@@ -600,3 +600,27 @@ input, textarea, select { font-family: inherit; color: var(--text-primary); }
 @keyframes starjoy { from { transform: translateY(0) scale(1); } to { transform: translateY(-5px) scale(1.3); } }
 .cat .ink { stroke: #4a2e1a; stroke-width: 2.4; fill: none; stroke-linecap: round; }
 .cat .inkf { fill: #4a2e1a; }
+
+/* ---- 15. 记忆面板 ---- */
+.memory-list { list-style: none; margin: 0; padding: 0; }
+.memory-row {
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: 7px 0; border-bottom: 1px dashed var(--border-subtle); font-size: var(--fs-sm);
+}
+.memory-row:last-child { border-bottom: none; }
+.memory-kind {
+  flex-shrink: 0; font-size: var(--fs-xs); font-weight: 700; border-radius: 999px; padding: 1px 9px;
+}
+.memory-kind.kind-profile { background: var(--amber-primary-soft); color: var(--amber-primary-hover); }
+.memory-kind.kind-fact { background: color-mix(in srgb, #4ADE80 15%, transparent); color: var(--success); }
+.memory-kind.kind-preference { background: color-mix(in srgb, #60A5FA 15%, transparent); color: #3B82F6; }
+.memory-kind.kind-event { background: var(--bg-subtle); color: var(--text-secondary); }
+.memory-content { flex: 1; min-width: 0; line-height: 1.5; }
+.memory-meta { flex-shrink: 0; color: var(--text-secondary); font-size: var(--fs-xs); }
+.memory-delete {
+  flex-shrink: 0; width: 24px; height: 24px; border-radius: 50%; border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated); color: var(--text-secondary); cursor: pointer; font-size: 11px;
+  transition: transform 120ms var(--ease-out), color var(--dur-hover);
+}
+.memory-delete:hover { color: var(--danger); }
+.memory-delete:active { transform: scale(.92); }

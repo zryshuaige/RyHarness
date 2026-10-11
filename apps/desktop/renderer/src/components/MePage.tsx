@@ -1,18 +1,28 @@
-import type { AgentDef, ProviderInfo } from '../api.ts'
+import { useEffect, useState } from 'react'
+import type { AgentDef, MemoryRow, ProviderInfo } from '../api.ts'
 import { Avatar } from './avatars/Avatar.tsx'
 
-/** 「我的」页：用户信息、主题切换、供应商状态、关于。 */
+/** 「我的」页：用户信息、主题切换、供应商状态、共享画像、关于。 */
 export function MePage({
+  api,
   ryen,
   providers,
   theme,
   onThemeChange,
 }: {
+  api: { listAgentMemories(agentId: string): Promise<{ agent: MemoryRow[]; shared: MemoryRow[] }> }
   ryen: AgentDef | undefined
   providers: ProviderInfo[]
   theme: 'light' | 'dark'
   onThemeChange: (theme: 'light' | 'dark') => void
 }) {
+  const [shared, setShared] = useState<MemoryRow[] | undefined>(undefined)
+  useEffect(() => {
+    if (ryen === undefined) return
+    api.listAgentMemories(ryen.id)
+      .then(({ shared: profile }) => { setShared(profile) })
+      .catch(() => { setShared([]) })
+  }, [api, ryen])
   return (
     <section className="page">
       <header className="page-header">
@@ -59,6 +69,23 @@ export function MePage({
               <div className="me-row-body">
                 <div className="me-row-title">关于 RyAgent</div>
                 <div className="me-row-sub">精简 agent 内核 + 社交化桌面 · 本地数据 SQLite</div>
+              </div>
+            </div>
+            <div className="me-row" style={{ alignItems: 'flex-start' }}>
+              <div className="me-row-body">
+                <div className="me-row-title">🧠 {ryen?.name ?? 'Ryen'} 了解你</div>
+                <div className="me-row-sub">共享画像——从你们的对话中沉淀，注入每轮记忆</div>
+                {shared !== undefined && (
+                  <ul className="memory-list" style={{ marginTop: 8 }}>
+                    {shared.length === 0 && <li className="panel-empty">还没有画像，聊几轮就有了。</li>}
+                    {shared.map((memory) => (
+                      <li key={memory.id} className="memory-row">
+                        <span className={`memory-kind kind-${memory.kind}`}>{memory.kind}</span>
+                        <span className="memory-content">{memory.content}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
             </div>
           </div>

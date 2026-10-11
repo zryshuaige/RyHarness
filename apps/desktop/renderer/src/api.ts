@@ -60,6 +60,18 @@ export interface MessageRow {
   createdAt: number
 }
 
+/** 长期记忆行。 */
+export interface MemoryRow {
+  id: string
+  agentId: string
+  kind: 'profile' | 'fact' | 'preference' | 'event'
+  content: string
+  createdAt: number
+  updatedAt: number
+  accessCount: number
+  sourceConversationId?: string
+}
+
 /** WS 事件（apps/server README 契约）。 */
 export type WsEvent =
   | { type: 'message-start'; conversationId: string; senderId: string; senderName: string; turnIndex: number }
@@ -139,6 +151,16 @@ export class ApiClient {
   /** 调度事件历史。 */
   listDispatchEvents(conversationId: string): Promise<{ events: { fromAgent?: string; toAgent: string; reason: string; turnIndex: number }[] }> {
     return this.request(`/api/conversations/${conversationId}/dispatch`)
+  }
+
+  /** 某 agent 的记忆（私有空间 + 共享画像）。 */
+  listAgentMemories(agentId: string): Promise<{ agent: MemoryRow[]; shared: MemoryRow[] }> {
+    return this.request(`/api/agents/${agentId}/memories`)
+  }
+
+  /** 软删一条记忆。 */
+  deleteMemory(id: string): Promise<{ deleted: string }> {
+    return this.request(`/api/memories/${id}`, { method: 'DELETE' })
   }
 
   fileUrl(name: string): string {

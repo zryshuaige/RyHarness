@@ -241,6 +241,37 @@ describe('RyAgentServer', () => {
     }
   }, 20_000)
 
+  it('memory endpoints: agent memories + shared profile + soft delete + stats', async () => {
+    const { MemoryService, HashEmbeddings } = await import('@ryagent/memory')
+    const { mkdtempSync } = await import('node:fs')
+    const dataDir = mkdtempSync(join(tmpdir(), 'ryagent-server-mem-'))
+    tmpDirs.push(dataDir)
+    const memory = new MemoryService({
+      dbPath: join(dataDir, 'ryagent.db'),
+      embeddings: new HashEmbeddings(),
+    })
+    memory.store.insert({ agentId: 'ryen', kind: 'fact', content: 'Ryen 的私有约定' })
+    memory.store.insert({ agentId: '*shared*', kind: 'profile', content: '用户是产品经理' })
+    const server = await RyAgentServer.create({ port: 0, dataDir, memory })
+    try {
+      const res = await getJson(server.url, '/api/agents/ryen/memories')
+      const body = res.body as { agent: { content: string }[]; shared: { content: string }[] }
+      expect(body.agent.map((m) => { return m.content })).toContain('Ryen 的私有约定')
+      expect(body.shared.map((m) => { return m.content })).toContain('用户是产品经理')
+
+      const stats = await getJson(server.url, '/api/memory/stats')
+      expect((stats.body as { enabled: boolean }).enabled).toBe(true)
+
+      const list = (await getJson(server.url, '/api/agents/ryen/memories')).body as { agent: { id: string }[] }
+      const del = await fetch(`${server.url}/api/memories/${list.agent[0]!.id}`, { method: 'DELETE' })
+      expect(del.status).toBe(200)
+      const after = (await getJson(server.url, '/api/agents/ryen/memories')).body as { agent: unknown[] }
+      expect(after.agent).toHaveLength(0)
+    } finally {
+      await server.close() // server.close 会一并关闭注入的 MemoryService
+    }
+  })
+
   it('serves produce-card events and downloads produced files (whitelist)', async () => {
     const { server, base } = await startServer([])
     try {

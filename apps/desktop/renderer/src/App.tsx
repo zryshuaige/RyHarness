@@ -186,13 +186,15 @@ export function App() {
           onChat={(agentId) => { void openDirectChat(agentId) }}
         />
       ) : (
-        <MePage ryen={ryen} providers={providers} theme={theme} onThemeChange={changeTheme} />
+        <MePage api={api} ryen={ryen} providers={providers} theme={theme} onThemeChange={changeTheme} />
       )}
 
       {tab === 'chats' && active !== undefined && (
         <RightPanel
+          api={api}
           conversation={active}
           agents={agents}
+          conversations={conversations}
           relays={snapshot.relays}
           messages={[...store.getSnapshot().messages]}
           fileUrl={(name) => { return api.fileUrl(name) }}

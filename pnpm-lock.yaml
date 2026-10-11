@@ -81,6 +81,9 @@ importers:
       '@ryagent/llm-openai':
         specifier: workspace:*
         version: link:../../packages/llm/openai
+      '@ryagent/memory':
+        specifier: workspace:*
+        version: link:../../packages/memory
       '@ryagent/session':
         specifier: workspace:*
         version: link:../../packages/session
@@ -163,6 +166,8 @@ importers:
       eventsource-parser:
         specifier: ^3.1.0
         version: 3.1.1
+
+  packages/memory: {}
 
   packages/runtime-diagnostics/invariants:
     dependencies:

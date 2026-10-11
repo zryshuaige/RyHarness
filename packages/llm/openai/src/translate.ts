@@ -109,7 +109,7 @@ export async function* translateChunks(
       if (choice.index !== 0) {
         throw new LlmError(`openai: unexpected choice index ${choice.index} for model "${model}"`, 'PROTOCOL')
       }
-      const delta = choice.delta
+      const delta = choice.delta ?? {}
       if (typeof delta.content === 'string' && delta.content.length > 0) {
         const last = blocks[blocks.length - 1]
         let index: number
@@ -128,12 +128,12 @@ export async function* translateChunks(
       if (Array.isArray(delta.tool_calls)) {
         for (const toolDelta of delta.tool_calls) {
           let index: number
-          if (toolDelta.id !== undefined && toolDelta.id.length > 0) {
+          if (typeof toolDelta.id === 'string' && toolDelta.id.length > 0) {
             index = blocks.length
             blocks.push({
               kind: 'tool-call',
               id: toolDelta.id as ToolCallId,
-              name: toolDelta.function?.name ?? '',
+              name: typeof toolDelta.function?.name === 'string' ? toolDelta.function.name : '',
               nameSent: false,
               arguments: '',
             })
@@ -151,10 +151,10 @@ export async function* translateChunks(
             index = found
           }
           const block = blocks[index] as BlockState & { kind: 'tool-call' }
-          if (toolDelta.function?.name !== undefined && toolDelta.function.name.length > 0) {
+          if (typeof toolDelta.function?.name === 'string' && toolDelta.function.name.length > 0) {
             block.name = toolDelta.function.name
           }
-          const argumentsDelta = toolDelta.function?.arguments ?? ''
+          const argumentsDelta = typeof toolDelta.function?.arguments === 'string' ? toolDelta.function.arguments : ''
           block.arguments += argumentsDelta
           // `name` rides only the first delta of a block.
           const sendName = !block.nameSent && block.name.length > 0

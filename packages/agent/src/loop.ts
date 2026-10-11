@@ -43,6 +43,17 @@ export interface AgentLoopOptions {
   history?: readonly Message[]
   /** 每步组装出完整 assistant 消息时回调（群聊调度器据此持久化/解析 @提及）。 */
   onAssistantMessage?: (message: AssistantMessage) => void
+  /**
+   * 长期记忆钩子（可选）：组装 prompt 前 recall 注入；每轮结束异步
+   * enqueueExtraction（绝不阻塞回复）。记忆故障不得影响对话。
+   */
+  memory?: AgentMemoryHooks
+}
+
+/** 记忆系统对运行时的最小接口（由 @ryagent/memory 的 MemoryService 实现）。 */
+export interface AgentMemoryHooks {
+  recall(agentId: string, inputText: string): Promise<string | undefined>
+  enqueueExtraction(agentId: string, agentName: string, conversationId: string, turnText: string): void
 }
 
 const DEFAULT_MAX_STEPS = 16
@@ -80,77 +91,110 @@ export class AgentLoop {
     const toolSchemas: ToolSchema[] = [...this.allowedTools.values()]
       .map((tool) => { return { name: tool.name, description: tool.description, parameters: tool.parameters } })
 
-    let steps = 0
-    while (steps < maxSteps) {
-      steps++
-      const request: GenerateOptions = {
-        provider: definition.provider,
-        model: definition.model,
-        system: definition.systemPrompt,
-        messages: history,
-        ...toolSchemas.length === 0 ? {} : { tools: toolSchemas },
-        ...definition.temperature === undefined ? {} : { temperature: definition.temperature },
-      }
-
-      const assembler = new BlockAssembler()
+    // 长期记忆召回（组装前注入；故障静默降级为无人设增强）。
+    let memoryBlock: string | undefined
+    if (this.options.memory !== undefined) {
       try {
-        for await (const chunk of llm.stream(request)) {
-          assembler.push(chunk)
-          if (chunk.type === 'text-delta') {
-            yield { type: 'text-delta', text: chunk.text }
-          } else if (chunk.type === 'block-end' && chunk.block.type === 'tool-call') {
-            yield {
-              type: 'tool-call-start',
-              callId: chunk.block.id,
-              name: chunk.block.name,
-              arguments: chunk.block.arguments,
-            }
-          }
-        }
-      } catch (error) {
-        const failure = failureOf(error)
-        yield { type: 'error', message: failure.message, code: failure.code }
-        return
-      }
-
-      const message = assembler.message({ provider: definition.provider, model: definition.model })
-      this.options.onAssistantMessage?.(message)
-      history.push(message)
-      const calls = message.content.filter((block): block is ToolCallBlock => { return block.type === 'tool-call' })
-      const finish: FinishReason = assembler.finish
-
-      if (calls.length === 0) {
-        // 纯文本（或错误/中止）终止：max-tokens 截断已由 BlockAssembler 处理。
-        yield { type: 'done', finish, steps }
-        return
-      }
-      if (finish.kind !== 'tool-calls' && finish.kind !== 'stop') {
-        // 流以错误/中止收尾却带着未执行的调用：不上调度，直接终止。
-        yield { type: 'done', finish, steps }
-        return
-      }
-
-      for (const call of calls) {
-        const result = await this.executeCall(call, context)
-        yield {
-          type: 'tool-result',
-          callId: call.id,
-          name: call.name,
-          isError: result.isError === true,
-          result,
-        }
-        history.push(createToolResultMessage({
-          callId: call.id as ToolCallId,
-          content: [{ type: 'text', text: result.content }],
-          isError: result.isError === true,
-        }))
+        memoryBlock = await this.options.memory.recall(definition.id, input.text)
+      } catch {
+        memoryBlock = undefined
       }
     }
+    const systemPrompt = memoryBlock === undefined
+      ? definition.systemPrompt
+      : `${definition.systemPrompt}\n\n${memoryBlock}`
 
-    yield {
-      type: 'error',
-      message: `agent loop exceeded maxSteps=${maxSteps} with pending tool calls`,
-      code: 'MAX_STEPS',
+    let steps = 0
+    let assistantText = ''
+    try {
+      while (steps < maxSteps) {
+        steps++
+        const request: GenerateOptions = {
+          provider: definition.provider,
+          model: definition.model,
+          system: systemPrompt,
+          messages: history,
+          ...toolSchemas.length === 0 ? {} : { tools: toolSchemas },
+          ...definition.temperature === undefined ? {} : { temperature: definition.temperature },
+        }
+
+        const assembler = new BlockAssembler()
+        try {
+          for await (const chunk of llm.stream(request)) {
+            assembler.push(chunk)
+            if (chunk.type === 'text-delta') {
+              yield { type: 'text-delta', text: chunk.text }
+            } else if (chunk.type === 'block-end' && chunk.block.type === 'tool-call') {
+              yield {
+                type: 'tool-call-start',
+                callId: chunk.block.id,
+                name: chunk.block.name,
+                arguments: chunk.block.arguments,
+              }
+            }
+          }
+        } catch (error) {
+          const failure = failureOf(error)
+          yield { type: 'error', message: failure.message, code: failure.code }
+          return
+        }
+
+        const message = assembler.message({ provider: definition.provider, model: definition.model })
+        this.options.onAssistantMessage?.(message)
+        history.push(message)
+        assistantText += message.content
+          .filter((block) => { return block.type === 'text' })
+          .map((block) => { return block.type === 'text' ? block.text : '' })
+          .join('\n')
+        const calls = message.content.filter((block): block is ToolCallBlock => { return block.type === 'tool-call' })
+        const finish: FinishReason = assembler.finish
+
+        if (calls.length === 0) {
+          yield { type: 'done', finish, steps }
+          return
+        }
+        if (finish.kind !== 'tool-calls' && finish.kind !== 'stop') {
+          yield { type: 'done', finish, steps }
+          return
+        }
+
+        for (const call of calls) {
+          const result = await this.executeCall(call, context)
+          yield {
+            type: 'tool-result',
+            callId: call.id,
+            name: call.name,
+            isError: result.isError === true,
+            result,
+          }
+          history.push(createToolResultMessage({
+            callId: call.id as ToolCallId,
+            content: [{ type: 'text', text: result.content }],
+            isError: result.isError === true,
+          }))
+        }
+      }
+
+      yield {
+        type: 'error',
+        message: `agent loop exceeded maxSteps=${maxSteps} with pending tool calls`,
+        code: 'MAX_STEPS',
+      }
+    } finally {
+      // 长期记忆抽取（异步管线，绝不阻塞回复）；至少要有 assistant 内容才入队。
+      if (this.options.memory !== undefined && assistantText.trim().length > 0) {
+        try {
+          this.options.memory.enqueueExtraction(
+            definition.id,
+            definition.name,
+            '',
+            `用户：${input.text}
+${definition.name}：${assistantText.trim()}`,
+          )
+        } catch {
+          // 记忆入队故障不影响对话。
+        }
+      }
     }
   }
 

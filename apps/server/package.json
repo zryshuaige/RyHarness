@@ -24,7 +24,8 @@
     "@ryagent/llm-openai": "workspace:*",
     "@ryagent/session": "workspace:*",
     "@ryagent/tools": "workspace:*",
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "@ryagent/memory": "workspace:*"
   },
   "devDependencies": {
     "@types/ws": "^8.5.10"

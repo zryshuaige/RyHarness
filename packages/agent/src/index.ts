@@ -17,4 +17,4 @@ export type {
 } from './types.ts'
 export { BUILTIN_TEMPLATES, RYEN_TEMPLATE, forkTemplate } from './builtin.ts'
 export { AgentLoop } from './loop.ts'
-export type { AgentLoopOptions } from './loop.ts'
+export type { AgentLoopOptions, AgentMemoryHooks } from './loop.ts'

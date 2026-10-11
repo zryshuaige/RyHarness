@@ -1,4 +1,6 @@
-import type { AgentDef, Conversation } from '../api.ts'
+import { useState } from 'react'
+import type { AgentDef, ApiClient, Conversation } from '../api.ts'
+import { MemoryPanel } from './MemoryPanel.tsx'
 import { Avatar } from './avatars/Avatar.tsx'
 import type { RelayItem, UiMessage } from '../store.ts'
 
@@ -19,22 +21,27 @@ function collectArtifacts(messages: UiMessage[]): { callId: string; name: string
 
 /** 右栏信息板：单聊 = 资料卡 + 产物；群聊 = 成员网格 + 调度时间线 + 产物。 */
 export function RightPanel({
+  api,
   conversation,
   agents,
+  conversations,
   relays,
   messages,
   fileUrl,
   collapsed,
   onToggle,
 }: {
+  api: ApiClient
   conversation: Conversation | undefined
   agents: AgentDef[]
+  conversations: Conversation[]
   relays: RelayItem[]
   messages: UiMessage[]
   fileUrl: (name: string) => string
   collapsed: boolean
   onToggle: () => void
 }) {
+  const [memoryFor, setMemoryFor] = useState<AgentDef | undefined>(undefined)
   if (collapsed) {
     return (
       <aside className="right-panel is-collapsed">
@@ -54,6 +61,7 @@ export function RightPanel({
             agents={agents}
             artifacts={collectArtifacts(messages)}
             fileUrl={fileUrl}
+            onShowMemories={setMemoryFor}
           />
         ) : (
           <GroupInfo
@@ -65,6 +73,15 @@ export function RightPanel({
           />
         )}
       </div>
+      {memoryFor !== undefined && (
+        <MemoryPanel
+          api={api}
+          agentId={memoryFor.id}
+          agentName={memoryFor.name}
+          conversationTitles={new Map(conversations.map((c) => { return [c.id, c.title] }))}
+          onClose={() => { setMemoryFor(undefined) }}
+        />
+      )}
     </aside>
   )
 }
@@ -97,11 +114,13 @@ function DirectProfile({
   agents,
   artifacts,
   fileUrl,
+  onShowMemories,
 }: {
   agentId: string | undefined
   agents: AgentDef[]
   artifacts: { callId: string; name: string; size: number; mime: string }[]
   fileUrl: (name: string) => string
+  onShowMemories: (agent: AgentDef) => void
 }) {
   const agent = agents.find((a) => { return a.id === agentId })
   if (agent === undefined) return <p className="panel-empty">未找到 agent</p>
@@ -113,6 +132,7 @@ function DirectProfile({
           {agent.name}
           {agent.isBuiltin && <span className="badge">内置</span>}
         </h3>
+        <button className="btn" style={{ marginTop: 4 }} onClick={() => { onShowMemories(agent) }}>🧠 记忆</button>
       </div>
       <dl className="profile-fields">
         <dt>人设</dt>

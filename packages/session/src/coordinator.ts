@@ -12,7 +12,7 @@
 
 import { brandString } from '@ryagent/brand'
 import { AgentLoop } from '@ryagent/agent'
-import type { AgentDefinition, AgentLoopEvent, Tool } from '@ryagent/agent'
+import type { AgentDefinition, AgentLoopEvent, AgentMemoryHooks, Tool } from '@ryagent/agent'
 import { GroupDispatcher, parseMentions } from '@ryagent/group'
 import type { GroupEvent, GroupHistoryEntry } from '@ryagent/group'
 import type {
@@ -31,6 +31,8 @@ export interface CoordinatorOptions {
   llm: LlmRuntime
   /** 可用工具全集（AgentLoop 按 agent 定义白名单过滤）。 */
   tools: readonly Tool[]
+  /** 长期记忆（可选）：每个发言 agent 用自己的空间 + 共享画像。 */
+  memory?: AgentMemoryHooks
 }
 
 /** 一次调用的运行上下文。 */
@@ -108,7 +110,8 @@ export class SessionCoordinator {
       contentBlocks: [{ type: 'text', text }], turnIndex,
     })
 
-    const loop = new AgentLoop({ definition: agent, llm, tools, history })
+    const memory = this.bindMemory(conversationId)
+    const loop = new AgentLoop({ definition: agent, llm, tools, history, ...memory === undefined ? {} : { memory } })
 
     let reply = ''
     let failed: { message: string; code: string } | undefined
@@ -182,7 +185,10 @@ export class SessionCoordinator {
       if (entry !== undefined) history.push(entry)
     }
 
-    const dispatcher = new GroupDispatcher({ llm, members, dispatcherId, tools })
+    const dispatcher = new GroupDispatcher({
+      llm, members, dispatcherId, tools,
+      ...this.bindMemory(conversationId) === undefined ? {} : { memory: this.bindMemory(conversationId) },
+    })
     for await (const event of dispatcher.runTurn({ text, history, workspaceRoot: context.workspaceRoot, turnIndex })) {
       yield event
       switch (event.type) {
@@ -215,6 +221,18 @@ export class SessionCoordinator {
         default:
           break
       }
+    }
+  }
+
+  /** 绑定会话 id 的记忆钩子（AgentLoop 不关心 conversationId，由这里注入）。 */
+  private bindMemory(conversationId: string): AgentMemoryHooks | undefined {
+    const memory = this.options.memory
+    if (memory === undefined) return undefined
+    return {
+      recall: (agentId, inputText) => { return memory.recall(agentId, inputText) },
+      enqueueExtraction: (agentId, agentName, _conversationId, turnText) => {
+        memory.enqueueExtraction(agentId, agentName, conversationId, turnText)
+      },
     }
   }
 

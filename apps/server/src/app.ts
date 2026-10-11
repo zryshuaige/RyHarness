@@ -16,6 +16,13 @@ import type { AgentDefinition } from '@ryagent/agent'
 import { apply as applyOpenAi } from '@ryagent/llm-openai'
 import { ARTIFACTS_DIR, fileProduce, fsRead, fsWrite, guessMime, shellExec } from '@ryagent/tools'
 import { SessionCoordinator, SessionStore } from '@ryagent/session'
+import {
+  ChatMemoryLlm,
+  MemoryService,
+  NullEmbeddings,
+  SiliconFlowEmbeddings,
+} from '@ryagent/memory'
+import type { AgentMemoryHooks } from '@ryagent/agent'
 import { WebSocketServer } from 'ws'
 import { EventHub } from './bus.ts'
 import type { WsEvent } from './events.ts'
@@ -42,6 +49,26 @@ export interface ServerOptions {
    * mock 适配器）；在 LlmRuntime 插件加载后调用。
    */
   mountLlm?: (ctx: Context) => void
+  /**
+   * 长期记忆：'default'（按环境构建：有 key → SiliconFlow embedding +
+   * 抽取 LLM；无 key → 纯 FTS5、无抽取）、自定义实现，或 null（禁用）。
+   */
+  memory?: AgentMemoryHooks | null
+}
+
+/** 按环境构建默认记忆服务。 */
+function createDefaultMemory(dataDir: string): MemoryService {
+  const apiKey = process.env.SILICONFLOW_API_KEY ?? ''
+  const hasKey = apiKey.length > 0
+  return new MemoryService({
+    dbPath: join(dataDir, 'ryagent.db'),
+    embeddings: hasKey
+      ? new SiliconFlowEmbeddings({ apiKey })
+      : new NullEmbeddings(),
+    llm: hasKey
+      ? new ChatMemoryLlm({ apiKey })
+      : undefined,
+  })
 }
 
 const DEFAULT_PORT = 32100
@@ -52,6 +79,8 @@ export class RyAgentServer {
   private constructor(
     readonly store: SessionStore,
     readonly coordinator: SessionCoordinator,
+    readonly memory: AgentMemoryHooks | undefined,
+    private readonly memoryService: MemoryService | undefined,
     private readonly http: Server,
     private readonly wss: WebSocketServer,
     private readonly hub: EventHub,
@@ -89,10 +118,16 @@ export class RyAgentServer {
         ? { providers: {} }
         : loadProvidersConfig(join(dataDir, 'config', 'providers.json')))
 
-    const coordinator = new SessionCoordinator({ store, llm: ctx.llm, tools: ALL_TOOLS })
+    const memoryOption = options.memory === null ? undefined : options.memory ?? createDefaultMemory(dataDir)
+    const memoryService = memoryOption instanceof MemoryService ? memoryOption : undefined
+    const coordinator = new SessionCoordinator({
+      store, llm: ctx.llm, tools: ALL_TOOLS,
+      ...memoryOption === undefined ? {} : { memory: memoryOption },
+    })
     const hub = new EventHub()
     const server = new RyAgentServer(
-      store, coordinator, createServer(), new WebSocketServer({ noServer: true }), hub,
+      store, coordinator, memoryOption, memoryService,
+      createServer(), new WebSocketServer({ noServer: true }), hub,
       dataDir, workspaceRoot, providers,
     )
     server.http.on('request', (req, res) => { server.onRequest(req, res).catch((error: unknown) => {
@@ -114,6 +149,7 @@ export class RyAgentServer {
       this.http.close((error) => { return error === undefined || error === null ? resolve() : reject(error) })
     })
     this.store.close()
+    this.memoryService?.close()
   }
 
   // ---- WS ----
@@ -234,6 +270,55 @@ export class RyAgentServer {
 
     router.get('/api/agent-templates', async (_req, res) => {
       json(res, 200, { templates: Object.values(AGENT_TEMPLATES) })
+    })
+
+    // ---- memories（长期记忆）----
+
+    /** 某 agent 的记忆：私有空间 active + 共享画像。 */
+    router.get('/api/agents/:id/memories', async (req, res) => {
+      if (store.getAgent(req.params.id as string) === undefined) {
+        json(res, 404, { error: 'agent not found' })
+        return
+      }
+      if (this.memoryService === undefined) {
+        json(res, 200, { agent: [], shared: [] })
+        return
+      }
+      const memoryStore = this.memoryService.store
+      json(res, 200, {
+        agent: memoryStore.listActiveForAgent(req.params.id as string),
+        shared: memoryStore.listSharedProfile(),
+      })
+    })
+
+    /** 软删一条记忆。 */
+    router.delete('/api/memories/:id', async (req, res) => {
+      if (this.memoryService === undefined) {
+        json(res, 409, { error: 'memory system disabled' })
+        return
+      }
+      const existing = this.memoryService.store.get(req.params.id as string)
+      if (existing === undefined) {
+        json(res, 404, { error: 'memory not found' })
+        return
+      }
+      this.memoryService.store.supersede(existing.id, 'deleted')
+      json(res, 200, { deleted: existing.id })
+    })
+
+    /** 记忆统计。 */
+    router.get('/api/memory/stats', async (_req, res) => {
+      if (this.memoryService === undefined) {
+        json(res, 200, { enabled: false })
+        return
+      }
+      json(res, 200, {
+        enabled: true,
+        embeddings: {
+          label: this.memoryService.embeddingsAvailable ? 'configured' : 'none:fts-only',
+        },
+        ...this.memoryService.store.stats(),
+      })
     })
 
     // ---- conversations ----
