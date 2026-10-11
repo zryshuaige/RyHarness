@@ -19,7 +19,7 @@ import { SessionCoordinator, SessionStore } from '@ryagent/session'
 import { WebSocketServer } from 'ws'
 import { EventHub } from './bus.ts'
 import type { WsEvent } from './events.ts'
-import { loadProvidersConfig, toAdapterConfig } from './config.ts'
+import { loadProvidersConfig, providerKeyConfigured, toAdapterConfig } from './config.ts'
 import type { ProvidersConfigFile } from './config.ts'
 import { AGENT_TEMPLATES, ensureSeedAgents, instantiateTemplate } from './seed.ts'
 import { Router, json, strField } from './router.ts'
@@ -347,6 +347,7 @@ export class RyAgentServer {
         providers: Object.entries(this.providers.providers).map(([id, provider]) => ({
           id,
           displayName: provider.displayName ?? id,
+          apiKeyConfigured: providerKeyConfigured(provider),
           models: provider.models.map((model) => ({
             id: model.id,
             ...model.name === undefined ? {} : { name: model.name },

@@ -50,3 +50,14 @@ export function loadProvidersConfig(path: string): ProvidersConfigFile {
 export function toAdapterConfig(config: ProvidersConfigFile): OpenAiAdapterConfig {
   return { providers: config.providers }
 }
+
+/** 某个供应商的凭据是否已配置（apiKey 直接给出，或 apiKeyEnv 指向的环境变量存在）；只看存在性，不泄露值。 */
+export function providerKeyConfigured(
+  provider: OpenAiProviderConfig,
+  env: (name: string) => string | undefined = (name) => { return process.env[name] },
+): boolean {
+  if (provider.apiKey !== undefined) return true
+  if (provider.apiKeyEnv === undefined) return false
+  const value = env(provider.apiKeyEnv)
+  return value !== undefined && value.length > 0
+}

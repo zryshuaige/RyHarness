@@ -5,4 +5,5 @@ packages:
   - vendor/*
 
 allowBuilds:
+  electron: true
   esbuild: true

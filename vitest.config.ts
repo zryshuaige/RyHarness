@@ -33,6 +33,10 @@ function standardDecoratorPlugin(): Plugin {
 }
 
 export default defineConfig({
+  esbuild: {
+    // 渲染层 .tsx（React JSX automatic runtime）；对纯 .ts 文件无影响。
+    jsx: 'automatic',
+  },
   plugins: [standardDecoratorPlugin()],
   resolve: {
     // Resolve @ryagent/* through tsconfig.json paths (source-level), so tests
@@ -40,6 +44,6 @@ export default defineConfig({
     tsconfigPaths: true,
   },
   test: {
-    include: ['apps/*/tests/**/*.test.ts', 'packages/*/tests/**/*.test.ts', 'packages/*/*/tests/**/*.test.ts'],
+    include: ['apps/*/tests/**/*.test.{ts,tsx}', 'packages/*/tests/**/*.test.ts', 'packages/*/*/tests/**/*.test.ts'],
   },
 })

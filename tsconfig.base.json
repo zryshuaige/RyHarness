@@ -1,9 +1,10 @@
 {
   "compilerOptions": {
     "target": "es2024",
+    "jsx": "react-jsx",
     "module": "esnext",
     "moduleResolution": "bundler",
-    "lib": ["es2024"],
+    "lib": ["es2024", "dom", "dom.iterable"],
     "strict": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
