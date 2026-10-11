@@ -27,6 +27,12 @@ importers:
         specifier: ^4.1.8
         version: 4.1.11(@types/node@22.20.5)(vite@8.3.4(@types/node@22.20.5)(esbuild@0.28.2)(tsx@4.23.15))
 
+  packages/agent:
+    dependencies:
+      '@ryagent/llm':
+        specifier: workspace:*
+        version: link:../llm/llm
+
   packages/attachment/types:
     dependencies:
       '@ryagent/cordis':
@@ -83,6 +89,14 @@ importers:
       '@ryagent/schemastery':
         specifier: workspace:*
         version: link:../../../vendor/schemastery
+
+  packages/session: {}
+
+  packages/tools:
+    dependencies:
+      '@ryagent/agent':
+        specifier: workspace:*
+        version: link:../agent
 
   packages/typert/protocol:
     dependencies:

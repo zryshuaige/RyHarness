@@ -40,6 +40,6 @@ export default defineConfig({
     tsconfigPaths: true,
   },
   test: {
-    include: ['packages/*/*/tests/**/*.test.ts'],
+    include: ['packages/*/tests/**/*.test.ts', 'packages/*/*/tests/**/*.test.ts'],
   },
 })

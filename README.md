@@ -14,14 +14,18 @@ vendor/                        vendored 上游地基（保持上游宽松编译�
 packages/
   llm/
     llm/                       @ryagent/llm           LLM 服务缝（LlmAdapter/LlmRuntime/StreamChunk）
-    openai/                    @ryagent/llm-openai    OpenAI 兼容适配器（新写）
+    openai/                    @ryagent/llm-openai    OpenAI 兼容适配器
+  agent/                       @ryagent/agent        精简 agent 运行时（AgentDefinition/Ryen 模板/AgentLoop）
+  tools/                       @ryagent/tools        基础工具（fs_read/fs_write/shell_exec/file_produce）
+  session/                     @ryagent/session      SQLite 持久化（node:sqlite）
   typert/protocol/             @ryagent/typert-protocol  Typert RPC 基类
   attachment/types/            @ryagent/attachment     附件类型 stub
   util/{brand,values,crypto,timeout}/   工具小包
   runtime-diagnostics/invariants/       @ryagent/invariants
 scripts/
   smoke-siliconflow.ts         SiliconFlow 冒烟（需 SILICONFLOW_API_KEY）
-.zcode/                        M0/M1 分析脚本（depscan/copy-packages 等）
+  demo-agent.ts                M2 集成验证（mock 适配器，不触网）
+.zcode/                        M0/M1/M2 分析脚本（depscan/copy-packages 等）
 ```
 
 ## 常用命令
