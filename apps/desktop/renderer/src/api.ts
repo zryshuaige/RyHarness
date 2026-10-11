@@ -136,6 +136,11 @@ export class ApiClient {
     return this.request(`/api/conversations/${conversationId}/read`, { method: 'POST', body: '{}' })
   }
 
+  /** 调度事件历史。 */
+  listDispatchEvents(conversationId: string): Promise<{ events: { fromAgent?: string; toAgent: string; reason: string; turnIndex: number }[] }> {
+    return this.request(`/api/conversations/${conversationId}/dispatch`)
+  }
+
   fileUrl(name: string): string {
     return `${this.base}/api/files/${encodeURIComponent(name)}`
   }

@@ -1,46 +1,118 @@
 import type { AgentDef, Conversation } from '../api.ts'
-import { AgentAvatar } from './Cat.tsx'
-import type { RelayItem } from '../store.ts'
+import { Avatar } from './avatars/Avatar.tsx'
+import type { RelayItem, UiMessage } from '../store.ts'
 
 const TOOL_LABELS: Record<string, string> = {
   fs_read: '读文件', fs_write: '写文件', shell_exec: '执行命令', file_produce: '产出文件',
 }
 
-/** 右栏信息板：单聊 = agent 资料卡；群聊 = 成员列表 + 调度轨迹。 */
+/** 从消息流收集产物文件。 */
+function collectArtifacts(messages: UiMessage[]): { callId: string; name: string; size: number; mime: string }[] {
+  const out: { callId: string; name: string; size: number; mime: string }[] = []
+  for (const message of messages) {
+    for (const part of message.parts) {
+      if (part.kind === 'file') out.push({ callId: part.callId, name: part.name, size: part.size, mime: part.mime })
+    }
+  }
+  return out
+}
+
+/** 右栏信息板：单聊 = 资料卡 + 产物；群聊 = 成员网格 + 调度时间线 + 产物。 */
 export function RightPanel({
   conversation,
   agents,
   relays,
+  messages,
+  fileUrl,
   collapsed,
   onToggle,
 }: {
   conversation: Conversation | undefined
   agents: AgentDef[]
   relays: RelayItem[]
+  messages: UiMessage[]
+  fileUrl: (name: string) => string
   collapsed: boolean
   onToggle: () => void
 }) {
+  if (collapsed) {
+    return (
+      <aside className="right-panel is-collapsed">
+        <button className="panel-expand-btn" title="展开信息板" onClick={onToggle}>«</button>
+      </aside>
+    )
+  }
   return (
-    <aside className={`right-panel ${collapsed ? 'is-collapsed' : ''}`}>
-      <button className="panel-toggle" onClick={onToggle}>{collapsed ? '«' : '»'}</button>
-      {collapsed || conversation === undefined ? null : conversation.kind === 'direct' ? (
-        <DirectProfile agentId={conversation.memberAgentIds[0]} agents={agents} />
-      ) : (
-        <GroupInfo conversation={conversation} agents={agents} relays={relays} />
-      )}
+    <aside className="right-panel">
+      <button className="right-panel-toggle" title="收起信息板" onClick={onToggle}>»</button>
+      <div className="panel-body">
+        {conversation === undefined ? (
+          <p className="panel-empty">选择一个会话查看详情</p>
+        ) : conversation.kind === 'direct' ? (
+          <DirectProfile
+            agentId={conversation.memberAgentIds[0]}
+            agents={agents}
+            artifacts={collectArtifacts(messages)}
+            fileUrl={fileUrl}
+          />
+        ) : (
+          <GroupInfo
+            conversation={conversation}
+            agents={agents}
+            relays={relays}
+            artifacts={collectArtifacts(messages)}
+            fileUrl={fileUrl}
+          />
+        )}
+      </div>
     </aside>
   )
 }
 
-function DirectProfile({ agentId, agents }: { agentId: string | undefined; agents: AgentDef[] }) {
+function ArtifactList({
+  artifacts,
+  fileUrl,
+}: {
+  artifacts: { callId: string; name: string; size: number; mime: string }[]
+  fileUrl: (name: string) => string
+}) {
+  if (artifacts.length === 0) {
+    return <p className="panel-empty">本会话还没有产物文件</p>
+  }
+  return (
+    <ul className="artifact-list">
+      {artifacts.map((artifact) => (
+        <li key={artifact.callId}>
+          <span aria-hidden="true">📄</span>
+          <span className="artifact-name" title={artifact.name}>{artifact.name}</span>
+          <a href={fileUrl(artifact.name)} target="_blank" rel="noreferrer">打开</a>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function DirectProfile({
+  agentId,
+  agents,
+  artifacts,
+  fileUrl,
+}: {
+  agentId: string | undefined
+  agents: AgentDef[]
+  artifacts: { callId: string; name: string; size: number; mime: string }[]
+  fileUrl: (name: string) => string
+}) {
   const agent = agents.find((a) => { return a.id === agentId })
   if (agent === undefined) return <p className="panel-empty">未找到 agent</p>
   return (
-    <div className="panel-body">
+    <>
       <div className="profile-head">
-        <AgentAvatar agent={agent} size={64} />
-        <h3>{agent.name}</h3>
-        {agent.isBuiltin && <span className="badge">内置</span>}
+        <Avatar avatarKey={agent.avatar} name={agent.name} seed={agent.id} size={80} className="avatar-lg-ring" />
+        <h3>
+          {agent.name}
+          {agent.isBuiltin && <span className="badge">内置</span>}
+        </h3>
       </div>
       <dl className="profile-fields">
         <dt>人设</dt>
@@ -49,46 +121,68 @@ function DirectProfile({ agentId, agents }: { agentId: string | undefined; agent
         <dd>{agent.provider} / {agent.model}</dd>
         <dt>工具</dt>
         <dd>
-          {agent.tools.length === 0 ? '无（纯对话）' : (
+          {agent.tools.length === 0 ? (
+            <span className="panel-empty">无（纯对话）</span>
+          ) : (
             <span className="tool-chips">
               {agent.tools.map((tool) => { return <span key={tool} className="chip">{TOOL_LABELS[tool] ?? tool}</span> })}
             </span>
           )}
         </dd>
       </dl>
-    </div>
+      <h4>本会话产物</h4>
+      <ArtifactList artifacts={artifacts} fileUrl={fileUrl} />
+    </>
   )
 }
 
-function GroupInfo({ conversation, agents, relays }: { conversation: Conversation; agents: AgentDef[]; relays: RelayItem[] }) {
+function GroupInfo({
+  conversation,
+  agents,
+  relays,
+  artifacts,
+  fileUrl,
+}: {
+  conversation: Conversation
+  agents: AgentDef[]
+  relays: RelayItem[]
+  artifacts: { callId: string; name: string; size: number; mime: string }[]
+  fileUrl: (name: string) => string
+}) {
   const members = conversation.memberAgentIds
     .map((id) => { return agents.find((a) => { return a.id === id }) })
     .filter((a): a is AgentDef => { return a !== undefined })
   const nameOf = (id: string): string => { return agents.find((a) => { return a.id === id })?.name ?? id }
   return (
-    <div className="panel-body">
+    <>
       <h4>成员（{members.length}）</h4>
-      <ul className="member-list">
+      <div className="member-grid">
         {members.map((member) => (
-          <li key={member.id}>
-            <AgentAvatar agent={member} size={28} />
-            <span>{member.name}</span>
-            {conversation.dispatcherAgentId === member.id && <span className="badge">调度员</span>}
-          </li>
+          <div key={member.id} className="member-cell">
+            <Avatar avatarKey={member.avatar} name={member.name} seed={member.id} size={44} />
+            <span className="member-name">
+              {member.name}
+              {conversation.dispatcherAgentId === member.id ? ' ★' : ''}
+            </span>
+          </div>
         ))}
-      </ul>
+      </div>
       <h4>调度轨迹</h4>
-      {relays.length === 0 ? <p className="panel-empty">本轮还没有调度事件</p> : (
+      {relays.length === 0 ? (
+        <p className="panel-empty">本轮还没有调度事件</p>
+      ) : (
         <ul className="relay-list">
           {relays.map((relay, index) => (
-            <li key={index} className={relay.reason === 'loop-guard' ? 'is-guard' : ''}>
-              <small>T{relay.turnIndex}</small>{' '}
+            <li key={index} className={relay.reason === 'loop-guard' || relay.reason === 'max-turns' ? 'is-guard' : ''}>
               {relay.fromAgent !== undefined ? `${nameOf(relay.fromAgent)} → ` : ''}@{nameOf(relay.toAgent)}
               <em>{relay.reason}</em>
+              <small>第 {relay.turnIndex + 1} 轮</small>
             </li>
           ))}
         </ul>
       )}
-    </div>
+      <h4>本会话产物</h4>
+      <ArtifactList artifacts={artifacts} fileUrl={fileUrl} />
+    </>
   )
 }

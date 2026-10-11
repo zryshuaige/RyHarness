@@ -1,6 +1,5 @@
 /** Ryen 猫管家吉祥物（SVG 三态：idle / thinking / happy）。 */
-export function Cat({ mood, size = 40 }: { mood: 'idle' | 'thinking' | 'happy'; size?: number }) {
-  const starClass = mood === 'thinking' ? 'star fast' : mood === 'happy' ? 'star joy' : 'star'
+export function Cat({ mood, size = 40 }: { mood: 'idle' | 'thinking' | 'happy'; size?: number }) {  const starClass = mood === 'thinking' ? 'star fast' : mood === 'happy' ? 'star joy' : 'star'
   let eyes: string
   if (mood === 'happy') {
     eyes = '<path class="ink" d="M20.5 33 q3.5 -4.6 7 0"/><path class="ink" d="M36.5 33 q3.5 -4.6 7 0"/>'
@@ -26,23 +25,4 @@ export function Cat({ mood, size = 40 }: { mood: 'idle' | 'thinking' | 'happy'; 
     + '<path d="M10.5 37.5 h6.5 M10.5 42.5 h6.5 M47 37.5 h6.5 M47 42.5 h6.5" stroke="#e9a25f" stroke-width="1.6" stroke-linecap="round"/>'
     + '</svg>'
   return <span dangerouslySetInnerHTML={{ __html: svg }} aria-label={`Ryen ${mood}`} role="img" />
-}
-
-/** 非 Ryen agent 的圆形 emoji 头像。 */
-const AVATAR_COLORS = ['#dbeafe', '#dcfce7', '#fce7f3', '#ede9fe', '#fef9c3', '#e0e7ff']
-
-export function AgentAvatar({ agent, size = 36 }: { agent: { id: string; name: string; avatar?: string }; size?: number }) {
-  if (agent.id === 'ryen') return <Cat mood="idle" size={size} />
-  const color = AVATAR_COLORS[Math.abs(hash(agent.id)) % AVATAR_COLORS.length]
-  return (
-    <span className="agent-avatar" style={{ width: size, height: size, background: color, fontSize: size * 0.52 }} role="img" aria-label={agent.name}>
-      {agent.avatar ?? agent.name.slice(0, 1)}
-    </span>
-  )
-}
-
-function hash(text: string): number {
-  let h = 0
-  for (let i = 0; i < text.length; i++) h = (h * 31 + text.charCodeAt(i)) | 0
-  return h
 }

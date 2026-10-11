@@ -18,6 +18,8 @@ export interface UiMessage {
   senderId: string
   senderName: string
   turnIndex: number
+  /** 消息时间（历史消息有；流式消息省略）。 */
+  createdAt?: number
   parts: MessagePart[]
   /** 已完整落库（message-done）。 */
   done: boolean
@@ -72,6 +74,17 @@ export class ChatStore {
     return this.snapshot
   }
 
+  /** 通知节流：40ms 合并连续事件（流式 token 批量重绘，报告 §5）。 */
+  private notifyTimer: ReturnType<typeof setTimeout> | undefined
+
+  private notify(): void {
+    if (this.notifyTimer !== undefined) return
+    this.notifyTimer = setTimeout(() => {
+      this.notifyTimer = undefined
+      for (const listener of this.listeners) listener()
+    }, 40)
+  }
+
   private mutate(fn: (draft: ChatSnapshot) => void): void {
     const draft: ChatSnapshot = {
       messages: this.snapshot.messages.map((m) => { return { ...m, parts: [...m.parts] } }),
@@ -82,12 +95,26 @@ export class ChatStore {
     }
     fn(draft)
     this.snapshot = draft
-    for (const listener of this.listeners) listener()
+    this.notify()
   }
 
   reset(): void {
     this.snapshot = EMPTY
-    for (const listener of this.listeners) listener()
+    this.notify()
+  }
+
+  /** 加载历史调度事件（打开会话时一次性灌入）。 */
+  setDispatchHistory(events: readonly { fromAgent?: string; toAgent: string; reason: string; turnIndex: number }[]): void {
+    this.mutate((draft) => {
+      draft.relays = events.map((event) => {
+        return {
+          ...event.fromAgent === undefined ? {} : { fromAgent: event.fromAgent },
+          toAgent: event.toAgent,
+          reason: event.reason,
+          turnIndex: event.turnIndex,
+        }
+      })
+    })
   }
 
   /** 折叠一条 WS 事件。 */

@@ -2,25 +2,65 @@ import { useEffect, useMemo, useState } from 'react'
 import { ApiClient, resolveApiBase } from './api.ts'
 import type { AgentDef, AgentTemplate, Conversation, ProviderInfo } from './api.ts'
 import { ChatStore } from './store.ts'
+import { useChat } from './store.ts'
 import { ConversationList } from './components/ConversationList.tsx'
 import { ChatView } from './components/ChatView.tsx'
 import { RightPanel } from './components/RightPanel.tsx'
-import { ContactsPage, CreateAgentModal, CreateGroupModal, SettingsModal } from './components/ContactsPage.tsx'
+import { ContactsPage, CreateAgentModal, CreateGroupModal } from './components/ContactsPage.tsx'
+import { MePage } from './components/MePage.tsx'
+import { AppIcon } from './components/AppIcon.tsx'
 
-type Page = 'chat' | 'contacts'
+type Tab = 'chats' | 'contacts' | 'me'
+
+type Theme = 'light' | 'dark'
+
+function loadTheme(): Theme {
+  try {
+    const stored = localStorage.getItem('ryagent-theme')
+    if (stored === 'light' || stored === 'dark') return stored
+  } catch {
+    // 隐私模式下 localStorage 不可用，回退浅色。
+  }
+  return 'light'
+}
+
+/** 应用 documentElement 的 data-theme（供测试与 App 共用）。 */
+export function applyTheme(theme: Theme): void {
+  document.documentElement.dataset.theme = theme
+}
+
+const RAIL_TABS: { key: Tab; icon: string; label: string }[] = [
+  { key: 'chats', icon: '💬', label: '聊天' },
+  { key: 'contacts', icon: '👥', label: '通讯录' },
+  { key: 'me', icon: '🐱', label: '我的' },
+]
 
 export function App() {
   const api = useMemo(() => { return new ApiClient(resolveApiBase()) }, [])
-  const [page, setPage] = useState<Page>('chat')
+  const [tab, setTab] = useState<Tab>('chats')
+  const [theme, setTheme] = useState<Theme>(loadTheme)
   const [agents, setAgents] = useState<AgentDef[]>([])
   const [templates, setTemplates] = useState<AgentTemplate[]>([])
   const [providers, setProviders] = useState<ProviderInfo[]>([])
   const [conversations, setConversations] = useState<Conversation[]>([])
+  const [listLoading, setListLoading] = useState(true)
   const [activeId, setActiveId] = useState<string | undefined>(undefined)
-  const [modal, setModal] = useState<'agent' | 'group' | 'settings' | undefined>(undefined)
+  const [modal, setModal] = useState<'agent' | 'group' | undefined>(undefined)
   const [panelCollapsed, setPanelCollapsed] = useState(false)
   const [loadError, setLoadError] = useState<string | undefined>(undefined)
   const [store] = useState(() => { return new ChatStore() })
+  const snapshot = useChat(store)
+
+  useEffect(() => { applyTheme(theme) }, [theme])
+
+  const changeTheme = (next: Theme): void => {
+    setTheme(next)
+    try {
+      localStorage.setItem('ryagent-theme', next)
+    } catch {
+      // 忽略持久化失败。
+    }
+  }
 
   const refresh = async (): Promise<void> => {
     try {
@@ -35,6 +75,8 @@ export function App() {
       setLoadError(undefined)
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setListLoading(false)
     }
   }
 
@@ -50,14 +92,14 @@ export function App() {
     })
     if (existing !== undefined) {
       setActiveId(existing.id)
-      setPage('chat')
+      setTab('chats')
       return
     }
     try {
       const { conversation } = await api.createConversation({ kind: 'direct', agentId })
       setConversations((prev) => { return [conversation, ...prev] })
       setActiveId(conversation.id)
-      setPage('chat')
+      setTab('chats')
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : String(error))
     }
@@ -75,48 +117,88 @@ export function App() {
 
   return (
     <div className="app-shell">
-      {page === 'contacts' ? (
+      {/* 栏 1：72px icon rail */}
+      <nav className="rail" aria-label="主导航">
+        <span className="rail-logo"><AppIcon size={40} /></span>
+        {RAIL_TABS.map((item) => (
+          <button
+            key={item.key}
+            className={`rail-tab ${tab === item.key ? 'is-active' : ''}`}
+            onClick={() => { setTab(item.key) }}
+          >
+            <span className="rail-icon" aria-hidden="true">{item.icon}</span>
+            {item.label}
+          </button>
+        ))}
+        <span className="rail-spacer" />
+        <button
+          className="rail-icon-btn"
+          title={theme === 'light' ? '切换到暗色' : '切换到浅色'}
+          onClick={() => { changeTheme(theme === 'light' ? 'dark' : 'light') }}
+        >
+          {theme === 'light' ? '🌙' : '☀️'}
+        </button>
+        <button className="rail-icon-btn" title="我的 / 设置" onClick={() => { setTab('me') }}>⚙️</button>
+      </nav>
+
+      {/* 栏 2：列表栏（聊天 tab）或空（通讯录/我的为整页） */}
+      {tab === 'chats' && (
+        <aside className="list-panel">
+          <ConversationList
+            conversations={conversations}
+            agents={agents}
+            activeId={activeId}
+            loading={listLoading}
+            onSelect={(id) => { setActiveId(id) }}
+          />
+        </aside>
+      )}
+
+      {/* 栏 3：内容区 */}
+      {tab === 'chats' ? (
+        active !== undefined ? (
+          <ChatView
+            key={active.id}
+            api={api}
+            conversation={active}
+            agents={agents}
+            store={store}
+            onRead={() => { void refresh() }}
+          />
+        ) : (
+          <section className="chat-view">
+            <div className="chat-scroll">
+              <div className="empty-state" style={{ height: '100%' }}>
+                <span className="empty-cat"><AppIcon size={96} /></span>
+                <h3>挑一个会话，或者开始新的</h3>
+                <p>喵——今天的安排，交给我和同事们就好。</p>
+              </div>
+            </div>
+          </section>
+        )
+      ) : tab === 'contacts' ? (
         <ContactsPage
           agents={agents}
           templates={templates}
           providers={providers}
-          onBack={() => { setPage('chat') }}
           onCreateAgent={() => { setModal('agent') }}
           onCreateGroup={() => { setModal('group') }}
           onChat={(agentId) => { void openDirectChat(agentId) }}
         />
       ) : (
-        <>
-          <ConversationList
-            conversations={conversations}
-            agents={agents}
-            activeId={activeId}
-            onSelect={(id) => { setActiveId(id) }}
-            onOpenContacts={() => { setPage('contacts') }}
-            onOpenSettings={() => { setModal('settings') }}
-          />
-          {active !== undefined ? (
-            <ChatView
-              key={active.id}
-              api={api}
-              conversation={active}
-              agents={agents}
-              store={store}
-              onRead={() => { void refresh() }}
-            />
-          ) : (
-            <section className="chat-view chat-empty">
-              <p>选择一个会话，或去通讯录找 agent 聊聊。</p>
-            </section>
-          )}
-          <RightPanel
-            conversation={active}
-            agents={agents}
-            relays={store.getSnapshot().relays}
-            collapsed={panelCollapsed}
-            onToggle={() => { setPanelCollapsed((v) => { return !v }) }}
-          />
-        </>
+        <MePage ryen={ryen} providers={providers} theme={theme} onThemeChange={changeTheme} />
+      )}
+
+      {tab === 'chats' && active !== undefined && (
+        <RightPanel
+          conversation={active}
+          agents={agents}
+          relays={snapshot.relays}
+          messages={[...store.getSnapshot().messages]}
+          fileUrl={(name) => { return api.fileUrl(name) }}
+          collapsed={panelCollapsed}
+          onToggle={() => { setPanelCollapsed((v) => { return !v }) }}
+        />
       )}
 
       {modal === 'agent' && (
@@ -138,18 +220,7 @@ export function App() {
             const { conversation } = await api.createConversation({ kind: 'group', ...input })
             await refresh()
             setActiveId(conversation.id)
-            setPage('chat')
-          }}
-        />
-      )}
-      {modal === 'settings' && (
-        <SettingsModal
-          ryen={ryen}
-          providers={providers}
-          onClose={() => { setModal(undefined) }}
-          onPatchRyen={async (patch) => {
-            if (ryen !== undefined) await api.patchAgent(ryen.id, patch)
-            await refresh()
+            setTab('chats')
           }}
         />
       )}

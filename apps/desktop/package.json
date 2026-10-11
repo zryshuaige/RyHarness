@@ -10,7 +10,8 @@
     "build": "pnpm run build:main && pnpm run build:renderer",
     "dev": "node scripts/dev.mjs",
     "start": "electron .",
-    "capture": "node scripts/capture.mjs"
+    "capture": "node scripts/capture.mjs",
+    "gen:icon": "node scripts/gen-icon.mjs"
   },
   "dependencies": {
     "@ryagent/server": "workspace:*",
@@ -23,6 +24,8 @@
     "@vitejs/plugin-react": "^5.0.0",
     "electron": "37.10.2",
     "jsdom": "^26.0.0",
+    "png-to-ico": "^3.0.2",
+    "sharp": "^0.35.5",
     "vite": "^6.0.0"
   }
 }

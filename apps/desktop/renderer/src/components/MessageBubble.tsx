@@ -1,4 +1,7 @@
+import { useState } from 'react'
 import type { MessagePart, UiMessage } from '../store.ts'
+import { Avatar } from './avatars/Avatar.tsx'
+import type { AgentDef } from '../api.ts'
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -31,23 +34,83 @@ export function MessagePartView({ part, fileUrl }: { part: MessagePart; fileUrl:
   )
 }
 
-/** 聊天气泡：用户右侧琥珀色，agent/system 左侧白底。 */
-export function MessageBubble({ message, fileUrl }: { message: UiMessage; fileUrl: (name: string) => string }) {
+function messagePlainText(message: UiMessage): string {
+  return message.parts
+    .filter((part) => { return part.kind === 'text' })
+    .map((part) => { return part.kind === 'text' ? part.text : '' })
+    .join('\n')
+}
+
+/** 聊天气泡：用户居右（琥珀渐变、右下直角），agent 居左（白底、左下直角）；
+ *  带头像列、hover 浮现复制操作、流式光标。 */
+export function MessageBubble({
+  message,
+  fileUrl,
+  agent,
+  tight = false,
+  firstOfGroup = true,
+}: {
+  message: UiMessage
+  fileUrl: (name: string) => string
+  /** 对应 agent（拿头像）；用户消息为 undefined。 */
+  agent?: AgentDef
+  /** 与同 sender 上一条相邻（收紧间距）。 */
+  tight?: boolean
+  /** 同 sender 组首条（显示头像与名字）。 */
+  firstOfGroup?: boolean
+}) {
+  const [copied, setCopied] = useState(false)
   const isUser = message.senderType === 'user'
+
+  const copy = async (): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(messagePlainText(message))
+      setCopied(true)
+      setTimeout(() => { setCopied(false) }, 1200)
+    } catch {
+      // 剪贴板不可用时静默。
+    }
+  }
+
+  const rowClass = [
+    'bubble-row',
+    isUser ? 'from-user' : 'from-agent',
+    tight ? 'tight' : '',
+    firstOfGroup ? 'first-of-group' : '',
+  ].filter(Boolean).join(' ')
+
   return (
-    <div className={`bubble-row ${isUser ? 'from-user' : 'from-agent'}`} data-sender={message.senderId}>
+    <div className={rowClass} data-sender={message.senderId}>
+      {!isUser && (
+        <span style={{ width: 40, flexShrink: 0, paddingTop: 2 }}>
+          {firstOfGroup && agent !== undefined
+            ? <Avatar avatarKey={agent.avatar} name={agent.name} seed={agent.id} size={40} />
+            : null}
+        </span>
+      )}
       <div className="bubble">
-        {!isUser && <div className="bubble-name">{message.senderName}</div>}
-        {message.parts.map((part, index) => (
-          <MessagePartView key={`${part.kind}-${index}`} part={part} fileUrl={fileUrl} />
-        ))}
-        {message.senderType === 'agent' && !message.done && <span className="bubble-cursor">▍</span>}
+        {!isUser && firstOfGroup && <div className="bubble-name">{message.senderName}</div>}
+        <div className="bubble-bubble">
+          {message.parts.map((part, index) => (
+            <MessagePartView key={`${part.kind}-${index}`} part={part} fileUrl={fileUrl} />
+          ))}
+          {message.senderType === 'agent' && !message.done && <span className="bubble-cursor">▍</span>}
+        </div>
+        <span className="bubble-actions">
+          <button
+            className="bubble-action"
+            title="复制"
+            onClick={() => { void copy() }}
+          >
+            {copied ? '✓' : '⧉'}
+          </button>
+        </span>
       </div>
     </div>
   )
 }
 
-/** 群聊接力链：一条 dispatch 记录渲染为头像间流转提示。 */
+/** 群聊接力链：一条 dispatch 记录渲染为流转提示。 */
 export function RelayChain({
   relays,
   turnIndex,
@@ -71,6 +134,7 @@ export function RelayChain({
     <div className="relay-chain" aria-label="调度轨迹">
       {items.map((relay, index) => (
         <span key={index} className={`relay-item ${relay.reason === 'loop-guard' || relay.reason === 'max-turns' ? 'is-guard' : ''}`}>
+          <span className="relay-dot" />
           {relay.fromAgent !== undefined && <>{nameOf(relay.fromAgent)} → </>}
           @{nameOf(relay.toAgent)} · {label(relay.reason)}
         </span>

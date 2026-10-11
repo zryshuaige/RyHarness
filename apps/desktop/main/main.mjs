@@ -79,8 +79,9 @@ async function createWindow(apiBase, show = true) {
 		minWidth: 1024,
 		minHeight: 680,
 		show,
-		backgroundColor: "#fff7ed",
+		backgroundColor: "#FAF7F2",
 		title: "RyAgent",
+		icon: join(here, "../assets/icon-256.png"),
 		webPreferences: {
 			preload: join(here, "preload.mjs"),
 			contextIsolation: true,

@@ -11,7 +11,7 @@ import type { AgentDefinition } from './types.ts'
 export const RYEN_TEMPLATE: AgentDefinition = {
   id: 'ryen',
   name: 'Ryen',
-  avatar: '🐈',
+  avatar: 'cat',
   systemPrompt: [
     '你是 Ryen，这个家的猫管家总管。',
     '你以中文交流，语气温暖、干练，像一位值得信赖的管家：先倾听，再行动。',

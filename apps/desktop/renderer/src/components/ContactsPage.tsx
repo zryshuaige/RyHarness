@@ -1,21 +1,60 @@
 import { useState } from 'react'
 import type { AgentDef, AgentTemplate, ProviderInfo } from '../api.ts'
-import { AgentAvatar } from './Cat.tsx'
+import { Avatar } from './avatars/Avatar.tsx'
+import { AVATARS } from './avatars/avatars.tsx'
+import { Cat } from './Cat.tsx'
 
 const TOOL_LABELS: Record<string, string> = {
   fs_read: '读文件', fs_write: '写文件', shell_exec: '执行命令', file_produce: '产出文件',
 }
 const ALL_TOOLS = Object.keys(TOOL_LABELS)
 
+/** 头像选择器：预置 SVG 库网格预览。 */
+export function AvatarPicker({
+  value,
+  onChange,
+}: {
+  value: string
+  onChange: (key: string) => void
+}) {
+  return (
+    <div className="avatar-picker" role="radiogroup" aria-label="选择头像">
+      {AVATARS.map((avatar) => (
+        <button
+          key={avatar.key}
+          type="button"
+          role="radio"
+          aria-checked={value === avatar.key}
+          className={value === avatar.key ? 'is-selected' : ''}
+          title={avatar.name}
+          onClick={() => { onChange(avatar.key) }}
+        >
+          <span
+            className="avatar-cell"
+            onClick={(event) => {
+              event.stopPropagation()
+              onChange(avatar.key)
+            }}
+          >
+            <span
+              style={{ width: 40, height: 40, display: 'inline-flex', borderRadius: '50%', overflow: 'hidden' }}
+              dangerouslySetInnerHTML={{ __html: `<svg viewBox="0 0 64 64" width="40" height="40">${avatar.svg}</svg>` }}
+            />
+            <small>{avatar.name}</small>
+          </span>
+        </button>
+      ))}
+    </div>
+  )
+}
+
 /** 通讯录：agent 卡片网格（Ryen 置顶）+ 新建/建群入口。 */
 export function ContactsPage({
   agents,
   templates,
-  providers,
   onChat,
   onCreateAgent,
   onCreateGroup,
-  onBack,
 }: {
   agents: AgentDef[]
   templates: AgentTemplate[]
@@ -23,7 +62,6 @@ export function ContactsPage({
   onChat: (agentId: string) => void
   onCreateAgent: () => void
   onCreateGroup: () => void
-  onBack: () => void
 }) {
   const sorted = [...agents].sort((a, b) => {
     if (a.id === 'ryen') return -1
@@ -31,33 +69,57 @@ export function ContactsPage({
     return a.name.localeCompare(b.name)
   })
   return (
-    <section className="contacts-page">
+    <section className="page">
       <header className="page-header">
-        <button onClick={onBack}>← 返回</button>
         <h2>通讯录</h2>
-        <div>
-          <button className="primary" onClick={onCreateGroup}>＋ 建群</button>
-          <button className="primary" onClick={onCreateAgent}>＋ 新建 Agent</button>
+        <div className="page-actions">
+          <button className="btn" onClick={onCreateGroup}>＋ 建群</button>
+          <button className="btn btn-primary" onClick={onCreateAgent}>＋ 新建 Agent</button>
         </div>
       </header>
-      <div className="contact-grid">
-        {sorted.map((agent) => (
-          <article key={agent.id} className="contact-card">
-            <AgentAvatar agent={agent} size={56} />
-            <h3>{agent.name}</h3>
-            {agent.isBuiltin && <span className="badge">内置</span>}
-            <p className="contact-model">{agent.provider} / {agent.model}</p>
-            <p className="contact-prompt">{agent.systemPrompt.slice(0, 60)}…</p>
-            <button onClick={() => { onChat(agent.id) }}>发消息</button>
-          </article>
-        ))}
+      <div className="page-scroll">
+        <div className="page-scroll-col">
+          {sorted.length === 0 ? (
+            <div className="empty-state">
+              <span className="empty-cat"><Cat mood="thinking" size={88} /></span>
+              <h3>通讯录还是空的</h3>
+              <p>从模板新建一位 agent 吧，挑个顺眼的头像。</p>
+            </div>
+          ) : (
+            <>
+              <p className="section-title">我的 Agent（{sorted.length}）</p>
+              <div className="contact-grid">
+                {sorted.map((agent) => (
+                  <article key={agent.id} className="contact-card">
+                    <Avatar avatarKey={agent.avatar} name={agent.name} seed={agent.id} size={64} />
+                    <h3>
+                      {agent.name}
+                      {agent.isBuiltin && <span className="badge">内置</span>}
+                    </h3>
+                    <p className="contact-model">{agent.provider} / {agent.model}</p>
+                    <p className="contact-prompt">{agent.systemPrompt.slice(0, 48)}…</p>
+                    <button className="btn" onClick={() => { onChat(agent.id) }}>发消息</button>
+                  </article>
+                ))}
+              </div>
+              <p className="section-title" style={{ marginTop: 24 }}>可用模板（{templates.length}）</p>
+              <div className="contact-grid">
+                {templates.map((template) => (
+                  <article key={template.key} className="contact-card" style={{ opacity: .88 }}>
+                    <h3 style={{ fontSize: 'var(--fs-base)' }}>{template.name}</h3>
+                    <p className="contact-prompt">{template.description}</p>
+                  </article>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
       </div>
-      <p className="page-hint">模板 {templates.length} 个 · 供应商 {providers.length} 个</p>
     </section>
   )
 }
 
-/** 新建 Agent：选模板 → 编辑表单。 */
+/** 新建 Agent：选模板 → 编辑表单（含头像选择器）。 */
 export function CreateAgentModal({
   templates,
   providers,
@@ -72,7 +134,7 @@ export function CreateAgentModal({
   const [templateKey, setTemplateKey] = useState(templates[0]?.key ?? 'general')
   const template = templates.find((t) => { return t.key === templateKey })
   const [name, setName] = useState('')
-  const [avatar, setAvatar] = useState('')
+  const [avatarKey, setAvatarKey] = useState('bot')
   const [systemPrompt, setSystemPrompt] = useState(template?.suggestedSystemPrompt ?? '')
   const [provider, setProvider] = useState(providers[0]?.id ?? 'siliconflow')
   const [model, setModel] = useState(template?.defaultModel ?? '')
@@ -86,6 +148,9 @@ export function CreateAgentModal({
     setSystemPrompt(next.suggestedSystemPrompt)
     setModel(next.defaultModel)
     setTools(next.defaultTools)
+    if (next.avatar !== undefined && AVATARS.some((a) => { return a.key === next.avatar })) {
+      setAvatarKey(next.avatar as string)
+    }
   }
 
   const models = providers.find((p) => { return p.id === provider })?.models ?? []
@@ -96,7 +161,7 @@ export function CreateAgentModal({
       await onSubmit({
         templateKey,
         name: name || template?.name,
-        ...avatar ? { avatar } : {},
+        avatar: avatarKey,
         systemPrompt,
         provider,
         model: model || models[0]?.id,
@@ -121,11 +186,11 @@ export function CreateAgentModal({
           <span>名字</span>
           <input value={name} placeholder={template?.name} onChange={(e) => { setName(e.target.value) }} />
         </label>
-        <label className="field">
-          <span>头像 emoji</span>
-          <input value={avatar} placeholder="💻" onChange={(e) => { setAvatar(e.target.value) }} />
-        </label>
       </div>
+      <fieldset className="field">
+        <span>头像</span>
+        <AvatarPicker value={avatarKey} onChange={setAvatarKey} />
+      </fieldset>
       <label className="field">
         <span>人设（system prompt）</span>
         <textarea rows={5} value={systemPrompt} onChange={(e) => { setSystemPrompt(e.target.value) }} />
@@ -162,8 +227,8 @@ export function CreateAgentModal({
         </div>
       </fieldset>
       <div className="modal-actions">
-        <button onClick={onClose}>取消</button>
-        <button className="primary" disabled={busy} onClick={() => { void submit() }}>保存</button>
+        <button className="btn" onClick={onClose}>取消</button>
+        <button className="btn btn-primary" disabled={busy} onClick={() => { void submit() }}>保存</button>
       </div>
     </Modal>
   )
@@ -213,7 +278,8 @@ export function CreateGroupModal({
           {agents.map((agent) => (
             <label key={agent.id}>
               <input type="checkbox" checked={selected.includes(agent.id)} onChange={() => { toggle(agent.id) }} />
-              <AgentAvatar agent={agent} size={22} /> {agent.name}
+              <Avatar avatarKey={agent.avatar} name={agent.name} seed={agent.id} size={22} />
+              {agent.name}
             </label>
           ))}
         </div>
@@ -228,61 +294,9 @@ export function CreateGroupModal({
         </select>
       </label>
       <div className="modal-actions">
-        <button onClick={onClose}>取消</button>
-        <button className="primary" disabled={busy || selected.length === 0} onClick={() => { void submit() }}>创建</button>
+        <button className="btn" onClick={onClose}>取消</button>
+        <button className="btn btn-primary" disabled={busy || selected.length === 0} onClick={() => { void submit() }}>创建</button>
       </div>
-    </Modal>
-  )
-}
-
-/** 设置面板：改 Ryen + 供应商状态。 */
-export function SettingsModal({
-  ryen,
-  providers,
-  onPatchRyen,
-  onClose,
-}: {
-  ryen: AgentDef | undefined
-  providers: ProviderInfo[]
-  onPatchRyen: (patch: { name: string; systemPrompt: string }) => Promise<void>
-  onClose: () => void
-}) {
-  const [name, setName] = useState(ryen?.name ?? 'Ryen')
-  const [systemPrompt, setSystemPrompt] = useState(ryen?.systemPrompt ?? '')
-  const [busy, setBusy] = useState(false)
-
-  return (
-    <Modal title="设置" onClose={onClose}>
-      <h4>内置管家</h4>
-      <label className="field">
-        <span>名字</span>
-        <input value={name} onChange={(e) => { setName(e.target.value) }} />
-      </label>
-      <label className="field">
-        <span>人设</span>
-        <textarea rows={5} value={systemPrompt} onChange={(e) => { setSystemPrompt(e.target.value) }} />
-      </label>
-      <div className="modal-actions">
-        <button
-          className="primary"
-          disabled={busy || ryen === undefined}
-          onClick={() => {
-            setBusy(true)
-            void onPatchRyen({ name, systemPrompt }).finally(() => { setBusy(false) })
-          }}
-        >
-          保存
-        </button>
-      </div>
-      <h4>供应商</h4>
-      {providers.map((provider) => (
-        <p key={provider.id} className={`provider-status ${provider.apiKeyConfigured ? 'ok' : 'missing'}`}>
-          {provider.apiKeyConfigured ? '✓' : '⚠️'} {provider.displayName}：
-          {provider.apiKeyConfigured
-            ? `已配置 key，${provider.models.length} 个模型`
-            : '未配置 key——设置 SILICONFLOW_API_KEY 环境变量后重启'}
-        </p>
-      ))}
     </Modal>
   )
 }
@@ -293,7 +307,7 @@ function Modal({ title, children, onClose }: { title: string; children: React.Re
       <div className="modal" onClick={(e) => { e.stopPropagation() }}>
         <header className="modal-header">
           <h3>{title}</h3>
-          <button onClick={onClose}>✕</button>
+          <button onClick={onClose} aria-label="关闭">✕</button>
         </header>
         {children}
       </div>

@@ -318,6 +318,16 @@ export class RyAgentServer {
       json(res, 200, { conversationId, lastReadSeq })
     })
 
+    /** 调度事件历史（右栏调度轨迹）。 */
+    router.get('/api/conversations/:id/dispatch', async (req, res) => {
+      const conversationId = req.params.id as string
+      if (store.getConversation(conversationId) === undefined) {
+        json(res, 404, { error: 'conversation not found' })
+        return
+      }
+      json(res, 200, { events: store.listDispatchEvents(conversationId) })
+    })
+
     router.get('/api/conversations/:id/messages', async (req, res) => {
       const conversationId = req.params.id as string
       if (store.getConversation(conversationId) === undefined) {

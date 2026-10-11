@@ -50,9 +50,22 @@ pnpm --filter @ryagent/desktop start      # electron .（file:// 加载 renderer
 
 ## 测试
 
-渲染层组件测试在 `tests/`（`@vitest-environment jsdom` pragma）：Cat 三态、消息气泡/工具行/文件卡片/接力链渲染、@补全纯逻辑、ChatStore 事件折叠。由仓库根 `pnpm test` 统一跑。
+渲染层组件测试在 `tests/`（`@vitest-environment jsdom` pragma）：Cat 三态、头像注册表（≥12 个预置 SVG + key 唯一 + 兜底色块）、群聊九宫格布局（2/3/4/5/9 人规则）、主题切换、消息气泡/工具行/文件卡片/接力链渲染、@补全纯逻辑、ChatStore 事件折叠。由仓库根 `pnpm test` 统一跑。
 
-## 实测截图（M4b 验证时真机截取）
+## 设计系统
 
-- `docs/screenshot-main.png`：三栏主界面（空状态，暖色琥珀系）。
-- `docs/screenshot-contacts.png`：通讯录页（Ryen 卡片，猫 SVG 头像渲染正常，建群/新建 Agent 入口）。
+设计 token（暖琥珀浅色 + 暖黑暗色两套、4px 基栅、阴影 3 级、圆角/字号阶梯）与交互参数依据 `docs/research/warm-amber-chat-ui-design-spec.md`：`styles.css` 内 `:root[data-theme='light'|'dark']` 切换，「我的」页或 rail 底部按钮切换并持久化到 localStorage。
+
+- **头像体系**：`renderer/src/components/avatars/` 预置 13 个同风格 SVG 头像（橘猫 Ryen/柴犬/狐狸/熊猫/兔子/猫头鹰/企鹅/仓鼠/考拉/机器人/龙/鹿/鲸鱼），Agent 的 `avatar` 字段存 avatarKey；未知 key 回退首字符暖色块；群聊为成员九宫格拼图（CSS Grid，微信规则）。
+- **软件图标**：`assets/icon-master.svg`（squircle + 琥珀渐变 + 领结猫）经 `pnpm --filter @ryagent/desktop gen:icon`（sharp + png-to-ico）导出 16–1024 PNG 与 icon.ico；BrowserWindow 与 rail logo 均使用。
+- **微交互**：hover 120ms、按压 scale(.97)、消息进入 fade+slide、typing 三点错峰、流式 40ms 批量重绘、距底 <100px 才自动跟随（否则浮出「跳至最新」）、骨架屏 shimmer、右栏展开/收起 200ms 过渡。
+
+## 实测截图（逐页真机截取，docs/redesign-*.png）
+
+- `redesign-01-chats.png`：聊天列表（群九宫格头像、未读徽标、猫管家口吻空态）。
+- `redesign-01b-chats-dark.png`：暗色聊天列表（主题持久化生效）。
+- `redesign-02-dm.png`：单聊（琥珀渐变气泡 + 方向直角、工具行、连续消息收紧、右栏资料卡 + 装饰环头像）。
+- `redesign-03-group.png`：群聊浅色（接力链、成员网格、调度轨迹）。
+- `redesign-04-contacts.png`：通讯录（SVG 头像卡片 + 模板区）。
+- `redesign-05-me.png`：我的（主题切换、供应商 key 状态）。
+- `redesign-06-dark.png`：暗色群聊（tonal elevation、降明度气泡暖白字、历史调度时间线）。
