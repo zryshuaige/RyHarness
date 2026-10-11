@@ -1,4 +1,5 @@
 import { defineConfig } from 'tsdown'
+import { standardDecorators } from '../../../scripts/tsdown-decorators.mjs'
 
 export default defineConfig({
   entry: ['src/index.ts'],
@@ -9,4 +10,5 @@ export default defineConfig({
   minify: false,
   external: [/^@ryagent\//],
   outExtensions: () => ({ js: '.js', dts: '.d.ts' }),
+  plugins: [standardDecorators()],
 })

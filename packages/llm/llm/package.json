@@ -18,6 +18,8 @@
   "dependencies": {
     "@ryagent/attachment": "workspace:*",
     "@ryagent/brand": "workspace:*",
+    "@ryagent/invariants": "workspace:*",
+    "@ryagent/schemastery": "workspace:*",
     "@ryagent/timeout": "workspace:*",
     "@ryagent/typert-protocol": "workspace:*",
     "@ryagent/util-crypto": "workspace:*",

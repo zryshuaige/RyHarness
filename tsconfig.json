@@ -6,6 +6,7 @@
   },
   "include": [
     "packages",
+    "apps",
     "scripts",
     "vitest.config.ts"
   ],

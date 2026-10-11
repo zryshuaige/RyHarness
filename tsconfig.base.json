@@ -29,7 +29,8 @@
       "@ryagent/agent": ["./packages/agent/src/index.ts"],
       "@ryagent/group": ["./packages/group/src/index.ts"],
       "@ryagent/tools": ["./packages/tools/src/index.ts"],
-      "@ryagent/session": ["./packages/session/src/index.ts"]
+      "@ryagent/session": ["./packages/session/src/index.ts"],
+      "@ryagent/server": ["./apps/server/src/index.ts"]
     }
   }
 }

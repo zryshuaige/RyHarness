@@ -49,6 +49,9 @@ function guessMime(name: string): string {
   return MIME_BY_EXT[extname(name).toLowerCase()] ?? 'application/octet-stream'
 }
 
+/** 按扩展名推断 MIME（供文件下载等复用）。 */
+export { guessMime }
+
 /**
  * 把内容写入工作区 `.ryagent-artifacts/` 并返回产物卡片。
  * 卡片字段（path/name/size/mime）即 UI 渲染文件消息所需的全部元数据。

@@ -6,3 +6,4 @@ dist/
 .env.local
 .zcode-tmp/
 .DS_Store
+data/

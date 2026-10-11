@@ -130,6 +130,21 @@ export class SessionStore {
 
   // ---- conversations ----
 
+  /** 删除一个 Agent；同时把它从所有会话的成员/调度员列表中摘除。 */
+  deleteAgent(id: string): void {
+    this.db.prepare('DELETE FROM agents WHERE id = ?').run(id)
+    for (const conversation of this.listConversations(10_000)) {
+      const members = conversation.memberAgentIds.filter((member) => { return member !== id })
+      const dispatcherRemoved = conversation.dispatcherAgentId === id
+      if (members.length === conversation.memberAgentIds.length && !dispatcherRemoved) continue
+      this.db.prepare('UPDATE conversations SET member_agent_ids = ?, dispatcher_agent_id = ? WHERE id = ?').run(
+        JSON.stringify(members),
+        dispatcherRemoved ? null : conversation.dispatcherAgentId ?? null,
+        conversation.id,
+      )
+    }
+  }
+
   /** 创建会话。 */
   createConversation(input: ConversationInput): Conversation {
     const now = Date.now()
@@ -156,6 +171,11 @@ export class SessionStore {
   getConversation(id: string): Conversation | undefined {
     const row = this.db.prepare('SELECT * FROM conversations WHERE id = ?').get(id) as Record<string, unknown> | undefined
     return row === undefined ? undefined : this.rowToConversation(row)
+  }
+
+  /** 删除会话（消息与调度事件由外键级联删除）。 */
+  deleteConversation(id: string): void {
+    this.db.prepare('DELETE FROM conversations WHERE id = ?').run(id)
   }
 
   /** 最近会话列表，按 updatedAt 倒序。 */

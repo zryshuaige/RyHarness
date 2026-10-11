@@ -23,6 +23,8 @@ packages/
   attachment/types/            @ryagent/attachment     附件类型 stub
   util/{brand,values,crypto,timeout}/   工具小包
   runtime-diagnostics/invariants/       @ryagent/invariants
+apps/
+  server/                      @ryagent/server       本地后端（HTTP + WS；API/事件契约见其 README）
 scripts/
   smoke-siliconflow.ts         SiliconFlow 冒烟（需 SILICONFLOW_API_KEY）
   demo-agent.ts                M2 集成验证（mock 适配器，不触网）
