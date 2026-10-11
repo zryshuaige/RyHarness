@@ -10,7 +10,7 @@
 import type { DatabaseSync } from 'node:sqlite'
 
 /** 当前 schema 版本；每次变更表结构时 +1 并追加迁移函数。 */
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 3
 
 /** 版本 1：初始表结构。 */
 function migrateV1(db: DatabaseSync): void {
@@ -71,10 +71,16 @@ function migrateV2(db: DatabaseSync): void {
   db.exec('ALTER TABLE messages ADD COLUMN tool_call_id TEXT')
 }
 
+/** 版本 3：conversations 增加 last_read_seq——未读徽标语义（用户已读到的消息序号）。 */
+function migrateV3(db: DatabaseSync): void {
+  db.exec('ALTER TABLE conversations ADD COLUMN last_read_seq INTEGER NOT NULL DEFAULT 0')
+}
+
 /** 全部迁移：索引即目标版本。新增迁移只追加，不改动既有条目。 */
 export const MIGRATIONS: Readonly<Record<number, (db: DatabaseSync) => void>> = {
   1: migrateV1,
   2: migrateV2,
+  3: migrateV3,
 }
 
 function userVersion(db: DatabaseSync): number {

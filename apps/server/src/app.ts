@@ -154,6 +154,9 @@ export class RyAgentServer {
 
   private routerLazy: Router | undefined
 
+  /** 每个会话一条 turn 链：同会话消息串行处理，新消息在上一 turn 结束后运行。 */
+  private readonly turnChains = new Map<string, Promise<void>>()
+
   private router(): Router {
     this.routerLazy ??= this.buildRouter()
     return this.routerLazy
@@ -244,7 +247,7 @@ export class RyAgentServer {
         return {
           ...conversation,
           lastMessagePreview: preview.slice(0, 120),
-          unreadCount: 0,
+          unreadCount: store.unreadCount(conversation.id, conversation.lastReadSeq),
         }
       })
       json(res, 200, { conversations })
@@ -304,6 +307,17 @@ export class RyAgentServer {
       json(res, 200, { deleted: req.params.id })
     })
 
+    /** 标记已读：lastReadSeq 推进到最新 seq。 */
+    router.post('/api/conversations/:id/read', async (req, res) => {
+      const conversationId = req.params.id as string
+      if (store.getConversation(conversationId) === undefined) {
+        json(res, 404, { error: 'conversation not found' })
+        return
+      }
+      const lastReadSeq = store.markConversationRead(conversationId)
+      json(res, 200, { conversationId, lastReadSeq })
+    })
+
     router.get('/api/conversations/:id/messages', async (req, res) => {
       const conversationId = req.params.id as string
       if (store.getConversation(conversationId) === undefined) {
@@ -335,8 +349,8 @@ export class RyAgentServer {
         type: 'message-start', conversationId, senderId: 'user', senderName: '用户',
         turnIndex: store.nextTurnIndex(conversationId),
       })
-      // 202：处理异步进行，过程经 WS 推送。
-      void this.runTurn(conversation, text)
+      // 202：处理异步进行，过程经 WS 推送；同会话消息串行排队。
+      this.enqueueTurn(conversation, text)
       json(res, 202, { accepted: true, conversationId })
     })
 
@@ -375,6 +389,29 @@ export class RyAgentServer {
     })
 
     return router
+  }
+
+  /** 把一轮对话排进该会话的串行链；上一 turn 未结束时先发 queued 事件。 */
+  private enqueueTurn(
+    conversation: { id: string; kind: string; memberAgentIds: string[] },
+    text: string,
+  ): void {
+    const tail = this.turnChains.get(conversation.id)
+    if (tail !== undefined) {
+      this.publish({
+        type: 'queued', conversationId: conversation.id, senderId: 'user',
+        turnIndex: this.store.nextTurnIndex(conversation.id),
+      })
+    }
+    const run = (tail ?? Promise.resolve()).catch(() => {}).then(() => {
+      return this.runTurn(conversation, text)
+    })
+    const chain = run.then(() => {
+      if (this.turnChains.get(conversation.id) === chain) this.turnChains.delete(conversation.id)
+    }, () => {
+      if (this.turnChains.get(conversation.id) === chain) this.turnChains.delete(conversation.id)
+    })
+    this.turnChains.set(conversation.id, chain)
   }
 
   /** 执行一轮对话（异步）：消费协调器事件流并发布 WS 事件。 */

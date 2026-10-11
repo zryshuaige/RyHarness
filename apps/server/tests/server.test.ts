@@ -21,12 +21,27 @@ class MockAdapter extends LlmAdapter {
     return this.calls
   }
 
+  protected lastUserText(options: GenerateOptions): string {
+    const last = options.messages[options.messages.length - 1]
+    return last === undefined ? '' : String((last.content[0] as { text?: string }).text ?? '')
+  }
+
   override providerInfo(provider: string) {
     return { id: provider, name: 'Mock' }
   }
 
-  stream(_options: GenerateOptions): AsyncIterable<StreamChunk> {
-    const text = this.replies[this.calls++] ?? ''
+  stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
+    this.calls++
+    return this.chunksFor(this.scriptedText(options))
+  }
+
+  /** 子类可覆盖：决定本次调用的回复文本。 */
+  protected scriptedText(options: GenerateOptions): string {
+    return this.replies[this.calls - 1] ?? ''
+  }
+
+  /** 子类可覆盖：自定义 chunk 流（如加延迟门）。 */
+  protected chunksFor(text: string): AsyncIterable<StreamChunk> {
     const chunks: StreamChunk[] = [
       { type: 'text-delta', index: 0, text },
       { type: 'block-end', index: 0, block: { type: 'text', text } },
@@ -204,12 +219,17 @@ describe('RyAgentServer', () => {
       expect(rows.map((m) => { return `${m.senderType}:${m.senderId ?? '-'}` }))
         .toEqual(['user:user', 'agent:ryen', `agent:${coderId}`])
 
-      // 会话列表含预览
+      // 会话列表含预览与真实未读数（两条 agent 发言未读）
       const list = await getJson(base, '/api/conversations')
       const entry = (list.body.conversations as { id: string; lastMessagePreview: string; unreadCount: number }[])
         .find((c) => { return c.id === conversationId })
       expect(entry?.lastMessagePreview).toBe('草案写好了。')
-      expect(entry?.unreadCount).toBe(0)
+      expect(entry?.unreadCount).toBe(2)
+      await postJson(base, `/api/conversations/${conversationId}/read`, {})
+      const listAfterRead = await getJson(base, '/api/conversations')
+      const entryAfter = (listAfterRead.body.conversations as { id: string; unreadCount: number }[])
+        .find((c) => { return c.id === conversationId })
+      expect(entryAfter?.unreadCount).toBe(0)
 
       // 删会话级联清消息
       const deleted = await fetch(`${base}/api/conversations/${conversationId}`, { method: 'DELETE' })
@@ -270,6 +290,104 @@ describe('RyAgentServer', () => {
       const messages = await getJson(base, `/api/conversations/${conversationId}/messages`)
       const rows = (messages.body as { messages: { senderType: string; senderId?: string }[] }).messages
       expect(rows.map((m) => { return `${m.senderType}:${m.senderId ?? '-'}` })).toEqual(['user:user', 'agent:ryen'])
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('同会话消息串行：第二个请求排队，queued 事件先行，顺序不乱', async () => {
+    // 第一个回复延迟 300ms，给第二条消息留出"撞上忙期"的窗口。
+    let releaseFirst: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { releaseFirst = resolve })
+    const calls: string[] = []
+    class GatedAdapter extends MockAdapter {
+      protected override scriptedText(options: GenerateOptions): string {
+        const text = this.lastUserText(options)
+        calls.push(text)
+        return `R${calls.length}`
+      }
+
+      protected override chunksFor(_text: string): AsyncIterable<StreamChunk> {
+        return (async function* (): AsyncGenerator<StreamChunk> {
+          if (calls.length === 1) await gate
+          yield { type: 'text-delta', index: 0, text: `R${calls.length}` }
+          yield { type: 'block-end', index: 0, block: { type: 'text', text: `R${calls.length}` } }
+          yield { type: 'finish', reason: { kind: 'stop' } }
+        })()
+      }
+    }
+    const dataDir = mkdtempSync(join(tmpdir(), 'ryagent-server-queue-'))
+    tmpDirs.push(dataDir)
+    const adapter = new GatedAdapter(['', ''])
+    const server = await RyAgentServer.create({
+      port: 0, dataDir,
+      mountLlm: (ctx) => { ctx.llm.registerAdapter(['mock'], adapter) },
+    })
+    try {
+      await fetch(`${server.url}/api/agents/ryen`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'mock', model: 'mock' }),
+      })
+      const { conversation } = await (await fetch(`${server.url}/api/conversations`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind: 'direct', agentId: 'ryen' }),
+      })).json() as { conversation: { id: string } }
+
+      const collector = collectWs(
+        server.url, conversation.id,
+        (events) => { return events.filter((e) => { return e.type === 'message-done' }).length >= 2 },
+      )
+      await collector.ready
+      const first = await postJson(server.url, `/api/conversations/${conversation.id}/messages`, { text: '第一条' })
+      expect(first.status).toBe(202)
+      const second = await postJson(server.url, `/api/conversations/${conversation.id}/messages`, { text: '第二条' })
+      expect(second.status).toBe(202)
+      releaseFirst()
+      const events = await collector.done
+      // queued 事件在第二条处理前到达。
+      expect(events.some((e) => { return e.type === 'queued' })).toBe(true)
+      expect(calls).toEqual(['第一条', '第二条'])
+      const messages = await getJson(server.url, `/api/conversations/${conversation.id}/messages`)
+      const rows = (messages.body as { messages: { contentBlocks: { text?: string }[] }[] }).messages
+      const texts = rows.map((m) => { return (m.contentBlocks[0] as { text?: string }).text })
+      expect(texts).toEqual(['第一条', 'R1', '第二条', 'R2'])
+    } finally {
+      await server.close()
+    }
+  }, 20_000)
+
+  it('未读徽标：agent 回复后 unreadCount=1，POST read 归零；用户消息不计未读', async () => {
+    const { server, base } = await startServer(['未读回复。'])
+    try {
+      await fetch(`${base}/api/agents/ryen`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'mock', model: 'mock' }),
+      })
+      const { conversation } = await (await fetch(`${base}/api/conversations`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind: 'direct', agentId: 'ryen' }),
+      })).json() as { conversation: { id: string } }
+
+      const collector = collectWs(base, conversation.id, (events) => {
+        return events.some((e) => { return e.type === 'message-done' })
+      })
+      await collector.ready
+      await postJson(base, `/api/conversations/${conversation.id}/messages`, { text: '在吗' })
+      await collector.done
+
+      const list1 = await getJson(base, '/api/conversations')
+      const entry1 = (list1.body.conversations as { id: string; unreadCount: number }[])
+        .find((c) => { return c.id === conversation.id })
+      expect(entry1?.unreadCount).toBe(1)
+
+      const read = await postJson(base, `/api/conversations/${conversation.id}/read`, {})
+      expect(read.status).toBe(200)
+      expect((read.body as { lastReadSeq: number }).lastReadSeq).toBeGreaterThan(0)
+
+      const list2 = await getJson(base, '/api/conversations')
+      const entry2 = (list2.body.conversations as { id: string; unreadCount: number }[])
+        .find((c) => { return c.id === conversation.id })
+      expect(entry2?.unreadCount).toBe(0)
     } finally {
       await server.close()
     }

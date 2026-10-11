@@ -109,15 +109,7 @@ async function main() {
 		return;
 	}
 	app.on("activate", () => {
-		if (BrowserWindow.getAllWindows().length === 0) RyAgentServer.create({
-			port: 0,
-			host: "127.0.0.1",
-			dataDir: process.env.RYAGENT_DATA_DIR ?? ""
-		}).then((again) => {
-			return createWindow(again.url);
-		}).then((window) => {
-			window.focus();
-		});
+		if (BrowserWindow.getAllWindows().length === 0) createWindow(server.url);
 	});
 	app.on("window-all-closed", () => {
 		if (process.platform !== "darwin") app.quit();

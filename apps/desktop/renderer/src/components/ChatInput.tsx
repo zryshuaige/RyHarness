@@ -15,10 +15,12 @@ export function ChatInput({
   members,
   onSend,
   disabled,
+  hint,
 }: {
   members: MentionMember[]
   onSend: (text: string) => void
   disabled?: boolean
+  hint?: string
 }) {
   const [text, setText] = useState('')
   const [cursor, setCursor] = useState(0)
@@ -74,6 +76,7 @@ export function ChatInput({
 
   return (
     <div className="chat-input-wrap">
+      {hint !== undefined && <p className="queue-hint">{hint}</p>}
       {candidates.length > 0 && (
         <ul className="mention-menu" role="listbox">
           {candidates.map((member, index) => (

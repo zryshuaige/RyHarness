@@ -43,11 +43,14 @@ export function ChatView({
   conversation,
   agents,
   store,
+  onRead,
 }: {
   api: ApiClient
   conversation: Conversation
   agents: AgentDef[]
   store: ChatStore
+  /** 标记已读后回调（刷新左栏未读徽标）。 */
+  onRead?: () => void
 }) {
   const snapshot = useChat(store)
   const [history, setHistory] = useState<ReturnType<typeof fromHistory>>([])
@@ -72,6 +75,8 @@ export function ChatView({
       if (!cancelled) setHistoryLoaded(true)
     })
     const unsubscribe = api.subscribe(conversation.id, (event) => { store.apply(event) })
+    // 打开会话即标记已读。
+    api.markRead(conversation.id).then(() => { onRead?.() }).catch(() => {})
     return () => {
       cancelled = true
       unsubscribe()
@@ -159,7 +164,12 @@ export function ChatView({
         )}
       </div>
 
-      <ChatInput members={conversation.kind === 'group' ? members : []} onSend={(text) => { void send(text) }} />
+      <ChatInput
+        members={conversation.kind === 'group' ? members : []}
+        onSend={(text) => { void send(text) }}
+        disabled={snapshot.queueing}
+        hint={snapshot.queueing ? '上一条还在处理，已排队…' : undefined}
+      />
     </section>
   )
 }

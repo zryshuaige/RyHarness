@@ -40,6 +40,7 @@ export interface Conversation {
   title: string
   memberAgentIds: string[]
   dispatcherAgentId?: string
+  lastReadSeq: number
   createdAt: number
   updatedAt: number
   lastMessagePreview?: string
@@ -69,6 +70,7 @@ export type WsEvent =
   | { type: 'dispatch'; conversationId: string; fromAgent?: string; toAgent: string; reason: string; turnIndex: number }
   | { type: 'message-done'; conversationId: string; senderId: string; turnIndex: number }
   | { type: 'error'; conversationId: string; message: string; code: string }
+  | { type: 'queued'; conversationId: string; senderId: 'user'; turnIndex: number }
 
 // ---- 客户端 ----
 
@@ -127,6 +129,11 @@ export class ApiClient {
 
   postMessage(conversationId: string, text: string): Promise<{ accepted: boolean }> {
     return this.request(`/api/conversations/${conversationId}/messages`, { method: 'POST', body: JSON.stringify({ text }) })
+  }
+
+  /** 标记会话已读（未读徽标归零）。 */
+  markRead(conversationId: string): Promise<{ conversationId: string; lastReadSeq: number }> {
+    return this.request(`/api/conversations/${conversationId}/read`, { method: 'POST', body: '{}' })
   }
 
   fileUrl(name: string): string {

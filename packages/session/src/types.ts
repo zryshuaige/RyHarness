@@ -31,6 +31,8 @@ export interface Conversation {
   memberAgentIds: string[]
   /** 群聊调度员 agent id：决定每条用户消息路由给谁；单聊为空。 */
   dispatcherAgentId?: string
+  /** 用户已读到的消息序号（未读 = seq 更大且非本人发送的消息数）。 */
+  lastReadSeq: number
   createdAt: number
   updatedAt: number
 }

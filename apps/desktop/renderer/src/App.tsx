@@ -96,7 +96,14 @@ export function App() {
             onOpenSettings={() => { setModal('settings') }}
           />
           {active !== undefined ? (
-            <ChatView key={active.id} api={api} conversation={active} agents={agents} store={store} />
+            <ChatView
+              key={active.id}
+              api={api}
+              conversation={active}
+              agents={agents}
+              store={store}
+              onRead={() => { void refresh() }}
+            />
           ) : (
             <section className="chat-view chat-empty">
               <p>选择一个会话，或去通讯录找 agent 聊聊。</p>

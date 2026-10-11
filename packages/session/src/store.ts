@@ -154,15 +154,17 @@ export class SessionStore {
       title: input.title ?? '',
       memberAgentIds: [...input.memberAgentIds],
       ...input.dispatcherAgentId === undefined ? {} : { dispatcherAgentId: input.dispatcherAgentId },
+      lastReadSeq: 0,
       createdAt: now,
       updatedAt: now,
     }
     this.db.prepare(`
-      INSERT INTO conversations (id, kind, title, member_agent_ids, dispatcher_agent_id, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO conversations (id, kind, title, member_agent_ids, dispatcher_agent_id, last_read_seq, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       conversation.id, conversation.kind, conversation.title,
-      JSON.stringify(conversation.memberAgentIds), conversation.dispatcherAgentId ?? null, now, now,
+      JSON.stringify(conversation.memberAgentIds), conversation.dispatcherAgentId ?? null,
+      0, now, now,
     )
     return conversation
   }
@@ -176,6 +178,23 @@ export class SessionStore {
   /** 删除会话（消息与调度事件由外键级联删除）。 */
   deleteConversation(id: string): void {
     this.db.prepare('DELETE FROM conversations WHERE id = ?').run(id)
+  }
+
+  /** 未读数：seq 大于 lastReadSeq 且非用户发送的消息条数。 */
+  unreadCount(conversationId: string, lastReadSeq: number): number {
+    const row = this.db.prepare(
+      'SELECT COUNT(*) AS count FROM messages WHERE conversation_id = ? AND seq > ? AND sender_type != \'user\'',
+    ).get(conversationId, lastReadSeq) as { count: number }
+    return Number(row.count)
+  }
+
+  /** 标记已读：lastReadSeq 推进到当前最新消息序号；返回推进后的值。 */
+  markConversationRead(conversationId: string): number {
+    const row = this.db.prepare('SELECT COALESCE(MAX(seq), 0) AS max_seq FROM messages WHERE conversation_id = ?')
+      .get(conversationId) as { max_seq: number }
+    const seq = Number(row.max_seq)
+    this.db.prepare('UPDATE conversations SET last_read_seq = ? WHERE id = ?').run(seq, conversationId)
+    return seq
   }
 
   /** 最近会话列表，按 updatedAt 倒序。 */
@@ -198,6 +217,7 @@ export class SessionStore {
       ...row.dispatcher_agent_id === null || row.dispatcher_agent_id === undefined
         ? {}
         : { dispatcherAgentId: String(row.dispatcher_agent_id) },
+      lastReadSeq: Number(row.last_read_seq ?? 0),
       createdAt: Number(row.created_at),
       updatedAt: Number(row.updated_at),
     }

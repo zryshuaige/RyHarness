@@ -59,10 +59,9 @@ async function main(): Promise<void> {
   }
 
   app.on('activate', () => {
+    // macOS 点击 Dock 图标：复用已有 server 实例，只在窗口全关时重建窗口。
     if (BrowserWindow.getAllWindows().length === 0) {
-      void RyAgentServer.create({ port: 0, host: '127.0.0.1', dataDir: process.env.RYAGENT_DATA_DIR ?? '' })
-        .then((again) => { return createWindow(again.url) })
-        .then((window) => { window.focus() })
+      void createWindow(server.url)
     }
   })
   app.on('window-all-closed', () => {

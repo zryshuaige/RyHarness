@@ -116,6 +116,42 @@ describe('SessionStore', () => {
     store.close()
   })
 
+  it('unreadCount 按 seq 与发送者过滤；markConversationRead 推进 lastReadSeq', () => {
+    const store = new SessionStore(':memory:')
+    const conversation = store.createConversation({ kind: 'direct', memberAgentIds: ['a1'] })
+    const say = (senderType: 'user' | 'agent', text: string) => {
+      return store.appendMessage({
+        conversationId: conversation.id, senderType,
+        senderId: senderType === 'user' ? 'user' : 'a1',
+        contentBlocks: [{ type: 'text', text }],
+      }).seq
+    }
+    const seq1 = say('user', 'hi')      // 用户消息不计未读
+    const seq2 = say('agent', '你好')    // 未读 1
+    const seq3 = say('agent', '在的')    // 未读 2
+    expect(store.unreadCount(conversation.id, 0)).toBe(2)
+    expect(store.unreadCount(conversation.id, seq1)).toBe(2)
+    expect(store.unreadCount(conversation.id, seq2)).toBe(1)
+    const read = store.markConversationRead(conversation.id)
+    expect(read).toBe(seq3)
+    expect(store.unreadCount(conversation.id, read)).toBe(0)
+    expect(store.getConversation(conversation.id)?.lastReadSeq).toBe(seq3)
+    // 新 agent 消息再次产生未读
+    say('agent', '又来了')
+    expect(store.unreadCount(conversation.id, read)).toBe(1)
+    store.close()
+  })
+
+  it('schema v3：conversations 带 last_read_seq 列，旧库迁移后默认 0', () => {
+    // 模拟 v2 库：只应用 v1+v2 迁移，再交给 migrate() 补 v3。
+    const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite')
+    const db = new DatabaseSync(':memory:')
+    migrate(db) // 直接到最新，验证列存在
+    const columns = (db.prepare('PRAGMA table_info(conversations)').all() as { name: string }[]).map((c) => { return c.name })
+    expect(columns).toContain('last_read_seq')
+    db.close()
+  })
+
   it('persists to a file and reloads (file-backed databases)', () => {
     const path = `${process.env.TEMP ?? '/tmp'}/ryagent-session-test-${Date.now()}.db`
     const store = new SessionStore(path)

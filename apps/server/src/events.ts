@@ -56,3 +56,10 @@ export type WsEvent =
   }
   | { type: 'message-done'; conversationId: string; senderId: string; turnIndex: number }
   | { type: 'error'; conversationId: string; message: string; code: string }
+  | {
+    type: 'queued'
+    conversationId: string
+    /** 排队的用户消息。 */
+    senderId: 'user'
+    turnIndex: number
+  }

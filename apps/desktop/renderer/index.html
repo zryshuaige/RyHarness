@@ -3,6 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- CSP：单文件内联产物需要 script/style 的 unsafe-inline；网络只放行本机回环的 http/ws。 -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src http://127.0.0.1:* ws://127.0.0.1:*; img-src 'self' data:"
+    />
     <title>RyAgent</title>
   </head>
   <body>

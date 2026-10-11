@@ -35,10 +35,12 @@ export interface ChatSnapshot {
   relays: RelayItem[]
   /** senderId → 正在生成中的消息数。 */
   typing: Record<string, number>
+  /** 有消息在排队等待上一 turn 结束。 */
+  queueing: boolean
   error?: { message: string; code: string }
 }
 
-const EMPTY: ChatSnapshot = { messages: [], relays: [], typing: {} }
+const EMPTY: ChatSnapshot = { messages: [], relays: [], typing: {}, queueing: false }
 
 /** 一条消息内文本部件的累积写入辅助。 */
 function appendText(parts: MessagePart[], text: string): void {
@@ -75,6 +77,7 @@ export class ChatStore {
       messages: this.snapshot.messages.map((m) => { return { ...m, parts: [...m.parts] } }),
       relays: [...this.snapshot.relays],
       typing: { ...this.snapshot.typing },
+      queueing: this.snapshot.queueing,
       ...this.snapshot.error === undefined ? {} : { error: this.snapshot.error },
     }
     fn(draft)
@@ -159,6 +162,7 @@ export class ChatStore {
       }
       case 'message-done': {
         this.mutate((draft) => {
+          draft.queueing = false
           const key = this.streamingKey(event.senderId, event.turnIndex)
           const index = draft.messages.findIndex((m) => { return m.key === key })
           if (index >= 0) {
@@ -168,6 +172,12 @@ export class ChatStore {
           const remaining = (draft.typing[event.senderId] ?? 1) - 1
           if (remaining <= 0) delete draft.typing[event.senderId]
           else draft.typing[event.senderId] = remaining
+        })
+        return
+      }
+      case 'queued': {
+        this.mutate((draft) => {
+          draft.queueing = true
         })
         return
       }
