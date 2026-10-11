@@ -1,0 +1,8 @@
+node_modules/
+lib/
+dist/
+*.log
+.env
+.env.local
+.zcode-tmp/
+.DS_Store

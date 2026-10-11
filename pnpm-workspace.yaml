@@ -1,0 +1,6 @@
+packages:
+  - packages/*/*
+  - vendor/*
+
+allowBuilds:
+  esbuild: true
