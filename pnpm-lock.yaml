@@ -39,6 +39,15 @@ importers:
         specifier: workspace:*
         version: link:../../../vendor/cordis
 
+  packages/group:
+    dependencies:
+      '@ryagent/agent':
+        specifier: workspace:*
+        version: link:../agent
+      '@ryagent/llm':
+        specifier: workspace:*
+        version: link:../llm/llm
+
   packages/llm/llm:
     dependencies:
       '@ryagent/attachment':
@@ -90,7 +99,20 @@ importers:
         specifier: workspace:*
         version: link:../../../vendor/schemastery
 
-  packages/session: {}
+  packages/session:
+    dependencies:
+      '@ryagent/agent':
+        specifier: workspace:*
+        version: link:../agent
+      '@ryagent/brand':
+        specifier: workspace:*
+        version: link:../util/brand
+      '@ryagent/group':
+        specifier: workspace:*
+        version: link:../group
+      '@ryagent/llm':
+        specifier: workspace:*
+        version: link:../llm/llm
 
   packages/tools:
     dependencies:

@@ -14,5 +14,11 @@
   },
   "scripts": {
     "build": "tsdown"
+  },
+  "dependencies": {
+    "@ryagent/agent": "workspace:*",
+    "@ryagent/brand": "workspace:*",
+    "@ryagent/group": "workspace:*",
+    "@ryagent/llm": "workspace:*"
   }
 }

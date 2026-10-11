@@ -10,7 +10,7 @@
 import type { DatabaseSync } from 'node:sqlite'
 
 /** 当前 schema 版本；每次变更表结构时 +1 并追加迁移函数。 */
-export const SCHEMA_VERSION = 1
+export const SCHEMA_VERSION = 2
 
 /** 版本 1：初始表结构。 */
 function migrateV1(db: DatabaseSync): void {
@@ -66,9 +66,15 @@ function migrateV1(db: DatabaseSync): void {
   `)
 }
 
+/** 版本 2：messages 增加 tool_call_id——AgentLoop 的工具结果消息需要带回 callId 才能重建多轮请求历史。 */
+function migrateV2(db: DatabaseSync): void {
+  db.exec('ALTER TABLE messages ADD COLUMN tool_call_id TEXT')
+}
+
 /** 全部迁移：索引即目标版本。新增迁移只追加，不改动既有条目。 */
 export const MIGRATIONS: Readonly<Record<number, (db: DatabaseSync) => void>> = {
   1: migrateV1,
+  2: migrateV2,
 }
 
 function userVersion(db: DatabaseSync): number {

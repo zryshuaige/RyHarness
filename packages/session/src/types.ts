@@ -51,6 +51,8 @@ export interface StoredMessage {
   contentBlocks: unknown[]
   /** 群聊 @提及的 agent id 列表。 */
   mentions: string[]
+  /** 工具结果消息对应的 callId（其他消息为空）。 */
+  toolCallId?: string
   /** 会话内的轮次序号（同一轮用户输入 + agent 回复 + 工具结果共享）。 */
   turnIndex: number
   createdAt: number

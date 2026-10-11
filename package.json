@@ -12,7 +12,8 @@
     "test": "vitest run",
     "build": "pnpm -r run build",
     "smoke:siliconflow": "tsx scripts/smoke-siliconflow.ts",
-    "demo:agent": "tsx scripts/demo-agent.ts"
+    "demo:agent": "tsx scripts/demo-agent.ts",
+    "demo:group": "tsx scripts/demo-group.ts"
   },
   "devDependencies": {
     "@types/node": "^22.20.0",

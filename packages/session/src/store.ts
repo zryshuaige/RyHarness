@@ -37,6 +37,8 @@ export interface MessageInput {
   senderId?: string
   contentBlocks: unknown[]
   mentions?: string[]
+  /** 工具结果消息：对应 tool_call 的 callId。 */
+  toolCallId?: string
   turnIndex?: number
 }
 
@@ -194,15 +196,17 @@ export class SessionStore {
       ...input.senderId === undefined ? {} : { senderId: input.senderId },
       contentBlocks: input.contentBlocks,
       mentions: input.mentions ?? [],
+      ...input.toolCallId === undefined ? {} : { toolCallId: input.toolCallId },
       turnIndex: input.turnIndex ?? 0,
       createdAt: now,
     }
     const result = this.db.prepare(`
-      INSERT INTO messages (id, conversation_id, sender_type, sender_id, content_blocks, mentions, turn_index, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO messages (id, conversation_id, sender_type, sender_id, content_blocks, mentions, tool_call_id, turn_index, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       message.id, message.conversationId, message.senderType, message.senderId ?? null,
-      JSON.stringify(message.contentBlocks), JSON.stringify(message.mentions), message.turnIndex, now,
+      JSON.stringify(message.contentBlocks), JSON.stringify(message.mentions),
+      message.toolCallId ?? null, message.turnIndex, now,
     )
     message.seq = Number(result.lastInsertRowid)
     this.touchConversation(input.conversationId, now)
@@ -219,6 +223,13 @@ export class SessionStore {
     return rows.reverse().map((row) => { return this.rowToMessage(row) })
   }
 
+  /** 会话的下一个 turn 序号（max(turn_index) + 1，首条为 0）。 */
+  nextTurnIndex(conversationId: string): number {
+    const row = this.db.prepare('SELECT COALESCE(MAX(turn_index), -1) + 1 AS next FROM messages WHERE conversation_id = ?')
+      .get(conversationId) as { next: number }
+    return Number(row.next)
+  }
+
   private rowToMessage(row: Record<string, unknown>): StoredMessage {
     return {
       id: String(row.id),
@@ -228,6 +239,7 @@ export class SessionStore {
       ...row.sender_id === null || row.sender_id === undefined ? {} : { senderId: String(row.sender_id) },
       contentBlocks: parseJsonArray(String(row.content_blocks)),
       mentions: parseJsonArray(String(row.mentions)) as string[],
+      ...row.tool_call_id === null || row.tool_call_id === undefined ? {} : { toolCallId: String(row.tool_call_id) },
       turnIndex: Number(row.turn_index),
       createdAt: Number(row.created_at),
     }
@@ -248,9 +260,9 @@ export class SessionStore {
     return event
   }
 
-  /** 按会话列出调度事件，时间升序。 */
+  /** 按会话列出调度事件，写入顺序（rowid）升序——同毫秒时间戳也能保持确定性顺序。 */
   listDispatchEvents(conversationId: string): DispatchEvent[] {
-    const rows = this.db.prepare('SELECT * FROM dispatch_events WHERE conversation_id = ? ORDER BY created_at, id')
+    const rows = this.db.prepare('SELECT * FROM dispatch_events WHERE conversation_id = ? ORDER BY rowid')
       .all(conversationId) as Record<string, unknown>[]
     return rows.map((row): DispatchEvent => {
       return {

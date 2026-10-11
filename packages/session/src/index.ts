@@ -11,6 +11,8 @@
 export { SessionStore } from './store.ts'
 export type { AgentInput, ConversationInput, MessageInput, MessagePage } from './store.ts'
 export { SCHEMA_VERSION, MIGRATIONS, migrate } from './schema.ts'
+export { SessionCoordinator } from './coordinator.ts'
+export type { CoordinatorOptions, RunContext } from './coordinator.ts'
 export type {
   Conversation,
   ConversationKind,

@@ -19,6 +19,7 @@ import {
   isHarnessError,
 } from '@ryagent/llm'
 import type {
+  AssistantMessage,
   FinishReason,
   GenerateOptions,
   LlmRuntime,
@@ -40,6 +41,8 @@ export interface AgentLoopOptions {
   maxSteps?: number
   /** 起始历史（从持久层恢复的消息），循环会复制后追加。 */
   history?: readonly Message[]
+  /** 每步组装出完整 assistant 消息时回调（群聊调度器据此持久化/解析 @提及）。 */
+  onAssistantMessage?: (message: AssistantMessage) => void
 }
 
 const DEFAULT_MAX_STEPS = 16
@@ -111,6 +114,7 @@ export class AgentLoop {
       }
 
       const message = assembler.message({ provider: definition.provider, model: definition.model })
+      this.options.onAssistantMessage?.(message)
       history.push(message)
       const calls = message.content.filter((block): block is ToolCallBlock => { return block.type === 'tool-call' })
       const finish: FinishReason = assembler.finish

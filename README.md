@@ -16,8 +16,9 @@ packages/
     llm/                       @ryagent/llm           LLM 服务缝（LlmAdapter/LlmRuntime/StreamChunk）
     openai/                    @ryagent/llm-openai    OpenAI 兼容适配器
   agent/                       @ryagent/agent        精简 agent 运行时（AgentDefinition/Ryen 模板/AgentLoop）
+  group/                       @ryagent/group        群聊调度器（@直路由 + 调度员选路 + loop-guard 护栏）
   tools/                       @ryagent/tools        基础工具（fs_read/fs_write/shell_exec/file_produce）
-  session/                     @ryagent/session      SQLite 持久化（node:sqlite）
+  session/                     @ryagent/session      SQLite 持久化 + SessionCoordinator（node:sqlite）
   typert/protocol/             @ryagent/typert-protocol  Typert RPC 基类
   attachment/types/            @ryagent/attachment     附件类型 stub
   util/{brand,values,crypto,timeout}/   工具小包
