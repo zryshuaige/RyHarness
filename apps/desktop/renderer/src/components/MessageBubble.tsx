@@ -51,6 +51,7 @@ export function MessageBubble({
   agent,
   tight = false,
   firstOfGroup = true,
+  onFeedback,
 }: {
   message: UiMessage
   fileUrl: (name: string) => string
@@ -60,8 +61,11 @@ export function MessageBubble({
   tight?: boolean
   /** 同 sender 组首条（显示头像与名字）。 */
   firstOfGroup?: boolean
+  /** 👍/👎 反馈（仅 agent 消息）。 */
+  onFeedback?: (message: UiMessage, signal: 'thumb_up' | 'thumb_down') => void
 }) {
   const [copied, setCopied] = useState(false)
+  const [feedback, setFeedback] = useState<'thumb_up' | 'thumb_down' | undefined>(undefined)
   const isUser = message.senderType === 'user'
 
   const copy = async (): Promise<void> => {
@@ -106,6 +110,30 @@ export function MessageBubble({
           >
             <Icon name={copied ? 'check' : 'copy'} size={14} />
           </button>
+          {!isUser && onFeedback !== undefined && message.done && (
+            <>
+              <button
+                className={`bubble-action ${feedback === 'thumb_up' ? 'is-active' : ''}`}
+                title="有帮助"
+                onClick={() => {
+                  setFeedback('thumb_up')
+                  onFeedback(message, 'thumb_up')
+                }}
+              >
+                <Icon name="thumbs-up" size={14} />
+              </button>
+              <button
+                className={`bubble-action ${feedback === 'thumb_down' ? 'is-active-neg' : ''}`}
+                title="有问题（触发反思）"
+                onClick={() => {
+                  setFeedback('thumb_down')
+                  onFeedback(message, 'thumb_down')
+                }}
+              >
+                <Icon name="thumbs-down" size={14} />
+              </button>
+            </>
+          )}
         </span>
       </div>
     </div>

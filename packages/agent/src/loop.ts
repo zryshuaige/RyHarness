@@ -48,12 +48,35 @@ export interface AgentLoopOptions {
    * enqueueExtraction（绝不阻塞回复）。记忆故障不得影响对话。
    */
   memory?: AgentMemoryHooks
+  /**
+   * 自我进化钩子（可选）：组装前 compile 注入 [经验手册]/[上次教训]；
+   * 每轮结束异步 enqueueTurn（Reflector 计数 + Reflexion + Curator delta）。
+   */
+  evolution?: AgentEvolutionHooks
 }
 
 /** 记忆系统对运行时的最小接口（由 @ryagent/memory 的 MemoryService 实现）。 */
 export interface AgentMemoryHooks {
   recall(agentId: string, inputText: string): Promise<string | undefined>
   enqueueExtraction(agentId: string, agentName: string, conversationId: string, turnText: string): void
+}
+
+/** 一轮轨迹数据（进化管线的输入，由 @ryagent/evolve 消费）。 */
+export interface EvolutionTurnData {
+  userText: string
+  assistantText: string
+  toolResults: { name: string; isError: boolean }[]
+  /** LLM 流是否以错误收尾。 */
+  llmError: boolean
+  /** 本轮注入的 playbook 条目 / 教训（归因计数用）。 */
+  injectedPlaybookEntryIds: string[]
+  injectedReflectionIds: string[]
+}
+
+/** 自我进化对运行时的最小接口（由 @ryagent/evolve 的 EvolveService 实现）。 */
+export interface AgentEvolutionHooks {
+  compile(agentId: string): Promise<{ text: string; playbookEntryIds: string[]; reflectionIds: string[] } | undefined>
+  enqueueTurn(agentId: string, agentName: string, conversationId: string, turn: EvolutionTurnData): void
 }
 
 const DEFAULT_MAX_STEPS = 16
@@ -100,12 +123,30 @@ export class AgentLoop {
         memoryBlock = undefined
       }
     }
-    const systemPrompt = memoryBlock === undefined
-      ? definition.systemPrompt
-      : `${definition.systemPrompt}\n\n${memoryBlock}`
+    // 自我进化编译（playbook + 上次教训）；故障静默降级。
+    let evolutionBlock: string | undefined
+    let injectedPlaybookEntryIds: string[] = []
+    let injectedReflectionIds: string[] = []
+    if (this.options.evolution !== undefined) {
+      try {
+        const compiled = await this.options.evolution.compile(definition.id)
+        evolutionBlock = compiled?.text
+        injectedPlaybookEntryIds = compiled?.playbookEntryIds ?? []
+        injectedReflectionIds = compiled?.reflectionIds ?? []
+      } catch {
+        evolutionBlock = undefined
+      }
+    }
+    const systemPrompt = [
+      definition.systemPrompt,
+      memoryBlock,
+      evolutionBlock,
+    ].filter((part): part is string => { return part !== undefined }).join('\n\n')
 
     let steps = 0
     let assistantText = ''
+    let llmError = false
+    const toolResults: { name: string; isError: boolean }[] = []
     try {
       while (steps < maxSteps) {
         steps++
@@ -134,6 +175,7 @@ export class AgentLoop {
             }
           }
         } catch (error) {
+          llmError = true
           const failure = failureOf(error)
           yield { type: 'error', message: failure.message, code: failure.code }
           return
@@ -160,6 +202,7 @@ export class AgentLoop {
 
         for (const call of calls) {
           const result = await this.executeCall(call, context)
+          toolResults.push({ name: call.name, isError: result.isError === true })
           yield {
             type: 'tool-result',
             callId: call.id,
@@ -181,6 +224,23 @@ export class AgentLoop {
         code: 'MAX_STEPS',
       }
     } finally {
+      // 自我进化：每轮轨迹入队（Reflector/Reflexion/Curator，异步）。
+      // 无 assistant 文本但发生错误/工具调用的轮次也要入队（反思需要失败信号）。
+      if (this.options.evolution !== undefined
+        && (assistantText.trim().length > 0 || llmError || toolResults.length > 0)) {
+        try {
+          this.options.evolution.enqueueTurn(definition.id, definition.name, '', {
+            userText: input.text,
+            assistantText: assistantText.trim(),
+            toolResults,
+            llmError,
+            injectedPlaybookEntryIds,
+            injectedReflectionIds,
+          })
+        } catch {
+          // 进化入队故障不影响对话。
+        }
+      }
       // 长期记忆抽取（异步管线，绝不阻塞回复）；至少要有 assistant 内容才入队。
       if (this.options.memory !== undefined && assistantText.trim().length > 0) {
         try {

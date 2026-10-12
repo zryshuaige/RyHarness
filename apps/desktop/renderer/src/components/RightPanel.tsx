@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { AgentDef, ApiClient, Conversation } from '../api.ts'
 import { MemoryPanel } from './MemoryPanel.tsx'
+import { PlaybookPanel } from './PlaybookPanel.tsx'
 import { Icon } from './Icon.tsx'
 import { Avatar } from './avatars/Avatar.tsx'
 import type { RelayItem, UiMessage } from '../store.ts'
@@ -43,6 +44,7 @@ export function RightPanel({
   onToggle: () => void
 }) {
   const [memoryFor, setMemoryFor] = useState<AgentDef | undefined>(undefined)
+  const [playbookFor, setPlaybookFor] = useState<AgentDef | undefined>(undefined)
   if (collapsed) {
     return (
       <aside className="right-panel is-collapsed">
@@ -64,6 +66,7 @@ export function RightPanel({
             artifacts={collectArtifacts(messages)}
             fileUrl={fileUrl}
             onShowMemories={setMemoryFor}
+            onShowPlaybook={setPlaybookFor}
           />
         ) : (
           <GroupInfo
@@ -75,6 +78,14 @@ export function RightPanel({
           />
         )}
       </div>
+      {playbookFor !== undefined && (
+        <PlaybookPanel
+          api={api}
+          agentId={playbookFor.id}
+          agentName={playbookFor.name}
+          onClose={() => { setPlaybookFor(undefined) }}
+        />
+      )}
       {memoryFor !== undefined && (
         <MemoryPanel
           api={api}
@@ -117,12 +128,14 @@ function DirectProfile({
   artifacts,
   fileUrl,
   onShowMemories,
+  onShowPlaybook,
 }: {
   agentId: string | undefined
   agents: AgentDef[]
   artifacts: { callId: string; name: string; size: number; mime: string }[]
   fileUrl: (name: string) => string
   onShowMemories: (agent: AgentDef) => void
+  onShowPlaybook: (agent: AgentDef) => void
 }) {
   const agent = agents.find((a) => { return a.id === agentId })
   if (agent === undefined) return <p className="panel-empty">未找到 agent</p>
@@ -134,7 +147,10 @@ function DirectProfile({
           {agent.name}
           {agent.isBuiltin && <span className="badge">内置</span>}
         </h3>
-        <button className="btn" style={{ marginTop: 4 }} onClick={() => { onShowMemories(agent) }}><Icon name="brain" size={15} /> 记忆</button>
+        <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+          <button className="btn" onClick={() => { onShowMemories(agent) }}><Icon name="brain" size={15} /> 记忆</button>
+          <button className="btn" onClick={() => { onShowPlaybook(agent) }}><Icon name="check" size={15} /> 经验手册</button>
+        </div>
       </div>
       <dl className="profile-fields">
         <dt>人设</dt>

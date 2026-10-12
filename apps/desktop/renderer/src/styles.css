@@ -811,3 +811,12 @@ input, textarea, select { font-family: inherit; color: var(--text-primary); }
 /* 跳至最新：箭头转向下 */
 .jump-icon { transform: rotate(90deg); }
 .theme-toggle button { display: inline-flex; align-items: center; gap: 5px; }
+
+/* ---- 18. 反馈与经验手册 ---- */
+.bubble-action.is-active { color: var(--success); border-color: var(--success); }
+.bubble-action.is-active-neg { color: var(--danger); border-color: var(--danger); }
+.pb-count { flex-shrink: 0; font-size: var(--fs-xs); font-weight: 700; border-radius: 999px; padding: 1px 8px; }
+.pb-count.pos { background: color-mix(in srgb, #4ADE80 15%, transparent); color: var(--success); }
+.pb-count.neg { background: color-mix(in srgb, #F87171 15%, transparent); color: var(--danger); }
+.memory-row.is-deprecated { opacity: .5; }
+.memory-row.is-deprecated .memory-content { text-decoration: line-through; }

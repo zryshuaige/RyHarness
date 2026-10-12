@@ -63,6 +63,9 @@
       ],
       "@ryagent/memory": [
         "./packages/memory/src/index.ts"
+      ],
+      "@ryagent/evolve": [
+        "./packages/evolve/src/index.ts"
       ]
     }
   },

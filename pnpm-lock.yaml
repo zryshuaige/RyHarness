@@ -72,6 +72,9 @@ importers:
       '@ryagent/cordis':
         specifier: workspace:*
         version: link:../../vendor/cordis
+      '@ryagent/evolve':
+        specifier: workspace:*
+        version: link:../../packages/evolve
       '@ryagent/group':
         specifier: workspace:*
         version: link:../../packages/group
@@ -109,6 +112,8 @@ importers:
       '@ryagent/cordis':
         specifier: workspace:*
         version: link:../../../vendor/cordis
+
+  packages/evolve: {}
 
   packages/group:
     dependencies:

@@ -18,7 +18,7 @@
  */
 
 import { AgentLoop } from '@ryagent/agent'
-import type { AgentDefinition, AgentMemoryHooks, Tool, ToolResult } from '@ryagent/agent'
+import type { AgentDefinition, AgentEvolutionHooks, AgentMemoryHooks, Tool, ToolResult } from '@ryagent/agent'
 import type { AssistantMessage, LlmRuntime, ToolCallId } from '@ryagent/llm'
 import { parseMentions } from './mentions.ts'
 
@@ -59,6 +59,8 @@ export interface GroupDispatcherOptions {
   tools: readonly Tool[]
   /** 长期记忆钩子（每个发言 agent 各自的空间 + 共享画像）。 */
   memory?: AgentMemoryHooks
+  /** 自我进化钩子（playbook 注入 + 每轮轨迹入队）。 */
+  evolution?: AgentEvolutionHooks
   /** 单条用户消息触发的最大接力轮次，默认 8。 */
   maxTurns?: number
 }
@@ -168,6 +170,7 @@ export class GroupDispatcher {
         tools: this.options.tools,
         onAssistantMessage: (message) => { assistant = message },
         ...this.options.memory === undefined ? {} : { memory: this.options.memory },
+        ...this.options.evolution === undefined ? {} : { evolution: this.options.evolution },
       })
       let assistant: AssistantMessage | undefined
       let failed = false

@@ -12,7 +12,7 @@
 
 import { brandString } from '@ryagent/brand'
 import { AgentLoop } from '@ryagent/agent'
-import type { AgentDefinition, AgentLoopEvent, AgentMemoryHooks, Tool } from '@ryagent/agent'
+import type { AgentDefinition, AgentEvolutionHooks, AgentLoopEvent, AgentMemoryHooks, Tool } from '@ryagent/agent'
 import { GroupDispatcher, parseMentions } from '@ryagent/group'
 import type { GroupEvent, GroupHistoryEntry } from '@ryagent/group'
 import type {
@@ -33,6 +33,8 @@ export interface CoordinatorOptions {
   tools: readonly Tool[]
   /** 长期记忆（可选）：每个发言 agent 用自己的空间 + 共享画像。 */
   memory?: AgentMemoryHooks
+  /** 自我进化（可选）：playbook 注入 + 每轮 delta/反思。 */
+  evolution?: AgentEvolutionHooks
 }
 
 /** 一次调用的运行上下文。 */
@@ -111,7 +113,12 @@ export class SessionCoordinator {
     })
 
     const memory = this.bindMemory(conversationId)
-    const loop = new AgentLoop({ definition: agent, llm, tools, history, ...memory === undefined ? {} : { memory } })
+    const evolution = this.bindEvolution(conversationId)
+    const loop = new AgentLoop({
+      definition: agent, llm, tools, history,
+      ...memory === undefined ? {} : { memory },
+      ...evolution === undefined ? {} : { evolution },
+    })
 
     let reply = ''
     let failed: { message: string; code: string } | undefined
@@ -188,6 +195,7 @@ export class SessionCoordinator {
     const dispatcher = new GroupDispatcher({
       llm, members, dispatcherId, tools,
       ...this.bindMemory(conversationId) === undefined ? {} : { memory: this.bindMemory(conversationId) },
+      ...this.bindEvolution(conversationId) === undefined ? {} : { evolution: this.bindEvolution(conversationId) },
     })
     for await (const event of dispatcher.runTurn({ text, history, workspaceRoot: context.workspaceRoot, turnIndex })) {
       yield event
@@ -232,6 +240,18 @@ export class SessionCoordinator {
       recall: (agentId, inputText) => { return memory.recall(agentId, inputText) },
       enqueueExtraction: (agentId, agentName, _conversationId, turnText) => {
         memory.enqueueExtraction(agentId, agentName, conversationId, turnText)
+      },
+    }
+  }
+
+  /** 绑定会话 id 的进化钩子（conversationId 由这里注入轨迹与归因）。 */
+  private bindEvolution(conversationId: string): AgentEvolutionHooks | undefined {
+    const evolution = this.options.evolution
+    if (evolution === undefined) return undefined
+    return {
+      compile: (agentId) => { return evolution.compile(agentId) },
+      enqueueTurn: (agentId, agentName, _conversationId, turn) => {
+        evolution.enqueueTurn(agentId, agentName, conversationId, turn)
       },
     }
   }

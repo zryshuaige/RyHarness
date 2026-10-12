@@ -39,6 +39,18 @@ pnpm dev          # 等价于 tsx src/main.ts（在 apps/server 目录）
 
 消息行结构（StoredMessage）：`{ id, seq, conversationId, senderType: 'user'|'agent'|'system', senderId?, contentBlocks, mentions, toolCallId?, turnIndex, createdAt }`。`contentBlocks` 为 @ryagent/llm 的 ContentBlock JSON。
 
+### Memories & 进化
+
+| 方法与路径 | 说明 |
+|---|---|
+| `GET /api/agents/:id/memories` | 长期记忆：私有空间 active + 共享画像。 |
+| `DELETE /api/memories/:id` | 记忆软删（status=deleted）。 |
+| `GET /api/memory/stats` | 记忆统计 + embedding 可用性。 |
+| `POST /api/feedback` | `{conversationId, agentId, signal: thumb_up\|thumb_down}`——👎 即时反思 + 归因 harmful；👍 归因 helpful。 |
+| `GET /api/agents/:id/playbook` | 经验手册：playbook 条目（section 分组计数）+ 待验证教训。 |
+| `POST /api/playbook/:id/status` | `{status: active\|deprecated}` 手动停用/恢复条目。 |
+| `POST /api/evolve/consolidate` | 手动触发巩固（到期清理/重复记忆合并/dormant 统计）。 |
+
 ### Providers & 文件
 
 | 方法与路径 | 说明 |

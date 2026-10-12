@@ -72,6 +72,29 @@ export interface MemoryRow {
   sourceConversationId?: string
 }
 
+/** 经验手册条目。 */
+export interface PlaybookEntryRow {
+  id: string
+  agentId: string
+  section: 'strategy' | 'pitfall' | 'preference' | 'tooling'
+  content: string
+  helpful: number
+  harmful: number
+  status: 'active' | 'deprecated'
+  createdAt: number
+  updatedAt: number
+  source: 'curator' | 'reflection' | 'seed' | 'manual'
+}
+
+/** 待验证的反思教训。 */
+export interface ReflectionRow {
+  id: string
+  agentId: string
+  lesson: string
+  hitCount: number
+  createdAt: number
+}
+
 /** WS 事件（apps/server README 契约）。 */
 export type WsEvent =
   | { type: 'message-start'; conversationId: string; senderId: string; senderName: string; turnIndex: number }
@@ -161,6 +184,27 @@ export class ApiClient {
   /** 软删一条记忆。 */
   deleteMemory(id: string): Promise<{ deleted: string }> {
     return this.request(`/api/memories/${id}`, { method: 'DELETE' })
+  }
+
+  /** 用户反馈：👎 即时反思；👍 归因 helpful。 */
+  sendFeedback(input: {
+    conversationId: string
+    agentId: string
+    signal: 'thumb_up' | 'thumb_down'
+    userText?: string
+    assistantText?: string
+  }): Promise<{ recorded: boolean }> {
+    return this.request('/api/feedback', { method: 'POST', body: JSON.stringify(input) })
+  }
+
+  /** 某 agent 的经验手册。 */
+  getPlaybook(agentId: string): Promise<{ entries: PlaybookEntryRow[]; reflections: ReflectionRow[] }> {
+    return this.request(`/api/agents/${agentId}/playbook`)
+  }
+
+  /** 手动 deprecate / 恢复手册条目。 */
+  setPlaybookStatus(id: string, status: 'active' | 'deprecated'): Promise<{ id: string; status: string }> {
+    return this.request(`/api/playbook/${id}/status`, { method: 'POST', body: JSON.stringify({ status }) })
   }
 
   fileUrl(name: string): string {

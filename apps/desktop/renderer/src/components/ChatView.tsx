@@ -200,6 +200,19 @@ export function ChatView({
                   agent={agentById(message.senderId)}
                   tight={index > 0 && turn.messages[index - 1]?.senderId === message.senderId}
                   firstOfGroup={index === 0 || turn.messages[index - 1]?.senderId !== message.senderId}
+                  onFeedback={(target, signal) => {
+                    const textOf = (m: typeof target): string => {
+                      return m.parts.filter((p) => { return p.kind === 'text' })
+                        .map((p) => { return p.kind === 'text' ? p.text : '' }).join(' ')
+                    }
+                    void api.sendFeedback({
+                      conversationId: conversation.id,
+                      agentId: target.senderId,
+                      signal,
+                      userText: textOf(turn.messages.find((m) => { return m.senderType === 'user' }) ?? target).slice(0, 300),
+                      assistantText: textOf(target).slice(0, 300),
+                    }).catch(() => {})
+                  }}
                 />
               ))}
             </div>

@@ -22,6 +22,8 @@ import {
   NullEmbeddings,
   SiliconFlowEmbeddings,
 } from '@ryagent/memory'
+import { ChatEvolveLlm, EvolveService, seedIfEmpty } from '@ryagent/evolve'
+import type { AgentEvolutionHooks } from '@ryagent/agent'
 import type { AgentMemoryHooks } from '@ryagent/agent'
 import { WebSocketServer } from 'ws'
 import { EventHub } from './bus.ts'
@@ -54,6 +56,22 @@ export interface ServerOptions {
    * 抽取 LLM；无 key → 纯 FTS5、无抽取）、自定义实现，或 null（禁用）。
    */
   memory?: AgentMemoryHooks | null
+  /**
+   * 自我进化：'default'（有 key → Curator/Reflector LLM；无 key → 仅确定性
+   * 计数与手动管理）、自定义实现，或 null（禁用）。
+   */
+  evolution?: AgentEvolutionHooks | null
+  /** 巩固调度间隔毫秒；0/undefined = 关闭（默认 6 小时）。 */
+  consolidationIntervalMs?: number
+}
+
+/** 按环境构建默认进化服务。 */
+function createDefaultEvolve(dataDir: string): EvolveService {
+  const apiKey = process.env.SILICONFLOW_API_KEY ?? ''
+  return new EvolveService({
+    dbPath: join(dataDir, 'ryagent.db'),
+    llm: apiKey.length > 0 ? new ChatEvolveLlm({ apiKey }) : undefined,
+  })
 }
 
 /** 按环境构建默认记忆服务。 */
@@ -81,6 +99,8 @@ export class RyAgentServer {
     readonly coordinator: SessionCoordinator,
     readonly memory: AgentMemoryHooks | undefined,
     private readonly memoryService: MemoryService | undefined,
+    readonly evolution: AgentEvolutionHooks | undefined,
+    private readonly evolutionService: EvolveService | undefined,
     private readonly http: Server,
     private readonly wss: WebSocketServer,
     private readonly hub: EventHub,
@@ -120,13 +140,43 @@ export class RyAgentServer {
 
     const memoryOption = options.memory === null ? undefined : options.memory ?? createDefaultMemory(dataDir)
     const memoryService = memoryOption instanceof MemoryService ? memoryOption : undefined
+    const evolutionOption = options.evolution === null ? undefined : options.evolution ?? createDefaultEvolve(dataDir)
+    const evolutionService = evolutionOption instanceof EvolveService ? evolutionOption : undefined
+    // 冷启动种子：内置 Ryen 播通用模板手册。
+    if (evolutionService !== undefined) seedIfEmpty(evolutionService.store, 'ryen', 'general')
+    // 记忆清扫面接线（runOnce 判重合并用）。
+    if (evolutionService !== undefined && memoryService !== undefined) {
+      evolutionService.attachMemorySweep({
+        listSpaces: () => {
+          const spaces = new Set<string>()
+          for (const [space] of Object.entries(memoryService.store.stats().bySpace)) spaces.add(space)
+          return [...spaces]
+        },
+        listActiveEmbeddings: (spaceId) => {
+          return memoryService.store.listActiveEmbeddings(spaceId).map((row) => {
+            return {
+              id: row.id,
+              content: row.content,
+              embedding: row.embedding,
+              accessCount: row.accessCount,
+              updatedAt: row.updatedAt,
+            }
+          })
+        },
+        supersede: (id) => { memoryService.store.supersede(id, 'superseded') },
+      })
+    }
     const coordinator = new SessionCoordinator({
       store, llm: ctx.llm, tools: ALL_TOOLS,
       ...memoryOption === undefined ? {} : { memory: memoryOption },
+      ...evolutionOption === undefined ? {} : { evolution: evolutionOption },
     })
     const hub = new EventHub()
+    if (evolutionService !== undefined && options.consolidationIntervalMs !== 0) {
+      evolutionService.startConsolidation(options.consolidationIntervalMs ?? 6 * 3_600_000)
+    }
     const server = new RyAgentServer(
-      store, coordinator, memoryOption, memoryService,
+      store, coordinator, memoryOption, memoryService, evolutionOption, evolutionService,
       createServer(), new WebSocketServer({ noServer: true }), hub,
       dataDir, workspaceRoot, providers,
     )
@@ -150,6 +200,7 @@ export class RyAgentServer {
     })
     this.store.close()
     this.memoryService?.close()
+    this.evolutionService?.close()
   }
 
   // ---- WS ----
@@ -319,6 +370,78 @@ export class RyAgentServer {
         },
         ...this.memoryService.store.stats(),
       })
+    })
+
+    // ---- 自我进化（playbook / reflections / 反馈闭环）----
+
+    /** 用户反馈：👎 即时反思 + 归因 harmful；👍 归因 helpful。 */
+    router.post('/api/feedback', async (req, res) => {
+      if (this.evolutionService === undefined) {
+        json(res, 409, { error: 'evolution system disabled' })
+        return
+      }
+      const body = await req.body()
+      const conversationId = strField(body, 'conversationId')
+      const agentId = strField(body, 'agentId')
+      const signal = strField(body, 'signal')
+      if (conversationId === undefined || agentId === undefined
+        || (signal !== 'thumb_up' && signal !== 'thumb_down')) {
+        json(res, 400, { error: 'conversationId, agentId and signal(thumb_up|thumb_down) are required' })
+        return
+      }
+      this.evolutionService.recordFeedback({
+        agentId,
+        conversationId,
+        signal,
+        userText: strField(body, 'userText'),
+        assistantText: strField(body, 'assistantText'),
+      })
+      json(res, 200, { recorded: true })
+    })
+
+    /** 某 agent 的经验手册：playbook 条目（含 deprecated）+ 待验证教训。 */
+    router.get('/api/agents/:id/playbook', async (req, res) => {
+      if (store.getAgent(req.params.id as string) === undefined) {
+        json(res, 404, { error: 'agent not found' })
+        return
+      }
+      if (this.evolutionService === undefined) {
+        json(res, 200, { entries: [], reflections: [] })
+        return
+      }
+      json(res, 200, {
+        entries: this.evolutionService.store.listEntries(req.params.id as string),
+        reflections: this.evolutionService.store.listPendingReflections(req.params.id as string, 50),
+      })
+    })
+
+    /** 手动 deprecate / 恢复条目。 */
+    router.post('/api/playbook/:id/status', async (req, res) => {
+      if (this.evolutionService === undefined) {
+        json(res, 409, { error: 'evolution system disabled' })
+        return
+      }
+      const existing = this.evolutionService.store.getEntry(req.params.id as string)
+      if (existing === undefined) {
+        json(res, 404, { error: 'entry not found' })
+        return
+      }
+      const status = strField(await req.body(), 'status')
+      if (status !== 'active' && status !== 'deprecated') {
+        json(res, 400, { error: 'status must be active|deprecated' })
+        return
+      }
+      this.evolutionService.setEntryStatus(existing.id, status)
+      json(res, 200, { id: existing.id, status })
+    })
+
+    /** 手动触发巩固任务（周期调度之外的即时入口）。 */
+    router.post('/api/evolve/consolidate', async (_req, res) => {
+      if (this.evolutionService === undefined) {
+        json(res, 409, { error: 'evolution system disabled' })
+        return
+      }
+      json(res, 200, this.evolutionService.runOnce())
     })
 
     // ---- conversations ----
