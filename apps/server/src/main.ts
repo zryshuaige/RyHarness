@@ -17,7 +17,10 @@ const server = await RyAgentServer.create({
 console.log(`[ryagent] server listening at ${server.url}`)
 console.log(`[ryagent] data dir: ${server.dataDir}`)
 
+let shuttingDown = false
 const shutdown = (): void => {
+  if (shuttingDown) return
+  shuttingDown = true
   console.log('\n[ryagent] shutting down…')
   server.close().then(() => {
     process.exit(0)

@@ -8,13 +8,14 @@ pnpm dev          # 等价于 tsx src/main.ts（在 apps/server 目录）
 ```
 
 - 默认监听 `127.0.0.1:32100`（仅本机，安全边界依赖 OS 账户）。
+- **Origin 白名单**：HTTP 与 WS upgrade 只放行空 Origin（Electron file://、curl/Node 客户端）或回环源（127.0.0.1 / localhost / ::1）；其余源 HTTP 回 403、WS 拒绝升级。
 - 数据目录 `<dataDir>/`（默认 `<cwd>/data`，已 gitignore）：`ryagent.db`（SQLite）、`config/providers.json`（首启写入内置 SiliconFlow 条目，key 走 `SILICONFLOW_API_KEY` 环境变量，配置文件不存明文）、`workspace/`（工具工作区与产物目录）。
 - 首启种子：内置 Ryen 保证存在于 agents 表。
-- 优雅停机：`RyAgentServer.close()` 关 WS 客户端、HTTP server、SQLite；独立模式 SIGINT/SIGTERM 自动触发。
+- 优雅停机：`RyAgentServer.close()` 幂等（重复调用复用同一停机流程）；先等在途 turn 完成（默认 10s 超时兜底，`shutdownTimeoutMs` 可调），再断 WS 客户端、关 HTTP server、关 SQLite；独立模式 SIGINT/SIGTERM 自动触发。
 
 ## HTTP API
 
-统一约定：JSON；错误为 `{ "error": string }`；`content-type: application/json; charset=utf-8`。
+统一约定：JSON；错误为 `{ "error": string }`；`content-type: application/json; charset=utf-8`。非法 JSON body 与非法 URL 编码回 **400**（客户端错误），不污染 500。
 
 ### Agents
 
@@ -22,7 +23,7 @@ pnpm dev          # 等价于 tsx src/main.ts（在 apps/server 目录）
 |---|---|
 | `GET /api/agents` | 全部 agent 定义（含 builtin）。 |
 | `POST /api/agents` | 创建。body：`{ templateKey? , name?, systemPrompt?, provider?, model?, temperature?, tools?, avatar? }`。带 `templateKey` 时从模板实例化（缺省字段用模板默认值，id 自动生成）。 |
-| `PATCH /api/agents/:id` | 合并更新（`isBuiltin` 不可变）。 |
+| `PATCH /api/agents/:id` | 合并更新：与 POST 同款字段白名单校验（类型错误回 **400**，未知键丢弃；`isBuiltin` 不可变）。 |
 | `DELETE /api/agents/:id` | 删除；builtin 返回 **409**；同时把该 agent 从所有会话的成员/调度员列表摘除。 |
 | `GET /api/agent-templates` | 内置模板清单：`general`(通用助理 Ryen) / `coding` / `writing` / `translation` / `file-organizer`，各含 `suggestedSystemPrompt`、`defaultTools`、`defaultModel`。 |
 
@@ -62,6 +63,8 @@ pnpm dev          # 等价于 tsx src/main.ts（在 apps/server 目录）
 
 连接：`ws://127.0.0.1:32100/ws?conversationId=<id>`（每事件一条 JSON 文本帧）。
 
+**协议完备性**：每条事件带该会话内单调递增的 `seq`（从 1 起，无订阅者时也递增）——客户端按 seq 发现断线缺口并重拉历史补齐。服务器每 30s 发 ping（`wsHeartbeatMs` 可调），连续两轮未 pong 的连接被 terminate；发送前检查 `bufferedAmount`，超过 1MB 判定慢消费者并断开。
+
 | 事件 | 字段 | 时机 |
 |---|---|---|
 | `message-start` | `conversationId, senderId, senderName, turnIndex` | 一条消息开始：用户消息提交时（senderId=`user`）以及每个 agent 开始生成时（senderId=agent id）。 |
@@ -84,4 +87,4 @@ pnpm dev          # 等价于 tsx src/main.ts（在 apps/server 目录）
 
 ## 测试
 
-`tests/server.test.ts`：真实 HTTP + WS 客户端跑通模板/CRUD/builtin 保护、群聊端到端（WS 事件序列 + 落库一致）、direct 流式、文件下载白名单。mock 适配器注入，不触网。
+`tests/server.test.ts`：真实 HTTP + WS 客户端跑通模板/CRUD/builtin 保护、PATCH 白名单校验、400/500 分界、Origin 白名单、WS seq/心跳 terminate、群聊端到端（WS 事件序列 + 落库一致）、direct 流式、文件下载白名单、close 幂等与优雅停机（等在途 turn + 超时兜底）。mock 适配器注入，不触网。

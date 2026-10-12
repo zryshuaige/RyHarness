@@ -116,15 +116,23 @@ export class SessionCoordinator {
     const evolution = this.bindEvolution(conversationId)
     const loop = new AgentLoop({
       definition: agent, llm, tools, history,
+      // 每步组装出的 assistant 消息（含 tool_calls、可能无文本）即时落库：
+      // 不持久化它们，重建历史里 tool 消息就没有前置的 assistant tool_calls
+      // 消息，违反 OpenAI 消息序列契约（第二轮必 400）。
+      onAssistantMessage: (message) => {
+        if (message.content.length === 0) return
+        store.appendMessage({
+          conversationId, senderType: 'agent', senderId: agentId,
+          contentBlocks: [...message.content], turnIndex,
+        })
+      },
       ...memory === undefined ? {} : { memory },
       ...evolution === undefined ? {} : { evolution },
     })
 
-    let reply = ''
     let failed: { message: string; code: string } | undefined
     for await (const event of loop.run({ text }, context)) {
       yield event
-      if (event.type === 'text-delta') reply += event.text
       if (event.type === 'tool-result') {
         store.appendMessage({
           conversationId, senderType: 'agent', senderId: agentId,
@@ -140,11 +148,6 @@ export class SessionCoordinator {
         conversationId, senderType: 'system',
         contentBlocks: [{ type: 'text', text: `[error:${failed.code}] ${failed.message}` }],
         turnIndex,
-      })
-    } else if (reply.length > 0) {
-      store.appendMessage({
-        conversationId, senderType: 'agent', senderId: agentId,
-        contentBlocks: [{ type: 'text', text: reply }], turnIndex,
       })
     }
   }

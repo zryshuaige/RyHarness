@@ -54,10 +54,13 @@ function serializeMessage(message: RequestMessage): OpenAiWireMessage {
           ? [{ id: block.id, type: 'function' as const, function: { name: block.name, arguments: block.arguments } }]
           : []
       })
+      const text = blocksToText(message.content)
       return {
         role: 'assistant',
-        // OpenAI requires null content when tool_calls are present.
-        content: toolCalls.length > 0 ? null : blocksToText(message.content),
+        // OpenAI allows tool_calls alongside string content; only an empty
+        // text collapses to null. Dropping the text would silently lose what
+        // the model said before calling tools.
+        content: toolCalls.length > 0 && text.length === 0 ? null : text,
         ...toolCalls.length === 0 ? {} : { tool_calls: toolCalls },
       }
     }

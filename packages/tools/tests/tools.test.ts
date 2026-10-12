@@ -57,6 +57,15 @@ describe('fs_read / fs_write', () => {
     const read = await fsRead.execute({ path: 'big.txt' }, ctx)
     expect(read.content).toContain('[truncated:')
   })
+
+  it('超大文件只读开头窗口（不整文件入内存），截断标注真实文件大小', async () => {
+    const { root, ctx } = workspace()
+    // 100k 个 CJK 字符 ≈ 300KB，超过 256KB 读窗口。
+    writeFileSync(join(root, 'huge.txt'), '汉'.repeat(100_000))
+    const read = await fsRead.execute({ path: 'huge.txt' }, ctx)
+    expect(read.content).toContain('[truncated: file is 300000 bytes')
+    expect(read.content.length).toBeLessThan(70_000)
+  })
 })
 
 describe('shell_exec', () => {

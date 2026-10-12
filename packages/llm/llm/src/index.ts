@@ -30,6 +30,7 @@ import type {
 import { freezeMessage } from './message.ts'
 import { resolveRetryPolicy } from './retry-policy.ts'
 import type { ResolvedRetryPolicy } from './retry-policy.ts'
+import { streamWithRetry } from './retry-stream.ts'
 import type { ProviderRequestId } from './brand.ts'
 import { callConfigEquals } from './call-config.ts'
 import type { LlmCallConfig, LlmCallConfigAdapterDefaults } from './call-config.ts'
@@ -50,6 +51,7 @@ export * from './content.ts'
 export * from './assistant-stream.ts'
 export * from './message.ts'
 export * from './retry-policy.ts'
+export { isRetryableFailure, retryDelayMs, streamWithRetry } from './retry-stream.ts'
 export { BlockAssembler } from './assembler.ts'
 export { callConfigEquals, isAgentLoopRequest, markAgentLoopRequest } from './call-config.ts'
 export type { LlmCallConfig, LlmCallConfigAdapterDefaults } from './call-config.ts'
@@ -1140,11 +1142,14 @@ export class LlmRuntime extends TypertRemoteService {
     options: GenerateOptions,
     prepared?: PreparedDispatch,
   ): AsyncIterable<StreamChunk> {
+    const policy = prepared?.registration.retryPolicy
+      ?? this.adapters.get(options.provider)?.retryPolicy
+      ?? resolveRetryPolicy(undefined, 'llm: default retryPolicy')
     return this.ctx.waterfall(
       this,
       'llm/stream',
       options,
-      () => this.adapterStream(options, prepared),
+      () => streamWithRetry(policy, () => this.adapterStream(options, prepared), options.signal),
     )
   }
 }

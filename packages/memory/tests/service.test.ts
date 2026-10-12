@@ -121,6 +121,34 @@ describe('抽取管线：四操作', () => {
     service.close()
   })
 
+  it('UPDATE/DELETE 拒绝跨空间 memoryId：幻觉 id 不能改写/删除别的空间的记忆', async () => {
+    // 受害者记忆在 agent-a 空间；抽取发生在 agent-b 空间，LLM 幻觉出 agent-a 的 memoryId。
+    let victimId = ''
+    const llm: MemoryLlm = {
+      async extractFacts() {
+        return [{ text: 'agent-b 的新事实', scope: 'agent', kind: 'fact' }]
+      },
+      async decideOperations() {
+        return [
+          { action: 'UPDATE', memoryId: victimId, newText: '被篡改的内容' },
+          { action: 'DELETE', memoryId: victimId },
+        ]
+      },
+    }
+    const service = new MemoryService({ dbPath: dbPath(), embeddings: new HashEmbeddings(), llm })
+    victimId = service.store.insert({ agentId: 'agent-a', kind: 'fact', content: 'agent-a 的私密约定' }).id
+
+    service.enqueueExtraction('agent-b', 'BotB', 'c1', '用户：随便聊聊')
+    await service.flush()
+
+    const victim = service.store.get(victimId)!
+    expect(victim.status).toBe('active')
+    expect(victim.content).toBe('agent-a 的私密约定')
+    // 两个操作都被拒绝：agent-b 空间不得新增任何行
+    expect(service.store.listActiveForAgent('agent-b')).toHaveLength(0)
+    service.close()
+  })
+
   it('DELETE：矛盾事实 → 旧记忆 superseded', async () => {
     let existingId = ''
     const llm = mockLlm({

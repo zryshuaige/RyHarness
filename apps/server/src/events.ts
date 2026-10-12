@@ -63,3 +63,9 @@ export type WsEvent =
     senderId: 'user'
     turnIndex: number
   }
+
+/**
+ * 实际推上 WS 的事件：EventHub 发布时打上每会话单调递增的 `seq`（从 1 起）。
+ * 客户端按 seq 检测断线期间的事件缺口（seq 跳号即需要重拉历史补齐）。
+ */
+export type StampedWsEvent = WsEvent & { seq: number }

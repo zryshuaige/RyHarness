@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync } from 'node:fs'
+import { connect } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -123,6 +124,15 @@ function collectWs(
     })
   })
   return { ready, done }
+}
+
+/** 轮询等待条件成立（测试用，最长 5s）。 */
+async function waitFor(cond: () => boolean): Promise<void> {
+  const deadline = Date.now() + 5000
+  while (!cond()) {
+    if (Date.now() > deadline) throw new Error('waitFor timed out')
+    await new Promise((resolve) => { setTimeout(resolve, 10) })
+  }
 }
 
 describe('RyAgentServer', () => {
@@ -423,4 +433,238 @@ describe('RyAgentServer', () => {
       await server.close()
     }
   })
+
+  it('PATCH /api/agents/:id 与 POST 同款白名单校验：类型错误 400，未知键丢弃', async () => {
+    const { server, base } = await startServer([])
+    try {
+      const patch = (payload: unknown): Promise<Response> => {
+        return fetch(`${base}/api/agents/ryen`, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+      }
+      expect((await patch({ temperature: 'abc' })).status).toBe(400)
+      expect((await patch({ tools: 'not-an-array' })).status).toBe(400)
+      expect((await patch({ name: 42 })).status).toBe(400)
+      // 未知键（createdAt 等）被丢弃而不是入库；合法字段正常合并
+      const ok = await patch({ createdAt: 0, hacker: true, name: '猫管家二世' })
+      expect(ok.status).toBe(200)
+      const agent = ((await ok.json()) as { agent: Record<string, unknown> }).agent
+      expect(agent.name).toBe('猫管家二世')
+      expect('hacker' in agent).toBe(false)
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('非法 JSON body 与非法 URL 编码回 400 而非 500', async () => {
+    const { server, base } = await startServer([])
+    try {
+      const badJson = await fetch(`${base}/api/conversations`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{oops',
+      })
+      expect(badJson.status).toBe(400)
+      const badUrl = await fetch(`${base}/api/files/%E0%A4%A`)
+      expect(badUrl.status).toBe(400)
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('Origin 白名单：空/回环放行，外部源 HTTP 403、WS 拒绝升级', async () => {
+    const { server, base } = await startServer([])
+    try {
+      expect((await getJson(base, '/api/agents')).status).toBe(200) // 无 Origin（Node/curl/Electron file://）
+      const viteDev = await fetch(`${base}/api/agents`, { headers: { origin: 'http://localhost:5173' } })
+      expect(viteDev.status).toBe(200)
+      const loopback = await fetch(`${base}/api/agents`, { headers: { origin: 'http://127.0.0.1:32100' } })
+      expect(loopback.status).toBe(200)
+      const evil = await fetch(`${base}/api/agents`, { headers: { origin: 'https://evil.example' } })
+      expect(evil.status).toBe(403)
+
+      await new Promise<void>((resolve, reject) => {
+        const ws = new WebSocket(`${base.replace('http', 'ws')}/ws?conversationId=c1`, {
+          headers: { origin: 'https://evil.example' },
+        })
+        ws.on('open', () => {
+          ws.terminate()
+          reject(new Error('WS upgrade should have been refused for a foreign origin'))
+        })
+        ws.on('error', () => { resolve() })
+      })
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('close() 幂等：重复调用复用同一停机流程，不抛错', async () => {
+    const { server } = await startServer([])
+    await Promise.all([server.close(), server.close()])
+    await server.close()
+  })
+
+  it('WS 事件带每会话单调递增 seq（客户端可据此发现断线缺口）', async () => {
+    const { server, base } = await startServer(['你好。'])
+    try {
+      await fetch(`${base}/api/agents/ryen`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'mock', model: 'mock' }),
+      })
+      const direct = await postJson(base, '/api/conversations', { kind: 'direct', agentId: 'ryen' })
+      const conversationId = (direct.body as { conversation: { id: string } }).conversation.id
+
+      const collector = collectWs(
+        base, conversationId,
+        (events) => { return events.some((e) => { return e.type === 'message-done' }) },
+      )
+      await collector.ready
+      await postJson(base, `/api/conversations/${conversationId}/messages`, { text: '在吗' })
+      const events = await collector.done
+      const seqs = events.map((e) => { return (e as { seq?: number }).seq })
+      expect(seqs).toEqual([1, 2, 3, 4])
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('WS 心跳：连续两轮未 pong 的半死连接被 terminate', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'ryagent-server-heartbeat-'))
+    tmpDirs.push(dataDir)
+    const server = await RyAgentServer.create({
+      port: 0,
+      dataDir,
+      wsHeartbeatMs: 60,
+      mountLlm: (ctx) => { ctx.llm.registerAdapter(['mock'], new MockAdapter([])) },
+    })
+    try {
+      const port = Number(new URL(server.url).port)
+      const socket = connect(port, '127.0.0.1')
+      // 裸 TCP 完成 WS 握手后永不回 pong。
+      await new Promise<void>((resolve, reject) => {
+        socket.once('error', reject)
+        socket.once('connect', () => {
+          socket.write(
+            'GET /ws?conversationId=c1 HTTP/1.1\r\n'
+            + 'Host: 127.0.0.1\r\n'
+            + 'Upgrade: websocket\r\n'
+            + 'Connection: Upgrade\r\n'
+            + 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n'
+            + 'Sec-WebSocket-Version: 13\r\n\r\n',
+          )
+          resolve()
+        })
+      })
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          reject(new Error('server did not terminate the dead connection within two heartbeat rounds'))
+        }, 5000)
+        // 裸 socket 必须排空入站帧（握手响应 + ping），否则 close 事件不可靠。
+        socket.on('data', () => {})
+        socket.on('close', () => {
+          clearTimeout(timer)
+          resolve()
+        })
+      })
+    } finally {
+      await server.close()
+    }
+  }, 10_000)
+
+  it('优雅停机：close() 先等在途 turn 完成再关库（事件能送达客户端）', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const calls: string[] = []
+    class GatedAdapter extends MockAdapter {
+      protected override scriptedText(options: GenerateOptions): string {
+        calls.push(this.lastUserText(options))
+        return '慢回复'
+      }
+
+      protected override chunksFor(text: string): AsyncIterable<StreamChunk> {
+        return (async function* (): AsyncGenerator<StreamChunk> {
+          await gate
+          yield { type: 'text-delta', index: 0, text }
+          yield { type: 'block-end', index: 0, block: { type: 'text', text } }
+          yield { type: 'finish', reason: { kind: 'stop' } }
+        })()
+      }
+    }
+    const dataDir = mkdtempSync(join(tmpdir(), 'ryagent-server-drain-'))
+    tmpDirs.push(dataDir)
+    const server = await RyAgentServer.create({
+      port: 0, dataDir,
+      mountLlm: (ctx) => { ctx.llm.registerAdapter(['mock'], new GatedAdapter([])) },
+    })
+    await fetch(`${server.url}/api/agents/ryen`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: 'mock', model: 'mock' }),
+    })
+    const { conversation } = await (await fetch(`${server.url}/api/conversations`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'direct', agentId: 'ryen' }),
+    })).json() as { conversation: { id: string } }
+
+    const collector = collectWs(
+      server.url, conversation.id,
+      (events) => { return events.some((e) => { return e.type === 'message-done' }) },
+    )
+    await collector.ready
+    await postJson(server.url, `/api/conversations/${conversation.id}/messages`, { text: '慢慢来' })
+    await waitFor(() => { return calls.length > 0 })
+
+    const closePromise = server.close()
+    const early = await Promise.race([
+      closePromise.then(() => { return 'closed' as const }),
+      new Promise<'waiting'>((resolve) => { setTimeout(() => { resolve('waiting') }, 300) }),
+    ])
+    expect(early).toBe('waiting') // turn 未完成前 close 不得关库返回
+    release()
+    const events = await collector.done
+    expect(events.map((e) => { return e.type }))
+      .toEqual(['message-start', 'message-start', 'text-delta', 'message-done'])
+    await closePromise
+  }, 20_000)
+
+  it('优雅停机超时兜底：在途 turn 卡死时 close() 也在超时后完成', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const calls: string[] = []
+    class StuckAdapter extends MockAdapter {
+      protected override scriptedText(options: GenerateOptions): string {
+        calls.push(this.lastUserText(options))
+        return '卡死'
+      }
+
+      protected override chunksFor(text: string): AsyncIterable<StreamChunk> {
+        return (async function* (): AsyncGenerator<StreamChunk> {
+          await gate
+          yield { type: 'text-delta', index: 0, text }
+          yield { type: 'block-end', index: 0, block: { type: 'text', text } }
+          yield { type: 'finish', reason: { kind: 'stop' } }
+        })()
+      }
+    }
+    const dataDir = mkdtempSync(join(tmpdir(), 'ryagent-server-timeout-'))
+    tmpDirs.push(dataDir)
+    const server = await RyAgentServer.create({
+      port: 0, dataDir, shutdownTimeoutMs: 200,
+      mountLlm: (ctx) => { ctx.llm.registerAdapter(['mock'], new StuckAdapter([])) },
+    })
+    await fetch(`${server.url}/api/agents/ryen`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: 'mock', model: 'mock' }),
+    })
+    const { conversation } = await (await fetch(`${server.url}/api/conversations`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'direct', agentId: 'ryen' }),
+    })).json() as { conversation: { id: string } }
+    await postJson(server.url, `/api/conversations/${conversation.id}/messages`, { text: '卡住' })
+    await waitFor(() => { return calls.length > 0 })
+    await server.close() // turn 永不放行也应 ~200ms 后完成停机
+    release() // 放行悬挂的 turn；写已关闭的库由 runTurn 的 catch 兜住
+  }, 20_000)
 })

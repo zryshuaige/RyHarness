@@ -172,6 +172,27 @@ describe('AgentLoop', () => {
     expect((events[0] as { message: string }).message).toContain('boom')
   })
 
+  it('终态 error finish 传播为 error 事件而不是 done（半截回复不算完成）', async () => {
+    const llm = mockLlm([[
+      { type: 'text-delta', index: 0, text: '半截' },
+      { type: 'block-end', index: 0, block: { type: 'text', text: '半截' } },
+      { type: 'finish', reason: { kind: 'error', failure: { message: 'provider exploded', code: 'SERVER' } } },
+    ]])
+    const loop = new AgentLoop({ definition: DEFINITION, llm, tools: [echoTool] })
+    const events = await collect(loop.run({ text: 'hi' }, { workspaceRoot: process.cwd() }))
+    expect(events.some((event) => { return event.type === 'done' })).toBe(false)
+    expect(events.at(-1)).toEqual({ type: 'error', message: 'provider exploded', code: 'SERVER' })
+  })
+
+  it('终态 aborted finish 同样传播为 error 事件', async () => {
+    const llm = mockLlm([[
+      { type: 'finish', reason: { kind: 'aborted', failure: { message: 'client went away', code: 'ABORTED' } } },
+    ]])
+    const loop = new AgentLoop({ definition: DEFINITION, llm, tools: [echoTool] })
+    const events = await collect(loop.run({ text: 'hi' }, { workspaceRoot: process.cwd() }))
+    expect(events).toEqual([{ type: 'error', message: 'client went away', code: 'ABORTED' }])
+  })
+
   it('stops at maxSteps when the model keeps calling tools', async () => {
     const scripted = Array.from({ length: 20 }, (): StreamChunk[] => [
       {

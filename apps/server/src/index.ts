@@ -9,7 +9,7 @@
 export { RyAgentServer } from './app.ts'
 export type { ServerOptions } from './app.ts'
 export { EventHub } from './bus.ts'
-export type { WsEvent } from './events.ts'
+export type { StampedWsEvent, WsEvent } from './events.ts'
 export { AGENT_TEMPLATES, ensureSeedAgents, instantiateTemplate } from './seed.ts'
 export type { AgentTemplate } from './seed.ts'
 export { DEFAULT_PROVIDERS, loadProvidersConfig, providerKeyConfigured, toAdapterConfig } from './config.ts'

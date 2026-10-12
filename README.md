@@ -64,7 +64,7 @@ pnpm --filter @ryagent/desktop dev          # 开发模式（Vite HMR + Electron
 ## 测试
 
 ```sh
-pnpm test          # 83 个测试：内核单测 + mock SSE 适配器 + 真实 HTTP/WS 集成 + jsdom 组件测试
+pnpm test          # 168 个测试：内核单测 + mock SSE 适配器 + 真实 HTTP/WS 集成 + jsdom 组件测试
 pnpm typecheck     # 严格模式（根程序；vendor 由其自身 tsc build 校验）
 pnpm -r build      # 全量构建（vendor 用 tsc，packages 用 tsdown，desktop = tsdown + vite）
 pnpm demo:agent    # M2 集成：mock 适配器跑 AgentLoop + 落库断言

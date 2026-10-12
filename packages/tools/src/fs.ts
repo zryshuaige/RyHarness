@@ -3,12 +3,14 @@
  * @module @ryagent/tools/fs
  */
 
-import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { closeSync, mkdirSync, openSync, readSync, statSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { Tool, ToolResult } from '@ryagent/agent'
 import { resolveInWorkspace, truncateOutput } from './workspace.ts'
 
 const MAX_READ_CHARS = 64_000
+/** 读窗口字节上限：UTF-8 每字符至多 4 字节，覆盖 MAX_READ_CHARS 个字符。 */
+const MAX_READ_BYTES = MAX_READ_CHARS * 4
 
 function argString(args: unknown, key: string): string {
   if (typeof args === 'object' && args !== null && key in args) {
@@ -44,7 +46,21 @@ export const fsRead: Tool = {
       const stat = statSync(target, { throwIfNoEntry: false })
       if (stat === undefined) return { content: `file not found: ${target}`, isError: true }
       if (!stat.isFile()) return { content: `not a file: ${target}`, isError: true }
-      const raw = readFileSync(target, 'utf8')
+      // 只读开头的窗口字节：整文件读入内存会把超大日志/数据文件直接拉爆进程。
+      const fd = openSync(target, 'r')
+      let raw: string
+      let bytesRead = 0
+      try {
+        const window = Buffer.alloc(Math.min(stat.size, MAX_READ_BYTES))
+        bytesRead = readSync(fd, window, 0, window.length, 0)
+        raw = window.toString('utf8', 0, bytesRead)
+      } finally {
+        closeSync(fd)
+      }
+      if (bytesRead < stat.size) {
+        const head = raw.slice(0, MAX_READ_CHARS)
+        return { content: `${head}\n…[truncated: file is ${stat.size} bytes, showing first ${head.length} chars]` }
+      }
       return { content: truncateOutput(raw, MAX_READ_CHARS) }
     })
   },

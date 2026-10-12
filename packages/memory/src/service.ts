@@ -232,7 +232,7 @@ export class MemoryService implements AgentMemory {
         }
         case 'UPDATE': {
           const existing = this.store.get(op.memoryId)
-          if (existing === undefined || existing.status !== 'active') break
+          if (existing === undefined || existing.status !== 'active' || existing.agentId !== spaceId) break
           this.store.supersede(op.memoryId, 'superseded')
           this.store.insert({
             agentId: spaceId,
@@ -245,6 +245,9 @@ export class MemoryService implements AgentMemory {
           break
         }
         case 'DELETE': {
+          // 同 UPDATE：不得跨空间软删别的 agent（或共享画像）的记忆。
+          const target = this.store.get(op.memoryId)
+          if (target === undefined || target.status !== 'active' || target.agentId !== spaceId) break
           this.store.supersede(op.memoryId, 'superseded')
           break
         }

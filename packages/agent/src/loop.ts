@@ -191,6 +191,14 @@ export class AgentLoop {
         const calls = message.content.filter((block): block is ToolCallBlock => { return block.type === 'tool-call' })
         const finish: FinishReason = assembler.finish
 
+        // 终态 error/aborted 不是正常收尾：传播为 error 事件，让协调器落
+        // system 错误消息、服务器推 error 事件，而不是把半截回复当完整回复。
+        if (finish.kind === 'error' || finish.kind === 'aborted') {
+          llmError = true
+          yield { type: 'error', message: finish.failure.message, code: finish.failure.code }
+          return
+        }
+
         if (calls.length === 0) {
           yield { type: 'done', finish, steps }
           return

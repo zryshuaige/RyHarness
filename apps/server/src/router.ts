@@ -19,6 +19,14 @@ export interface Request {
 
 export type Handler = (req: Request, res: ServerResponse) => Promise<void>
 
+/** 客户端请求错误（非法 JSON body 等）：dispatch 捕获后回对应 4xx，不再冒泡成 500。 */
+export class HttpRequestError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message)
+    this.name = 'HttpRequestError'
+  }
+}
+
 interface Route {
   method: string
   segments: string[]
@@ -50,7 +58,12 @@ export class Router {
         const pattern = route.segments[i] as string
         const actual = segments[i] as string
         if (pattern.startsWith(':')) {
-          params[pattern.slice(1)] = decodeURIComponent(actual)
+          try {
+            params[pattern.slice(1)] = decodeURIComponent(actual)
+          } catch {
+            json(res, 400, { error: 'malformed URL encoding' })
+            return true
+          }
         } else if (pattern !== actual) {
           matched = false
           break
@@ -63,9 +76,21 @@ export class Router {
         if (chunks.length === 0) return undefined
         const text = Buffer.concat(chunks).toString('utf8')
         if (text.length === 0) return undefined
-        return JSON.parse(text) as unknown
+        try {
+          return JSON.parse(text) as unknown
+        } catch {
+          throw new HttpRequestError(400, 'invalid JSON body')
+        }
       }
-      await route.handler({ method: req.method ?? 'GET', params, query: url.searchParams, body, raw: req }, res)
+      try {
+        await route.handler({ method: req.method ?? 'GET', params, query: url.searchParams, body, raw: req }, res)
+      } catch (error) {
+        if (error instanceof HttpRequestError) {
+          json(res, error.status, { error: error.message })
+          return true
+        }
+        throw error
+      }
       return true
     }
     return false

@@ -26,15 +26,65 @@ import { ChatEvolveLlm, EvolveService, seedIfEmpty } from '@ryagent/evolve'
 import type { AgentEvolutionHooks } from '@ryagent/agent'
 import type { AgentMemoryHooks } from '@ryagent/agent'
 import { WebSocketServer } from 'ws'
+import type { WebSocket as WsSocket } from 'ws'
 import { EventHub } from './bus.ts'
 import type { WsEvent } from './events.ts'
 import { loadProvidersConfig, providerKeyConfigured, toAdapterConfig } from './config.ts'
 import type { ProvidersConfigFile } from './config.ts'
 import { AGENT_TEMPLATES, ensureSeedAgents, instantiateTemplate } from './seed.ts'
-import { Router, json, strField } from './router.ts'
+import { HttpRequestError, Router, json, strField } from './router.ts'
 
 /** 工具全集：协调器按各 agent 定义白名单过滤。 */
 const ALL_TOOLS = [fsRead, fsWrite, shellExec, fileProduce]
+
+const DEFAULT_PORT = 32100
+const DEFAULT_HOST = '127.0.0.1'
+/** WS 心跳间隔：每 30s ping 一次，连续两次未 pong 的连接 terminate。 */
+const DEFAULT_WS_HEARTBEAT_MS = 30_000
+/** WS 发送缓冲上限：超过说明是慢消费者，断开防止内存堆积。 */
+const MAX_WS_BUFFERED_BYTES = 1_048_576
+/** 优雅停机等待在途 turn 的上限。 */
+const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10_000
+
+/**
+ * Origin 白名单：空 Origin（Electron file:// 渲染层、curl/Node 客户端）
+ * 或回环地址（127.0.0.1 / localhost / ::1，覆盖 Vite dev server）。
+ */
+function originAllowed(origin: string | undefined): boolean {
+  if (origin === undefined || origin.length === 0 || origin === 'null') return true
+  try {
+    const hostname = new URL(origin).hostname
+    return hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '[::1]'
+  } catch {
+    return false
+  }
+}
+
+/** POST/PATCH 共用的 agent 字段白名单校验：类型不符抛 400，未知键丢弃。 */
+function agentFieldOverrides(body: unknown): Partial<Omit<AgentDefinition, 'id' | 'isBuiltin'>> {
+  const overrides: Partial<Omit<AgentDefinition, 'id' | 'isBuiltin'>> = {}
+  if (typeof body !== 'object' || body === null) return overrides
+  const record = body as Record<string, unknown>
+  for (const key of ['name', 'avatar', 'systemPrompt', 'provider', 'model'] as const) {
+    const value = record[key]
+    if (value === undefined) continue
+    if (typeof value !== 'string') throw new HttpRequestError(400, `field "${key}" must be a string`)
+    overrides[key] = value
+  }
+  if (record.temperature !== undefined) {
+    if (typeof record.temperature !== 'number' || !Number.isFinite(record.temperature)) {
+      throw new HttpRequestError(400, 'field "temperature" must be a finite number')
+    }
+    overrides.temperature = record.temperature
+  }
+  if (record.tools !== undefined) {
+    if (!Array.isArray(record.tools) || record.tools.some((tool) => { return typeof tool !== 'string' })) {
+      throw new HttpRequestError(400, 'field "tools" must be an array of strings')
+    }
+    overrides.tools = record.tools as string[]
+  }
+  return overrides
+}
 
 /** 服务构造选项。 */
 export interface ServerOptions {
@@ -63,6 +113,10 @@ export interface ServerOptions {
   evolution?: AgentEvolutionHooks | null
   /** 巩固调度间隔毫秒；0/undefined = 关闭（默认 6 小时）。 */
   consolidationIntervalMs?: number
+  /** WS 心跳间隔毫秒（默认 30s；测试可调小）。两次未 pong 即断开。 */
+  wsHeartbeatMs?: number
+  /** 优雅停机等待在途 turn 的超时毫秒（默认 10s）。 */
+  shutdownTimeoutMs?: number
 }
 
 /** 按环境构建默认进化服务。 */
@@ -89,9 +143,6 @@ function createDefaultMemory(dataDir: string): MemoryService {
   })
 }
 
-const DEFAULT_PORT = 32100
-const DEFAULT_HOST = '127.0.0.1'
-
 /** RyAgent 本地后端服务。 */
 export class RyAgentServer {
   private constructor(
@@ -107,7 +158,15 @@ export class RyAgentServer {
     readonly dataDir: string,
     readonly workspaceRoot: string,
     private readonly providers: ProvidersConfigFile,
+    private readonly wsHeartbeatMs: number,
+    private readonly shutdownTimeoutMs: number,
   ) {}
+
+  /** 第二次及以后的 close() 直接复用首次的停机 Promise（幂等）。 */
+  private closing: Promise<void> | undefined
+  private heartbeat: ReturnType<typeof setInterval> | undefined
+  /** 每个 WS 客户端的 pong 存活标记（心跳两轮未响应即断开）。 */
+  private readonly wsAlive = new Map<WsSocket, boolean>()
 
   /** 实际监听地址（端口 0 时取系统分配值）。 */
   get url(): string {
@@ -179,6 +238,8 @@ export class RyAgentServer {
       store, coordinator, memoryOption, memoryService, evolutionOption, evolutionService,
       createServer(), new WebSocketServer({ noServer: true }), hub,
       dataDir, workspaceRoot, providers,
+      options.wsHeartbeatMs ?? DEFAULT_WS_HEARTBEAT_MS,
+      options.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS,
     )
     server.http.on('request', (req, res) => { server.onRequest(req, res).catch((error: unknown) => {
       if (!res.headersSent) json(res, 500, { error: error instanceof Error ? error.message : String(error) })
@@ -191,8 +252,27 @@ export class RyAgentServer {
     return server
   }
 
-  /** 优雅停机：断开 WS 客户端、关 HTTP、关数据库。 */
-  async close(): Promise<void> {
+  /**
+   * 优雅停机（幂等）：先等在途 turn 完成（超时兜底），再断 WS 客户端、
+   * 关 HTTP、关数据库——在途 turn 的收尾事件还能推到客户端，且不会写
+   * 已关闭的 SQLite。
+   */
+  close(): Promise<void> {
+    this.closing ??= this.doClose()
+    return this.closing
+  }
+
+  private async doClose(): Promise<void> {
+    if (this.heartbeat !== undefined) clearInterval(this.heartbeat)
+    const pending = [...this.turnChains.values()]
+    if (pending.length > 0) {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      await Promise.race([
+        Promise.allSettled(pending),
+        new Promise((resolve) => { timer = setTimeout(resolve, this.shutdownTimeoutMs) }),
+      ])
+      if (timer !== undefined) clearTimeout(timer)
+    }
     for (const client of this.wss.clients) client.terminate()
     this.wss.close()
     await new Promise<void>((resolve, reject) => {
@@ -206,7 +286,25 @@ export class RyAgentServer {
   // ---- WS ----
 
   private attachWs(): void {
+    this.heartbeat = setInterval(() => {
+      for (const [ws, alive] of this.wsAlive) {
+        if (!alive) {
+          // 上一轮 ping 未收到 pong：半死连接，断开释放订阅与缓冲区。
+          ws.terminate()
+          continue
+        }
+        this.wsAlive.set(ws, false)
+        if (ws.readyState === ws.OPEN) ws.ping()
+      }
+    }, this.wsHeartbeatMs)
+    // 心跳不应拖住进程退出（测试与内嵌模式）。
+    this.heartbeat.unref()
+
     this.http.on('upgrade', (req, socket, head) => {
+      if (!originAllowed(req.headers.origin)) {
+        socket.destroy()
+        return
+      }
       const url = new URL(req.url ?? '/', 'http://localhost')
       if (url.pathname !== '/ws') {
         socket.destroy()
@@ -218,11 +316,23 @@ export class RyAgentServer {
         return
       }
       this.wss.handleUpgrade(req, socket, head, (ws) => {
+        this.wsAlive.set(ws, true)
+        ws.on('pong', () => { this.wsAlive.set(ws, true) })
         const unsubscribe = this.hub.subscribe(conversationId, (event) => {
-          if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(event))
+          if (ws.readyState !== ws.OPEN) return
+          // 慢消费者背压：缓冲堆积超上限说明客户端跟不上，断开比堆积内存安全。
+          if (ws.bufferedAmount > MAX_WS_BUFFERED_BYTES) {
+            ws.terminate()
+            return
+          }
+          ws.send(JSON.stringify(event))
         })
-        ws.on('close', unsubscribe)
-        ws.on('error', unsubscribe)
+        const drop = (): void => {
+          this.wsAlive.delete(ws)
+          unsubscribe()
+        }
+        ws.on('close', drop)
+        ws.on('error', drop)
       })
     })
   }
@@ -234,7 +344,17 @@ export class RyAgentServer {
   // ---- HTTP ----
 
   private async onRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const url = new URL(req.url ?? '/', 'http://localhost')
+    if (!originAllowed(req.headers.origin)) {
+      json(res, 403, { error: 'origin not allowed' })
+      return
+    }
+    let url: URL
+    try {
+      url = new URL(req.url ?? '/', 'http://localhost')
+    } catch {
+      json(res, 400, { error: 'malformed request URL' })
+      return
+    }
     const handled = await this.router().dispatch(req, res, url.pathname + url.search)
     if (!handled) json(res, 404, { error: `not found: ${req.method} ${url.pathname}` })
   }
@@ -262,15 +382,8 @@ export class RyAgentServer {
     router.post('/api/agents', async (req, res) => {
       const body = await req.body()
       const templateKey = strField(body, 'templateKey')
-      const overrides: Partial<Omit<AgentDefinition, 'id' | 'isBuiltin'>> = {}
-      if (typeof body === 'object' && body !== null) {
-        const record = body as Record<string, unknown>
-        for (const key of ['name', 'avatar', 'systemPrompt', 'provider', 'model'] as const) {
-          if (typeof record[key] === 'string') (overrides as Record<string, unknown>)[key] = record[key]
-        }
-        if (typeof record.temperature === 'number') overrides.temperature = record.temperature
-        if (Array.isArray(record.tools)) overrides.tools = record.tools as string[]
-      }
+      // 白名单校验失败抛 HttpRequestError，由 dispatch 统一回 400。
+      const overrides = agentFieldOverrides(body)
       try {
         const definition: AgentDefinition = templateKey !== undefined
           ? instantiateTemplate(templateKey, overrides)
@@ -295,10 +408,11 @@ export class RyAgentServer {
         json(res, 404, { error: `agent not found: ${req.params.id}` })
         return
       }
-      const body = (await req.body()) as Partial<AgentDefinition> | undefined
+      // 与 POST 同款白名单：类型不符 400（dispatch 统一捕获），未知键丢弃。
+      const overrides = agentFieldOverrides(await req.body())
       const merged: AgentDefinition = {
         ...existing,
-        ...body ?? {},
+        ...overrides,
         id: existing.id,
         isBuiltin: existing.isBuiltin,
       }
