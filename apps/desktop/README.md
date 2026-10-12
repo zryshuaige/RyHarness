@@ -48,6 +48,14 @@ pnpm --filter @ryagent/desktop start      # electron .（file:// 加载 renderer
 - **产物卡片**：produce-card 事件 → 文件卡片（文件名/大小/MIME），"打开"走 `/api/files/:name`。
 - **Ryen 状态**：顶栏小猫在任意 agent 生成时转 thinking（星星旋转），全部完成时 happy 一下回 idle。
 
+## 图标系统
+
+`renderer/src/components/Icon.tsx`：22 个内联 SVG 图标（stroke 风格 1.8px、圆角线帽、
+24 viewBox、currentColor），替代全部 emoji chrome（Windows 上 emoji 渲染成不一致
+色块是界面最脏的元素）。覆盖：chat-bubble/users/cat-face/sun/moon/gear/search/send/
+brain/plus/x/chevron-right/left/panel-right/copy/check/file/thumbs-up/down/at-sign/
+group/pencil/alert。尺寸节奏：rail 22px、按钮 15-16px、输入区 16px。
+
 ## 测试
 
 渲染层组件测试在 `tests/`（`@vitest-environment jsdom` pragma）：Cat 三态、头像注册表（≥12 个预置 SVG + key 唯一 + 兜底色块）、群聊九宫格布局（2/3/4/5/9 人规则）、主题切换、消息气泡/工具行/文件卡片/接力链渲染、@补全纯逻辑、ChatStore 事件折叠。由仓库根 `pnpm test` 统一跑。

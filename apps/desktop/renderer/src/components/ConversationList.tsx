@@ -4,6 +4,7 @@ import { Avatar } from './avatars/Avatar.tsx'
 import { GroupAvatar } from './avatars/GroupAvatar.tsx'
 import { formatTime } from './ChatView.tsx'
 import { ConversationSkeleton } from './Skeleton.tsx'
+import { Icon } from './Icon.tsx'
 
 /** 左栏会话列表：48px 头像、未读徽标、预览、搜索过滤、骨架屏。 */
 export function ConversationList({
@@ -48,12 +49,15 @@ export function ConversationList({
   return (
     <>
       <div className="list-panel-header">
-        <input
-          className="search-box"
-          placeholder="搜索会话"
-          value={query}
-          onChange={(event) => { setQuery(event.target.value) }}
-        />
+        <span className="search-box-wrap">
+          <Icon name="search" size={15} className="search-box-icon" />
+          <input
+            className="search-box has-icon"
+            placeholder="搜索会话"
+            value={query}
+            onChange={(event) => { setQuery(event.target.value) }}
+          />
+        </span>
       </div>
       <div className="conversation-list">
         {loading === true ? (

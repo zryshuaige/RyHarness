@@ -10,6 +10,8 @@ import { WelcomeHome } from './components/WelcomeHome.tsx'
 import { ContactsPage, CreateAgentModal, CreateGroupModal } from './components/ContactsPage.tsx'
 import { MePage } from './components/MePage.tsx'
 import { AppIcon } from './components/AppIcon.tsx'
+import { Icon } from './components/Icon.tsx'
+import type { IconName } from './components/Icon.tsx'
 
 type Tab = 'chats' | 'contacts' | 'me'
 
@@ -30,10 +32,10 @@ export function applyTheme(theme: Theme): void {
   document.documentElement.dataset.theme = theme
 }
 
-const RAIL_TABS: { key: Tab; icon: string; label: string }[] = [
-  { key: 'chats', icon: '💬', label: '聊天' },
-  { key: 'contacts', icon: '👥', label: '通讯录' },
-  { key: 'me', icon: '🐱', label: '我的' },
+const RAIL_TABS: { key: Tab; icon: IconName; label: string }[] = [
+  { key: 'chats', icon: 'chat-bubble', label: '聊天' },
+  { key: 'contacts', icon: 'users', label: '通讯录' },
+  { key: 'me', icon: 'cat-face', label: '我的' },
 ]
 
 export function App() {
@@ -146,7 +148,7 @@ export function App() {
             className={`rail-tab ${tab === item.key ? 'is-active' : ''}`}
             onClick={() => { setTab(item.key) }}
           >
-            <span className="rail-icon" aria-hidden="true">{item.icon}</span>
+            <span className="rail-icon" aria-hidden="true"><Icon name={item.icon} size={22} /></span>
             {item.label}
           </button>
         ))}
@@ -156,9 +158,9 @@ export function App() {
           title={theme === 'light' ? '切换到暗色' : '切换到浅色'}
           onClick={() => { changeTheme(theme === 'light' ? 'dark' : 'light') }}
         >
-          {theme === 'light' ? '🌙' : '☀️'}
+          <Icon name={theme === 'light' ? 'moon' : 'sun'} size={18} />
         </button>
-        <button className="rail-icon-btn" title="我的 / 设置" onClick={() => { setTab('me') }}>⚙️</button>
+        <button className="rail-icon-btn" title="我的 / 设置" onClick={() => { setTab('me') }}><Icon name="gear" size={18} /></button>
       </nav>
 
       {/* 栏 2：列表栏（聊天 tab）或空（通讯录/我的为整页） */}

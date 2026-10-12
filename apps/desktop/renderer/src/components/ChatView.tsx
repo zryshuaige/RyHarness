@@ -7,6 +7,7 @@ import { Cat } from './Cat.tsx'
 import { ChatInput } from './ChatInput.tsx'
 import { MessageBubble, RelayChain } from './MessageBubble.tsx'
 import { TypingDots } from './TypingDots.tsx'
+import { Icon } from './Icon.tsx'
 
 function formatTime(ts: number): string {
   const date = new Date(ts)
@@ -204,7 +205,7 @@ export function ChatView({
             </div>
           ))}
           {snapshot.error !== undefined && (
-            <p className="error-banner">⚠️ [{snapshot.error.code}] {snapshot.error.message}</p>
+            <p className="error-banner"><Icon name="alert" size={14} /> [{snapshot.error.code}] {snapshot.error.message}</p>
           )}
           {typingAgents.length > 0 && (
             <p className="typing-indicator">
@@ -221,7 +222,7 @@ export function ChatView({
           )}
         </div>
         {showJump && (
-          <button className="jump-latest" onClick={jumpToLatest}>↓ 跳至最新</button>
+          <button className="jump-latest" onClick={jumpToLatest}><Icon name="chevron-right" size={12} className="jump-icon" /> 跳至最新</button>
         )}
       </div>
 

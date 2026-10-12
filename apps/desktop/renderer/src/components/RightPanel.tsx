@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { AgentDef, ApiClient, Conversation } from '../api.ts'
 import { MemoryPanel } from './MemoryPanel.tsx'
+import { Icon } from './Icon.tsx'
 import { Avatar } from './avatars/Avatar.tsx'
 import type { RelayItem, UiMessage } from '../store.ts'
 
@@ -45,14 +46,14 @@ export function RightPanel({
   if (collapsed) {
     return (
       <aside className="right-panel is-collapsed">
-        <button className="panel-expand-btn" title="展开信息板" onClick={onToggle}>«</button>
+        <button className="panel-expand-btn" title="展开信息板" onClick={onToggle}><Icon name="panel-right" size={14} /></button>
       </aside>
     )
   }
   return (
     <aside className="right-panel">
       <span className="panel-banner" aria-hidden="true" />
-      <button className="right-panel-toggle" title="收起信息板" onClick={onToggle}>»</button>
+      <button className="right-panel-toggle" title="收起信息板" onClick={onToggle}><Icon name="chevron-right" size={13} /></button>
       <div className="panel-body">
         {conversation === undefined ? (
           <p className="panel-empty">选择一个会话查看详情</p>
@@ -101,7 +102,7 @@ function ArtifactList({
     <ul className="artifact-list">
       {artifacts.map((artifact) => (
         <li key={artifact.callId}>
-          <span aria-hidden="true">📄</span>
+          <span aria-hidden="true"><Icon name="file" size={15} /></span>
           <span className="artifact-name" title={artifact.name}>{artifact.name}</span>
           <a href={fileUrl(artifact.name)} target="_blank" rel="noreferrer">打开</a>
         </li>
@@ -133,7 +134,7 @@ function DirectProfile({
           {agent.name}
           {agent.isBuiltin && <span className="badge">内置</span>}
         </h3>
-        <button className="btn" style={{ marginTop: 4 }} onClick={() => { onShowMemories(agent) }}>🧠 记忆</button>
+        <button className="btn" style={{ marginTop: 4 }} onClick={() => { onShowMemories(agent) }}><Icon name="brain" size={15} /> 记忆</button>
       </div>
       <dl className="profile-fields">
         <dt>人设</dt>

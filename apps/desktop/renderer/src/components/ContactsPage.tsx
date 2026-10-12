@@ -3,6 +3,7 @@ import type { AgentDef, AgentTemplate, ProviderInfo } from '../api.ts'
 import { Avatar } from './avatars/Avatar.tsx'
 import { AVATARS } from './avatars/avatars.tsx'
 import { Cat } from './Cat.tsx'
+import { Icon } from './Icon.tsx'
 
 const TOOL_LABELS: Record<string, string> = {
   fs_read: '读文件', fs_write: '写文件', shell_exec: '执行命令', file_produce: '产出文件',
@@ -73,8 +74,8 @@ export function ContactsPage({
       <header className="page-header">
         <h2>通讯录</h2>
         <div className="page-actions">
-          <button className="btn" onClick={onCreateGroup}>＋ 建群</button>
-          <button className="btn btn-primary" onClick={onCreateAgent}>＋ 新建 Agent</button>
+          <button className="btn" onClick={onCreateGroup}><Icon name="group" size={15} /> 建群</button>
+          <button className="btn btn-primary" onClick={onCreateAgent}><Icon name="plus" size={15} /> 新建 Agent</button>
         </div>
       </header>
       <div className="page-scroll">
@@ -90,7 +91,7 @@ export function ContactsPage({
               <p className="section-title">我的 Agent（{sorted.length}）</p>
               <div className="contact-grid">
                 <button className="contact-card contact-create" onClick={onCreateAgent}>
-                  <span className="contact-create-icon">＋</span>
+                  <span className="contact-create-icon"><Icon name="plus" size={22} /></span>
                   <h3>新建 Agent</h3>
                   <p className="contact-prompt">从模板开始，挑头像、定人设</p>
                 </button>
@@ -312,7 +313,7 @@ function Modal({ title, children, onClose }: { title: string; children: React.Re
       <div className="modal" onClick={(e) => { e.stopPropagation() }}>
         <header className="modal-header">
           <h3>{title}</h3>
-          <button onClick={onClose} aria-label="关闭">✕</button>
+          <button onClick={onClose} aria-label="关闭"><Icon name="x" size={15} /></button>
         </header>
         {children}
       </div>

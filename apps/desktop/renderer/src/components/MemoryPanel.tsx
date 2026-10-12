@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { ApiClient, MemoryRow } from '../api.ts'
+import { Icon } from './Icon.tsx'
 
 const KIND_LABELS: Record<MemoryRow['kind'], string> = {
   profile: '画像', fact: '事实', preference: '偏好', event: '事件',
@@ -49,7 +50,7 @@ export function MemoryPanel({
           ? ` · ${conversationTitles.get(memory.sourceConversationId) ?? '会话'}`
           : ''}
       </span>
-      <button className="memory-delete" title="删除（软删）" onClick={() => { void remove(memory.id) }}>✕</button>
+      <button className="memory-delete" title="删除（软删）" onClick={() => { void remove(memory.id) }}><Icon name="x" size={11} /></button>
     </li>
   )
 
@@ -58,7 +59,7 @@ export function MemoryPanel({
       <div className="modal" onClick={(e) => { e.stopPropagation() }}>
         <header className="modal-header">
           <h3>{agentName} 的记忆</h3>
-          <button onClick={onClose} aria-label="关闭">✕</button>
+          <button onClick={onClose} aria-label="关闭"><Icon name="x" size={15} /></button>
         </header>
         {memories === undefined ? (
           <p className="panel-empty">载入中…</p>

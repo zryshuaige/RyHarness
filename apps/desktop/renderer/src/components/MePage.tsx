@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { AgentDef, MemoryRow, ProviderInfo } from '../api.ts'
 import { Avatar } from './avatars/Avatar.tsx'
+import { Icon } from './Icon.tsx'
 
 interface MeApi {
   listAgentMemories(agentId: string): Promise<{ agent: MemoryRow[]; shared: MemoryRow[] }>
@@ -75,7 +76,7 @@ export function MePage({
                     setEditingName(true)
                   }}
                 >
-                  {ryen.name} ✎
+                  {ryen.name} <Icon name="pencil" size={14} className="me-pencil" />
                 </button>
               )}
               <p className="me-sub">你的猫管家总管 · 内置 Agent</p>
@@ -89,8 +90,8 @@ export function MePage({
                 <div className="me-row-sub">暖琥珀浅色 / 暖黑暗色</div>
               </div>
               <span className="theme-toggle" role="radiogroup" aria-label="主题">
-                <button className={theme === 'light' ? 'is-active' : ''} onClick={() => { onThemeChange('light') }}>☀️ 浅色</button>
-                <button className={theme === 'dark' ? 'is-active' : ''} onClick={() => { onThemeChange('dark') }}>🌙 暗色</button>
+                <button className={theme === 'light' ? 'is-active' : ''} onClick={() => { onThemeChange('light') }}><Icon name="sun" size={14} /> 浅色</button>
+                <button className={theme === 'dark' ? 'is-active' : ''} onClick={() => { onThemeChange('dark') }}><Icon name="moon" size={14} /> 暗色</button>
               </span>
             </div>
             {providers.map((provider) => (
@@ -116,7 +117,7 @@ export function MePage({
             </div>
             <div className="me-row" style={{ alignItems: 'flex-start' }}>
               <div className="me-row-body">
-                <div className="me-row-title">🧠 {ryen?.name ?? 'Ryen'} 了解你</div>
+                <div className="me-row-title"><Icon name="brain" size={15} /> {ryen?.name ?? 'Ryen'} 了解你</div>
                 <div className="me-row-sub">共享画像——从你们的对话中沉淀，注入每轮记忆</div>
                 {shared !== undefined && (
                   <ul className="memory-list" style={{ marginTop: 8 }}>

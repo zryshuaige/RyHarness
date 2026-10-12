@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { filterMentions, mentionQueryAt } from '../store.ts'
 import { Avatar } from './avatars/Avatar.tsx'
+import { Icon } from './Icon.tsx'
 
 interface MentionMember {
   id: string
@@ -101,7 +102,7 @@ export function ChatInput({
                 onMouseEnter={() => { setSelected(index) }}
               >
                 <Avatar avatarKey={member.avatar} name={member.name} seed={member.id} size={24} />
-                <span className="mention-name">@{member.name}</span>
+                <span className="mention-name"><Icon name="at-sign" size={12} />{member.name}</span>
                 {(member.tools?.length ?? 0) > 0 && (
                   <span className="mention-badge">{member.tools!.length} 工具</span>
                 )}
@@ -127,7 +128,7 @@ export function ChatInput({
           onSelect={(event) => { setCursor(event.currentTarget.selectionStart ?? 0) }}
         />
       </div>
-      <button className="send-btn" onClick={submit} disabled={disabled || text.trim().length === 0}>发送</button>
+      <button className="send-btn" onClick={submit} disabled={disabled || text.trim().length === 0}><Icon name="send" size={16} /><span>发送</span></button>
     </>
   )
 }

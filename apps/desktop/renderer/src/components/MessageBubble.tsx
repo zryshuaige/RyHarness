@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { MessagePart, UiMessage } from '../store.ts'
 import { Avatar } from './avatars/Avatar.tsx'
+import { Icon } from './Icon.tsx'
 import type { AgentDef } from '../api.ts'
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -16,14 +17,16 @@ export function MessagePartView({ part, fileUrl }: { part: MessagePart; fileUrl:
   if (part.kind === 'tool') {
     return (
       <p className={`tool-row ${part.status === 'running' ? 'is-running' : ''} ${part.isError === true ? 'is-error' : ''}`}>
-        <span className="tool-dot">{part.status === 'running' ? '⏳' : part.isError === true ? '⚠️' : '✓'}</span>
+        <span className={`tool-dot ${part.status === 'running' ? 'is-running' : ''}`}>
+          {part.status === 'running' ? '' : <Icon name={part.isError === true ? 'alert' : 'check'} size={13} />}
+        </span>
         {part.status === 'running' ? `正在使用工具：${part.name}…` : `工具 ${part.name} ${part.isError === true ? '失败' : '完成'}`}
       </p>
     )
   }
   return (
     <div className="file-card">
-      <span className="file-icon">📄</span>
+      <span className="file-icon"><Icon name="file" size={22} /></span>
       <span className="file-meta">
         <strong>{part.name}</strong>
         <small>{formatSize(part.size)} · {part.mime}</small>
@@ -101,7 +104,7 @@ export function MessageBubble({
             title="复制"
             onClick={() => { void copy() }}
           >
-            {copied ? '✓' : '⧉'}
+            <Icon name={copied ? 'check' : 'copy'} size={14} />
           </button>
         </span>
       </div>
@@ -144,7 +147,7 @@ export function RelayChain({
               <span className="relay-avatar">
                 <Avatar avatarKey={avatarOf(relay.fromAgent).avatarKey} name={nameOf(relay.fromAgent)} seed={relay.fromAgent} size={20} />
               </span>
-              <span className="relay-arrow" aria-hidden="true">→</span>
+              <span className="relay-arrow" aria-hidden="true"><Icon name="chevron-right" size={11} /></span>
             </>
           )}
           <span className="relay-avatar">
