@@ -30,6 +30,10 @@ const RECALL_PER_CHANNEL = 10
 const RECALL_TOP_N = 5
 /** 衰减时间常数（天）。 */
 const DECAY_DAYS = 30
+/** 默认 embedding 请求超时（毫秒）。 */
+const DEFAULT_EMBED_TIMEOUT_MS = 800
+/** 默认 recall 整体预算（毫秒）——保障首 token 延迟。 */
+const DEFAULT_RECALL_BUDGET_MS = 1_200
 
 /** 供 AgentLoop 接入的薄接口（recall 同步组装前、enqueue 异步收尾）。 */
 export interface AgentMemory {
@@ -44,6 +48,10 @@ export interface MemoryServiceOptions {
   /** 注入行数上限（默认 5）。 */
   recallTopN?: number
   logger?: (message: string) => void
+  /** 单次 embedding 网络请求超时（默认 800ms），超时降级纯 FTS5。 */
+  embedTimeoutMs?: number
+  /** recall 整体预算（默认 1200ms）：超预算则跳过本轮记忆注入，不阻塞首 token。 */
+  recallBudgetMs?: number
 }
 
 export class MemoryService implements AgentMemory {
@@ -52,6 +60,8 @@ export class MemoryService implements AgentMemory {
   private readonly llm: MemoryLlm | undefined
   private readonly topN: number
   private readonly log: (message: string) => void
+  private readonly embedTimeoutMs: number
+  private readonly recallBudgetMs: number
   /** 单 writer 队列。 */
   private queue: Promise<void> = Promise.resolve()
 
@@ -60,6 +70,8 @@ export class MemoryService implements AgentMemory {
     this.embeddings = options.embeddings ?? new NullEmbeddings()
     this.llm = options.llm
     this.topN = options.recallTopN ?? RECALL_TOP_N
+    this.embedTimeoutMs = options.embedTimeoutMs ?? DEFAULT_EMBED_TIMEOUT_MS
+    this.recallBudgetMs = options.recallBudgetMs ?? DEFAULT_RECALL_BUDGET_MS
     this.log = options.logger ?? ((message) => { console.log(message) })
   }
 
@@ -78,12 +90,18 @@ export class MemoryService implements AgentMemory {
    * @returns 注入文本；无记忆时返回 undefined（不注入空块）。
    */
   async recall(agentId: string, inputText: string): Promise<string | undefined> {
+    const budgetStart = Date.now()
     const text = inputText.trim()
     const sections: string[] = []
 
     const profile = this.store.listSharedProfile()
     if (profile.length > 0) {
       sections.push(`用户画像：\n${profile.map((m) => { return `- ${m.content}` }).join('\n')}`)
+    }
+
+    // 预算守卫：画像已超预算时直接返回（profile 量小，正常不会发生）。
+    if (Date.now() - budgetStart > this.recallBudgetMs) {
+      return sections.length > 0 ? `[记忆] ${sections.join('\n')}` : undefined
     }
 
     const recalled = await this.hybridRecall(agentId, text)
@@ -134,14 +152,15 @@ export class MemoryService implements AgentMemory {
       .map((hit) => { return hit.memory })
   }
 
-  /** embedding + 文本缓存：相同文本不重复请求。 */
+  /** embedding + 文本缓存：相同文本不重复请求；网络请求带超时，超时降级纯 FTS5。 */
   private async embedCached(text: string): Promise<Float32Array | null> {
     if (!this.embeddings.available) return null
     const cached = this.store.cachedEmbedding(text)
     if (cached !== null) return cached
-    const vectors = await this.embeddings.embed([text])
+    const vectors = await withTimeout(this.embeddings.embed([text]), this.embedTimeoutMs)
     const vector = vectors === null ? null : vectors[0] ?? null
     if (vector !== null) this.store.cacheEmbedding(text, vector)
+    else this.log(`@ryagent/memory: embedding timed out after ${this.embedTimeoutMs}ms, falling back to FTS-only`)
     return vector
   }
 
@@ -234,4 +253,12 @@ export class MemoryService implements AgentMemory {
       }
     }
   }
+}
+
+/** Promise 超时包装：超时返回 null（embedding 降级纯 FTS5 路径用）。 */
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | null> {
+  return Promise.race([
+    promise.then((value) => { return value as T | null }),
+    new Promise<null>((resolve) => { return setTimeout(() => { return resolve(null) }, timeoutMs) }),
+  ])
 }

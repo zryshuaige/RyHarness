@@ -203,6 +203,32 @@ export class SessionStore {
     return rows.map((row) => { return this.rowToConversation(row) })
   }
 
+  /**
+   * 会话列表 + 末条预览 + 未读数（单查询，避免 N+1）。
+   * 未读 = seq > last_read_seq 且非用户发送的消息数。
+   */
+  listConversationsWithPreview(limit = 50): (Conversation & { lastMessagePreview: string; unreadCount: number })[] {
+    const rows = this.db.prepare(`
+      SELECT c.*,
+        (SELECT content_blocks FROM messages
+          WHERE conversation_id = c.id ORDER BY seq DESC LIMIT 1) AS last_blocks,
+        (SELECT COUNT(*) FROM messages
+          WHERE conversation_id = c.id AND seq > c.last_read_seq AND sender_type != 'user') AS unread_count
+      FROM conversations c
+      ORDER BY c.updated_at DESC
+      LIMIT ?
+    `).all(limit) as Record<string, unknown>[]
+    return rows.map((row) => {
+      const blocks = parseJsonArray(String(row.last_blocks ?? '[]')) as { type?: string; text?: string }[]
+      const preview = (blocks.find((b) => { return b.type === 'text' && typeof b.text === 'string' })?.text ?? '').slice(0, 120)
+      return {
+        ...this.rowToConversation(row),
+        lastMessagePreview: preview,
+        unreadCount: Number(row.unread_count ?? 0),
+      }
+    })
+  }
+
   /** 刷新会话的 updatedAt（新消息落库后调用）。 */
   touchConversation(id: string, now = Date.now()): void {
     this.db.prepare('UPDATE conversations SET updated_at = ? WHERE id = ?').run(now, id)

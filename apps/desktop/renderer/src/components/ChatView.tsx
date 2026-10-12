@@ -59,6 +59,7 @@ export function ChatView({
 }) {
   const snapshot = useChat(store)
   const [history, setHistory] = useState<UiMessage[]>([])
+  const [historyLimit, setHistoryLimit] = useState(50)
   const [historyLoaded, setHistoryLoaded] = useState(false)
   const [showJump, setShowJump] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -78,7 +79,7 @@ export function ChatView({
     store.reset()
     setHistoryLoaded(false)
     stickToBottom.current = true
-    api.messages(conversation.id, 50).then(({ messages }) => {
+    api.messages(conversation.id, historyLimit).then(({ messages }) => {
       if (cancelled) return
       setHistory(fromHistory(messages, nameOf))
       setHistoryLoaded(true)
@@ -95,7 +96,7 @@ export function ChatView({
       unsubscribe()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conversation.id])
+  }, [conversation.id, historyLimit])
 
   // 自动跟随滚动：仅当视口距底 < 100px（报告 §5）。
   useEffect(() => {
@@ -150,11 +151,14 @@ export function ChatView({
   }
 
   const allMessages = [...history, ...snapshot.messages]
+  // 渲染上限：超长会话只渲染最近 RENDER_CAP 条，配合「加载更早」向上翻页。
+  const RENDER_CAP = 150
+  const visibleMessages = allMessages.length > RENDER_CAP ? allMessages.slice(-RENDER_CAP) : allMessages
 
   // 按 turn 分组；turn 间插时间分隔；同 sender 相邻收紧。
   const turns = useMemo(() => {
     const groups: { turnIndex: number; time: number | undefined; messages: UiMessage[] }[] = []
-    for (const message of allMessages) {
+    for (const message of visibleMessages) {
       const last = groups[groups.length - 1]
       if (last === undefined || last.turnIndex !== message.turnIndex) {
         groups.push({ turnIndex: message.turnIndex, time: message.createdAt, messages: [message] })
@@ -163,7 +167,7 @@ export function ChatView({
       }
     }
     return groups
-  }, [allMessages])
+  }, [visibleMessages])
 
   const typingAgents = Object.keys(snapshot.typing).filter((id) => { return id !== 'user' })
 
@@ -180,6 +184,14 @@ export function ChatView({
       <div className="chat-scroll" ref={scrollRef} onScroll={handleScroll} style={{ position: 'relative' }}>
         <div className="chat-col">
           {!historyLoaded && <p className="chat-hint">载入历史中…</p>}
+          {historyLoaded && history.length >= historyLimit && (
+            <button className="load-earlier" onClick={() => { setHistoryLimit((n) => { return n + 100 }) }}>
+              ↑ 加载更早消息
+            </button>
+          )}
+          {allMessages.length > RENDER_CAP && (
+            <p className="chat-hint">已省略 {allMessages.length - RENDER_CAP} 条早期消息</p>
+          )}
           {turns.map((turn) => (
             <div key={turn.turnIndex} className="turn-block">
               {turn.time !== undefined && <div className="turn-time">{formatTime(turn.time)}</div>}

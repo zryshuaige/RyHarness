@@ -447,17 +447,7 @@ export class RyAgentServer {
     // ---- conversations ----
 
     router.get('/api/conversations', async (_req, res) => {
-      const conversations = store.listConversations().map((conversation) => {
-        const last = store.listMessages(conversation.id, { limit: 1 }).at(-1)
-        const preview = last === undefined
-          ? ''
-          : (last.contentBlocks[0] as { text?: string } | undefined)?.text ?? ''
-        return {
-          ...conversation,
-          lastMessagePreview: preview.slice(0, 120),
-          unreadCount: store.unreadCount(conversation.id, conversation.lastReadSeq),
-        }
-      })
+      const conversations = store.listConversationsWithPreview()
       json(res, 200, { conversations })
     })
 

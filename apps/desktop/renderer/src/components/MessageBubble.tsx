@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import type { MessagePart, UiMessage } from '../store.ts'
 import { Avatar } from './avatars/Avatar.tsx'
 import { Icon } from './Icon.tsx'
@@ -45,7 +45,7 @@ function messagePlainText(message: UiMessage): string {
 
 /** 聊天气泡：用户居右（琥珀渐变、右下直角），agent 居左（白底、左下直角）；
  *  带头像列、hover 浮现复制操作、流式光标。 */
-export function MessageBubble({
+function MessageBubbleInner({
   message,
   fileUrl,
   agent,
@@ -139,6 +139,21 @@ export function MessageBubble({
     </div>
   )
 }
+
+/**
+ * memo 包装：流式期间 store 每次通知都会重建消息数组，自定义相等器按
+ * （key, senderId, done, parts 序列化）比较——未变化的气泡跳过重渲染。
+ */
+export const MessageBubble = memo(MessageBubbleInner, (prev, next) => {
+  return prev.message.key === next.message.key
+    && prev.message.senderId === next.message.senderId
+    && prev.message.done === next.message.done
+    && prev.tight === next.tight
+    && prev.firstOfGroup === next.firstOfGroup
+    && JSON.stringify(prev.message.parts) === JSON.stringify(next.message.parts)
+    && prev.onFeedback === next.onFeedback
+    && prev.fileUrl === next.fileUrl
+})
 
 /** 群聊接力链：头像 A → 箭头 → 头像 B 的流转提示，错峰滑入。 */
 export function RelayChain({

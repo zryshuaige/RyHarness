@@ -1,8 +1,8 @@
 import { dirname, join } from "node:path";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { BrowserWindow, app } from "electron";
 import { RyAgentServer } from "@ryagent/server";
-import { rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 //#region electron/capture.ts
@@ -72,6 +72,34 @@ async function runCapture(server, here, createWindow) {
 * serve 渲染层构建产物（renderer/dist）。
 */
 const here = dirname(fileURLToPath(import.meta.url));
+/**
+* 启动时解析 .env（KEY=VALUE，环境变量优先，绝不覆盖已存在的 process.env）。
+* 候选路径按序查找：RYAGENT_ENV_FILE → userData/.env → 应用目录/.env →
+* 仓库根（dev 模式 ../../.env）→ cwd/.env。保证 Electron 内嵌 server 能
+* 读到 SILICONFLOW_API_KEY 等配置。
+*/
+function loadDotEnvIntoProcess() {
+	const candidates = [
+		process.env.RYAGENT_ENV_FILE,
+		join(app.getPath("userData"), ".env"),
+		join(app.getAppPath(), ".env"),
+		join(app.getAppPath(), "..", "..", ".env"),
+		join(process.cwd(), ".env")
+	].filter((p) => {
+		return typeof p === "string" && p.length > 0;
+	});
+	for (const candidate of candidates) {
+		if (!existsSync(candidate)) continue;
+		for (const line of readFileSync(candidate, "utf8").split(/\r?\n/)) {
+			const match = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/.exec(line);
+			if (match === null || match[1] === void 0) continue;
+			const value = (match[2] ?? "").replace(/^["']|["']$/g, "");
+			if (value.length > 0 && process.env[match[1]] === void 0) process.env[match[1]] = value;
+		}
+		return;
+	}
+}
+loadDotEnvIntoProcess();
 async function createWindow(apiBase, show = true) {
 	const window = new BrowserWindow({
 		width: 1320,

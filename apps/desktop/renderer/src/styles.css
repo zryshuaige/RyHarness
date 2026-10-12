@@ -820,3 +820,13 @@ input, textarea, select { font-family: inherit; color: var(--text-primary); }
 .pb-count.neg { background: color-mix(in srgb, #F87171 15%, transparent); color: var(--danger); }
 .memory-row.is-deprecated { opacity: .5; }
 .memory-row.is-deprecated .memory-content { text-decoration: line-through; }
+
+/* 加载更早 */
+.load-earlier {
+  display: block; margin: 0 auto var(--space-3); border: 1px solid var(--border-subtle);
+  background: var(--bg-surface); color: var(--amber-primary-hover); border-radius: 999px;
+  padding: 5px 18px; font-size: var(--fs-sm); font-weight: 600; cursor: pointer;
+  transition: border-color var(--dur-hover), transform 120ms var(--ease-out);
+}
+.load-earlier:hover { border-color: var(--amber-primary); }
+.load-earlier:active { transform: scale(.97); }
