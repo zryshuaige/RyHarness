@@ -830,3 +830,70 @@ input, textarea, select { font-family: inherit; color: var(--text-primary); }
 }
 .load-earlier:hover { border-color: var(--amber-primary); }
 .load-earlier:active { transform: scale(.97); }
+
+/* ---- 19. 质感提升第四轮（对标 Linear/Notion/ChatGPT/Kimi） ---- */
+
+/* 边框半透明化：死灰 → 主题色低透明 */
+:root[data-theme='light'] {
+  --border-subtle: rgba(69, 42, 6, 0.10);
+  --border-strong: rgba(69, 42, 6, 0.18);
+  --inset-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.55);
+  --chat-bg-tint: radial-gradient(1200px 500px at 70% -10%, rgba(245, 158, 11, 0.05), transparent 60%),
+    radial-gradient(900px 400px at 10% 110%, rgba(242, 117, 43, 0.04), transparent 55%);
+}
+:root[data-theme='dark'] {
+  --border-subtle: rgba(255, 244, 228, 0.09);
+  --border-strong: rgba(255, 244, 228, 0.16);
+  --inset-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --chat-bg-tint: radial-gradient(1200px 500px at 70% -10%, rgba(245, 158, 11, 0.06), transparent 60%),
+    radial-gradient(900px 400px at 10% 110%, rgba(242, 117, 43, 0.05), transparent 55%);
+}
+
+/* 字体渲染优化 */
+body {
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'ss01';
+  text-rendering: optimizeLegibility;
+}
+.welcome-greeting, .chat-header-info strong, .page-header h2, .me-name {
+  letter-spacing: -0.01em;
+}
+
+/* 主区与侧栏明度差 + 极淡暖色渐变（<5%） */
+.chat-scroll, .page-scroll { background: var(--chat-bg-tint); }
+
+/* 按钮/输入框：边框 + 内高光双层质感 */
+.btn, .search-box, .me-row, .contact-card, .welcome-chip, .welcome-recent-item, .template-card,
+.chat-input-col, .field input, .field select, .field textarea {
+  box-shadow: var(--inset-highlight);
+}
+.btn { border-color: var(--border-subtle); }
+.btn-primary { box-shadow: var(--inset-highlight), var(--shadow-1); }
+
+/* 列表项/卡片统一 150ms ease-out */
+.conversation-item, .contact-card, .template-card, .welcome-chip, .me-row, .rail-tab, .rail-icon-btn,
+.btn, .bubble-action, .memory-delete, .load-earlier, .send-btn {
+  transition-duration: 150ms;
+  transition-timing-function: var(--ease-out);
+}
+
+/* 弹层：backdrop-blur + 缩放进入（modal-in 已有，补遮罩模糊） */
+.modal-mask { backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+.mention-menu, .jump-latest { backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+
+/* 间距再松一档 */
+.chat-scroll { padding: var(--space-6) var(--space-8); }
+.page-scroll { padding: var(--space-6) var(--space-8); }
+.contact-grid { gap: var(--space-5); }
+.conversation-item { padding: var(--space-3) var(--space-3); }
+
+/* 头像选择器（DiceBear 画廊） */
+.avatar-picker-wrap { display: flex; flex-direction: column; gap: var(--space-3); }
+.avatar-picker-preview { display: flex; align-items: center; gap: var(--space-4); }
+.avatar-picker-actions { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.avatar-picker-actions small { color: var(--text-secondary); font-size: var(--fs-xs); }
+.avatar-picker { grid-template-columns: repeat(6, 1fr); }
+
+/* 欢迎页 chips 图标 */
+.welcome-chip { display: inline-flex; align-items: center; gap: 8px; }
+.chip-emoji { width: 20px; height: 20px; display: inline-flex; }
+.chip-emoji svg, .chip-emoji img { width: 100%; height: 100%; }

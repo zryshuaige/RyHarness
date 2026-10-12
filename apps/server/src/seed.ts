@@ -41,7 +41,7 @@ export const AGENT_TEMPLATES: Readonly<Record<string, AgentTemplate>> = {
     ].join('\n'),
     defaultTools: ['fs_read', 'fs_write', 'shell_exec', 'file_produce'],
     defaultModel: 'deepseek-ai/DeepSeek-V3',
-    avatar: 'bot',
+    avatar: 'db:adventurer:codebot',
   },
   writing: {
     key: 'writing',
@@ -50,7 +50,7 @@ export const AGENT_TEMPLATES: Readonly<Record<string, AgentTemplate>> = {
     suggestedSystemPrompt: '你是中文写作助手，文字准确、有节奏、符合场景语气；先给成稿，再附简要修改说明。',
     defaultTools: ['file_produce'],
     defaultModel: 'deepseek-ai/DeepSeek-V3',
-    avatar: 'rabbit',
+    avatar: 'db:lorelei:writer',
   },
   translation: {
     key: 'translation',
@@ -59,7 +59,7 @@ export const AGENT_TEMPLATES: Readonly<Record<string, AgentTemplate>> = {
     suggestedSystemPrompt: '你是翻译，中英互译信达雅；保留原文格式与术语；拿不准的译法附简短注释。',
     defaultTools: [],
     defaultModel: 'deepseek-ai/DeepSeek-V3',
-    avatar: 'owl',
+    avatar: 'db:notionists:translator',
   },
   'file-organizer': {
     key: 'file-organizer',
@@ -68,7 +68,7 @@ export const AGENT_TEMPLATES: Readonly<Record<string, AgentTemplate>> = {
     suggestedSystemPrompt: '你是文件整理员：先盘点工作区文件，再按用户要求移动/归档/生成索引；任何删除前必须说明；结果用清单汇报。',
     defaultTools: ['fs_read', 'fs_write', 'shell_exec'],
     defaultModel: 'deepseek-ai/DeepSeek-V3',
-    avatar: 'koala',
+    avatar: 'db:bigEars:organizer',
   },
 }
 

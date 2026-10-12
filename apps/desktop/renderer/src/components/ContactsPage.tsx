@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { AgentDef, AgentTemplate, ProviderInfo } from '../api.ts'
 import { Avatar } from './avatars/Avatar.tsx'
-import { AVATARS } from './avatars/avatars.tsx'
+import { AVATAR_STYLES, dicebearSvg, randomAvatarSpec } from './avatars/avatars.tsx'
 import { Cat } from './Cat.tsx'
 import { Icon } from './Icon.tsx'
 
@@ -11,42 +11,61 @@ const TOOL_LABELS: Record<string, string> = {
 const ALL_TOOLS = Object.keys(TOOL_LABELS)
 
 /** 头像选择器：预置 SVG 库网格预览。 */
+/** 头像选择器：DiceBear 风格画廊 + 随机换一批。 */
 export function AvatarPicker({
   value,
   onChange,
 }: {
+  /** `db:{style}:{seed}` 或 'cat'。 */
   value: string
-  onChange: (key: string) => void
+  onChange: (spec: string) => void
 }) {
+  const current = parsePickerValue(value)
   return (
-    <div className="avatar-picker" role="radiogroup" aria-label="选择头像">
-      {AVATARS.map((avatar) => (
-        <button
-          key={avatar.key}
-          type="button"
-          role="radio"
-          aria-checked={value === avatar.key}
-          className={value === avatar.key ? 'is-selected' : ''}
-          title={avatar.name}
-          onClick={() => { onChange(avatar.key) }}
-        >
-          <span
-            className="avatar-cell"
-            onClick={(event) => {
-              event.stopPropagation()
-              onChange(avatar.key)
-            }}
-          >
-            <span
-              style={{ width: 40, height: 40, display: 'inline-flex', borderRadius: '50%', overflow: 'hidden' }}
-              dangerouslySetInnerHTML={{ __html: `<svg viewBox="0 0 64 64" width="40" height="40">${avatar.svg}</svg>` }}
-            />
-            <small>{avatar.name}</small>
-          </span>
-        </button>
-      ))}
+    <div className="avatar-picker-wrap">
+      <div className="avatar-picker-preview">
+        <Avatar avatarKey={`db:${current.styleKey}:${current.seed}`} name="预览" size={64} />
+        <div className="avatar-picker-actions">
+          <button type="button" className="btn" onClick={() => { onChange(randomAvatarSpec()) }}>
+            <Icon name="dices" size={14} /> 换一批
+          </button>
+          <small>当前：{AVATAR_STYLES.find((s) => { return s.key === current.styleKey })?.name ?? current.styleKey}</small>
+        </div>
+      </div>
+      <div className="avatar-picker" role="radiogroup" aria-label="选择风格">
+        {AVATAR_STYLES.map((style) => {
+          const preview = dicebearSvg(style.key, current.seed) ?? ''
+          return (
+            <button
+              key={style.key}
+              type="button"
+              role="radio"
+              aria-checked={current.styleKey === style.key}
+              className={current.styleKey === style.key ? 'is-selected' : ''}
+              title={`${style.name}（${style.license === 'CC0-1.0' ? 'CC0 公有领域' : 'CC BY 4.0'}）`}
+              onClick={() => { onChange(`db:${style.key}:${current.seed}`) }}
+            >
+              <span className="avatar-cell">
+                <span
+                  style={{ width: 40, height: 40, display: 'inline-flex', borderRadius: '50%', overflow: 'hidden' }}
+                  dangerouslySetInnerHTML={{ __html: preview.replace('<svg', '<svg width="40" height="40"') }}
+                />
+                <small>{style.name}</small>
+              </span>
+            </button>
+          )
+        })}
+      </div>
     </div>
   )
+}
+
+function parsePickerValue(value: string): { styleKey: string; seed: string } {
+  const match = /^db:([a-zA-Z]+):(.+)$/.exec(value)
+  if (match !== null && match[1] !== undefined && match[2] !== undefined) {
+    return { styleKey: match[1], seed: match[2] }
+  }
+  return { styleKey: 'lorelei', seed: Math.random().toString(36).slice(2, 10) }
 }
 
 /** 通讯录：agent 卡片网格（Ryen 置顶）+ 新建/建群入口。 */
@@ -140,7 +159,7 @@ export function CreateAgentModal({
   const [templateKey, setTemplateKey] = useState(templates[0]?.key ?? 'general')
   const template = templates.find((t) => { return t.key === templateKey })
   const [name, setName] = useState('')
-  const [avatarKey, setAvatarKey] = useState('bot')
+  const [avatarKey, setAvatarKey] = useState(() => { return randomAvatarSpec() })
   const [systemPrompt, setSystemPrompt] = useState(template?.suggestedSystemPrompt ?? '')
   const [provider, setProvider] = useState(providers[0]?.id ?? 'siliconflow')
   const [model, setModel] = useState(template?.defaultModel ?? '')
@@ -154,9 +173,6 @@ export function CreateAgentModal({
     setSystemPrompt(next.suggestedSystemPrompt)
     setModel(next.defaultModel)
     setTools(next.defaultTools)
-    if (next.avatar !== undefined && AVATARS.some((a) => { return a.key === next.avatar })) {
-      setAvatarKey(next.avatar as string)
-    }
   }
 
   const models = providers.find((p) => { return p.id === provider })?.models ?? []

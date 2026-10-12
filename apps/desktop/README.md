@@ -48,13 +48,23 @@ pnpm --filter @ryagent/desktop start      # electron .（file:// 加载 renderer
 - **产物卡片**：produce-card 事件 → 文件卡片（文件名/大小/MIME），"打开"走 `/api/files/:name`。
 - **Ryen 状态**：顶栏小猫在任意 agent 生成时转 thinking（星星旋转），全部完成时 happy 一下回 idle。
 
+## 图形资源（专业开源库，license 见根 NOTICE.md）
+
+- **头像 = DiceBear**（@dicebear/core+collection，本地 SVG 生成无网络）：6 个可爱风格
+  （lorelei/notionists/thumbs=CC0，adventurer/bigEars/funEmoji=CC BY 4.0 需署名）。
+  agent.avatar 编码 `db:{style}:{seed}`，建/改 Agent 可选风格 + 「换一批」随机 seed；
+  Ryen 保留定制橘猫；旧库值平滑回退首字符块。会话列表/气泡/通讯录/九宫格全生效。
+- **UI 图标 = Lucide**（lucide-static，ISC）：23 个正式图标经 scripts/gen-lucide-icons.mjs
+  拷入 src/assets/lucide/（替换了此前的手绘版）。
+- **软件图标 = Fluent Emoji 猫脸**（microsoft/fluentui-emoji，MIT）+ 琥珀 squircle
+  渐变底，sharp 合成（scripts/gen-icon.mjs 重新生成 16–1024 PNG + ico）。
+- **残留 emoji 语义元素 = Fluent Emoji modern SVG**（欢迎页 chips 等，vendored）。
+
 ## 图标系统
 
-`renderer/src/components/Icon.tsx`：22 个内联 SVG 图标（stroke 风格 1.8px、圆角线帽、
-24 viewBox、currentColor），替代全部 emoji chrome（Windows 上 emoji 渲染成不一致
-色块是界面最脏的元素）。覆盖：chat-bubble/users/cat-face/sun/moon/gear/search/send/
-brain/plus/x/chevron-right/left/panel-right/copy/check/file/thumbs-up/down/at-sign/
-group/pencil/alert。尺寸节奏：rail 22px、按钮 15-16px、输入区 16px。
+`renderer/src/components/Icon.tsx`：Lucide 注册表（stroke 2px、圆角线帽、24 viewBox、
+currentColor），`<Icon name="send" size={18} />`。尺寸节奏：rail 22px、按钮 15-16px、
+输入区 16px。
 
 ## 测试
 

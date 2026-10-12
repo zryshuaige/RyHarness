@@ -1,10 +1,12 @@
 import { useMemo } from 'react'
-import { AVATAR_BY_KEY, fallbackColor } from './avatars.tsx'
 import { Cat } from '../Cat.tsx'
+import { dicebearSvg, fallbackColor, parseAvatarSpec } from './avatars.tsx'
 
 /**
- * 统一头像组件：按 avatarKey 渲染预置 SVG；'cat' 走 Ryen 的 Cat 组件；
- * 未知 key 回退首字符暖色色块。
+ * 统一头像组件：
+ * - 'cat' → Ryen 定制橘猫（品牌主角，保留）
+ * - `db:{style}:{seed}` → DiceBear 本地生成 SVG（6 个可爱风格）
+ * - 未知/旧值 → 首字符暖色块兜底
  */
 export function Avatar({
   avatarKey,
@@ -20,41 +22,46 @@ export function Avatar({
   size?: number
   className?: string
 }) {
-  const def = avatarKey === undefined ? undefined : AVATAR_BY_KEY[avatarKey]
   const initial = (name.trim().slice(0, 1) || '?').toUpperCase()
 
-  const fallback = useMemo(() => {
-    return (
-      <span
-        className={`avatar avatar-fallback ${className}`}
-        style={{
-          width: size, height: size,
-          background: fallbackColor(seed ?? name),
-          fontSize: Math.round(size * 0.44),
-        }}
-        role="img"
-        aria-label={name}
-      >
-        {initial}
-      </span>
-    )
-  }, [seed, name, size, initial, className])
+  const spec = useMemo(() => {
+    return parseAvatarSpec(avatarKey)
+  }, [avatarKey])
+  const dicebear = useMemo(() => {
+    return spec === null ? null : dicebearSvg(spec.styleKey, spec.seed)
+  }, [spec])
 
-  if (def === undefined) return fallback
-  if (def.key === 'cat') {
+  if (avatarKey === 'cat') {
     return (
       <span className={`avatar avatar-cat ${className}`} style={{ width: size, height: size }} role="img" aria-label={name}>
         <Cat mood="idle" size={size} />
       </span>
     )
   }
+  if (dicebear !== null) {
+    return (
+      <span
+        className={`avatar ${className}`}
+        style={{ width: size, height: size }}
+        role="img"
+        aria-label={name}
+        dangerouslySetInnerHTML={{ __html: dicebear }}
+      />
+    )
+  }
   return (
     <span
-      className={`avatar ${className}`}
-      style={{ width: size, height: size }}
+      className={`avatar avatar-fallback ${className}`}
+      style={{
+        width: size,
+        height: size,
+        background: fallbackColor(seed ?? name),
+        fontSize: Math.round(size * 0.44),
+      }}
       role="img"
-      aria-label={`${name}（${def.name}）`}
-      dangerouslySetInnerHTML={{ __html: `<svg viewBox="0 0 64 64" width="${size}" height="${size}">${def.svg}</svg>` }}
-    />
+      aria-label={name}
+    >
+      {initial}
+    </span>
   )
 }

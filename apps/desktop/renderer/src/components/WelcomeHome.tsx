@@ -12,12 +12,17 @@ export function greetingForHour(hour: number): string {
   return '夜深了'
 }
 
-/** 建议任务 chips（点击直接发起与 Ryen 的对话）。 */
+import memoSvg from '../assets/fluent-emoji/memo.svg?raw'
+import folderSvg from '../assets/fluent-emoji/open-file-folder.svg?raw'
+import envelopeSvg from '../assets/fluent-emoji/envelope.svg?raw'
+import calendarSvg from '../assets/fluent-emoji/calendar.svg?raw'
+
+/** 建议任务 chips（点击直接发起与 Ryen 的对话，Fluent Emoji 图标）。 */
 const SUGGESTIONS = [
-  '帮我整理一份本周周报',
-  '看看工作区里都有什么文件',
-  '写一封简短的请假邮件',
-  '给我列一个下周工作计划',
+  { text: '帮我整理一份本周周报', icon: memoSvg },
+  { text: '看看工作区里都有什么文件', icon: folderSvg },
+  { text: '写一封简短的请假邮件', icon: envelopeSvg },
+  { text: '给我列一个下周工作计划', icon: calendarSvg },
 ]
 
 /**
@@ -62,9 +67,10 @@ export function WelcomeHome({
       <h1 className="welcome-greeting">{greeting}，我是 {ryen?.name ?? 'Ryen'}</h1>
       <p className="welcome-sub">喵——今天想让我做点什么？挑一个，或者直接跟我说。</p>
       <div className="welcome-chips">
-        {SUGGESTIONS.map((text) => (
-          <button key={text} className="welcome-chip" onClick={() => { onSuggest(text) }}>
-            {text}
+        {SUGGESTIONS.map((chip) => (
+          <button key={chip.text} className="welcome-chip" onClick={() => { onSuggest(chip.text) }}>
+            <span className="chip-emoji" aria-hidden="true" dangerouslySetInnerHTML={{ __html: chip.icon }} />
+            {chip.text}
           </button>
         ))}
       </div>
