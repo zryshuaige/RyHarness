@@ -7,6 +7,8 @@ interface MentionMember {
   id: string
   name: string
   avatar?: string
+  /** 工具数（补全弹层的徽章）。 */
+  tools?: string[]
 }
 
 /**
@@ -100,6 +102,9 @@ export function ChatInput({
               >
                 <Avatar avatarKey={member.avatar} name={member.name} seed={member.id} size={24} />
                 <span className="mention-name">@{member.name}</span>
+                {(member.tools?.length ?? 0) > 0 && (
+                  <span className="mention-badge">{member.tools!.length} 工具</span>
+                )}
               </li>
             ))}
           </ul>

@@ -2,7 +2,6 @@ import { useState } from 'react'
 import type { MessagePart, UiMessage } from '../store.ts'
 import { Avatar } from './avatars/Avatar.tsx'
 import type { AgentDef } from '../api.ts'
-
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
@@ -110,15 +109,17 @@ export function MessageBubble({
   )
 }
 
-/** 群聊接力链：一条 dispatch 记录渲染为流转提示。 */
+/** 群聊接力链：头像 A → 箭头 → 头像 B 的流转提示，错峰滑入。 */
 export function RelayChain({
   relays,
   turnIndex,
   nameOf,
+  avatarOf,
 }: {
   relays: { fromAgent?: string; toAgent: string; reason: string; turnIndex: number }[]
   turnIndex: number
   nameOf: (id: string) => string
+  avatarOf: (id: string) => { avatarKey?: string; name: string }
 }) {
   const items = relays.filter((relay) => { return relay.turnIndex === turnIndex })
   if (items.length === 0) return null
@@ -133,10 +134,23 @@ export function RelayChain({
   return (
     <div className="relay-chain" aria-label="调度轨迹">
       {items.map((relay, index) => (
-        <span key={index} className={`relay-item ${relay.reason === 'loop-guard' || relay.reason === 'max-turns' ? 'is-guard' : ''}`}>
-          <span className="relay-dot" />
-          {relay.fromAgent !== undefined && <>{nameOf(relay.fromAgent)} → </>}
-          @{nameOf(relay.toAgent)} · {label(relay.reason)}
+        <span
+          key={`${relay.reason}-${index}`}
+          className={`relay-flow ${relay.reason === 'loop-guard' || relay.reason === 'max-turns' ? 'is-guard' : ''}`}
+          style={{ animationDelay: `${index * 90}ms` }}
+        >
+          {relay.fromAgent !== undefined && (
+            <>
+              <span className="relay-avatar">
+                <Avatar avatarKey={avatarOf(relay.fromAgent).avatarKey} name={nameOf(relay.fromAgent)} seed={relay.fromAgent} size={20} />
+              </span>
+              <span className="relay-arrow" aria-hidden="true">→</span>
+            </>
+          )}
+          <span className="relay-avatar">
+            <Avatar avatarKey={avatarOf(relay.toAgent).avatarKey} name={nameOf(relay.toAgent)} seed={relay.toAgent} size={20} />
+          </span>
+          <span className="relay-label">{label(relay.reason)}</span>
         </span>
       ))}
     </div>

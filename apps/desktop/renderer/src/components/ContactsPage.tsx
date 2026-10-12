@@ -89,9 +89,14 @@ export function ContactsPage({
             <>
               <p className="section-title">我的 Agent（{sorted.length}）</p>
               <div className="contact-grid">
+                <button className="contact-card contact-create" onClick={onCreateAgent}>
+                  <span className="contact-create-icon">＋</span>
+                  <h3>新建 Agent</h3>
+                  <p className="contact-prompt">从模板开始，挑头像、定人设</p>
+                </button>
                 {sorted.map((agent) => (
                   <article key={agent.id} className="contact-card">
-                    <Avatar avatarKey={agent.avatar} name={agent.name} seed={agent.id} size={64} />
+                    <Avatar avatarKey={agent.avatar} name={agent.name} seed={agent.id} size={56} />
                     <h3>
                       {agent.name}
                       {agent.isBuiltin && <span className="badge">内置</span>}
@@ -103,12 +108,12 @@ export function ContactsPage({
                 ))}
               </div>
               <p className="section-title" style={{ marginTop: 24 }}>可用模板（{templates.length}）</p>
-              <div className="contact-grid">
+              <div className="template-rail">
                 {templates.map((template) => (
-                  <article key={template.key} className="contact-card" style={{ opacity: .88 }}>
-                    <h3 style={{ fontSize: 'var(--fs-base)' }}>{template.name}</h3>
-                    <p className="contact-prompt">{template.description}</p>
-                  </article>
+                  <button key={template.key} className="template-card" onClick={onCreateAgent}>
+                    <strong>{template.name}</strong>
+                    <span>{template.description}</span>
+                  </button>
                 ))}
               </div>
             </>

@@ -64,12 +64,16 @@ describe('MessageBubble', () => {
 
 describe('RelayChain 接力链', () => {
   const nameOf = (id: string): string => ({ ryen: 'Ryen', codebot: 'CodeBot' })[id] ?? id
+  const avatarOf = (id: string) => {
+    return { avatarKey: ({ ryen: 'cat', codebot: 'bot' })[id], name: nameOf(id) } as { avatarKey?: string; name: string }
+  }
 
-  it('渲染流转提示与护栏样式', () => {
+  it('渲染头像流转与护栏样式', () => {
     const html = renderToStaticMarkup(
       <RelayChain
         turnIndex={0}
         nameOf={nameOf}
+        avatarOf={avatarOf}
         relays={[
           { toAgent: 'ryen', reason: 'default-dispatcher', turnIndex: 0 },
           { fromAgent: 'ryen', toAgent: 'codebot', reason: 'relay @CodeBot', turnIndex: 0 },
@@ -77,8 +81,10 @@ describe('RelayChain 接力链', () => {
         ]}
       />,
     )
-    expect(html).toContain('Ryen → @CodeBot · 转交')
-    expect(html).toContain('@Ryen · 调度')
+    expect(html).toContain('relay-flow')
+    expect(html).toContain('relay-arrow')
+    expect(html).toContain('转交')
+    expect(html).toContain('调度')
     expect(html).toContain('is-guard')
   })
 
@@ -87,11 +93,12 @@ describe('RelayChain 接力链', () => {
       <RelayChain
         turnIndex={1}
         nameOf={nameOf}
+        avatarOf={avatarOf}
         relays={[{ toAgent: 'ryen', reason: 'default-dispatcher', turnIndex: 0 }]}
       />,
     )
     expect(html).toBe('')
-    const empty = renderToStaticMarkup(<RelayChain turnIndex={0} nameOf={nameOf} relays={[]} />)
+    const empty = renderToStaticMarkup(<RelayChain turnIndex={0} nameOf={nameOf} avatarOf={avatarOf} relays={[]} />)
     expect(empty).toBe('')
   })
 })

@@ -6,6 +6,7 @@ import { useChat } from './store.ts'
 import { ConversationList } from './components/ConversationList.tsx'
 import { ChatView } from './components/ChatView.tsx'
 import { RightPanel } from './components/RightPanel.tsx'
+import { WelcomeHome } from './components/WelcomeHome.tsx'
 import { ContactsPage, CreateAgentModal, CreateGroupModal } from './components/ContactsPage.tsx'
 import { MePage } from './components/MePage.tsx'
 import { AppIcon } from './components/AppIcon.tsx'
@@ -105,6 +106,25 @@ export function App() {
     }
   }
 
+  /** 欢迎主页的建议 chip：打开（或创建）与 Ryen 的单聊并直接发送。 */
+  const suggestToRyen = async (text: string): Promise<void> => {
+    if (ryen === undefined) return
+    try {
+      const existing = conversations.find((c) => {
+        return c.kind === 'direct' && c.memberAgentIds.length === 1 && c.memberAgentIds[0] === ryen.id
+      })
+      const conversationId = existing !== undefined
+        ? existing.id
+        : (await api.createConversation({ kind: 'direct', agentId: ryen.id })).conversation.id
+      if (existing === undefined) await refresh()
+      setActiveId(conversationId)
+      setTab('chats')
+      await api.postMessage(conversationId, text)
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : String(error))
+    }
+  }
+
   if (loadError !== undefined) {
     return (
       <div className="app-error">
@@ -168,11 +188,13 @@ export function App() {
         ) : (
           <section className="chat-view">
             <div className="chat-scroll">
-              <div className="empty-state" style={{ height: '100%' }}>
-                <span className="empty-cat"><AppIcon size={96} /></span>
-                <h3>挑一个会话，或者开始新的</h3>
-                <p>喵——今天的安排，交给我和同事们就好。</p>
-              </div>
+              <WelcomeHome
+                ryen={ryen}
+                agents={agents}
+                conversations={conversations}
+                onSuggest={(text) => { void suggestToRyen(text) }}
+                onOpenConversation={(id) => { setActiveId(id) }}
+              />
             </div>
           </section>
         )
@@ -186,7 +208,14 @@ export function App() {
           onChat={(agentId) => { void openDirectChat(agentId) }}
         />
       ) : (
-        <MePage api={api} ryen={ryen} providers={providers} theme={theme} onThemeChange={changeTheme} />
+        <MePage
+          api={api}
+          ryen={ryen}
+          providers={providers}
+          theme={theme}
+          onThemeChange={changeTheme}
+          onRyenPatched={() => { void refresh() }}
+        />
       )}
 
       {tab === 'chats' && active !== undefined && (

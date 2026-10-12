@@ -2,27 +2,46 @@ import { useEffect, useState } from 'react'
 import type { AgentDef, MemoryRow, ProviderInfo } from '../api.ts'
 import { Avatar } from './avatars/Avatar.tsx'
 
-/** 「我的」页：用户信息、主题切换、供应商状态、共享画像、关于。 */
+interface MeApi {
+  listAgentMemories(agentId: string): Promise<{ agent: MemoryRow[]; shared: MemoryRow[] }>
+  patchAgent(id: string, patch: Record<string, unknown>): Promise<{ agent: AgentDef }>
+}
+
+/** 「我的」页：用户卡（昵称可编辑）、设置分组、供应商状态灯、共享画像、关于。 */
 export function MePage({
   api,
   ryen,
   providers,
   theme,
   onThemeChange,
+  onRyenPatched,
 }: {
-  api: { listAgentMemories(agentId: string): Promise<{ agent: MemoryRow[]; shared: MemoryRow[] }> }
+  api: MeApi
   ryen: AgentDef | undefined
   providers: ProviderInfo[]
   theme: 'light' | 'dark'
   onThemeChange: (theme: 'light' | 'dark') => void
+  onRyenPatched?: () => void
 }) {
   const [shared, setShared] = useState<MemoryRow[] | undefined>(undefined)
+  const [editingName, setEditingName] = useState(false)
+  const [nameDraft, setNameDraft] = useState('')
   useEffect(() => {
     if (ryen === undefined) return
     api.listAgentMemories(ryen.id)
       .then(({ shared: profile }) => { setShared(profile) })
       .catch(() => { setShared([]) })
   }, [api, ryen])
+
+  const saveName = async (): Promise<void> => {
+    if (ryen === undefined) return
+    const trimmed = nameDraft.trim()
+    setEditingName(false)
+    if (trimmed.length === 0 || trimmed === ryen.name) return
+    await api.patchAgent(ryen.id, { name: trimmed }).catch(() => {})
+    onRyenPatched?.()
+  }
+
   return (
     <section className="page">
       <header className="page-header">
@@ -31,13 +50,36 @@ export function MePage({
       <div className="page-scroll">
         <div className="page-scroll-col me-page">
           {ryen !== undefined && (
-            <>
+            <div className="me-usercard">
               <span className="me-avatar">
                 <Avatar avatarKey={ryen.avatar} name={ryen.name} seed={ryen.id} size={96} />
               </span>
-              <div className="me-name">{ryen.name}</div>
+              {editingName ? (
+                <input
+                  className="me-name-input"
+                  value={nameDraft}
+                  autoFocus
+                  onChange={(e) => { setNameDraft(e.target.value) }}
+                  onBlur={() => { void saveName() }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void saveName()
+                    if (e.key === 'Escape') setEditingName(false)
+                  }}
+                />
+              ) : (
+                <button
+                  className="me-name"
+                  title="点击修改昵称"
+                  onClick={() => {
+                    setNameDraft(ryen.name)
+                    setEditingName(true)
+                  }}
+                >
+                  {ryen.name} ✎
+                </button>
+              )}
               <p className="me-sub">你的猫管家总管 · 内置 Agent</p>
-            </>
+            </div>
           )}
 
           <div className="me-section">
@@ -53,16 +95,16 @@ export function MePage({
             </div>
             {providers.map((provider) => (
               <div key={provider.id} className="me-row">
+                <span className={`status-dot ${provider.apiKeyConfigured ? 'ok' : 'warn'}`} aria-hidden="true" />
                 <div className="me-row-body">
-                  <div className="me-row-title">
-                    {provider.apiKeyConfigured ? '✓' : '⚠️'} {provider.displayName}
-                  </div>
+                  <div className="me-row-title">{provider.displayName}</div>
                   <div className="me-row-sub">
                     {provider.apiKeyConfigured
                       ? `已配置 key · ${provider.models.length} 个模型`
                       : '未配置 key——设置 SILICONFLOW_API_KEY 环境变量后重启'}
                   </div>
                 </div>
+                <span className="me-chevron" aria-hidden="true">›</span>
               </div>
             ))}
             <div className="me-row">
@@ -70,6 +112,7 @@ export function MePage({
                 <div className="me-row-title">关于 RyAgent</div>
                 <div className="me-row-sub">精简 agent 内核 + 社交化桌面 · 本地数据 SQLite</div>
               </div>
+              <span className="me-chevron" aria-hidden="true">›</span>
             </div>
             <div className="me-row" style={{ alignItems: 'flex-start' }}>
               <div className="me-row-body">

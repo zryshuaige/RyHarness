@@ -51,6 +51,7 @@ export function RightPanel({
   }
   return (
     <aside className="right-panel">
+      <span className="panel-banner" aria-hidden="true" />
       <button className="right-panel-toggle" title="收起信息板" onClick={onToggle}>»</button>
       <div className="panel-body">
         {conversation === undefined ? (

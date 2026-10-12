@@ -182,7 +182,15 @@ export function ChatView({
           {turns.map((turn) => (
             <div key={turn.turnIndex} className="turn-block">
               {turn.time !== undefined && <div className="turn-time">{formatTime(turn.time)}</div>}
-              <RelayChain relays={snapshot.relays} turnIndex={turn.turnIndex} nameOf={nameOf} />
+              <RelayChain
+                relays={snapshot.relays}
+                turnIndex={turn.turnIndex}
+                nameOf={nameOf}
+                avatarOf={(id) => {
+                  const agent = agentById(id)
+                  return { avatarKey: agent?.avatar, name: agent?.name ?? id }
+                }}
+              />
               {turn.messages.map((message, index) => (
                 <MessageBubble
                   key={message.key}
