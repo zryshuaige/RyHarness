@@ -1,0 +1,112 @@
+/**
+ * 产品层样式：wave2 新增能力的样式集中在这里，不动 styles.css（视觉系统由
+ * 另一条线维护，避免两处互相覆盖）。全部使用既有设计 token。
+ */
+
+/* ---- 弹窗：内容区可滚动 + 操作条吸底 ----
+   之前弹窗整体超出视口且不可滚动，「保存」按钮在小屏上直接够不到。 */
+.modal-scroll {
+  max-height: min(66vh, 620px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: var(--space-2);
+  margin-right: calc(-1 * var(--space-2));
+}
+
+.modal-actions-sticky {
+  position: sticky;
+  bottom: 0;
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  padding-bottom: var(--space-2);
+  background: linear-gradient(to top, var(--bg-elevated) 62%, transparent);
+}
+
+/* ---- 通讯录卡片：操作区 ---- */
+.contact-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.btn-danger {
+  color: var(--danger, #b42318);
+}
+
+.btn-danger:hover {
+  background: color-mix(in srgb, var(--danger, #b42318) 10%, transparent);
+}
+
+/* ---- 建群成员：副信息区分重名 ---- */
+.member-checks label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.member-label {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.member-name {
+  font-weight: 500;
+}
+
+.member-sub {
+  color: var(--text-tertiary, var(--text-secondary));
+  font-size: var(--fs-xs, 11px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- 首启 API Key 配置卡 ---- */
+.apikey-card {
+  max-width: 520px;
+  margin: 0 auto var(--space-6);
+  padding: var(--space-4);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-1, 0 1px 2px rgb(0 0 0 / 0.06));
+  text-align: left;
+}
+
+.apikey-title {
+  margin: 0 0 var(--space-1);
+  font-size: var(--fs-base);
+  font-weight: 600;
+}
+
+.apikey-hint {
+  margin: 0 0 var(--space-3);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.apikey-row {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.apikey-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.apikey-error {
+  margin: var(--space-2) 0 0;
+  color: var(--danger, #b42318);
+  font-size: var(--fs-sm);
+}
+
+/* ---- 会话列表空态：顶部对齐 + 下一步引导 ---- */
+.empty-state-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+  justify-content: center;
+}

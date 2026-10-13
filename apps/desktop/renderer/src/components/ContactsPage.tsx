@@ -93,13 +93,18 @@ export function ContactsPage({
   templates,
   onChat,
   onCreateAgent,
+  onEditAgent,
+  onDeleteAgent,
   onCreateGroup,
 }: {
   agents: AgentDef[]
   templates: AgentTemplate[]
   providers: ProviderInfo[]
   onChat: (agentId: string) => void
-  onCreateAgent: () => void
+  /** 传入模板 key 时以该模板为初始值新建（此前恒为第一个模板，等于假按钮）。 */
+  onCreateAgent: (templateKey?: string) => void
+  onEditAgent: (agent: AgentDef) => void
+  onDeleteAgent: (agent: AgentDef) => void
   onCreateGroup: () => void
 }) {
   const sorted = [...agents].sort((a, b) => {
@@ -115,7 +120,13 @@ export function ContactsPage({
           <button type="button" className="btn" onClick={onCreateGroup}>
             <Icon name="group" size={15} /> 建群
           </button>
-          <button type="button" className="btn btn-primary" onClick={onCreateAgent}>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => {
+              onCreateAgent()
+            }}
+          >
             <Icon name="plus" size={15} /> 新建 Agent
           </button>
         </div>
@@ -134,7 +145,13 @@ export function ContactsPage({
             <>
               <p className="section-title">我的 Agent（{sorted.length}）</p>
               <div className="contact-grid">
-                <button type="button" className="contact-card contact-create" onClick={onCreateAgent}>
+                <button
+                  type="button"
+                  className="contact-card contact-create"
+                  onClick={() => {
+                    onCreateAgent()
+                  }}
+                >
                   <span className="contact-create-icon">
                     <Icon name="plus" size={22} />
                   </span>
@@ -152,15 +169,39 @@ export function ContactsPage({
                       {agent.provider} / {agent.model}
                     </p>
                     <p className="contact-prompt">{agent.systemPrompt.slice(0, 48)}…</p>
-                    <button
-                      type="button"
-                      className="btn"
-                      onClick={() => {
-                        onChat(agent.id)
-                      }}
-                    >
-                      发消息
-                    </button>
+                    <div className="contact-actions">
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={() => {
+                          onChat(agent.id)
+                        }}
+                      >
+                        发消息
+                      </button>
+                      {!agent.isBuiltin && (
+                        <>
+                          <button
+                            type="button"
+                            className="btn"
+                            onClick={() => {
+                              onEditAgent(agent)
+                            }}
+                          >
+                            编辑
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-danger"
+                            onClick={() => {
+                              onDeleteAgent(agent)
+                            }}
+                          >
+                            删除
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </article>
                 ))}
               </div>
@@ -169,7 +210,14 @@ export function ContactsPage({
               </p>
               <div className="template-rail">
                 {templates.map((template) => (
-                  <button type="button" key={template.key} className="template-card" onClick={onCreateAgent}>
+                  <button
+                    type="button"
+                    key={template.key}
+                    className="template-card"
+                    onClick={() => {
+                      onCreateAgent(template.key)
+                    }}
+                  >
                     <strong>{template.name}</strong>
                     <span>{template.description}</span>
                   </button>
@@ -183,30 +231,36 @@ export function ContactsPage({
   )
 }
 
-/** 新建 Agent：选模板 → 编辑表单（含头像选择器）。 */
+/** 新建/编辑 Agent：选模板 → 编辑表单（含头像选择器）。内容区可滚动，操作条吸底。 */
 export function CreateAgentModal({
   templates,
   providers,
+  initialTemplateKey,
+  editing,
   onSubmit,
   onClose,
 }: {
   templates: AgentTemplate[]
   providers: ProviderInfo[]
+  /** 初始模板（通讯录模板轨点进来时带 key）。 */
+  initialTemplateKey?: string
+  /** 非空 = 编辑既有 agent（此时模板选择隐藏，保存走 PATCH）。 */
+  editing?: AgentDef
   onSubmit: (input: Record<string, unknown>) => Promise<void>
   onClose: () => void
 }) {
-  const [templateKey, setTemplateKey] = useState(templates[0]?.key ?? 'general')
+  const [templateKey, setTemplateKey] = useState(initialTemplateKey ?? templates[0]?.key ?? 'general')
   const template = templates.find((t) => {
     return t.key === templateKey
   })
-  const [name, setName] = useState('')
+  const [name, setName] = useState(editing?.name ?? '')
   const [avatarKey, setAvatarKey] = useState(() => {
-    return randomAvatarSpec()
+    return editing?.avatar ?? randomAvatarSpec()
   })
-  const [systemPrompt, setSystemPrompt] = useState(template?.suggestedSystemPrompt ?? '')
-  const [provider, setProvider] = useState(providers[0]?.id ?? 'siliconflow')
-  const [model, setModel] = useState(template?.defaultModel ?? '')
-  const [tools, setTools] = useState<string[]>(template?.defaultTools ?? [])
+  const [systemPrompt, setSystemPrompt] = useState(editing?.systemPrompt ?? template?.suggestedSystemPrompt ?? '')
+  const [provider, setProvider] = useState(editing?.provider ?? providers[0]?.id ?? 'siliconflow')
+  const [model, setModel] = useState(editing?.model ?? template?.defaultModel ?? '')
+  const [tools, setTools] = useState<string[]>(editing?.tools ?? template?.defaultTools ?? [])
   const [busy, setBusy] = useState(false)
 
   const pickTemplate = (key: string): void => {
@@ -229,8 +283,8 @@ export function CreateAgentModal({
     setBusy(true)
     try {
       await onSubmit({
-        templateKey,
-        name: name || template?.name,
+        ...(editing === undefined ? { templateKey } : {}),
+        name: name || editing?.name || template?.name,
         avatar: avatarKey,
         systemPrompt,
         provider,
@@ -244,111 +298,115 @@ export function CreateAgentModal({
   }
 
   return (
-    <Modal title="新建 Agent" onClose={onClose}>
-      <label className="field">
-        <span>从模板开始</span>
-        <select
-          value={templateKey}
-          onChange={(e) => {
-            pickTemplate(e.target.value)
-          }}
-        >
-          {templates.map((t) => {
-            return (
-              <option key={t.key} value={t.key}>
-                {t.name} — {t.description}
-              </option>
-            )
-          })}
-        </select>
-      </label>
-      <div className="field-row">
+    <Modal title={editing === undefined ? '新建 Agent' : `编辑 ${editing.name}`} onClose={onClose}>
+      <div className="modal-scroll">
+        {editing === undefined && (
+          <label className="field">
+            <span>从模板开始</span>
+            <select
+              value={templateKey}
+              onChange={(e) => {
+                pickTemplate(e.target.value)
+              }}
+            >
+              {templates.map((t) => {
+                return (
+                  <option key={t.key} value={t.key}>
+                    {t.name} — {t.description}
+                  </option>
+                )
+              })}
+            </select>
+          </label>
+        )}
+        <div className="field-row">
+          <label className="field">
+            <span>名字</span>
+            <input
+              value={name}
+              placeholder={template?.name}
+              onChange={(e) => {
+                setName(e.target.value)
+              }}
+            />
+          </label>
+        </div>
+        <fieldset className="field">
+          <span>头像</span>
+          <AvatarPicker value={avatarKey} onChange={setAvatarKey} />
+        </fieldset>
         <label className="field">
-          <span>名字</span>
-          <input
-            value={name}
-            placeholder={template?.name}
+          <span>人设（system prompt）</span>
+          <textarea
+            rows={5}
+            value={systemPrompt}
             onChange={(e) => {
-              setName(e.target.value)
+              setSystemPrompt(e.target.value)
             }}
           />
         </label>
-      </div>
-      <fieldset className="field">
-        <span>头像</span>
-        <AvatarPicker value={avatarKey} onChange={setAvatarKey} />
-      </fieldset>
-      <label className="field">
-        <span>人设（system prompt）</span>
-        <textarea
-          rows={5}
-          value={systemPrompt}
-          onChange={(e) => {
-            setSystemPrompt(e.target.value)
-          }}
-        />
-      </label>
-      <div className="field-row">
-        <label className="field">
-          <span>供应商</span>
-          <select
-            value={provider}
-            onChange={(e) => {
-              setProvider(e.target.value)
-            }}
-          >
-            {providers.map((p) => {
-              return (
-                <option key={p.id} value={p.id}>
-                  {p.displayName}
-                  {p.apiKeyConfigured ? '' : '（未配置 key）'}
-                </option>
-              )
-            })}
-          </select>
-        </label>
-        <label className="field">
-          <span>模型</span>
-          <select
-            value={model}
-            onChange={(e) => {
-              setModel(e.target.value)
-            }}
-          >
-            {models.map((m) => {
-              return (
-                <option key={m.id} value={m.id}>
-                  {m.name ?? m.id}
-                </option>
-              )
-            })}
-          </select>
-        </label>
-      </div>
-      <fieldset className="field">
-        <span>工具白名单</span>
-        <div className="tool-checks">
-          {ALL_TOOLS.map((tool) => (
-            <label key={tool}>
-              <input
-                type="checkbox"
-                checked={tools.includes(tool)}
-                onChange={(e) => {
-                  setTools(
-                    e.target.checked
-                      ? [...tools, tool]
-                      : tools.filter((t) => {
-                          return t !== tool
-                        }),
-                  )
-                }}
-              />
-              {TOOL_LABELS[tool]}
-            </label>
-          ))}
+        <div className="field-row">
+          <label className="field">
+            <span>供应商</span>
+            <select
+              value={provider}
+              onChange={(e) => {
+                setProvider(e.target.value)
+              }}
+            >
+              {providers.map((p) => {
+                return (
+                  <option key={p.id} value={p.id}>
+                    {p.displayName}
+                    {p.apiKeyConfigured ? '' : '（未配置 key）'}
+                  </option>
+                )
+              })}
+            </select>
+          </label>
+          <label className="field">
+            <span>模型</span>
+            <select
+              value={model}
+              onChange={(e) => {
+                setModel(e.target.value)
+              }}
+            >
+              {models.map((m) => {
+                return (
+                  <option key={m.id} value={m.id}>
+                    {m.name ?? m.id}
+                  </option>
+                )
+              })}
+            </select>
+          </label>
         </div>
-      </fieldset>
-      <div className="modal-actions">
+        <fieldset className="field">
+          <span>工具白名单</span>
+          <div className="tool-checks">
+            {ALL_TOOLS.map((tool) => (
+              <label key={tool}>
+                <input
+                  type="checkbox"
+                  checked={tools.includes(tool)}
+                  onChange={(e) => {
+                    setTools(
+                      e.target.checked
+                        ? [...tools, tool]
+                        : tools.filter((t) => {
+                            return t !== tool
+                          }),
+                    )
+                  }}
+                />
+                {TOOL_LABELS[tool]}
+              </label>
+            ))}
+          </div>
+        </fieldset>
+      </div>
+      <div className="modal-actions modal-actions-sticky">
         <button type="button" className="btn" onClick={onClose}>
           取消
         </button>
@@ -360,7 +418,7 @@ export function CreateAgentModal({
             void submit()
           }}
         >
-          保存
+          {editing === undefined ? '保存' : '保存修改'}
         </button>
       </div>
     </Modal>
@@ -436,7 +494,12 @@ export function CreateGroupModal({
                 }}
               />
               <Avatar avatarKey={agent.avatar} name={agent.name} seed={agent.id} size={22} />
-              {agent.name}
+              <span className="member-label">
+                <span className="member-name">{agent.name}</span>
+                <small className="member-sub">
+                  {agent.provider} · {agent.systemPrompt.slice(0, 18)}
+                </small>
+              </span>
             </label>
           ))}
         </div>

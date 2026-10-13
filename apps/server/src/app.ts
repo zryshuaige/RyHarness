@@ -22,7 +22,14 @@ import type { WebSocket as WsSocket } from 'ws'
 import { WebSocketServer } from 'ws'
 import { EventHub } from './bus.ts'
 import type { ProvidersConfigFile } from './config.ts'
-import { loadProvidersConfig, providerKeyConfigured, toAdapterConfig } from './config.ts'
+import {
+  loadApiKeys,
+  loadProvidersConfig,
+  mergeApiKeys,
+  providerKeyConfigured,
+  saveApiKey,
+  toAdapterConfig,
+} from './config.ts'
 import type { WsEvent } from './events.ts'
 import { HttpRequestError, json, Router, strField } from './router.ts'
 import { AGENT_TEMPLATES, ensureSeedAgents, instantiateTemplate } from './seed.ts'
@@ -127,9 +134,7 @@ function resolveSidecarLlm(
   providers: ProvidersConfigFile,
 ): { apiKey: string; baseURL: string; model: string } | undefined {
   for (const provider of Object.values(providers.providers)) {
-    const apiKey =
-      provider.apiKey ??
-      (provider.apiKeyEnv === undefined ? undefined : process.env[provider.apiKeyEnv])
+    const apiKey = provider.apiKey ?? (provider.apiKeyEnv === undefined ? undefined : process.env[provider.apiKeyEnv])
     if (apiKey === undefined || apiKey.length === 0) continue
     const model = provider.models[0]?.id
     if (model === undefined) continue
@@ -172,6 +177,7 @@ export class RyAgentServer {
     readonly dataDir: string,
     readonly workspaceRoot: string,
     private readonly providers: ProvidersConfigFile,
+    private readonly llmContext: Context,
     private readonly wsHeartbeatMs: number,
     private readonly shutdownTimeoutMs: number,
   ) {}
@@ -200,19 +206,20 @@ export class RyAgentServer {
       store.upsertAgent(input)
     })
 
+    // 供应商配置解析一次：显式注入 > 挂载自定义 runtime > 配置文件（含应用内 key 合并）。
+    const providers =
+      options.providersConfig ??
+      (options.mountLlm !== undefined
+        ? { providers: {} }
+        : mergeApiKeys(loadProvidersConfig(join(dataDir, 'config', 'providers.json')), loadApiKeys(dataDir)))
+
     const ctx = new Context()
     await ctx.plugin(LlmRuntime)
     if (options.mountLlm !== undefined) {
       options.mountLlm(ctx)
     } else {
-      const providers = options.providersConfig ?? loadProvidersConfig(join(dataDir, 'config', 'providers.json'))
       applyOpenAi(ctx, toAdapterConfig(providers))
     }
-    const providers =
-      options.providersConfig ??
-      (options.mountLlm !== undefined
-        ? { providers: {} }
-        : loadProvidersConfig(join(dataDir, 'config', 'providers.json')))
 
     const memoryOption =
       options.memory === null ? undefined : (options.memory ?? createDefaultMemory(dataDir, providers))
@@ -276,6 +283,7 @@ export class RyAgentServer {
       dataDir,
       workspaceRoot,
       providers,
+      ctx,
       options.wsHeartbeatMs ?? DEFAULT_WS_HEARTBEAT_MS,
       options.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS,
     )
@@ -425,6 +433,8 @@ export class RyAgentServer {
 
   /** 每个会话一条 turn 链：同会话消息串行处理，新消息在上一 turn 结束后运行。 */
   private readonly turnChains = new Map<string, Promise<void>>()
+  /** 在途轮次的中止器（取消端点用它打断 LLM 流与工具执行）。 */
+  private readonly activeTurns = new Map<string, AbortController>()
 
   private router(): Router {
     this.routerLazy ??= this.buildRouter()
@@ -681,6 +691,43 @@ export class RyAgentServer {
       json(res, 200, { deleted: req.params.id })
     })
 
+    /** 取消生成：中止该会话在途的一轮（LLM 流 + 工具执行）。 */
+    router.post('/api/conversations/:id/cancel', async (req, res) => {
+      const conversationId = req.params.id as string
+      if (store.getConversation(conversationId) === undefined) {
+        json(res, 404, { error: 'conversation not found' })
+        return
+      }
+      const controller = this.activeTurns.get(conversationId)
+      if (controller === undefined) {
+        json(res, 200, { cancelled: false })
+        return
+      }
+      controller.abort()
+      json(res, 200, { cancelled: true })
+    })
+
+    /** 应用内配置 API key：写 config/api-keys.json（0600）并热注册适配器。 */
+    router.post('/api/settings/api-key', async (req, res) => {
+      const body = await req.body()
+      const record = body as Record<string, unknown>
+      const providerId = typeof record.providerId === 'string' ? record.providerId : ''
+      const apiKey = typeof record.apiKey === 'string' ? record.apiKey.trim() : ''
+      if (providerId.length === 0 || apiKey.length === 0) {
+        json(res, 400, { error: 'providerId and apiKey are required' })
+        return
+      }
+      if (!saveApiKey(this.dataDir, providerId, apiKey)) {
+        json(res, 404, { error: `unknown provider: ${providerId}` })
+        return
+      }
+      // 热更新：把新 key 合并进配置并重新注册适配器，用户不用重启。
+      const next = mergeApiKeys(this.providers, loadApiKeys(this.dataDir))
+      this.providers.providers = next.providers
+      applyOpenAi(this.llmContext, toAdapterConfig(next))
+      json(res, 200, { providerId, configured: true })
+    })
+
     /** 标记已读：lastReadSeq 推进到最新 seq。 */
     router.post('/api/conversations/:id/read', async (req, res) => {
       const conversationId = req.params.id as string
@@ -811,7 +858,10 @@ export class RyAgentServer {
     text: string,
   ): Promise<void> {
     const { coordinator, store } = this
-    const runContext = { workspaceRoot: this.workspaceRoot }
+    // 每轮一个 AbortController：取消端点通过它中止 LLM 流与工具执行。
+    const controller = new AbortController()
+    this.activeTurns.set(conversation.id, controller)
+    const runContext = { workspaceRoot: this.workspaceRoot, signal: controller.signal }
     try {
       if (conversation.kind === 'direct') {
         const agentId = conversation.memberAgentIds[0] as string
@@ -956,12 +1006,26 @@ export class RyAgentServer {
         }
       }
     } catch (error) {
-      this.publish({
-        type: 'error',
-        conversationId: conversation.id,
-        message: error instanceof Error ? error.message : String(error),
-        code: 'INTERNAL',
-      })
+      // 取消不是故障：给一个明确的 code，渲染层据此显示"已停止"而不是红条报错。
+      if (controller.signal.aborted) {
+        this.publish({
+          type: 'error',
+          conversationId: conversation.id,
+          message: '已停止生成',
+          code: 'ABORTED',
+        })
+      } else {
+        this.publish({
+          type: 'error',
+          conversationId: conversation.id,
+          message: error instanceof Error ? error.message : String(error),
+          code: 'INTERNAL',
+        })
+      }
+    } finally {
+      if (this.activeTurns.get(conversation.id) === controller) {
+        this.activeTurns.delete(conversation.id)
+      }
     }
   }
 }

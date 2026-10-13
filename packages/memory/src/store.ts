@@ -256,7 +256,9 @@ export class MemoryStore {
   embeddingCacheStats(): Record<string, number> {
     const out: Record<string, number> = {}
     for (const row of this.db
-      .prepare("SELECT COALESCE(NULLIF(model, ''), '(legacy)') AS model, COUNT(*) AS count FROM embedding_cache GROUP BY model")
+      .prepare(
+        "SELECT COALESCE(NULLIF(model, ''), '(legacy)') AS model, COUNT(*) AS count FROM embedding_cache GROUP BY model",
+      )
       .all() as { model: string; count: number }[]) {
       out[row.model] = Number(row.count)
     }

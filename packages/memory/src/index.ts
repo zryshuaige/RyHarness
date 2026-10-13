@@ -28,7 +28,7 @@ export {
 export type { CandidateFact, MemoryLlm, MemoryOperation } from './llm.ts'
 export { ChatMemoryLlm, MEMORY_LLM_CODES } from './llm.ts'
 export type { MemoryKind, MemoryStatus } from './schema.ts'
-export { MIGRATIONS, MEMORY_SCHEMA_VERSION, migrateMemory, SHARED_SPACE } from './schema.ts'
+export { MEMORY_SCHEMA_VERSION, MIGRATIONS, migrateMemory, SHARED_SPACE } from './schema.ts'
 export type { AgentMemory, MemoryServiceOptions } from './service.ts'
 export { MemoryService } from './service.ts'
 export type { InsertMemoryInput, MemoryRow } from './store.ts'

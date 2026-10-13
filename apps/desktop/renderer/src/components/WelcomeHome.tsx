@@ -1,7 +1,9 @@
-import type { AgentDef, Conversation } from '../api.ts'
+import { useState } from 'react'
+import type { AgentDef, Conversation, ProviderInfo } from '../api.ts'
 import { Avatar } from './avatars/Avatar.tsx'
 import { GroupAvatar } from './avatars/GroupAvatar.tsx'
 import { Cat } from './Cat.tsx'
+import { Icon, type IconName } from './Icon.tsx'
 
 /** 按时辰问候（纯函数，供测试）。 */
 export function greetingForHour(hour: number): string {
@@ -12,17 +14,12 @@ export function greetingForHour(hour: number): string {
   return '夜深了'
 }
 
-import calendarSvg from '../assets/fluent-emoji/calendar.svg?raw'
-import envelopeSvg from '../assets/fluent-emoji/envelope.svg?raw'
-import memoSvg from '../assets/fluent-emoji/memo.svg?raw'
-import folderSvg from '../assets/fluent-emoji/open-file-folder.svg?raw'
-
-/** 建议任务 chips（点击直接发起与 Ryen 的对话，Fluent Emoji 图标）。 */
-const SUGGESTIONS = [
-  { text: '帮我整理一份本周周报', icon: memoSvg },
-  { text: '看看工作区里都有什么文件', icon: folderSvg },
-  { text: '写一封简短的请假邮件', icon: envelopeSvg },
-  { text: '给我列一个下周工作计划', icon: calendarSvg },
+/** 建议任务 chips（点击直接发起与 Ryen 的对话）。图标统一用 Lucide 线性图标。 */
+const SUGGESTIONS: { text: string; icon: IconName }[] = [
+  { text: '帮我整理一份本周周报', icon: 'clipboard-list' },
+  { text: '看看工作区里都有什么文件', icon: 'file' },
+  { text: '写一封简短的请假邮件', icon: 'mail' },
+  { text: '给我列一个下周工作计划', icon: 'calendar-days' },
 ]
 
 /**
@@ -33,17 +30,28 @@ export function WelcomeHome({
   ryen,
   agents,
   conversations,
+  providers,
+  onSaveApiKey,
   onSuggest,
   onOpenConversation,
 }: {
   ryen: AgentDef | undefined
   agents: AgentDef[]
   conversations: Conversation[]
+  providers: ProviderInfo[]
+  onSaveApiKey: (providerId: string, apiKey: string) => Promise<void>
   onSuggest: (text: string) => void
   onOpenConversation: (id: string) => void
 }) {
   const greeting = greetingForHour(new Date().getHours())
   const recent = conversations.slice(0, 3)
+  // 没配置任何供应商凭据时，聊天一定失败——先让人把 key 填上。
+  const unconfigured = providers.find((p) => {
+    return !p.apiKeyConfigured
+  })
+  const [key, setKey] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [keyError, setKeyError] = useState<string | undefined>(undefined)
   const nameOf = (id: string): string => {
     return (
       agents.find((a) => {
@@ -80,6 +88,44 @@ export function WelcomeHome({
         {greeting}，我是 {ryen?.name ?? 'Ryen'}
       </h1>
       <p className="welcome-sub">喵——今天想让我做点什么？挑一个，或者直接跟我说。</p>
+      {unconfigured !== undefined && (
+        <div className="apikey-card">
+          <p className="apikey-title">先填一个 API Key</p>
+          <p className="apikey-hint">
+            还没有配置 {unconfigured.displayName} 的凭据，聊天会用不了。Key 只写在本机的配置文件里，不会上传到别处。
+          </p>
+          <div className="apikey-row">
+            <input
+              type="password"
+              value={key}
+              placeholder={`${unconfigured.displayName} API Key`}
+              autoComplete="off"
+              onChange={(e) => {
+                setKey(e.target.value)
+              }}
+            />
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={saving || key.trim().length === 0}
+              onClick={() => {
+                setSaving(true)
+                setKeyError(undefined)
+                onSaveApiKey(unconfigured.id, key.trim())
+                  .catch((error: unknown) => {
+                    setKeyError(error instanceof Error ? error.message : String(error))
+                  })
+                  .finally(() => {
+                    setSaving(false)
+                  })
+              }}
+            >
+              {saving ? '保存中' : '保存'}
+            </button>
+          </div>
+          {keyError !== undefined && <p className="apikey-error">{keyError}</p>}
+        </div>
+      )}
       <div className="welcome-chips">
         {SUGGESTIONS.map((chip) => (
           <button
@@ -90,8 +136,7 @@ export function WelcomeHome({
               onSuggest(chip.text)
             }}
           >
-            {/* biome-ignore lint/security/noDangerouslySetInnerHtml: chip 图标为仓库内置 Fluent Emoji SVG，无外部输入 */}
-            <span className="chip-emoji" aria-hidden="true" dangerouslySetInnerHTML={{ __html: chip.icon }} />
+            <Icon name={chip.icon} size={16} />
             {chip.text}
           </button>
         ))}

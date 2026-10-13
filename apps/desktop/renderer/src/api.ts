@@ -186,6 +186,27 @@ export class ApiClient {
     return this.request(`/api/agents/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
   }
 
+  deleteAgent(id: string): Promise<{ deleted: string }> {
+    return this.request(`/api/agents/${id}`, { method: 'DELETE' })
+  }
+
+  deleteConversation(id: string): Promise<{ deleted: string }> {
+    return this.request(`/api/conversations/${id}`, { method: 'DELETE' })
+  }
+
+  /** 中止该会话在途的一轮生成。 */
+  cancelTurn(conversationId: string): Promise<{ cancelled: boolean }> {
+    return this.request(`/api/conversations/${conversationId}/cancel`, { method: 'POST' })
+  }
+
+  /** 应用内保存 API key（后端写 0600 文件，不回显明文）。 */
+  setApiKey(providerId: string, apiKey: string): Promise<{ providerId: string; configured: boolean }> {
+    return this.request('/api/settings/api-key', {
+      method: 'POST',
+      body: JSON.stringify({ providerId, apiKey }),
+    })
+  }
+
   templates(): Promise<{ templates: AgentTemplate[] }> {
     return this.request('/api/agent-templates')
   }

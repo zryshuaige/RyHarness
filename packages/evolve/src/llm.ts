@@ -176,9 +176,11 @@ export class ChatEvolveLlm implements EvolveLlm {
             })
             .join('\n')
     // 模型只允许引用我们真的给过的条目 id，幻觉 id 在这里就被丢掉。
-    const knownIds = new Set(entries.map((entry) => {
-      return entry.id
-    }))
+    const knownIds = new Set(
+      entries.map((entry) => {
+        return entry.id
+      }),
+    )
     const parsed = (await this.chatJson(
       '你只输出合法 JSON。',
       `${CURATOR_PROMPT}${entryBlock}\n\n（agent：${input.agentName}）\n\n用户：${input.trajectory.userText}\n${input.agentName}：${input.trajectory.assistantText.slice(0, 800)}\n工具：${tools}\n流错误：${input.trajectory.llmError ? '是' : '否'}`,

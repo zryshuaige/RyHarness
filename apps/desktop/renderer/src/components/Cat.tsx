@@ -45,12 +45,5 @@ export function Cat({
     FACES[mood] +
     `</svg>`
   // biome-ignore lint/security/noDangerouslySetInnerHtml: 仓库内置的静态母版 SVG，无外部输入
-  return (
-    <span
-      data-mood={mood}
-      dangerouslySetInnerHTML={{ __html: svg }}
-      aria-label={`Ryen ${mood}`}
-      role="img"
-    />
-  )
+  return <span data-mood={mood} dangerouslySetInnerHTML={{ __html: svg }} aria-label={`Ryen ${mood}`} role="img" />
 }

@@ -46,6 +46,10 @@ describe('欢迎主页', () => {
         ryen={agents[0]}
         agents={agents}
         conversations={conversations}
+        providers={[{ id: 'siliconflow', displayName: 'SiliconFlow', apiKeyConfigured: true, models: [] }]}
+        onSaveApiKey={() => {
+          return Promise.resolve()
+        }}
         onSuggest={() => {}}
         onOpenConversation={() => {}}
       />,
@@ -56,6 +60,26 @@ describe('欢迎主页', () => {
     expect(html).toContain('最近会话')
     expect(html).toContain('周报写好了')
     expect(html).toContain('<svg') // 猫管家 SVG
+    // 凭据齐全时不出现配置卡。
+    expect(html).not.toContain('先填一个 API Key')
+  })
+
+  it('没有配置凭据时给出 API Key 配置卡，而不是让用户去改环境变量', () => {
+    const html = renderToStaticMarkup(
+      <WelcomeHome
+        ryen={undefined}
+        agents={[]}
+        conversations={[]}
+        providers={[{ id: 'siliconflow', displayName: 'SiliconFlow', apiKeyConfigured: false, models: [] }]}
+        onSaveApiKey={() => {
+          return Promise.resolve()
+        }}
+        onSuggest={() => {}}
+        onOpenConversation={() => {}}
+      />,
+    )
+    expect(html).toContain('先填一个 API Key')
+    expect(html).toContain('SiliconFlow API Key')
   })
 })
 

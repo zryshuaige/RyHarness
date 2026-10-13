@@ -6,7 +6,7 @@
 
 import type { Token, Tokens } from 'marked'
 import { lexer } from 'marked'
-import { useMemo, type ReactNode } from 'react'
+import { type ReactNode, useMemo } from 'react'
 
 /** 只允许安全协议的链接地址；不安全返回 undefined（调用方降级为文本）。 */
 export function safeHref(href: string | null | undefined): string | undefined {

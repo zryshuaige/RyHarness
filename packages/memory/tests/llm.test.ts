@@ -1,5 +1,5 @@
-import { ChatMemoryLlm, MEMORY_LLM_CODES } from '@ryagent/memory'
 import { isHarnessError } from '@ryagent/llm'
+import { ChatMemoryLlm, MEMORY_LLM_CODES } from '@ryagent/memory'
 import { describe, expect, it } from 'vitest'
 
 interface Captured {
@@ -8,7 +8,10 @@ interface Captured {
   headers: Record<string, string>
 }
 
-function stubFetch(reply: unknown, init: { ok?: boolean; status?: number } = {}): {
+function stubFetch(
+  reply: unknown,
+  init: { ok?: boolean; status?: number } = {},
+): {
   fetchImpl: typeof fetch
   calls: Captured[]
 } {
@@ -112,11 +115,7 @@ describe('ChatMemoryLlm（配置驱动）', () => {
   })
 
   it('分段数组形式的 content 也能拼回文本解析', async () => {
-    const { fetchImpl } = stubFetch(
-      contentReply([
-        { type: 'text', text: '{"operations":[{"action":"ADD"}]}' },
-      ]),
-    )
+    const { fetchImpl } = stubFetch(contentReply([{ type: 'text', text: '{"operations":[{"action":"ADD"}]}' }]))
     const llm = new ChatMemoryLlm({ apiKey: 'k', baseURL: 'https://x/v1', model: 'm', fetchImpl })
     const ops = await llm.decideOperations({
       candidate: { text: '用户喜欢川菜', scope: 'shared', kind: 'preference' },

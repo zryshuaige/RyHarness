@@ -76,6 +76,10 @@ export function App() {
   const [listLoading, setListLoading] = useState(true)
   const [activeId, setActiveId] = useState<string | undefined>(undefined)
   const [modal, setModal] = useState<'agent' | 'group' | undefined>(undefined)
+  /** 新建 agent 时的初始模板（通讯录模板轨带入）。 */
+  const [agentTemplateKey, setAgentTemplateKey] = useState<string | undefined>(undefined)
+  /** 非空 = 编辑既有 agent。 */
+  const [editingAgent, setEditingAgent] = useState<AgentDef | undefined>(undefined)
   const [panelCollapsed, setPanelCollapsed] = useState(false)
   const [loadError, setLoadError] = useState<string | undefined>(undefined)
   const [store] = useState(() => {
@@ -111,40 +115,43 @@ export function App() {
     }
   }
 
-  const runRefresh = useCallback(async (client: ApiClient): Promise<void> => {
-    try {
-      const [agentRes, templateRes, providerRes, conversationRes] = await Promise.all([
-        client.listAgents(),
-        client.templates(),
-        client.providers(),
-        client.conversations(),
-      ])
-      setAgents((prev) => {
-        return sameList(prev, agentRes.agents) ? prev : agentRes.agents
-      })
-      setTemplates((prev) => {
-        return sameList(prev, templateRes.templates) ? prev : templateRes.templates
-      })
-      setProviders((prev) => {
-        return sameList(prev, providerRes.providers) ? prev : providerRes.providers
-      })
-      setConversations((prev) => {
-        return sameList(prev, conversationRes.conversations) ? prev : conversationRes.conversations
-      })
-      store.setAgentNames(
-        new Map(
-          agentRes.agents.map((a) => {
-            return [a.id, a.name]
-          }),
-        ),
-      )
-      setLoadError(undefined)
-    } catch (error) {
-      setLoadError(error instanceof Error ? error.message : String(error))
-    } finally {
-      setListLoading(false)
-    }
-  }, [store])
+  const runRefresh = useCallback(
+    async (client: ApiClient): Promise<void> => {
+      try {
+        const [agentRes, templateRes, providerRes, conversationRes] = await Promise.all([
+          client.listAgents(),
+          client.templates(),
+          client.providers(),
+          client.conversations(),
+        ])
+        setAgents((prev) => {
+          return sameList(prev, agentRes.agents) ? prev : agentRes.agents
+        })
+        setTemplates((prev) => {
+          return sameList(prev, templateRes.templates) ? prev : templateRes.templates
+        })
+        setProviders((prev) => {
+          return sameList(prev, providerRes.providers) ? prev : providerRes.providers
+        })
+        setConversations((prev) => {
+          return sameList(prev, conversationRes.conversations) ? prev : conversationRes.conversations
+        })
+        store.setAgentNames(
+          new Map(
+            agentRes.agents.map((a) => {
+              return [a.id, a.name]
+            }),
+          ),
+        )
+        setLoadError(undefined)
+      } catch (error) {
+        setLoadError(error instanceof Error ? error.message : String(error))
+      } finally {
+        setListLoading(false)
+      }
+    },
+    [store],
+  )
 
   /** 全量刷新：并发调用合并为一次，飞行中再来请求只排一次尾随刷新。 */
   const refreshGate = useRef<{ inflight: Promise<void> | null; queued: boolean }>({
@@ -298,7 +305,8 @@ export function App() {
             }}
           >
             <span className="rail-icon" aria-hidden="true">
-              <Icon name={item.icon} size={22} />
+              {/* 「我的」用品牌橘猫，其余用线性图标——全局只保留一套图形语言。 */}
+              {item.key === 'me' ? <AppIcon size={22} /> : <Icon name={item.icon} size={22} />}
             </span>
             {item.label}
           </button>
@@ -363,6 +371,11 @@ export function App() {
                 ryen={ryen}
                 agents={agents}
                 conversations={conversations}
+                providers={providers}
+                onSaveApiKey={async (providerId, apiKey) => {
+                  await api.setApiKey(providerId, apiKey)
+                  await refresh()
+                }}
                 onSuggest={(text) => {
                   void suggestToRyen(text)
                 }}
@@ -378,8 +391,26 @@ export function App() {
           agents={agents}
           templates={templates}
           providers={providers}
-          onCreateAgent={() => {
+          onCreateAgent={(templateKey) => {
+            setAgentTemplateKey(templateKey)
+            setEditingAgent(undefined)
             setModal('agent')
+          }}
+          onEditAgent={(agent) => {
+            setEditingAgent(agent)
+            setAgentTemplateKey(undefined)
+            setModal('agent')
+          }}
+          onDeleteAgent={(agent) => {
+            if (!window.confirm(`删除「${agent.name}」？相关记忆与经验也会一并移除，且不可恢复。`)) return
+            void api
+              .deleteAgent(agent.id)
+              .then(() => {
+                return refresh()
+              })
+              .catch((error: unknown) => {
+                window.alert(error instanceof Error ? error.message : String(error))
+              })
           }}
           onCreateGroup={() => {
             setModal('group')
@@ -424,11 +455,16 @@ export function App() {
         <CreateAgentModal
           templates={templates}
           providers={providers}
+          {...(agentTemplateKey === undefined ? {} : { initialTemplateKey: agentTemplateKey })}
+          {...(editingAgent === undefined ? {} : { editing: editingAgent })}
           onClose={() => {
             setModal(undefined)
+            setEditingAgent(undefined)
+            setAgentTemplateKey(undefined)
           }}
           onSubmit={async (input) => {
-            await api.createAgent(input)
+            if (editingAgent === undefined) await api.createAgent(input)
+            else await api.patchAgent(editingAgent.id, input)
             await refresh()
           }}
         />

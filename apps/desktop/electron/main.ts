@@ -53,13 +53,7 @@ loadDotEnvIntoProcess()
 /** 平台菜单：macOS 保留系统约定的应用菜单；其他平台整条隐藏（autoHideMenuBar）。 */
 function applyPlatformMenu(): void {
   if (process.platform !== 'darwin') return
-  Menu.setApplicationMenu(
-    Menu.buildFromTemplate([
-      { role: 'appMenu' },
-      { role: 'editMenu' },
-      { role: 'windowMenu' },
-    ]),
-  )
+  Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }]))
 }
 
 /**

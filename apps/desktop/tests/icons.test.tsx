@@ -33,12 +33,16 @@ describe('Lucide 图标系统', () => {
       'pencil',
       'alert',
       'dices',
+      'clipboard-list',
+      'mail',
+      'calendar-days',
     ]
     for (const name of required) {
       expect(typeof ICONS[name as keyof typeof ICONS], name).toBe('string')
       expect(ICONS[name as keyof typeof ICONS].length, name).toBeGreaterThan(0)
     }
-    expect(Object.keys(ICONS).length).toBe(24)
+    // 注册表不许留孤儿：每个图标都必须是被断言的需求清单之一。
+    expect(Object.keys(ICONS).sort()).toEqual([...required].sort())
   })
 
   it('统一 stroke 风格：24 viewBox、currentColor、圆角线帽、fill=none、默认尺寸 20', () => {

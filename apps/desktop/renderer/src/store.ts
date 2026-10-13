@@ -254,7 +254,9 @@ export class ChatStore {
         const index = this.findStreamingIndex(event.senderId)
         if (index < 0) return
         const message = this.snapshot.messages[index]!
-        this.emit({ messages: replaceAt(this.snapshot.messages, index, withParts(message, appendText(message.parts, event.text))) })
+        this.emit({
+          messages: replaceAt(this.snapshot.messages, index, withParts(message, appendText(message.parts, event.text))),
+        })
         return
       }
       case 'tool-call-start': {
@@ -263,13 +265,20 @@ export class ChatStore {
         const message = this.snapshot.messages[index]!
         this.indexCall(event.callId, index)
         this.emit({
-          messages: replaceAt(this.snapshot.messages, index, withParts(message, message.parts.concat({
-            kind: 'tool',
-            callId: event.callId,
-            name: event.name,
-            arguments: event.arguments,
-            status: 'running',
-          }))),
+          messages: replaceAt(
+            this.snapshot.messages,
+            index,
+            withParts(
+              message,
+              message.parts.concat({
+                kind: 'tool',
+                callId: event.callId,
+                name: event.name,
+                arguments: event.arguments,
+                status: 'running',
+              }),
+            ),
+          ),
         })
         return
       }
@@ -304,13 +313,20 @@ export class ChatStore {
         this.indexCall(event.callId, index)
         this.artifactsVersion += 1
         this.emit({
-          messages: replaceAt(this.snapshot.messages, index, withParts(message, message.parts.concat({
-            kind: 'file',
-            callId: event.callId,
-            name: event.card.name,
-            size: event.card.size,
-            mime: event.card.mime,
-          }))),
+          messages: replaceAt(
+            this.snapshot.messages,
+            index,
+            withParts(
+              message,
+              message.parts.concat({
+                kind: 'file',
+                callId: event.callId,
+                name: event.card.name,
+                size: event.card.size,
+                mime: event.card.mime,
+              }),
+            ),
+          ),
         })
         return
       }

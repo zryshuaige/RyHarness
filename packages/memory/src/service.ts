@@ -339,11 +339,7 @@ export class MemoryService implements AgentMemory {
     operations: readonly MemoryOperation[],
     conversationId: string,
   ): Promise<void> {
-    const write = async (
-      kind: MemoryKind,
-      content: string,
-      supersedesId?: string,
-    ): Promise<void> => {
+    const write = async (kind: MemoryKind, content: string, supersedesId?: string): Promise<void> => {
       const trimmed = content.trim()
       const embedding = await this.embedCached(trimmed)
       this.store.insert({

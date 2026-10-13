@@ -3,9 +3,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import {
-  MIGRATIONS,
   MEMORY_SCHEMA_VERSION,
   MemoryStore,
+  MIGRATIONS,
   migrateMemory,
   NullEmbeddings,
   SHARED_SPACE,
@@ -50,10 +50,9 @@ describe('MemoryStore', () => {
         "INSERT INTO memories (id, agent_id, kind, content, embedding, dim, created_at, updated_at) VALUES ('m1', 'a1', 'fact', '用户住在北京', ?, 2, 1, 1)",
       )
       .run(Buffer.from(new Float32Array([0.5, 0.5]).buffer))
-    legacy.prepare('INSERT INTO embedding_cache (hash, vector, dim, created_at) VALUES (?, ?, 2, 1)').run(
-      'h1',
-      Buffer.from(new Float32Array([1, 0]).buffer),
-    )
+    legacy
+      .prepare('INSERT INTO embedding_cache (hash, vector, dim, created_at) VALUES (?, ?, 2, 1)')
+      .run('h1', Buffer.from(new Float32Array([1, 0]).buffer))
     legacy.close()
 
     const s = new MemoryStore(path)

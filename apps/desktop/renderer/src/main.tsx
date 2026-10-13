@@ -1,6 +1,7 @@
 import { createRoot } from 'react-dom/client'
 import { App } from './App.tsx'
 import './styles.css'
+import './styles-product.css'
 
 const splash = document.getElementById('splash')
 if (splash !== null) {

@@ -198,12 +198,7 @@ export const MessageBubble = memo(MessageBubbleInner, (prev, next) => {
   const a = prev.message
   const b = next.message
   if (a === b) return true
-  return (
-    a.key === b.key &&
-    a.senderId === b.senderId &&
-    a.done === b.done &&
-    (a.version ?? 0) === (b.version ?? 0)
-  )
+  return a.key === b.key && a.senderId === b.senderId && a.done === b.done && (a.version ?? 0) === (b.version ?? 0)
 })
 
 /** 群聊接力链：头像 A → 箭头 → 头像 B 的流转提示，错峰滑入。 */

@@ -142,7 +142,12 @@ export class EvolveStore {
    * 就会新增一条），手册很快自我复制膨胀。归一化 bigram Jaccard ≥
    * {@link NEAR_DUPLICATE_THRESHOLD} 视为同一条。
    */
-  hasNearDuplicate(agentId: string, section: PlaybookSection, content: string, threshold = NEAR_DUPLICATE_THRESHOLD): boolean {
+  hasNearDuplicate(
+    agentId: string,
+    section: PlaybookSection,
+    content: string,
+    threshold = NEAR_DUPLICATE_THRESHOLD,
+  ): boolean {
     return this.hasNearDuplicateExcept(agentId, section, content, undefined, threshold)
   }
 
@@ -155,9 +160,7 @@ export class EvolveStore {
     threshold = NEAR_DUPLICATE_THRESHOLD,
   ): boolean {
     const candidates = this.db
-      .prepare(
-        "SELECT id, content FROM playbook_entries WHERE agent_id = ? AND section = ? AND status = 'active'",
-      )
+      .prepare("SELECT id, content FROM playbook_entries WHERE agent_id = ? AND section = ? AND status = 'active'")
       .all(agentId, section) as { id: string; content: string }[]
     return candidates.some((row) => {
       if (row.id === exceptId) return false

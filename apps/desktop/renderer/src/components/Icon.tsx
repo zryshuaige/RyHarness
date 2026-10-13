@@ -9,16 +9,19 @@
 import rawAlert from '../assets/lucide/alert.svg?raw'
 import rawAtSign from '../assets/lucide/at-sign.svg?raw'
 import rawBrain from '../assets/lucide/brain.svg?raw'
+import rawCalendarDays from '../assets/lucide/calendar-days.svg?raw'
 import rawCatFace from '../assets/lucide/cat-face.svg?raw'
 import rawChatBubble from '../assets/lucide/chat-bubble.svg?raw'
 import rawCheck from '../assets/lucide/check.svg?raw'
 import rawChevronLeft from '../assets/lucide/chevron-left.svg?raw'
 import rawChevronRight from '../assets/lucide/chevron-right.svg?raw'
+import rawClipboardList from '../assets/lucide/clipboard-list.svg?raw'
 import rawCopy from '../assets/lucide/copy.svg?raw'
 import rawDices from '../assets/lucide/dices.svg?raw'
 import rawFile from '../assets/lucide/file.svg?raw'
 import rawGear from '../assets/lucide/gear.svg?raw'
 import rawGroup from '../assets/lucide/group.svg?raw'
+import rawMail from '../assets/lucide/mail.svg?raw'
 import rawMoon from '../assets/lucide/moon.svg?raw'
 import rawPanelRight from '../assets/lucide/panel-right.svg?raw'
 import rawPencil from '../assets/lucide/pencil.svg?raw'
@@ -63,6 +66,9 @@ export const ICONS = {
   pencil: bodyOf(rawPencil),
   alert: bodyOf(rawAlert),
   dices: bodyOf(rawDices),
+  'clipboard-list': bodyOf(rawClipboardList),
+  mail: bodyOf(rawMail),
+  'calendar-days': bodyOf(rawCalendarDays),
 } as const
 
 export type IconName = keyof typeof ICONS

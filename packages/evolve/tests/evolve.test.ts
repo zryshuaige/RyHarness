@@ -119,7 +119,12 @@ describe('Reflector 归因计数', () => {
       content: '部署脚本要带版本号标签',
       source: 'seed',
     })
-    s.enqueueTurn('a1', 'A', 'c1', turn({ injectedPlaybookEntryIds: [relevant.id, noise.id], userText: '把文件写一下' }))
+    s.enqueueTurn(
+      'a1',
+      'A',
+      'c1',
+      turn({ injectedPlaybookEntryIds: [relevant.id, noise.id], userText: '把文件写一下' }),
+    )
     await s.flush()
     expect(s.store.getEntry(relevant.id)!.helpful).toBe(1)
     expect(s.store.getEntry(noise.id)!.helpful).toBe(0)
