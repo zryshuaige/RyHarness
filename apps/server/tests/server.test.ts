@@ -482,6 +482,9 @@ describe('RyAgentServer', () => {
       expect(viteDev.status).toBe(200)
       const loopback = await fetch(`${base}/api/agents`, { headers: { origin: 'http://127.0.0.1:32100' } })
       expect(loopback.status).toBe(200)
+      // Electron 渲染层（file:// 页面）的 WS 握手带 Origin: file://，必须放行
+      const fileOrigin = await fetch(`${base}/api/agents`, { headers: { origin: 'file://' } })
+      expect(fileOrigin.status).toBe(200)
       const evil = await fetch(`${base}/api/agents`, { headers: { origin: 'https://evil.example' } })
       expect(evil.status).toBe(403)
 

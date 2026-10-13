@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AgentDef, ApiClient, Conversation, MessageRow } from '../api.ts'
 import { messageText } from '../api.ts'
 import type { ChatStore, UiMessage } from '../store.ts'
@@ -18,30 +18,57 @@ function formatTime(ts: number): string {
     : date.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
 }
 
-/** 历史消息行 → UiMessage 形状。 */
-function fromHistory(rows: MessageRow[], nameOf: (id: string) => string): UiMessage[] {
-  return rows.map((row) => {
+/**
+ * 历史消息行 → UiMessage 形状。
+ * 纯 tool_call 的 assistant 消息（无文本块且无 toolCallId 结果行）没有可展示
+ * 内容，直接跳过——否则渲染成空气泡。
+ */
+export function fromHistory(rows: MessageRow[], nameOf: (id: string) => string): UiMessage[] {
+  const out: UiMessage[] = []
+  for (const row of rows) {
     const toolPrefix = '〔tool〕'
     const raw = messageText(row)
     const isTool = row.toolCallId !== undefined || raw.startsWith(toolPrefix)
+    if (!isTool && raw.trim().length === 0) continue
     const text = isTool && raw.startsWith(toolPrefix) ? raw.slice(toolPrefix.length) : raw
-    return {
+    out.push({
       key: `hist:${row.id}`,
       senderType: row.senderType,
       senderId: row.senderId ?? (row.senderType === 'user' ? 'user' : 'system'),
       senderName: row.senderType === 'user' ? '我' : nameOf(row.senderId ?? ''),
       turnIndex: row.turnIndex,
+      seq: row.seq,
       createdAt: row.createdAt,
       done: true,
       parts: isTool
         ? [{ kind: 'tool' as const, callId: row.toolCallId ?? row.id, name: text.split(':')[0] ?? 'tool', arguments: '', status: 'done' as const }]
         : [{ kind: 'text' as const, text }],
-    }
-  })
+    })
+  }
+  return out
 }
 
 /** 距底阈值：超过则停止自动跟随（报告 §5 的 100px 规则）。 */
 const FOLLOW_THRESHOLD = 100
+
+/** 每页历史消息数（向上翻页）。 */
+const PAGE_SIZE = 50
+
+/** 渲染上限：超长会话只渲染最近若干条，「加载更早」时同步放宽。 */
+const RENDER_CAP = 150
+
+/** 程序化滚动到底；smooth 仅用于「跳至最新」，流式跟随必须即时。 */
+function scrollToBottom(node: HTMLDivElement, smooth: boolean): void {
+  if (smooth && typeof node.scrollTo === 'function') {
+    try {
+      node.scrollTo({ top: node.scrollHeight, behavior: 'smooth' })
+      return
+    } catch {
+      // jsdom 等环境无 scrollTo 实现，回退直接赋值。
+    }
+  }
+  node.scrollTop = node.scrollHeight
+}
 
 /** 中栏聊天窗口。 */
 export function ChatView({
@@ -59,29 +86,55 @@ export function ChatView({
 }) {
   const snapshot = useChat(store)
   const [history, setHistory] = useState<UiMessage[]>([])
-  const [historyLimit, setHistoryLimit] = useState(50)
+  const [hasMore, setHasMore] = useState(false)
   const [historyLoaded, setHistoryLoaded] = useState(false)
+  const [loadingEarlier, setLoadingEarlier] = useState(false)
+  const [renderCap, setRenderCap] = useState(RENDER_CAP)
   const [showJump, setShowJump] = useState(false)
+  const [conn, setConn] = useState<'open' | 'reconnecting'>('open')
+  const [connDismissed, setConnDismissed] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
+  const restoreScroll = useRef<{ prevHeight: number; prevTop: number } | null>(null)
   const [catMood, setCatMood] = useState<'idle' | 'thinking' | 'happy'>('idle')
 
-  const nameOf = (id: string): string => {
+  const nameOf = useCallback((id: string): string => {
     return agents.find((a) => { return a.id === id })?.name ?? id
-  }
+  }, [agents])
   const agentById = (id: string): AgentDef | undefined => {
     return agents.find((a) => { return a.id === id })
   }
+
+  /** 断线缺口/重连后重拉最新一页历史 + 调度事件，重置流式状态。 */
+  const reloadLatest = useCallback((): void => {
+    store.reset()
+    setRenderCap(RENDER_CAP)
+    stickToBottom.current = true
+    api.messages(conversation.id, { limit: PAGE_SIZE }).then(({ messages }) => {
+      setHistory(fromHistory(messages, nameOf))
+      setHasMore(messages.length === PAGE_SIZE)
+    }).catch(() => {})
+    api.listDispatchEvents(conversation.id).then(({ events }) => {
+      store.setDispatchHistory(events)
+    }).catch(() => {})
+  }, [api, conversation.id, nameOf, store])
+  const reloadRef = useRef(reloadLatest)
+  reloadRef.current = reloadLatest
 
   // 载入历史 + 订阅 WS + 标记已读。
   useEffect(() => {
     let cancelled = false
     store.reset()
     setHistoryLoaded(false)
+    setHasMore(false)
+    setRenderCap(RENDER_CAP)
+    setConn('open')
+    setConnDismissed(false)
     stickToBottom.current = true
-    api.messages(conversation.id, historyLimit).then(({ messages }) => {
+    api.messages(conversation.id, { limit: PAGE_SIZE }).then(({ messages }) => {
       if (cancelled) return
       setHistory(fromHistory(messages, nameOf))
+      setHasMore(messages.length === PAGE_SIZE)
       setHistoryLoaded(true)
     }).catch(() => {
       if (!cancelled) setHistoryLoaded(true)
@@ -90,21 +143,57 @@ export function ChatView({
     api.listDispatchEvents(conversation.id).then(({ events }) => {
       if (!cancelled) store.setDispatchHistory(events)
     }).catch(() => {})
-    const unsubscribe = api.subscribe(conversation.id, (event) => { store.apply(event) })
+    const unsubscribe = api.subscribe(conversation.id, (event) => { store.apply(event) }, {
+      onStatus: (status) => {
+        if (cancelled) return
+        setConn(status)
+        if (status === 'open') setConnDismissed(false)
+      },
+      onGap: () => {
+        if (!cancelled) reloadRef.current()
+      },
+    })
     return () => {
       cancelled = true
       unsubscribe()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conversation.id, historyLimit])
+  }, [conversation.id])
 
-  // 自动跟随滚动：仅当视口距底 < 100px（报告 §5）。
+  // 向上翻页：取最早 seq 之前的一页前插，并保持视口位置不跳动。
+  const loadEarlier = async (): Promise<void> => {
+    const earliest = history[0]?.seq
+    if (earliest === undefined || loadingEarlier) return
+    setLoadingEarlier(true)
+    try {
+      const { messages } = await api.messages(conversation.id, { limit: PAGE_SIZE, before: earliest })
+      const older = fromHistory(messages, nameOf)
+      const node = scrollRef.current
+      if (node !== null) restoreScroll.current = { prevHeight: node.scrollHeight, prevTop: node.scrollTop }
+      setHasMore(messages.length === PAGE_SIZE)
+      setHistory((prev) => { return [...older, ...prev] })
+      setRenderCap((cap) => { return cap + PAGE_SIZE })
+    } catch {
+      // 加载失败保持现状，用户可重试。
+    } finally {
+      setLoadingEarlier(false)
+    }
+  }
+
+  // 滚动：翻页前插后还原视口；否则仅当视口距底 < 100px 时即时跟随（报告 §5）。
+  // 依赖 snapshot.messages 的身份（store 每次通知都重建数组），流式追加也触发。
   useEffect(() => {
     const node = scrollRef.current
     if (node === null) return
-    if (stickToBottom.current) node.scrollTop = node.scrollHeight
+    const restore = restoreScroll.current
+    restoreScroll.current = null
+    if (restore !== null) {
+      node.scrollTop = node.scrollHeight - restore.prevHeight + restore.prevTop
+      return
+    }
+    if (stickToBottom.current) scrollToBottom(node, false)
     setShowJump(!stickToBottom.current)
-  }, [snapshot.messages.length, history.length, snapshot.typing])
+  }, [snapshot.messages, history, snapshot.typing])
 
   const handleScroll = (): void => {
     const node = scrollRef.current
@@ -118,7 +207,7 @@ export function ChatView({
     const node = scrollRef.current
     if (node === null) return
     stickToBottom.current = true
-    node.scrollTop = node.scrollHeight
+    scrollToBottom(node, true)
     setShowJump(false)
   }
 
@@ -141,7 +230,8 @@ export function ChatView({
   }, [conversation.memberAgentIds, agents])
 
   const send = async (text: string): Promise<void> => {
-    store.addUserMessage(text, nextTurnIndex(snapshot.messages))
+    // turnIndex 基于全量消息（历史 + 流式快照），与服务端口径一致。
+    store.addUserMessage(text, nextTurnIndex([...history, ...snapshot.messages]))
     stickToBottom.current = true
     try {
       await api.postMessage(conversation.id, text)
@@ -151,9 +241,37 @@ export function ChatView({
   }
 
   const allMessages = [...history, ...snapshot.messages]
-  // 渲染上限：超长会话只渲染最近 RENDER_CAP 条，配合「加载更早」向上翻页。
-  const RENDER_CAP = 150
-  const visibleMessages = allMessages.length > RENDER_CAP ? allMessages.slice(-RENDER_CAP) : allMessages
+  // 渲染上限随「加载更早」同步放宽（renderCap 初始 RENDER_CAP，每次翻页 +PAGE_SIZE）。
+  const visibleMessages = allMessages.length > renderCap ? allMessages.slice(-renderCap) : allMessages
+  const allMessagesRef = useRef<UiMessage[]>([])
+  allMessagesRef.current = allMessages
+
+  // 稳定引用：MessageBubble 的 memo 依赖这两个 prop 的身份不变。
+  const fileUrl = useCallback((name: string): string => { return api.fileUrl(name) }, [api])
+  const onFeedback = useCallback((target: UiMessage, signal: 'thumb_up' | 'thumb_down'): void => {
+    const textOf = (m: UiMessage): string => {
+      return m.parts.filter((p) => { return p.kind === 'text' })
+        .map((p) => { return p.kind === 'text' ? p.text : '' }).join(' ')
+    }
+    // 找目标消息之前最近的用户消息作为反馈上下文。
+    const msgs = allMessagesRef.current
+    const targetIndex = msgs.indexOf(target)
+    let userText = ''
+    for (let i = (targetIndex < 0 ? msgs.length : targetIndex) - 1; i >= 0; i--) {
+      const candidate = msgs[i]!
+      if (candidate.senderType === 'user') {
+        userText = textOf(candidate)
+        break
+      }
+    }
+    void api.sendFeedback({
+      conversationId: conversation.id,
+      agentId: target.senderId,
+      signal,
+      userText: userText.slice(0, 300),
+      assistantText: textOf(target).slice(0, 300),
+    }).catch(() => {})
+  }, [api, conversation.id])
 
   // 按 turn 分组；turn 间插时间分隔；同 sender 相邻收紧。
   const turns = useMemo(() => {
@@ -181,16 +299,25 @@ export function ChatView({
         </div>
       </header>
 
+      {conn === 'reconnecting' && !connDismissed && (
+        <p className="conn-banner" role="status">
+          <Icon name="alert" size={14} /> 连接已断开，正在重连…
+          <button className="conn-banner-close" aria-label="关闭提示" onClick={() => { setConnDismissed(true) }}>
+            <Icon name="x" size={12} />
+          </button>
+        </p>
+      )}
+
       <div className="chat-scroll" ref={scrollRef} onScroll={handleScroll} style={{ position: 'relative' }}>
         <div className="chat-col">
           {!historyLoaded && <p className="chat-hint">载入历史中…</p>}
-          {historyLoaded && history.length >= historyLimit && (
-            <button className="load-earlier" onClick={() => { setHistoryLimit((n) => { return n + 100 }) }}>
-              ↑ 加载更早消息
+          {historyLoaded && hasMore && (
+            <button className="load-earlier" disabled={loadingEarlier} onClick={() => { void loadEarlier() }}>
+              {loadingEarlier ? '载入中…' : '↑ 加载更早消息'}
             </button>
           )}
-          {allMessages.length > RENDER_CAP && (
-            <p className="chat-hint">已省略 {allMessages.length - RENDER_CAP} 条早期消息</p>
+          {allMessages.length > renderCap && (
+            <p className="chat-hint">已省略 {allMessages.length - renderCap} 条早期消息</p>
           )}
           {turns.map((turn) => (
             <div key={turn.turnIndex} className="turn-block">
@@ -208,23 +335,11 @@ export function ChatView({
                 <MessageBubble
                   key={message.key}
                   message={message}
-                  fileUrl={(name) => { return api.fileUrl(name) }}
+                  fileUrl={fileUrl}
                   agent={agentById(message.senderId)}
                   tight={index > 0 && turn.messages[index - 1]?.senderId === message.senderId}
                   firstOfGroup={index === 0 || turn.messages[index - 1]?.senderId !== message.senderId}
-                  onFeedback={(target, signal) => {
-                    const textOf = (m: typeof target): string => {
-                      return m.parts.filter((p) => { return p.kind === 'text' })
-                        .map((p) => { return p.kind === 'text' ? p.text : '' }).join(' ')
-                    }
-                    void api.sendFeedback({
-                      conversationId: conversation.id,
-                      agentId: target.senderId,
-                      signal,
-                      userText: textOf(turn.messages.find((m) => { return m.senderType === 'user' }) ?? target).slice(0, 300),
-                      assistantText: textOf(target).slice(0, 300),
-                    }).catch(() => {})
-                  }}
+                  onFeedback={onFeedback}
                 />
               ))}
             </div>
@@ -273,7 +388,8 @@ function maxTurn(messages: { turnIndex: number }[]): number {
   return messages.reduce((max, m) => { return Math.max(max, m.turnIndex) }, -1)
 }
 
-function nextTurnIndex(messages: { turnIndex: number }[]): number {
+/** 下一个 turn 序号（传入历史 + 流式快照的合并列表，与服务端口径一致）。 */
+export function nextTurnIndex(messages: { turnIndex: number }[]): number {
   return maxTurn(messages) + 1
 }
 

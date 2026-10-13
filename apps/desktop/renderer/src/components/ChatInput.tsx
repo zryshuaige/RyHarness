@@ -28,9 +28,11 @@ export function ChatInput({
   const [text, setText] = useState('')
   const [cursor, setCursor] = useState(0)
   const [selected, setSelected] = useState(0)
+  /** Esc 显式关闭补全菜单；文本变动时复位（不往文本里塞魔法字符）。 */
+  const [dismissed, setDismissed] = useState(false)
   const ref = useRef<HTMLTextAreaElement>(null)
 
-  const mention = mentionQueryAt(text, cursor)
+  const mention = dismissed ? null : mentionQueryAt(text, cursor)
   const candidates = mention === null ? [] : filterMentions(members, mention.query).slice(0, 6)
 
   /** textarea 自动增高（上限 6 行 ≈ 148px）。 */
@@ -71,7 +73,8 @@ export function ChatInput({
       event.preventDefault()
       setSelected((selected + candidates.length - 1) % candidates.length)
     } else if (event.key === 'Escape' && candidates.length > 0) {
-      setText(`${text.slice(0, cursor)}​${text.slice(cursor)}`)
+      event.preventDefault()
+      setDismissed(true)
     }
   }
 
@@ -122,6 +125,7 @@ export function ChatInput({
           onChange={(event) => {
             setText(event.target.value)
             setCursor(event.target.selectionStart ?? event.target.value.length)
+            setDismissed(false)
             autoGrow(event.target)
           }}
           onKeyDown={handleKey}

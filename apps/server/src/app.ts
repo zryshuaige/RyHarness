@@ -47,14 +47,15 @@ const MAX_WS_BUFFERED_BYTES = 1_048_576
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10_000
 
 /**
- * Origin 白名单：空 Origin（Electron file:// 渲染层、curl/Node 客户端）
+ * Origin 白名单：空 Origin（curl/Node 客户端）、file://（Electron 渲染层）
  * 或回环地址（127.0.0.1 / localhost / ::1，覆盖 Vite dev server）。
  */
 function originAllowed(origin: string | undefined): boolean {
   if (origin === undefined || origin.length === 0 || origin === 'null') return true
   try {
-    const hostname = new URL(origin).hostname
-    return hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '[::1]'
+    const url = new URL(origin)
+    if (url.protocol === 'file:') return true
+    return url.hostname === '127.0.0.1' || url.hostname === 'localhost' || url.hostname === '[::1]'
   } catch {
     return false
   }

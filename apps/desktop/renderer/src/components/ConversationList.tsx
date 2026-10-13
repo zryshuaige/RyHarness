@@ -68,7 +68,8 @@ export function ConversationList({
             <p>{conversations.length === 0 ? '去通讯录找 agent 聊聊吧。' : '换个关键词试试。'}</p>
           </div>
         ) : filtered.map((conversation) => (
-          <div
+          <button
+            type="button"
             key={conversation.id}
             className={`conversation-item ${conversation.id === activeId ? 'is-active' : ''}`}
             onClick={() => { onSelect(conversation.id) }}
@@ -82,11 +83,13 @@ export function ConversationList({
               <div className="conversation-item-bottom">
                 <span className="preview">{conversation.lastMessagePreview ?? ''}</span>
                 {(conversation.unreadCount ?? 0) > 0 && (
-                  <span className="unread-badge">{conversation.unreadCount}</span>
+                  <span className="unread-badge">
+                    {(conversation.unreadCount ?? 0) > 99 ? '99+' : conversation.unreadCount}
+                  </span>
                 )}
               </div>
             </div>
-          </div>
+          </button>
         ))}
       </div>
     </>

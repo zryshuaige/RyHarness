@@ -2,6 +2,7 @@ import { memo, useState } from 'react'
 import type { MessagePart, UiMessage } from '../store.ts'
 import { Avatar } from './avatars/Avatar.tsx'
 import { Icon } from './Icon.tsx'
+import { Markdown } from './Markdown.tsx'
 import type { AgentDef } from '../api.ts'
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -9,9 +10,11 @@ function formatSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
-/** 单个消息部件的渲染。 */
-export function MessagePartView({ part, fileUrl }: { part: MessagePart; fileUrl: (name: string) => string }) {
+/** 单个消息部件的渲染。markdown=true 时文本按 Markdown 渲染（消息完成后）。 */
+export function MessagePartView({ part, fileUrl, markdown = false }: { part: MessagePart; fileUrl: (name: string) => string; markdown?: boolean }) {
   if (part.kind === 'text') {
+    // 流式期间纯文本直出（token 高频追加，不重复解析）；完成后渲染 Markdown。
+    if (markdown) return <div className="bubble-text bubble-md"><Markdown text={part.text} /></div>
     return <p className="bubble-text">{part.text}</p>
   }
   if (part.kind === 'tool') {
@@ -98,7 +101,12 @@ function MessageBubbleInner({
         {!isUser && firstOfGroup && <div className="bubble-name">{message.senderName}</div>}
         <div className="bubble-bubble">
           {message.parts.map((part, index) => (
-            <MessagePartView key={`${part.kind}-${index}`} part={part} fileUrl={fileUrl} />
+            <MessagePartView
+              key={`${part.kind}-${index}`}
+              part={part}
+              fileUrl={fileUrl}
+              markdown={message.done && message.senderType === 'agent'}
+            />
           ))}
           {message.senderType === 'agent' && !message.done && <span className="bubble-cursor">▍</span>}
         </div>

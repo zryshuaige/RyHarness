@@ -18,6 +18,8 @@ export interface UiMessage {
   senderId: string
   senderName: string
   turnIndex: number
+  /** 服务端消息序号（历史消息有；用于向上分页的 before 游标）。 */
+  seq?: number
   /** 消息时间（历史消息有；流式消息省略）。 */
   createdAt?: number
   parts: MessagePart[]

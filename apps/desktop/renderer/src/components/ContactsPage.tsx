@@ -4,6 +4,7 @@ import { Avatar } from './avatars/Avatar.tsx'
 import { AVATAR_STYLES, dicebearSvg, randomAvatarSpec } from './avatars/avatars.tsx'
 import { Cat } from './Cat.tsx'
 import { Icon } from './Icon.tsx'
+import { Modal } from './Modal.tsx'
 
 const TOOL_LABELS: Record<string, string> = {
   fs_read: '读文件', fs_write: '写文件', shell_exec: '执行命令', file_produce: '产出文件',
@@ -320,19 +321,5 @@ export function CreateGroupModal({
         <button className="btn btn-primary" disabled={busy || selected.length === 0} onClick={() => { void submit() }}>创建</button>
       </div>
     </Modal>
-  )
-}
-
-function Modal({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
-  return (
-    <div className="modal-mask" onClick={onClose}>
-      <div className="modal" onClick={(e) => { e.stopPropagation() }}>
-        <header className="modal-header">
-          <h3>{title}</h3>
-          <button onClick={onClose} aria-label="关闭"><Icon name="x" size={15} /></button>
-        </header>
-        {children}
-      </div>
-    </div>
   )
 }

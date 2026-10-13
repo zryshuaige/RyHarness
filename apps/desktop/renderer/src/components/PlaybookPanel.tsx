@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { ApiClient, PlaybookEntryRow, ReflectionRow } from '../api.ts'
 import { Icon } from './Icon.tsx'
+import { Modal } from './Modal.tsx'
 
 const SECTION_LABELS: Record<PlaybookEntryRow['section'], string> = {
   strategy: '策略', pitfall: '坑', preference: '偏好', tooling: '工具用法',
@@ -44,16 +45,11 @@ export function PlaybookPanel({
   const net = (entry: PlaybookEntryRow): number => { return entry.helpful - entry.harmful }
 
   return (
-    <div className="modal-mask" onClick={onClose}>
-      <div className="modal" onClick={(e) => { e.stopPropagation() }}>
-        <header className="modal-header">
-          <h3>{agentName} 的经验手册</h3>
-          <button onClick={onClose} aria-label="关闭"><Icon name="x" size={15} /></button>
-        </header>
-        {data === undefined ? (
-          <p className="panel-empty">载入中…</p>
-        ) : (
-          <>
+    <Modal title={`${agentName} 的经验手册`} onClose={onClose}>
+      {data === undefined ? (
+        <p className="panel-empty">载入中…</p>
+      ) : (
+        <>
             {data.reflections.length > 0 && (
               <>
                 <p className="section-title">反思中的教训（待验证，命中 {2} 次转正）</p>
@@ -98,9 +94,8 @@ export function PlaybookPanel({
             {data.entries.length === 0 && data.reflections.length === 0 && (
               <p className="panel-empty">手册还是空的——多聊几轮，我会从轨迹里沉淀经验。</p>
             )}
-          </>
-        )}
-      </div>
-    </div>
+        </>
+      )}
+    </Modal>
   )
 }

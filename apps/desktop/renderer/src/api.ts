@@ -95,7 +95,7 @@ export interface ReflectionRow {
   createdAt: number
 }
 
-/** WS 事件（apps/server README 契约）。 */
+/** WS 事件（apps/server README 契约）；服务端为每个事件附每会话单调递增 seq。 */
 export type WsEvent =
   | { type: 'message-start'; conversationId: string; senderId: string; senderName: string; turnIndex: number }
   | { type: 'text-delta'; conversationId: string; senderId: string; text: string }
@@ -106,6 +106,21 @@ export type WsEvent =
   | { type: 'message-done'; conversationId: string; senderId: string; turnIndex: number }
   | { type: 'error'; conversationId: string; message: string; code: string }
   | { type: 'queued'; conversationId: string; senderId: 'user'; turnIndex: number }
+
+/** 服务端实际下发的事件：带每会话单调递增 seq（客户端用于缺口检测）。 */
+export type StampedWsEvent = WsEvent & { seq?: number }
+
+/** WS 连接状态（断线重连提示用）。 */
+export type WsConnectionStatus = 'open' | 'reconnecting'
+
+export interface SubscribeOptions {
+  /** 连接状态变化（断线 → reconnecting，恢复 → open）。 */
+  onStatus?: (status: WsConnectionStatus) => void
+  /** 检测到事件 seq 缺口或断线重连成功：调用方应重拉历史补齐。 */
+  onGap?: () => void
+  /** 重连退避序列（ms），超过末尾值后循环使用末值；默认 1s/2s/5s/10s 封顶。 */
+  reconnectDelays?: number[]
+}
 
 // ---- 客户端 ----
 
@@ -158,8 +173,11 @@ export class ApiClient {
     return this.request('/api/conversations', { method: 'POST', body: JSON.stringify(input) })
   }
 
-  messages(conversationId: string, limit = 50): Promise<{ messages: MessageRow[] }> {
-    return this.request(`/api/conversations/${conversationId}/messages?limit=${limit}`)
+  messages(conversationId: string, opts: { limit?: number; before?: number } = {}): Promise<{ messages: MessageRow[] }> {
+    const params = new URLSearchParams()
+    params.set('limit', String(opts.limit ?? 50))
+    if (opts.before !== undefined) params.set('before', String(opts.before))
+    return this.request(`/api/conversations/${conversationId}/messages?${params.toString()}`)
   }
 
   postMessage(conversationId: string, text: string): Promise<{ accepted: boolean }> {
@@ -211,13 +229,61 @@ export class ApiClient {
     return `${this.base}/api/files/${encodeURIComponent(name)}`
   }
 
-  /** 订阅会话事件；返回退订函数。 */
-  subscribe(conversationId: string, onEvent: (event: WsEvent) => void): () => void {
-    const ws = new WebSocket(`${this.base.replace('http', 'ws')}/ws?conversationId=${conversationId}`)
-    ws.onmessage = (message) => {
-      onEvent(JSON.parse(String(message.data)) as WsEvent)
+  /**
+   * 订阅会话事件；返回退订函数。
+   * 断线自动指数退避重连（默认 1s/2s/5s/10s 封顶）；事件 seq 出现缺口或
+   * 重连成功时回调 onGap（调用方重拉历史补齐，断线期间的事件服务器不重放）。
+   */
+  subscribe(conversationId: string, onEvent: (event: StampedWsEvent) => void, opts: SubscribeOptions = {}): () => void {
+    const delays = opts.reconnectDelays ?? [1000, 2000, 5000, 10000]
+    const url = `${this.base.replace('http', 'ws')}/ws?conversationId=${conversationId}`
+    let closed = false
+    let attempts = 0
+    let lastSeq: number | undefined
+    let reconnecting = false
+    let socket: WebSocket | undefined
+    let timer: ReturnType<typeof setTimeout> | undefined
+
+    const setReconnecting = (value: boolean): void => {
+      if (reconnecting === value) return
+      reconnecting = value
+      opts.onStatus?.(value ? 'reconnecting' : 'open')
     }
-    return () => { ws.close() }
+
+    const connect = (): void => {
+      if (closed) return
+      const ws = new WebSocket(url)
+      socket = ws
+      ws.onmessage = (message) => {
+        const event = JSON.parse(String(message.data)) as StampedWsEvent
+        if (typeof event.seq === 'number') {
+          if (lastSeq !== undefined && event.seq > lastSeq + 1) opts.onGap?.()
+          lastSeq = event.seq
+        }
+        onEvent(event)
+      }
+      ws.onopen = () => {
+        // 重连成功：断开期间的事件已丢失，要求调用方补齐。
+        if (attempts > 0) opts.onGap?.()
+        attempts = 0
+        setReconnecting(false)
+      }
+      ws.onclose = () => {
+        if (closed) return
+        setReconnecting(true)
+        const delay = delays[Math.min(attempts, delays.length - 1)] ?? 10000
+        attempts += 1
+        timer = setTimeout(connect, delay)
+      }
+      ws.onerror = () => { ws.close() }
+    }
+    connect()
+
+    return () => {
+      closed = true
+      if (timer !== undefined) clearTimeout(timer)
+      socket?.close()
+    }
   }
 }
 

@@ -142,6 +142,25 @@ describe('SessionStore', () => {
     store.close()
   })
 
+  it('未读与预览排除纯 tool_call（无文本块）的消息', () => {
+    const store = new SessionStore(':memory:')
+    const conversation = store.createConversation({ kind: 'direct', memberAgentIds: ['a1'] })
+    store.appendMessage({
+      conversationId: conversation.id, senderType: 'agent', senderId: 'a1',
+      contentBlocks: [{ type: 'text', text: '我看下文件' }],
+    })
+    // 纯 tool_call 行：只有 tool-call 块，没有 text 块
+    store.appendMessage({
+      conversationId: conversation.id, senderType: 'agent', senderId: 'a1',
+      contentBlocks: [{ type: 'tool-call', callId: 'c1', name: 'fs_read' }],
+    })
+    expect(store.unreadCount(conversation.id, 0)).toBe(1)
+    const listed = store.listConversationsWithPreview()
+    expect(listed[0]!.unreadCount).toBe(1)
+    expect(listed[0]!.lastMessagePreview).toBe('我看下文件')
+    store.close()
+  })
+
   it('schema v3：conversations 带 last_read_seq 列，旧库迁移后默认 0', () => {
     // 模拟 v2 库：只应用 v1+v2 迁移，再交给 migrate() 补 v3。
     const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite')

@@ -223,7 +223,7 @@ input, textarea, select { font-family: inherit; color: var(--text-primary); }
 
 .chat-scroll {
   flex: 1; overflow-y: auto; padding: var(--space-5) var(--space-6);
-  scroll-behavior: smooth;
+  /* 不设 scroll-behavior：流式跟随必须即时；「跳至最新」用 JS smooth。 */
 }
 .chat-col { max-width: var(--chat-col); margin: 0 auto; display: flex; flex-direction: column; }
 .chat-hint { text-align: center; color: var(--text-secondary); }
@@ -897,3 +897,64 @@ body {
 .welcome-chip { display: inline-flex; align-items: center; gap: 8px; }
 .chip-emoji { width: 20px; height: 20px; display: inline-flex; }
 .chip-emoji svg, .chip-emoji img { width: 100%; height: 100%; }
+
+/* ---- 20. 批次 B：可达性 / 断线提示 / Markdown ---- */
+
+/* 会话列表项改为 button 后的原生样式复位 */
+.conversation-item {
+  border: none; background: none; width: 100%; text-align: left;
+  color: var(--text-primary); font-size: inherit; font-family: inherit;
+}
+
+/* 键盘焦点环（仅键盘聚焦时显示） */
+.conversation-item:focus-visible,
+.bubble-action:focus-visible,
+.load-earlier:focus-visible,
+.jump-latest:focus-visible,
+.conn-banner-close:focus-visible {
+  outline: none; box-shadow: var(--focus-ring);
+}
+
+/* 气泡操作条：键盘 Tab 进入气泡内时也显形（不只 hover） */
+.bubble-row:focus-within .bubble-actions { opacity: 1; pointer-events: auto; }
+
+/* 断线重连提示条（固定在聊天区顶部，不随消息滚动） */
+.conn-banner {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  margin: var(--space-2) var(--space-8) 0; padding: 6px var(--space-3);
+  background: color-mix(in srgb, var(--amber-500) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--amber-500) 35%, transparent);
+  border-radius: var(--radius-md); color: var(--amber-primary-hover);
+  font-size: var(--fs-sm); animation: msg-in 200ms var(--ease-out);
+}
+.conn-banner-close {
+  border: none; background: none; cursor: pointer; color: inherit;
+  display: inline-flex; align-items: center; line-height: 0; padding: 2px;
+  border-radius: 50%;
+}
+.conn-banner-close:hover { color: var(--danger); }
+
+/* Markdown 渲染块（消息完成后）：标题/列表/引用/表格/图片 */
+.bubble-md { margin: 0; word-break: break-word; font-size: var(--fs-body); line-height: 1.6; }
+.bubble-md > :first-child { margin-top: 0; }
+.bubble-md > :last-child { margin-bottom: 0; }
+.bubble-md p { margin: 6px 0; }
+.bubble-md h1, .bubble-md h2, .bubble-md h3,
+.bubble-md h4, .bubble-md h5, .bubble-md h6 {
+  margin: 12px 0 6px; line-height: 1.4; font-weight: 700;
+}
+.bubble-md h1 { font-size: var(--fs-title); }
+.bubble-md h2 { font-size: var(--fs-md); }
+.bubble-md h3, .bubble-md h4 { font-size: var(--fs-body); }
+.bubble-md h5, .bubble-md h6 { font-size: var(--fs-base); }
+.bubble-md ul, .bubble-md ol { margin: 6px 0; padding-left: 22px; }
+.bubble-md li { margin: 2px 0; }
+.bubble-md li > p { margin: 0; }
+.bubble-md blockquote {
+  margin: 6px 0; padding: 2px 12px;
+  border-left: 3px solid var(--amber-primary); color: var(--text-secondary);
+}
+.bubble-md table { border-collapse: collapse; margin: 6px 0; font-size: var(--fs-sm); }
+.bubble-md th, .bubble-md td { border: 1px solid var(--border-subtle); padding: 4px 10px; }
+.bubble-md img { max-width: 100%; border-radius: var(--radius-sm); }
+.bubble-md hr { border: none; border-top: 1px solid var(--border-subtle); margin: 10px 0; }

@@ -50,6 +50,15 @@ export interface MessagePage {
   beforeSeq?: number
 }
 
+/**
+ * SQL 片段：消息 content_blocks 里存在 type=text 块。
+ * 纯 tool_call 的 assistant 消息（无文本块）不计未读、不作会话预览。
+ */
+const HAS_TEXT_BLOCK_SQL = `EXISTS (
+  SELECT 1 FROM json_each(messages.content_blocks)
+  WHERE json_extract(value, '$.type') = 'text'
+)`
+
 function parseJsonArray(value: string): unknown[] {
   const parsed: unknown = JSON.parse(value)
   return Array.isArray(parsed) ? parsed : []
@@ -180,10 +189,11 @@ export class SessionStore {
     this.db.prepare('DELETE FROM conversations WHERE id = ?').run(id)
   }
 
-  /** 未读数：seq 大于 lastReadSeq 且非用户发送的消息条数。 */
+  /** 未读数：seq 大于 lastReadSeq、非用户发送、且含文本块（排除纯 tool_call 行）的消息条数。 */
   unreadCount(conversationId: string, lastReadSeq: number): number {
     const row = this.db.prepare(
-      'SELECT COUNT(*) AS count FROM messages WHERE conversation_id = ? AND seq > ? AND sender_type != \'user\'',
+      `SELECT COUNT(*) AS count FROM messages
+       WHERE conversation_id = ? AND seq > ? AND sender_type != 'user' AND ${HAS_TEXT_BLOCK_SQL}`,
     ).get(conversationId, lastReadSeq) as { count: number }
     return Number(row.count)
   }
@@ -205,15 +215,18 @@ export class SessionStore {
 
   /**
    * 会话列表 + 末条预览 + 未读数（单查询，避免 N+1）。
-   * 未读 = seq > last_read_seq 且非用户发送的消息数。
+   * 未读 = seq > last_read_seq、非用户发送、且含文本块的消息数；
+   * 预览取最近一条含文本块的消息（跳过纯 tool_call 行）。
    */
   listConversationsWithPreview(limit = 50): (Conversation & { lastMessagePreview: string; unreadCount: number })[] {
     const rows = this.db.prepare(`
       SELECT c.*,
         (SELECT content_blocks FROM messages
-          WHERE conversation_id = c.id ORDER BY seq DESC LIMIT 1) AS last_blocks,
+          WHERE conversation_id = c.id AND ${HAS_TEXT_BLOCK_SQL}
+          ORDER BY seq DESC LIMIT 1) AS last_blocks,
         (SELECT COUNT(*) FROM messages
-          WHERE conversation_id = c.id AND seq > c.last_read_seq AND sender_type != 'user') AS unread_count
+          WHERE conversation_id = c.id AND seq > c.last_read_seq AND sender_type != 'user'
+            AND ${HAS_TEXT_BLOCK_SQL}) AS unread_count
       FROM conversations c
       ORDER BY c.updated_at DESC
       LIMIT ?

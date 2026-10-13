@@ -133,6 +133,16 @@ export function App() {
         <h2>无法连接 RyAgent 后端</h2>
         <p>{loadError}</p>
         <p>请确认桌面服务已启动（Electron 内嵌或 <code>pnpm --filter @ryagent/server dev</code>）。</p>
+        <button
+          className="btn btn-primary"
+          onClick={() => {
+            setLoadError(undefined)
+            setListLoading(true)
+            void refresh()
+          }}
+        >
+          重试
+        </button>
       </div>
     )
   }
