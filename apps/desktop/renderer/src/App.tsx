@@ -345,6 +345,9 @@ export function App() {
             onSelect={(id) => {
               setActiveId(id)
             }}
+            onGoContacts={() => {
+              setTab('contacts')
+            }}
           />
         </aside>
       )}

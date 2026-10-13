@@ -638,6 +638,32 @@ describe('RyAgentServer', () => {
     }
   })
 
+  it('取消生成：/cancel 幂等，空闲返回 cancelled=false，会话不存在返回 404', async () => {
+    const { server, base } = await startServer(['单聊回复。'])
+    try {
+      await fetch(`${base}/api/agents/ryen`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'mock', model: 'mock' }),
+      })
+      const created = await postJson(base, '/api/conversations', { kind: 'direct', agentId: 'ryen' })
+      const conversationId = (created.body as { conversation: { id: string } }).conversation.id
+
+      const idle = await postJson(base, `/api/conversations/${conversationId}/cancel`, {})
+      expect(idle.status).toBe(200)
+      expect((idle.body as { cancelled: boolean }).cancelled).toBe(false)
+
+      await postJson(base, `/api/conversations/${conversationId}/messages`, { text: '在吗' })
+      const during = await postJson(base, `/api/conversations/${conversationId}/cancel`, {})
+      expect(during.status).toBe(200)
+
+      const missing = await postJson(base, '/api/conversations/nope/cancel', {})
+      expect(missing.status).toBe(404)
+    } finally {
+      await server.close()
+    }
+  })
+
   it('close() 幂等：重复调用复用同一停机流程，不抛错', async () => {
     const { server } = await startServer([])
     await Promise.all([server.close(), server.close()])

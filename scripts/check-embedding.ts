@@ -7,23 +7,13 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-function loadDotEnv(): Record<string, string> {
-  try {
-    const text = readFileSync(join(import.meta.dirname, '..', '.env'), 'utf8')
-    const vars: Record<string, string> = {}
-    for (const line of text.split(/\r?\n/)) {
-      const match = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/.exec(line)
-      if (match !== null && match[1] !== undefined && (match[2] ?? '').length > 0) {
-        vars[match[1]] = (match[2] ?? '').replace(/^["']|["']$/g, '')
-      }
-    }
-    return vars
-  } catch {
-    return {}
-  }
+// .env 交给 Node 标准库解析（引擎要求 ^22.19||>=24），不再各写一份正则。
+try {
+  process.loadEnvFile(join(import.meta.dirname, '..', '.env'))
+} catch {
+  // 没有 .env 就只用环境变量。
 }
-
-const env = { ...loadDotEnv(), ...(process.env as Record<string, string>) }
+const env = process.env as Record<string, string>
 const apiKey = env.SILICONFLOW_API_KEY
 if (apiKey === undefined || apiKey.length === 0) {
   console.log('[check-embedding] 未找到 SILICONFLOW_API_KEY，跳过（降级路径：纯 FTS5）。')

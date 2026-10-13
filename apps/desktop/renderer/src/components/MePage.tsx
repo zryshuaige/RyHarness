@@ -7,6 +7,98 @@ import { Modal } from './Modal.tsx'
 interface MeApi {
   listAgentMemories(agentId: string): Promise<{ agent: MemoryRow[]; shared: MemoryRow[] }>
   patchAgent(id: string, patch: Record<string, unknown>): Promise<{ agent: AgentDef }>
+  setApiKey(providerId: string, apiKey: string): Promise<{ providerId: string; configured: boolean }>
+}
+
+/**
+ * 供应商行：可展开。未配置凭据时直接在这里填 key（此前只有一行不可点的
+ * 状态文字 + 一个点不动的箭头，比没有还糟）。
+ */
+function ProviderRow({ provider, api, onSaved }: { provider: ProviderInfo; api: MeApi; onSaved: () => void }) {
+  const [open, setOpen] = useState(false)
+  const [key, setKey] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | undefined>(undefined)
+  return (
+    <div className="me-row provider-row">
+      <button
+        type="button"
+        className="me-row-btn provider-row-head"
+        aria-expanded={open}
+        onClick={() => {
+          setOpen((prev) => {
+            return !prev
+          })
+        }}
+      >
+        <span className={`status-dot ${provider.apiKeyConfigured ? 'ok' : 'warn'}`} aria-hidden="true" />
+        <span className="me-row-body">
+          <span className="me-row-title">{provider.displayName}</span>
+          <span className="me-row-sub">
+            {provider.apiKeyConfigured ? `已配置 key · ${provider.models.length} 个模型` : '未配置 key——点这里填上'}
+          </span>
+        </span>
+        <span className="me-chevron" aria-hidden="true">
+          {open ? '⌄' : '›'}
+        </span>
+      </button>
+      {open && (
+        <div className="provider-detail">
+          {provider.apiKeyConfigured ? (
+            <ul className="model-list">
+              {provider.models.map((model) => {
+                return (
+                  <li key={model.id}>
+                    {model.name ?? model.id}
+                    <small>{model.id}</small>
+                  </li>
+                )
+              })}
+            </ul>
+          ) : (
+            <>
+              <div className="apikey-row">
+                <input
+                  type="password"
+                  value={key}
+                  placeholder="粘贴 API Key"
+                  autoComplete="off"
+                  onChange={(event) => {
+                    setKey(event.target.value)
+                  }}
+                />
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={busy || key.trim().length === 0}
+                  onClick={() => {
+                    setBusy(true)
+                    setError(undefined)
+                    api
+                      .setApiKey(provider.id, key.trim())
+                      .then(() => {
+                        setKey('')
+                        onSaved()
+                      })
+                      .catch((cause: unknown) => {
+                        setError(cause instanceof Error ? cause.message : String(cause))
+                      })
+                      .finally(() => {
+                        setBusy(false)
+                      })
+                  }}
+                >
+                  {busy ? '保存中' : '保存'}
+                </button>
+              </div>
+              {error !== undefined && <p className="apikey-error">{error}</p>}
+              <p className="provider-note">Key 只写在本机配置文件（api-keys.json，权限 0600）。</p>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
 }
 
 /** 「我的」页：用户卡（昵称可编辑）、设置分组、供应商状态灯、共享画像、关于。 */
@@ -124,20 +216,14 @@ export function MePage({
               </span>
             </div>
             {providers.map((provider) => (
-              <div key={provider.id} className="me-row">
-                <span className={`status-dot ${provider.apiKeyConfigured ? 'ok' : 'warn'}`} aria-hidden="true" />
-                <div className="me-row-body">
-                  <div className="me-row-title">{provider.displayName}</div>
-                  <div className="me-row-sub">
-                    {provider.apiKeyConfigured
-                      ? `已配置 key · ${provider.models.length} 个模型`
-                      : '未配置 key——设置 SILICONFLOW_API_KEY 环境变量后重启'}
-                  </div>
-                </div>
-                <span className="me-chevron" aria-hidden="true">
-                  ›
-                </span>
-              </div>
+              <ProviderRow
+                key={provider.id}
+                provider={provider}
+                api={api}
+                onSaved={() => {
+                  onRyenPatched?.()
+                }}
+              />
             ))}
             <button
               type="button"

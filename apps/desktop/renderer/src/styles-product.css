@@ -64,6 +64,61 @@
   white-space: nowrap;
 }
 
+/* ---- 生成中：停止按钮 + 已用时 ----
+   此前流式期间只有一个静止光标，模型卡住时用户完全无从判断。 */
+.stop-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+  animation: stop-btn-in 220ms var(--ease-spring, cubic-bezier(0.34, 1.4, 0.64, 1));
+}
+
+.stop-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: currentColor;
+  animation: stop-pulse 1.6s ease-in-out infinite;
+}
+
+.stop-elapsed {
+  color: var(--text-tertiary, var(--text-secondary));
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-xs, 11px);
+}
+
+@keyframes stop-btn-in {
+  from {
+    opacity: 0;
+    transform: translateX(6px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes stop-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stop-dot {
+    animation: none;
+  }
+
+  .stop-btn {
+    animation: none;
+  }
+}
+
 /* ---- 首启 API Key 配置卡 ---- */
 .apikey-card {
   max-width: 520px;
@@ -109,4 +164,136 @@
   gap: var(--space-2);
   margin-top: var(--space-4);
   justify-content: center;
+}
+/* ---- Toast：轻提示 ----
+   反馈/复制/停止等瞬时反馈的统一出口；退场走 .is-leaving（全局退场体系）。 */
+.toast-host {
+  position: absolute;
+  bottom: var(--space-5);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  z-index: 40;
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 420px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-3, 0 8px 24px rgb(0 0 0 / 0.14));
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  animation: toast-in 200ms var(--ease-out, cubic-bezier(0.22, 0.8, 0.36, 1));
+}
+
+.toast.is-leaving {
+  animation: toast-out 150ms var(--ease-out, cubic-bezier(0.22, 0.8, 0.36, 1)) forwards;
+}
+
+.toast-success {
+  box-shadow: var(--shadow-3, 0 8px 24px rgb(0 0 0 / 0.14)), 0 0 0 1px
+    color-mix(in srgb, var(--accent, #b45309) 26%, transparent);
+}
+
+.toast-error {
+  color: var(--danger, #b42318);
+}
+
+.toast-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.toast-close {
+  border: none;
+  background: none;
+  color: var(--text-tertiary, var(--text-secondary));
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.toast-close:hover {
+  color: var(--text-primary);
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes toast-out {
+  to {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast,
+  .toast.is-leaving {
+    animation: none;
+  }
+}
+
+/* ---- 左栏空态：顶部对齐 + 下一步引导 ---- */
+.empty-state-inline {
+  min-height: 0;
+  margin-top: var(--space-6);
+  text-align: center;
+}
+
+/* ---- 供应商行（可展开 + 内联配置 key） ---- */
+.provider-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-2);
+}
+
+.provider-row-head {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.provider-detail {
+  padding: var(--space-2) var(--space-3) var(--space-3);
+}
+
+.model-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--fs-sm);
+}
+
+.model-list small {
+  display: block;
+  color: var(--text-tertiary, var(--text-secondary));
+  font-size: var(--fs-xs, 11px);
+}
+
+.provider-note {
+  margin: var(--space-2) 0 0;
+  color: var(--text-tertiary, var(--text-secondary));
+  font-size: var(--fs-xs, 11px);
 }

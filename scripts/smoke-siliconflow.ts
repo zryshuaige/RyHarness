@@ -20,23 +20,13 @@ import type { StreamChunk, ToolCallBlock } from '@ryagent/llm'
 import LlmRuntime, { createUserMessage } from '@ryagent/llm'
 import { apply } from '@ryagent/llm-openai'
 
-function loadDotEnv(): Record<string, string> {
-  try {
-    const text = readFileSync(join(import.meta.dirname, '..', '.env'), 'utf8')
-    const vars: Record<string, string> = {}
-    for (const line of text.split(/\r?\n/)) {
-      const match = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/.exec(line)
-      if (match === null || match[1] === undefined) continue
-      const value = (match[2] ?? '').replace(/^["']|["']$/g, '')
-      if (match[1].length > 0 && value.length > 0) vars[match[1]] = value
-    }
-    return vars
-  } catch {
-    return {}
-  }
+// .env 交给 Node 标准库解析（引擎要求 ^22.19||>=24），不再各写一份正则。
+try {
+  process.loadEnvFile(join(import.meta.dirname, '..', '.env'))
+} catch {
+  // 没有 .env 就只用环境变量。
 }
-
-const env = { ...loadDotEnv(), ...(process.env as Record<string, string>) }
+const env = process.env as Record<string, string>
 const apiKey = env.SILICONFLOW_API_KEY
 if (apiKey === undefined || apiKey.length === 0) {
   console.log('[smoke] 未找到 SILICONFLOW_API_KEY（环境变量或 RyAgent/.env），跳过 SiliconFlow 冒烟。')

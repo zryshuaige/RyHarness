@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AgentDef, ApiClient, Conversation, MessageRow } from '../api.ts'
 import { messageText } from '../api.ts'
+import { toast } from '../lib/toast.ts'
 import type { ChatStore, UiMessage } from '../store.ts'
 import { useChat } from '../store.ts'
 import { Cat } from './Cat.tsx'
 import { ChatInput } from './ChatInput.tsx'
 import { Icon } from './Icon.tsx'
 import { MessageBubble, RelayChain } from './MessageBubble.tsx'
+import { ToastHost } from './ToastHost.tsx'
 import { TypingDots } from './TypingDots.tsx'
 
 function formatTime(ts: number): string {
@@ -343,7 +345,16 @@ export function ChatView({
           userText: userText.slice(0, 300),
           assistantText: textOf(target).slice(0, 300),
         })
-        .catch(() => {})
+        .then(() => {
+          // 反馈是"自我进化"的入口，必须让用户看见它去了哪。
+          const who = agentById(target.senderId)?.name ?? '它'
+          toast.success(
+            signal === 'thumb_up' ? `已记下这条经验，${who} 会在类似场景里用上` : `已告诉 ${who} 这次哪里不对，会调整`,
+          )
+        })
+        .catch((error: unknown) => {
+          toast.error(`反馈没送出去：${error instanceof Error ? error.message : String(error)}`)
+        })
     },
     [api, conversation.id],
   )
@@ -478,10 +489,17 @@ export function ChatView({
                 void send(text)
               }}
               disabled={snapshot.queueing}
+              streaming={Object.keys(snapshot.typing).length > 0}
+              onStop={() => {
+                void api.cancelTurn(conversation.id).catch(() => {
+                  // 停止失败不该打扰用户：服务端本来就会在 turn 结束时清理。
+                })
+              }}
             />
           </div>
         </div>
       </div>
+      <ToastHost />
     </section>
   )
 }

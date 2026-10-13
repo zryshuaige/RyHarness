@@ -19,10 +19,10 @@ import { RENDERER_MOUNT, RendererAssets } from './renderer-assets.ts'
 const here = dirname(fileURLToPath(import.meta.url))
 
 /**
- * 启动时解析 .env（KEY=VALUE，环境变量优先，绝不覆盖已存在的 process.env）。
+ * 启动时加载 .env（KEY=VALUE）。用 Node 自带的 process.loadEnvFile——引擎要求
+ * ^22.19||>=24，自带实现语义明确（已存在的环境变量优先），不再手写解析器。
  * 候选路径按序查找：RYAGENT_ENV_FILE → userData/.env → 应用目录/.env →
- * 仓库根（dev 模式 ../../.env）→ cwd/.env。保证 Electron 内嵌 server 能
- * 读到 SILICONFLOW_API_KEY 等配置。
+ * 仓库根（dev 模式 ../../.env）→ cwd/.env。
  */
 function loadDotEnvIntoProcess(): void {
   const candidates = [
@@ -36,13 +36,11 @@ function loadDotEnvIntoProcess(): void {
   })
   for (const candidate of candidates) {
     if (!existsSync(candidate)) continue
-    for (const line of readFileSync(candidate, 'utf8').split(/\r?\n/)) {
-      const match = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/.exec(line)
-      if (match === null || match[1] === undefined) continue
-      const value = (match[2] ?? '').replace(/^["']|["']$/g, '')
-      if (value.length > 0 && process.env[match[1]] === undefined) {
-        process.env[match[1]] = value
-      }
+    try {
+      process.loadEnvFile(candidate)
+    } catch (error) {
+      // 解析失败不应挡住启动：凭据缺失由 provider 状态灯与首启配置卡兜底。
+      console.error(`[ryagent] failed to load env file ${candidate}:`, error)
     }
     return
   }

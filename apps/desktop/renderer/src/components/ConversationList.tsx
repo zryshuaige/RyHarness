@@ -13,12 +13,15 @@ export function ConversationList({
   activeId,
   loading,
   onSelect,
+  onGoContacts,
 }: {
   conversations: Conversation[]
   agents: AgentDef[]
   activeId: string | undefined
   loading?: boolean
   onSelect: (id: string) => void
+  /** 空态里的"去通讯录"入口（此前只有一句提示，用户不知道往哪走）。 */
+  onGoContacts?: () => void
 }) {
   const [query, setQuery] = useState('')
   const nameOf = (id: string): string => {
@@ -82,9 +85,16 @@ export function ConversationList({
         {loading === true ? (
           <ConversationSkeleton />
         ) : filtered.length === 0 ? (
-          <div className="empty-state" style={{ minHeight: 220 }}>
+          <div className="empty-state empty-state-inline">
             <h3>{conversations.length === 0 ? '还没有会话' : '没有匹配的会话'}</h3>
-            <p>{conversations.length === 0 ? '去通讯录找 agent 聊聊吧。' : '换个关键词试试。'}</p>
+            <p>{conversations.length === 0 ? '先去通讯录看看有什么助理。' : '换个关键词试试。'}</p>
+            {conversations.length === 0 && onGoContacts !== undefined && (
+              <div className="empty-state-actions">
+                <button type="button" className="btn" onClick={onGoContacts}>
+                  去通讯录
+                </button>
+              </div>
+            )}
           </div>
         ) : (
           filtered.map((conversation) => (

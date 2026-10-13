@@ -1,5 +1,5 @@
 import type { KeyboardEvent } from 'react'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { filterMentions, mentionQueryAt } from '../store.ts'
 import { Avatar } from './avatars/Avatar.tsx'
 import { Icon } from './Icon.tsx'
@@ -20,10 +20,15 @@ export function ChatInput({
   members,
   onSend,
   disabled,
+  streaming,
+  onStop,
 }: {
   members: MentionMember[]
   onSend: (text: string) => void
   disabled?: boolean
+  /** 对方正在生成：显示停止按钮与"已用时"。 */
+  streaming?: boolean
+  onStop?: () => void
 }) {
   const [text, setText] = useState('')
   const [cursor, setCursor] = useState(0)
@@ -34,6 +39,24 @@ export function ChatInput({
 
   const mention = dismissed ? null : mentionQueryAt(text, cursor)
   const candidates = mention === null ? [] : filterMentions(members, mention.query).slice(0, 6)
+  const [busyElapsed, setBusyElapsed] = useState<number | undefined>(undefined)
+
+  // 生成中的秒表：让"正在生成"有进度感，也给用户一个判断卡死的依据
+  // （实测出现过 40 秒无任何反馈，用户只能以为应用死了）。
+  useEffect(() => {
+    if (streaming !== true) {
+      setBusyElapsed(undefined)
+      return
+    }
+    const started = Date.now()
+    setBusyElapsed(0)
+    const timer = setInterval(() => {
+      setBusyElapsed(Math.floor((Date.now() - started) / 1000))
+    }, 1000)
+    return () => {
+      clearInterval(timer)
+    }
+  }, [streaming])
 
   /** textarea 自动增高（上限 6 行 ≈ 148px）。 */
   const autoGrow = (node: HTMLTextAreaElement | null): void => {
@@ -146,6 +169,13 @@ export function ChatInput({
         <Icon name="send" size={16} />
         <span>发送</span>
       </button>
+      {busyElapsed !== undefined && onStop !== undefined && (
+        <button type="button" className="btn stop-btn" onClick={onStop} title="停止生成（Esc）" aria-label="停止生成">
+          <span className="stop-dot" aria-hidden="true" />
+          停止
+          <span className="stop-elapsed">{busyElapsed}s</span>
+        </button>
+      )}
     </>
   )
 }
