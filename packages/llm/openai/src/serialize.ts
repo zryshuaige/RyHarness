@@ -61,7 +61,7 @@ function serializeMessage(message: RequestMessage): OpenAiWireMessage {
         // text collapses to null. Dropping the text would silently lose what
         // the model said before calling tools.
         content: toolCalls.length > 0 && text.length === 0 ? null : text,
-        ...toolCalls.length === 0 ? {} : { tool_calls: toolCalls },
+        ...(toolCalls.length === 0 ? {} : { tool_calls: toolCalls }),
       }
     }
     case 'tool': {
@@ -86,13 +86,13 @@ function serializeUserContent(content: RequestMessage['content']): string {
   for (const block of content) {
     if (block.type === 'text') parts.push(block.text)
     else if (block.type === 'image') {
-      parts.push(`[Image${block.attachment.name === undefined ? '' : ` "${block.attachment.name}"`}`
-        + ` ${block.attachment.width}x${block.attachment.height}, ${block.attachment.bytes} bytes]`)
-    }
-    else if (block.type === 'file') {
+      parts.push(
+        `[Image${block.attachment.name === undefined ? '' : ` "${block.attachment.name}"`}` +
+          ` ${block.attachment.width}x${block.attachment.height}, ${block.attachment.bytes} bytes]`,
+      )
+    } else if (block.type === 'file') {
       parts.push(`[File "${block.attachment.name}", ${block.attachment.bytes} bytes]`)
-    }
-    else if (block.type === 'reasoning') parts.push(block.text)
+    } else if (block.type === 'reasoning') parts.push(block.text)
   }
   return parts.join('\n')
 }
@@ -129,9 +129,9 @@ export function serializeRequest(options: GenerateOptions): OpenAiChatRequest {
     messages,
     stream: true,
     stream_options: { include_usage: true },
-    ...tools === undefined ? {} : { tools },
-    ...options.temperature === undefined ? {} : { temperature: options.temperature },
-    ...options.maxTokens === undefined ? {} : { max_tokens: options.maxTokens },
-    ...options.stop === undefined || options.stop.length === 0 ? {} : { stop: [...options.stop] },
+    ...(tools === undefined ? {} : { tools }),
+    ...(options.temperature === undefined ? {} : { temperature: options.temperature }),
+    ...(options.maxTokens === undefined ? {} : { max_tokens: options.maxTokens }),
+    ...(options.stop === undefined || options.stop.length === 0 ? {} : { stop: [...options.stop] }),
   }
 }

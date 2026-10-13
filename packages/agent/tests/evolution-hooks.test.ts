@@ -1,11 +1,15 @@
-import { describe, expect, it } from 'vitest'
-import type { LlmRuntime, StreamChunk } from '@ryagent/llm'
-import { AgentLoop } from '@ryagent/agent'
 import type { AgentDefinition, AgentEvolutionHooks, EvolutionTurnData } from '@ryagent/agent'
+import { AgentLoop } from '@ryagent/agent'
+import type { LlmRuntime, StreamChunk } from '@ryagent/llm'
+import { describe, expect, it } from 'vitest'
 
 const DEFINITION: AgentDefinition = {
-  id: 'a1', name: 'Tester', systemPrompt: '你是测试 agent。',
-  provider: 'mock', model: 'mock', tools: [],
+  id: 'a1',
+  name: 'Tester',
+  systemPrompt: '你是测试 agent。',
+  provider: 'mock',
+  model: 'mock',
+  tools: [],
 }
 
 function mockLlm(): LlmRuntime {
@@ -45,7 +49,9 @@ describe('AgentLoop × 自我进化', () => {
       },
     } as unknown as LlmRuntime
     const loop = new AgentLoop({ definition: DEFINITION, llm, tools: [], evolution })
-    for await (const _ of loop.run({ text: '干活' }, { workspaceRoot: process.cwd() })) { /* drain */ }
+    for await (const _ of loop.run({ text: '干活' }, { workspaceRoot: process.cwd() })) {
+      /* drain */
+    }
     expect(system).toContain('你是测试 agent。')
     expect(system).toContain('[经验手册]')
     expect(system).toContain('策略：先读后写')
@@ -55,7 +61,9 @@ describe('AgentLoop × 自我进化', () => {
   it('finally 入队轨迹：含 user/assistant 文本、工具结果、llmError、注入归因', async () => {
     const evolution = recordingEvolution()
     const loop = new AgentLoop({ definition: DEFINITION, llm: mockLlm(), tools: [], evolution })
-    for await (const _ of loop.run({ text: '写文件' }, { workspaceRoot: process.cwd() })) { /* drain */ }
+    for await (const _ of loop.run({ text: '写文件' }, { workspaceRoot: process.cwd() })) {
+      /* drain */
+    }
     expect(evolution.enqueued).toHaveLength(1)
     const turn = evolution.enqueued[0]!
     expect(turn.userText).toBe('写文件')
@@ -70,6 +78,7 @@ describe('AgentLoop × 自我进化', () => {
     const evolution = recordingEvolution()
     const failing = {
       stream() {
+        // biome-ignore lint/correctness/useYield: 测试替身——流立刻失败，不需要 yield
         return (async function* (): AsyncGenerator<StreamChunk> {
           throw new Error('boom')
         })()
@@ -88,7 +97,9 @@ describe('AgentLoop × 自我进化', () => {
 
   it('compile 抛错静默降级（对话不受影响）', async () => {
     const evolution: AgentEvolutionHooks = {
-      async compile() { throw new Error('evolve down') },
+      async compile() {
+        throw new Error('evolve down')
+      },
       enqueueTurn() {},
     }
     const loop = new AgentLoop({ definition: DEFINITION, llm: mockLlm(), tools: [], evolution })

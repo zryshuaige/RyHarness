@@ -1,9 +1,15 @@
-import { describe, expect, it } from 'vitest'
-import type { GenerateOptions, StreamChunk, ToolCallId } from '@ryagent/llm'
 import { brandString } from '@ryagent/brand'
-import { createUserMessage, createAssistantMessage, createToolResultMessage, createDeveloperMessage, LlmError } from '@ryagent/llm'
-import { OpenAiAdapter, serializeRequest } from '@ryagent/llm-openai'
+import type { GenerateOptions, StreamChunk, ToolCallId } from '@ryagent/llm'
+import {
+  createAssistantMessage,
+  createDeveloperMessage,
+  createToolResultMessage,
+  createUserMessage,
+  LlmError,
+} from '@ryagent/llm'
 import type { OpenAiChatRequest } from '@ryagent/llm-openai'
+import { OpenAiAdapter, serializeRequest } from '@ryagent/llm-openai'
+import { describe, expect, it } from 'vitest'
 
 function sseResponse(...lines: string[]): Response {
   const encoder = new TextEncoder()
@@ -64,7 +70,12 @@ describe('OpenAiAdapter', () => {
     })
     const chunks = await collect(adapter.stream(baseOptions))
     expect(chunks.at(-1)).toEqual({ type: 'finish', reason: { kind: 'stop' } })
-    expect(chunks.filter((c) => c.type === 'text-delta').map((c) => c.type === 'text-delta' && c.text).join('')).toBe('Hi')
+    expect(
+      chunks
+        .filter((c) => c.type === 'text-delta')
+        .map((c) => c.type === 'text-delta' && c.text)
+        .join(''),
+    ).toBe('Hi')
     expect(chunks.some((c) => c.type === 'usage' && c.usage.totalTokens === 4)).toBe(true)
     expect(seenBody).toMatchObject({
       model: 'test-model',
@@ -74,12 +85,25 @@ describe('OpenAiAdapter', () => {
   })
 
   it('round-trips a tool call and its result', async () => {
-    const adapter = makeAdapter(async () => sseResponse(
-      data({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'c1', type: 'function', function: { name: 'echo', arguments: '' } }] } }] }),
-      data({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: '{"text":"x"}' } }] } }] }),
-      data({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] }),
-      'data: [DONE]\n\n',
-    ))
+    const adapter = makeAdapter(async () =>
+      sseResponse(
+        data({
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [{ index: 0, id: 'c1', type: 'function', function: { name: 'echo', arguments: '' } }],
+              },
+            },
+          ],
+        }),
+        data({
+          choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: '{"text":"x"}' } }] } }],
+        }),
+        data({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] }),
+        'data: [DONE]\n\n',
+      ),
+    )
     const options: GenerateOptions = {
       ...baseOptions,
       messages: [
@@ -103,7 +127,11 @@ describe('OpenAiAdapter', () => {
     await collect(capturing.stream(options))
     expect(seenBody?.messages).toEqual([
       { role: 'user', content: 'hello' },
-      { role: 'assistant', content: null, tool_calls: [{ id: 'c1', type: 'function', function: { name: 'echo', arguments: '{"text":"x"}' } }] },
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{ id: 'c1', type: 'function', function: { name: 'echo', arguments: '{"text":"x"}' } }],
+      },
       { role: 'tool', tool_call_id: 'c1', content: 'x' },
     ])
     // The adapter itself reports tool-call assembly through StreamChunk blocks.
@@ -117,10 +145,13 @@ describe('OpenAiAdapter', () => {
   })
 
   it('maps 429 with quota wording to QUOTA and honors retry-after', async () => {
-    const adapter = makeAdapter(async () => new Response(
-      JSON.stringify({ error: { message: 'Insufficient balance', code: 'balance' } }),
-      { status: 429, headers: { 'retry-after': '30' } },
-    ))
+    const adapter = makeAdapter(
+      async () =>
+        new Response(JSON.stringify({ error: { message: 'Insufficient balance', code: 'balance' } }), {
+          status: 429,
+          headers: { 'retry-after': '30' },
+        }),
+    )
     const error = await collect(adapter.stream(baseOptions)).catch((e: unknown) => e)
     expect(error).toBeInstanceOf(LlmError)
     expect((error as LlmError).code).toBe('QUOTA')
@@ -134,7 +165,9 @@ describe('OpenAiAdapter', () => {
 
   it('fails with MISSING_CREDENTIAL when the environment variable is absent', async () => {
     const adapter = new OpenAiAdapter({
-      providers: { test: { baseURL: 'https://example.test/v1', apiKeyEnv: 'DEFINITELY_UNSET_KEY', models: [{ id: 'm' }] } },
+      providers: {
+        test: { baseURL: 'https://example.test/v1', apiKeyEnv: 'DEFINITELY_UNSET_KEY', models: [{ id: 'm' }] },
+      },
       env: () => undefined,
     })
     const error = await collect(adapter.stream(baseOptions)).catch((e: unknown) => e)
@@ -173,7 +206,9 @@ describe('serializeRequest', () => {
       { role: 'system', content: '[Tool "echo" added]' },
       { role: 'system', content: '[Tool "old" removed]' },
     ])
-    expect(request.tools).toEqual([{ type: 'function', function: { name: 'echo', description: 'echo', parameters: { type: 'object' } } }])
+    expect(request.tools).toEqual([
+      { type: 'function', function: { name: 'echo', description: 'echo', parameters: { type: 'object' } } },
+    ])
     expect(request).toMatchObject({ temperature: 0.5, max_tokens: 64, stream: true })
   })
 
@@ -181,7 +216,13 @@ describe('serializeRequest', () => {
     const request = serializeRequest({
       provider: 'test',
       model: 'm',
-      messages: [createToolResultMessage({ callId: brandString<ToolCallId>('c9'), content: [{ type: 'text', text: 'boom' }], isError: true })],
+      messages: [
+        createToolResultMessage({
+          callId: brandString<ToolCallId>('c9'),
+          content: [{ type: 'text', text: 'boom' }],
+          isError: true,
+        }),
+      ],
     })
     expect(request.messages).toEqual([{ role: 'tool', tool_call_id: 'c9', content: '[Tool error]\nboom' }])
   })

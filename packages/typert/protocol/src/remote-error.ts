@@ -40,9 +40,12 @@ export class RemoteError<Code extends RemoteErrorCode = RemoteErrorCode> extends
 export function remoteErrorOf(value: unknown): RemoteFailure | undefined {
   // Structural, not instanceof: an Error thrown in another realm (iframe, VM)
   // fails instanceof Error here, so the marker plus the code field is the test.
-  if (typeof value === 'object' && value !== null
-    && (value as { isDSHRemoteError?: unknown }).isDSHRemoteError === true
-    && typeof (value as { code?: unknown }).code === 'string') {
+  if (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as { isDSHRemoteError?: unknown }).isDSHRemoteError === true &&
+    typeof (value as { code?: unknown }).code === 'string'
+  ) {
     return value as RemoteFailure
   }
   return undefined

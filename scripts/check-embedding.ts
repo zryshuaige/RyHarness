@@ -23,7 +23,7 @@ function loadDotEnv(): Record<string, string> {
   }
 }
 
-const env = { ...loadDotEnv(), ...process.env as Record<string, string> }
+const env = { ...loadDotEnv(), ...(process.env as Record<string, string>) }
 const apiKey = env.SILICONFLOW_API_KEY
 if (apiKey === undefined || apiKey.length === 0) {
   console.log('[check-embedding] 未找到 SILICONFLOW_API_KEY，跳过（降级路径：纯 FTS5）。')
@@ -39,9 +39,11 @@ for (const model of MODELS) {
     body: JSON.stringify({ model, input: ['用户养了一只橘猫，名叫布丁', '今天天气不错'] }),
   })
   const elapsed = Date.now() - started
-  const body = await response.json() as { data?: { embedding: number[] }[]; error?: { message?: string } }
+  const body = (await response.json()) as { data?: { embedding: number[] }[]; error?: { message?: string } }
   if (response.ok && body.data !== undefined) {
-    console.log(`[check-embedding] ${model}: dim=${body.data[0]!.embedding.length}, 批量=${body.data.length}, ${elapsed}ms ✓`)
+    console.log(
+      `[check-embedding] ${model}: dim=${body.data[0]!.embedding.length}, 批量=${body.data.length}, ${elapsed}ms ✓`,
+    )
   } else {
     console.log(`[check-embedding] ${model}: 失败 ${body.error?.message ?? response.status}`)
   }

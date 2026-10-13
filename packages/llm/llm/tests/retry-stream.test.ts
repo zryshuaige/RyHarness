@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest'
 import { Context } from '@ryagent/cordis'
-import LlmRuntime, { LlmAdapter, LlmError, resolveRetryPolicy, streamWithRetry } from '@ryagent/llm'
 import type { ResolvedRetryPolicy, StreamChunk } from '@ryagent/llm'
+import LlmRuntime, { LlmAdapter, LlmError, resolveRetryPolicy, streamWithRetry } from '@ryagent/llm'
+import { describe, expect, it } from 'vitest'
 
 /** 快速退避策略：测试不等真实 backoff。 */
 const FAST: ResolvedRetryPolicy = resolveRetryPolicy(
@@ -17,7 +17,7 @@ function errorFinish(code: string, providerRetryAfterMs?: number): StreamChunk {
       failure: {
         message: `failure ${code}`,
         code,
-        ...providerRetryAfterMs === undefined ? {} : { providerRetryAfterMs },
+        ...(providerRetryAfterMs === undefined ? {} : { providerRetryAfterMs }),
       },
     },
   }
@@ -35,9 +35,13 @@ function scriptedOpen(scripts: StreamChunk[][]): { open: () => AsyncIterable<Str
   return {
     open() {
       const chunks = scripts[calls++] ?? scripts[scripts.length - 1] ?? []
-      return (async function* (): AsyncGenerator<StreamChunk> { yield* chunks })()
+      return (async function* (): AsyncGenerator<StreamChunk> {
+        yield* chunks
+      })()
     },
-    calls: () => { return calls },
+    calls: () => {
+      return calls
+    },
   }
 }
 
@@ -52,7 +56,11 @@ describe('streamWithRetry（单元）', () => {
     const { open, calls } = scriptedOpen([[errorFinish('EMPTY_RESPONSE')], TEXT_CHUNKS])
     const chunks = await collect(streamWithRetry(FAST, open))
     expect(calls()).toBe(2)
-    expect(chunks.map((c) => { return c.type })).toEqual(['text-delta', 'block-end', 'finish'])
+    expect(
+      chunks.map((c) => {
+        return c.type
+      }),
+    ).toEqual(['text-delta', 'block-end', 'finish'])
   })
 
   it('maxRetries 用完后把最后一次失败作为终态 error finish 透出', async () => {
@@ -75,14 +83,15 @@ describe('streamWithRetry（单元）', () => {
   })
 
   it('已交付内容的流失败不重试（避免重复内容）', async () => {
-    const partialThenError: StreamChunk[] = [
-      { type: 'text-delta', index: 0, text: '半截' },
-      errorFinish('TIMEOUT'),
-    ]
+    const partialThenError: StreamChunk[] = [{ type: 'text-delta', index: 0, text: '半截' }, errorFinish('TIMEOUT')]
     const { open, calls } = scriptedOpen([partialThenError, TEXT_CHUNKS])
     const chunks = await collect(streamWithRetry(FAST, open))
     expect(calls()).toBe(1)
-    expect(chunks.map((c) => { return c.type })).toEqual(['text-delta', 'finish'])
+    expect(
+      chunks.map((c) => {
+        return c.type
+      }),
+    ).toEqual(['text-delta', 'finish'])
   })
 
   it('QUOTA 无 Retry-After 不重试；带 Retry-After 重试', async () => {
@@ -101,14 +110,13 @@ describe('streamWithRetry（单元）', () => {
       { type: 'usage', usage: { inputTokens: 10, outputTokens: 0 } },
       errorFinish('EMPTY_RESPONSE'),
     ]
-    const succeeded: StreamChunk[] = [
-      { type: 'usage', usage: { inputTokens: 10, outputTokens: 2 } },
-      ...TEXT_CHUNKS,
-    ]
+    const succeeded: StreamChunk[] = [{ type: 'usage', usage: { inputTokens: 10, outputTokens: 2 } }, ...TEXT_CHUNKS]
     const { open, calls } = scriptedOpen([failedAttempt, succeeded])
     const chunks = await collect(streamWithRetry(FAST, open))
     expect(calls()).toBe(2)
-    const usages = chunks.filter((c) => { return c.type === 'usage' })
+    const usages = chunks.filter((c) => {
+      return c.type === 'usage'
+    })
     expect(usages).toHaveLength(1)
     expect(usages[0]).toMatchObject({ usage: { outputTokens: 2 } })
   })
@@ -120,7 +128,9 @@ describe('streamWithRetry（单元）', () => {
       'test',
     )
     const { open, calls } = scriptedOpen([[errorFinish('TIMEOUT')], TEXT_CHUNKS])
-    setTimeout(() => { controller.abort() }, 10)
+    setTimeout(() => {
+      controller.abort()
+    }, 10)
     const chunks = await collect(streamWithRetry(slow, open, controller.signal))
     expect(calls()).toBe(1)
     expect(chunks[0]).toMatchObject({ type: 'finish', reason: { kind: 'aborted', failure: { code: 'TIMEOUT' } } })
@@ -131,7 +141,10 @@ describe('streamWithRetry（单元）', () => {
 class FlakyAdapter extends LlmAdapter {
   calls = 0
 
-  constructor(private readonly failures: number, private readonly code: string) {
+  constructor(
+    private readonly failures: number,
+    private readonly code: string,
+  ) {
     super()
   }
 
@@ -173,7 +186,11 @@ describe('LlmRuntime 重试接线', () => {
     const { llm } = await makeRuntime(adapter)
     const chunks = await collect(llm.stream({ ...REQUEST }))
     expect(adapter.calls).toBe(3)
-    expect(chunks.map((c) => { return c.type })).toEqual(['text-delta', 'block-end', 'finish'])
+    expect(
+      chunks.map((c) => {
+        return c.type
+      }),
+    ).toEqual(['text-delta', 'block-end', 'finish'])
   })
 
   it('不可重试错误（AUTH）一次即终态 error finish', async () => {

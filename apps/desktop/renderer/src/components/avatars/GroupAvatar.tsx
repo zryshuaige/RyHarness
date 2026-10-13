@@ -22,8 +22,15 @@ const LAYOUT: Record<number, string[]> = {
 /** 5–9 人：3×3 按微信对角优先顺序取前 N 格。 */
 function grid9(n: number): string[] {
   const order = [
-    '1 / 1 / 2 / 2', '1 / 2 / 2 / 3', '2 / 1 / 3 / 2', '2 / 2 / 3 / 3',
-    '1 / 3 / 2 / 4', '3 / 1 / 4 / 2', '2 / 3 / 3 / 4', '3 / 2 / 4 / 3', '3 / 3 / 4 / 4',
+    '1 / 1 / 2 / 2',
+    '1 / 2 / 2 / 3',
+    '2 / 1 / 3 / 2',
+    '2 / 2 / 3 / 3',
+    '1 / 3 / 2 / 4',
+    '3 / 1 / 4 / 2',
+    '2 / 3 / 3 / 4',
+    '3 / 2 / 4 / 3',
+    '3 / 3 / 4 / 4',
   ]
   return order.slice(0, n)
 }
@@ -53,7 +60,10 @@ export function GroupAvatar({ members, size = 48 }: { members: Member[]; size?: 
       }}
     >
       {shown.map((member, index) => (
-        <span key={member.id} style={{ gridArea: grid[index], overflow: 'hidden', borderRadius: shown.length <= 2 ? 3 : 4 }}>
+        <span
+          key={member.id}
+          style={{ gridArea: grid[index], overflow: 'hidden', borderRadius: shown.length <= 2 ? 3 : 4 }}
+        >
           <Avatar avatarKey={member.avatar} name={member.name} seed={member.id} size={cell} />
         </span>
       ))}

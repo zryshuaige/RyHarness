@@ -6,10 +6,10 @@
  * @module @ryagent/invariants
  */
 
-import { Context, Service } from '@ryagent/cordis'
 import type { Inject } from '@ryagent/cordis'
-import z from '@ryagent/schemastery'
+import { type Context, Service } from '@ryagent/cordis'
 import type Schema from '@ryagent/schemastery'
+import z from '@ryagent/schemastery'
 
 /** Runtime invariant selection configured on the service plugin. */
 export interface Config {
@@ -120,9 +120,9 @@ export class InvariantRegistry extends Service {
   /** Return whether one full package name passes the configured filters. */
   private selected(packageName: string): boolean {
     if (!this.enabled) return false
-    if (this.packageAllowlist.length > 0
-      && !this.packageAllowlist.some(pattern => pattern.test(packageName))) return false
-    return !this.packageBlocklist.some(pattern => pattern.test(packageName))
+    if (this.packageAllowlist.length > 0 && !this.packageAllowlist.some((pattern) => pattern.test(packageName)))
+      return false
+    return !this.packageBlocklist.some((pattern) => pattern.test(packageName))
   }
 
   /**
@@ -150,42 +150,46 @@ export class InvariantRegistry extends Service {
 
     let registration: PendingInvariantRegistration
     try {
-      registration = ctx.effect(async () => {
-        if (!this.selected(packageName)) {
-          return () => {
-            registrations.delete(packageName)
-          }
-        }
-
-        const installInvariant = (childCtx: Context) => (
-          installer(childCtx, (message): never => {
-            throw new InvariantError(packageName, message)
-          })
-        )
-        try {
-          const child = ctx.plugin(installer.inject === undefined
-            ? installInvariant
-            : Object.assign(installInvariant, { inject: installer.inject }))
-
-          try {
-            await child
-          } catch (error) {
-            await child.dispose()
-            throw error
-          }
-
-          return async () => {
-            try {
-              await child.dispose()
-            } finally {
+      registration = ctx.effect(
+        async () => {
+          if (!this.selected(packageName)) {
+            return () => {
               registrations.delete(packageName)
             }
           }
-        } catch (error) {
-          registrations.delete(packageName)
-          throw error
-        }
-      }, `invariants.register(${JSON.stringify(packageName)})`)
+
+          const installInvariant = (childCtx: Context) =>
+            installer(childCtx, (message): never => {
+              throw new InvariantError(packageName, message)
+            })
+          try {
+            const child = ctx.plugin(
+              installer.inject === undefined
+                ? installInvariant
+                : Object.assign(installInvariant, { inject: installer.inject }),
+            )
+
+            try {
+              await child
+            } catch (error) {
+              await child.dispose()
+              throw error
+            }
+
+            return async () => {
+              try {
+                await child.dispose()
+              } finally {
+                registrations.delete(packageName)
+              }
+            }
+          } catch (error) {
+            registrations.delete(packageName)
+            throw error
+          }
+        },
+        `invariants.register(${JSON.stringify(packageName)})`,
+      )
     } catch (error) {
       registrations.delete(packageName)
       throw error

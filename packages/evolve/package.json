@@ -2,6 +2,7 @@
   "name": "@ryagent/evolve",
   "version": "0.1.0",
   "type": "module",
+  "license": "MIT",
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
   "exports": {

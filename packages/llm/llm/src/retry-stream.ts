@@ -15,20 +15,22 @@
  * @module @ryagent/llm/retry-stream
  */
 
-import type { LlmFailure, StreamChunk } from './types.ts'
-import type { ResolvedRetryPolicy } from './retry-policy.ts'
 import { QUOTA_EXCEEDED_CODE } from './error.ts'
+import type { ResolvedRetryPolicy } from './retry-policy.ts'
+import type { LlmFailure, StreamChunk } from './types.ts'
 
 /** Provider-requested delays are honored up to this cap (a stalled chat turn must not sleep for minutes). */
 const MAX_PROVIDER_DELAY_MS = 60_000
 
 /** Chunks that carry response content; delivering any of them makes the attempt unrepeatable. */
 function isContentChunk(chunk: StreamChunk): boolean {
-  return chunk.type === 'block-start'
-    || chunk.type === 'text-delta'
-    || chunk.type === 'reasoning-delta'
-    || chunk.type === 'tool-call-delta'
-    || chunk.type === 'block-end'
+  return (
+    chunk.type === 'block-start' ||
+    chunk.type === 'text-delta' ||
+    chunk.type === 'reasoning-delta' ||
+    chunk.type === 'tool-call-delta' ||
+    chunk.type === 'block-end'
+  )
 }
 
 /**
@@ -104,8 +106,13 @@ export async function* streamWithRetry(
         pendingUsage.push(chunk)
         continue
       }
-      if (!contentDelivered && chunk.type === 'finish' && chunk.reason.kind === 'error'
-        && signal?.aborted !== true && isRetryableFailure(policy, chunk.reason.failure)) {
+      if (
+        !contentDelivered &&
+        chunk.type === 'finish' &&
+        chunk.reason.kind === 'error' &&
+        signal?.aborted !== true &&
+        isRetryableFailure(policy, chunk.reason.failure)
+      ) {
         failure = chunk.reason.failure
         break
       }

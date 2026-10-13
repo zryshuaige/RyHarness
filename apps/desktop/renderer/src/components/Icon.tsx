@@ -6,38 +6,36 @@
  * 用法：<Icon name="send" size={18} />
  */
 
-import rawChatBubble from '../assets/lucide/chat-bubble.svg?raw'
-import rawUsers from '../assets/lucide/users.svg?raw'
+import rawAlert from '../assets/lucide/alert.svg?raw'
+import rawAtSign from '../assets/lucide/at-sign.svg?raw'
+import rawBrain from '../assets/lucide/brain.svg?raw'
 import rawCatFace from '../assets/lucide/cat-face.svg?raw'
-import rawSun from '../assets/lucide/sun.svg?raw'
-import rawMoon from '../assets/lucide/moon.svg?raw'
+import rawChatBubble from '../assets/lucide/chat-bubble.svg?raw'
+import rawCheck from '../assets/lucide/check.svg?raw'
+import rawChevronLeft from '../assets/lucide/chevron-left.svg?raw'
+import rawChevronRight from '../assets/lucide/chevron-right.svg?raw'
+import rawCopy from '../assets/lucide/copy.svg?raw'
+import rawDices from '../assets/lucide/dices.svg?raw'
+import rawFile from '../assets/lucide/file.svg?raw'
 import rawGear from '../assets/lucide/gear.svg?raw'
+import rawGroup from '../assets/lucide/group.svg?raw'
+import rawMoon from '../assets/lucide/moon.svg?raw'
+import rawPanelRight from '../assets/lucide/panel-right.svg?raw'
+import rawPencil from '../assets/lucide/pencil.svg?raw'
+import rawPlus from '../assets/lucide/plus.svg?raw'
 import rawSearch from '../assets/lucide/search.svg?raw'
 import rawSend from '../assets/lucide/send.svg?raw'
-import rawBrain from '../assets/lucide/brain.svg?raw'
-import rawPlus from '../assets/lucide/plus.svg?raw'
-import rawX from '../assets/lucide/x.svg?raw'
-import rawChevronRight from '../assets/lucide/chevron-right.svg?raw'
-import rawChevronLeft from '../assets/lucide/chevron-left.svg?raw'
-import rawPanelRight from '../assets/lucide/panel-right.svg?raw'
-import rawCopy from '../assets/lucide/copy.svg?raw'
-import rawCheck from '../assets/lucide/check.svg?raw'
-import rawFile from '../assets/lucide/file.svg?raw'
-import rawThumbsUp from '../assets/lucide/thumbs-up.svg?raw'
+import rawSun from '../assets/lucide/sun.svg?raw'
 import rawThumbsDown from '../assets/lucide/thumbs-down.svg?raw'
-import rawAtSign from '../assets/lucide/at-sign.svg?raw'
-import rawGroup from '../assets/lucide/group.svg?raw'
-import rawPencil from '../assets/lucide/pencil.svg?raw'
-import rawAlert from '../assets/lucide/alert.svg?raw'
-import rawDices from '../assets/lucide/dices.svg?raw'
+import rawThumbsUp from '../assets/lucide/thumbs-up.svg?raw'
+import rawUsers from '../assets/lucide/users.svg?raw'
+import rawX from '../assets/lucide/x.svg?raw'
 
 /** 去掉 lucide 源文件里的固定宽高与许可注释，只留 <svg> 元素本体。 */
 function bodyOf(raw: string): string {
   const match = /<svg[\s\S]*<\/svg>/.exec(raw)
   if (match === null) return ''
-  return match[0]
-    .replace(/\n\s*<!-- @license [^>]*-->\n/, '')
-    .replace(/width="24"\s*height="24"\s*/, '')
+  return match[0].replace(/\n\s*<!-- @license [^>]*-->\n/, '').replace(/width="24"\s*height="24"\s*/, '')
 }
 
 export const ICONS = {
@@ -70,7 +68,12 @@ export const ICONS = {
 export type IconName = keyof typeof ICONS
 
 /** 统一图标组件：颜色继承 currentColor，尺寸默认 18，线宽可用 strokeWidth 覆盖。 */
-export function Icon({ name, size = 18, className = '', strokeWidth }: {
+export function Icon({
+  name,
+  size = 18,
+  className = '',
+  strokeWidth,
+}: {
   name: IconName
   size?: number
   className?: string
@@ -78,14 +81,13 @@ export function Icon({ name, size = 18, className = '', strokeWidth }: {
 }) {
   const body = ICONS[name]
   if (body === undefined || body.length === 0) return null
-  const svg = strokeWidth === undefined
-    ? body
-    : body.replace(/stroke-width="2"/, `stroke-width="${strokeWidth}"`)
+  const svg = strokeWidth === undefined ? body : body.replace(/stroke-width="2"/, `stroke-width="${strokeWidth}"`)
   return (
     <span
       className={`icon ${className}`}
       style={{ width: size, height: size, display: 'inline-flex' }}
       aria-hidden="true"
+      // biome-ignore lint/security/noDangerouslySetInnerHtml: lucide 本地静态图标 SVG，无外部输入
       dangerouslySetInnerHTML={{
         __html: svg.replace('<svg', `<svg width="${size}" height="${size}"`),
       }}

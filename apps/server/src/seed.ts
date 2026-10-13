@@ -65,7 +65,8 @@ export const AGENT_TEMPLATES: Readonly<Record<string, AgentTemplate>> = {
     key: 'file-organizer',
     name: '文件整理',
     description: '在工作区内整理、重排、归档文件。',
-    suggestedSystemPrompt: '你是文件整理员：先盘点工作区文件，再按用户要求移动/归档/生成索引；任何删除前必须说明；结果用清单汇报。',
+    suggestedSystemPrompt:
+      '你是文件整理员：先盘点工作区文件，再按用户要求移动/归档/生成索引；任何删除前必须说明；结果用清单汇报。',
     defaultTools: ['fs_read', 'fs_write', 'shell_exec'],
     defaultModel: 'deepseek-ai/DeepSeek-V3',
     avatar: 'db:bigEars:organizer',
@@ -73,20 +74,22 @@ export const AGENT_TEMPLATES: Readonly<Record<string, AgentTemplate>> = {
 }
 
 /** 首启种子：保证内置 Ryen 存在于 agents 表。 */
-export function ensureSeedAgents(upsert: (input: {
-  id: string
-  name: string
-  avatar?: string
-  systemPrompt: string
-  provider: string
-  model: string
-  tools: string[]
-  isBuiltin: boolean
-}) => void): void {
+export function ensureSeedAgents(
+  upsert: (input: {
+    id: string
+    name: string
+    avatar?: string
+    systemPrompt: string
+    provider: string
+    model: string
+    tools: string[]
+    isBuiltin: boolean
+  }) => void,
+): void {
   upsert({
     id: RYEN_TEMPLATE.id,
     name: RYEN_TEMPLATE.name,
-    ...RYEN_TEMPLATE.avatar === undefined ? {} : { avatar: RYEN_TEMPLATE.avatar },
+    ...(RYEN_TEMPLATE.avatar === undefined ? {} : { avatar: RYEN_TEMPLATE.avatar }),
     systemPrompt: RYEN_TEMPLATE.systemPrompt,
     provider: RYEN_TEMPLATE.provider,
     model: RYEN_TEMPLATE.model as string,
@@ -110,9 +113,9 @@ export function instantiateTemplate(
   return {
     id: randomUUID(),
     name: overrides.name ?? template.name,
-    ...overrides.avatar === undefined && template.avatar === undefined
+    ...(overrides.avatar === undefined && template.avatar === undefined
       ? {}
-      : { avatar: overrides.avatar ?? template.avatar },
+      : { avatar: overrides.avatar ?? template.avatar }),
     systemPrompt: overrides.systemPrompt ?? template.suggestedSystemPrompt,
     provider: overrides.provider ?? 'siliconflow',
     model: overrides.model ?? template.defaultModel,

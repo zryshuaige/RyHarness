@@ -20,19 +20,37 @@ const DEFAULT_TIMEOUT_MS = 30_000
 const MAX_OUTPUT_CHARS = 32_000
 
 /** 各平台的默认 shell 与单命令标志；Windows 优先 Git Bash。 */
-function defaultShell(): { shell: string, args: (command: string) => string[] } {
+function defaultShell(): { shell: string; args: (command: string) => string[] } {
   if (process.platform === 'win32') {
     const candidates = [
       process.env.GIT_BASH_PATH,
       'C:/Program Files/Git/bin/bash.exe',
       'C:/Program Files (x86)/Git/bin/bash.exe',
-    ].filter((path): path is string => { return typeof path === 'string' && path.length > 0 })
+    ].filter((path): path is string => {
+      return typeof path === 'string' && path.length > 0
+    })
     for (const candidate of candidates) {
-      if (existsSync(candidate)) return { shell: candidate, args: (command) => { return ['-c', command] } }
+      if (existsSync(candidate))
+        return {
+          shell: candidate,
+          args: (command) => {
+            return ['-c', command]
+          },
+        }
     }
-    return { shell: process.env.ComSpec ?? 'cmd.exe', args: (command) => { return ['/d', '/s', '/c', `"${command}"`] } }
+    return {
+      shell: process.env.ComSpec ?? 'cmd.exe',
+      args: (command) => {
+        return ['/d', '/s', '/c', `"${command}"`]
+      },
+    }
   }
-  return { shell: '/bin/sh', args: (command) => { return ['-c', command] } }
+  return {
+    shell: '/bin/sh',
+    args: (command) => {
+      return ['-c', command]
+    },
+  }
 }
 
 function argString(args: unknown, key: string, fallback?: string): string {
@@ -85,13 +103,13 @@ export const shellExec: Tool = {
     } catch (error) {
       const failed = error as { stdout?: string; stderr?: string; message?: string; killed?: boolean }
       const output = [failed.stdout, failed.stderr]
-        .filter((part): part is string => { return typeof part === 'string' && part.length > 0 })
+        .filter((part): part is string => {
+          return typeof part === 'string' && part.length > 0
+        })
         .join('\n')
       const reason = failed.killed === true ? `timed out after ${timeoutMs}ms` : (failed.message ?? 'command failed')
       return {
-        content: output.length > 0
-          ? `${reason}\n${truncateOutput(output.trimEnd(), MAX_OUTPUT_CHARS)}`
-          : reason,
+        content: output.length > 0 ? `${reason}\n${truncateOutput(output.trimEnd(), MAX_OUTPUT_CHARS)}` : reason,
         isError: true,
       }
     }

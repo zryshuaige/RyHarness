@@ -1,8 +1,8 @@
-import { describe, expect, it } from 'vitest'
 import { brandString } from '@ryagent/brand'
 import type { AssistantMessage, MessageId, ToolCallId } from '@ryagent/llm'
-import { serializeRequest } from '@ryagent/llm-openai'
 import type { OpenAiWireMessage } from '@ryagent/llm-openai'
+import { serializeRequest } from '@ryagent/llm-openai'
+import { describe, expect, it } from 'vitest'
 
 function assistant(content: AssistantMessage['content']): AssistantMessage {
   return {
@@ -15,7 +15,9 @@ function assistant(content: AssistantMessage['content']): AssistantMessage {
 
 function assistantWire(options: Parameters<typeof serializeRequest>[0]): OpenAiWireMessage {
   const request = serializeRequest(options)
-  const wire = request.messages.find((message) => { return message.role === 'assistant' })
+  const wire = request.messages.find((message) => {
+    return message.role === 'assistant'
+  })
   if (wire === undefined) throw new Error('assistant message missing from wire request')
   return wire
 }
@@ -25,10 +27,12 @@ describe('serializeRequest assistant messages', () => {
     const wire = assistantWire({
       provider: 'p',
       model: 'm',
-      messages: [assistant([
-        { type: 'text', text: '我先查一下文件。' },
-        { type: 'tool-call', id: brandString<ToolCallId>('call-1'), name: 'fs_read', arguments: '{"path":"a.txt"}' },
-      ])],
+      messages: [
+        assistant([
+          { type: 'text', text: '我先查一下文件。' },
+          { type: 'tool-call', id: brandString<ToolCallId>('call-1'), name: 'fs_read', arguments: '{"path":"a.txt"}' },
+        ]),
+      ],
     })
     expect(wire.content).toBe('我先查一下文件。')
     expect(wire.tool_calls).toHaveLength(1)
@@ -38,9 +42,9 @@ describe('serializeRequest assistant messages', () => {
     const wire = assistantWire({
       provider: 'p',
       model: 'm',
-      messages: [assistant([
-        { type: 'tool-call', id: brandString<ToolCallId>('call-1'), name: 'fs_read', arguments: '{}' },
-      ])],
+      messages: [
+        assistant([{ type: 'tool-call', id: brandString<ToolCallId>('call-1'), name: 'fs_read', arguments: '{}' }]),
+      ],
     })
     expect(wire.content).toBeNull()
     expect(wire.tool_calls).toHaveLength(1)

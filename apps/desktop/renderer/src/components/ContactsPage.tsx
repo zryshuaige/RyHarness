@@ -7,7 +7,10 @@ import { Icon } from './Icon.tsx'
 import { Modal } from './Modal.tsx'
 
 const TOOL_LABELS: Record<string, string> = {
-  fs_read: '读文件', fs_write: '写文件', shell_exec: '执行命令', file_produce: '产出文件',
+  fs_read: '读文件',
+  fs_write: '写文件',
+  shell_exec: '执行命令',
+  file_produce: '产出文件',
 }
 const ALL_TOOLS = Object.keys(TOOL_LABELS)
 
@@ -27,16 +30,28 @@ export function AvatarPicker({
       <div className="avatar-picker-preview">
         <Avatar avatarKey={`db:${current.styleKey}:${current.seed}`} name="预览" size={64} />
         <div className="avatar-picker-actions">
-          <button type="button" className="btn" onClick={() => { onChange(randomAvatarSpec()) }}>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => {
+              onChange(randomAvatarSpec())
+            }}
+          >
             <Icon name="dices" size={14} /> 换一批
           </button>
-          <small>当前：{AVATAR_STYLES.find((s) => { return s.key === current.styleKey })?.name ?? current.styleKey}</small>
+          <small>
+            当前：
+            {AVATAR_STYLES.find((s) => {
+              return s.key === current.styleKey
+            })?.name ?? current.styleKey}
+          </small>
         </div>
       </div>
       <div className="avatar-picker" role="radiogroup" aria-label="选择风格">
         {AVATAR_STYLES.map((style) => {
           const preview = dicebearSvg(style.key, current.seed) ?? ''
           return (
+            // biome-ignore lint/a11y/useSemanticElements: 卡片式单选，原生 radio 样式无法满足设计
             <button
               key={style.key}
               type="button"
@@ -44,11 +59,14 @@ export function AvatarPicker({
               aria-checked={current.styleKey === style.key}
               className={current.styleKey === style.key ? 'is-selected' : ''}
               title={`${style.name}（${style.license === 'CC0-1.0' ? 'CC0 公有领域' : 'CC BY 4.0'}）`}
-              onClick={() => { onChange(`db:${style.key}:${current.seed}`) }}
+              onClick={() => {
+                onChange(`db:${style.key}:${current.seed}`)
+              }}
             >
               <span className="avatar-cell">
                 <span
                   style={{ width: 40, height: 40, display: 'inline-flex', borderRadius: '50%', overflow: 'hidden' }}
+                  // biome-ignore lint/security/noDangerouslySetInnerHtml: 头像预览为本地生成的 SVG，无外部输入
                   dangerouslySetInnerHTML={{ __html: preview.replace('<svg', '<svg width="40" height="40"') }}
                 />
                 <small>{style.name}</small>
@@ -94,15 +112,21 @@ export function ContactsPage({
       <header className="page-header">
         <h2>通讯录</h2>
         <div className="page-actions">
-          <button className="btn" onClick={onCreateGroup}><Icon name="group" size={15} /> 建群</button>
-          <button className="btn btn-primary" onClick={onCreateAgent}><Icon name="plus" size={15} /> 新建 Agent</button>
+          <button type="button" className="btn" onClick={onCreateGroup}>
+            <Icon name="group" size={15} /> 建群
+          </button>
+          <button type="button" className="btn btn-primary" onClick={onCreateAgent}>
+            <Icon name="plus" size={15} /> 新建 Agent
+          </button>
         </div>
       </header>
       <div className="page-scroll">
         <div className="page-scroll-col">
           {sorted.length === 0 ? (
             <div className="empty-state">
-              <span className="empty-cat"><Cat mood="thinking" size={88} /></span>
+              <span className="empty-cat">
+                <Cat mood="thinking" size={88} />
+              </span>
               <h3>通讯录还是空的</h3>
               <p>从模板新建一位 agent 吧，挑个顺眼的头像。</p>
             </div>
@@ -110,8 +134,10 @@ export function ContactsPage({
             <>
               <p className="section-title">我的 Agent（{sorted.length}）</p>
               <div className="contact-grid">
-                <button className="contact-card contact-create" onClick={onCreateAgent}>
-                  <span className="contact-create-icon"><Icon name="plus" size={22} /></span>
+                <button type="button" className="contact-card contact-create" onClick={onCreateAgent}>
+                  <span className="contact-create-icon">
+                    <Icon name="plus" size={22} />
+                  </span>
                   <h3>新建 Agent</h3>
                   <p className="contact-prompt">从模板开始，挑头像、定人设</p>
                 </button>
@@ -122,16 +148,28 @@ export function ContactsPage({
                       {agent.name}
                       {agent.isBuiltin && <span className="badge">内置</span>}
                     </h3>
-                    <p className="contact-model">{agent.provider} / {agent.model}</p>
+                    <p className="contact-model">
+                      {agent.provider} / {agent.model}
+                    </p>
                     <p className="contact-prompt">{agent.systemPrompt.slice(0, 48)}…</p>
-                    <button className="btn" onClick={() => { onChat(agent.id) }}>发消息</button>
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => {
+                        onChat(agent.id)
+                      }}
+                    >
+                      发消息
+                    </button>
                   </article>
                 ))}
               </div>
-              <p className="section-title" style={{ marginTop: 24 }}>可用模板（{templates.length}）</p>
+              <p className="section-title" style={{ marginTop: 24 }}>
+                可用模板（{templates.length}）
+              </p>
               <div className="template-rail">
                 {templates.map((template) => (
-                  <button key={template.key} className="template-card" onClick={onCreateAgent}>
+                  <button type="button" key={template.key} className="template-card" onClick={onCreateAgent}>
                     <strong>{template.name}</strong>
                     <span>{template.description}</span>
                   </button>
@@ -158,9 +196,13 @@ export function CreateAgentModal({
   onClose: () => void
 }) {
   const [templateKey, setTemplateKey] = useState(templates[0]?.key ?? 'general')
-  const template = templates.find((t) => { return t.key === templateKey })
+  const template = templates.find((t) => {
+    return t.key === templateKey
+  })
   const [name, setName] = useState('')
-  const [avatarKey, setAvatarKey] = useState(() => { return randomAvatarSpec() })
+  const [avatarKey, setAvatarKey] = useState(() => {
+    return randomAvatarSpec()
+  })
   const [systemPrompt, setSystemPrompt] = useState(template?.suggestedSystemPrompt ?? '')
   const [provider, setProvider] = useState(providers[0]?.id ?? 'siliconflow')
   const [model, setModel] = useState(template?.defaultModel ?? '')
@@ -169,14 +211,19 @@ export function CreateAgentModal({
 
   const pickTemplate = (key: string): void => {
     setTemplateKey(key)
-    const next = templates.find((t) => { return t.key === key })
+    const next = templates.find((t) => {
+      return t.key === key
+    })
     if (next === undefined) return
     setSystemPrompt(next.suggestedSystemPrompt)
     setModel(next.defaultModel)
     setTools(next.defaultTools)
   }
 
-  const models = providers.find((p) => { return p.id === provider })?.models ?? []
+  const models =
+    providers.find((p) => {
+      return p.id === provider
+    })?.models ?? []
 
   const submit = async (): Promise<void> => {
     setBusy(true)
@@ -200,14 +247,31 @@ export function CreateAgentModal({
     <Modal title="新建 Agent" onClose={onClose}>
       <label className="field">
         <span>从模板开始</span>
-        <select value={templateKey} onChange={(e) => { pickTemplate(e.target.value) }}>
-          {templates.map((t) => { return <option key={t.key} value={t.key}>{t.name} — {t.description}</option> })}
+        <select
+          value={templateKey}
+          onChange={(e) => {
+            pickTemplate(e.target.value)
+          }}
+        >
+          {templates.map((t) => {
+            return (
+              <option key={t.key} value={t.key}>
+                {t.name} — {t.description}
+              </option>
+            )
+          })}
         </select>
       </label>
       <div className="field-row">
         <label className="field">
           <span>名字</span>
-          <input value={name} placeholder={template?.name} onChange={(e) => { setName(e.target.value) }} />
+          <input
+            value={name}
+            placeholder={template?.name}
+            onChange={(e) => {
+              setName(e.target.value)
+            }}
+          />
         </label>
       </div>
       <fieldset className="field">
@@ -216,19 +280,48 @@ export function CreateAgentModal({
       </fieldset>
       <label className="field">
         <span>人设（system prompt）</span>
-        <textarea rows={5} value={systemPrompt} onChange={(e) => { setSystemPrompt(e.target.value) }} />
+        <textarea
+          rows={5}
+          value={systemPrompt}
+          onChange={(e) => {
+            setSystemPrompt(e.target.value)
+          }}
+        />
       </label>
       <div className="field-row">
         <label className="field">
           <span>供应商</span>
-          <select value={provider} onChange={(e) => { setProvider(e.target.value) }}>
-            {providers.map((p) => { return <option key={p.id} value={p.id}>{p.displayName}{p.apiKeyConfigured ? '' : '（未配置 key）'}</option> })}
+          <select
+            value={provider}
+            onChange={(e) => {
+              setProvider(e.target.value)
+            }}
+          >
+            {providers.map((p) => {
+              return (
+                <option key={p.id} value={p.id}>
+                  {p.displayName}
+                  {p.apiKeyConfigured ? '' : '（未配置 key）'}
+                </option>
+              )
+            })}
           </select>
         </label>
         <label className="field">
           <span>模型</span>
-          <select value={model} onChange={(e) => { setModel(e.target.value) }}>
-            {models.map((m) => { return <option key={m.id} value={m.id}>{m.name ?? m.id}</option> })}
+          <select
+            value={model}
+            onChange={(e) => {
+              setModel(e.target.value)
+            }}
+          >
+            {models.map((m) => {
+              return (
+                <option key={m.id} value={m.id}>
+                  {m.name ?? m.id}
+                </option>
+              )
+            })}
           </select>
         </label>
       </div>
@@ -241,7 +334,13 @@ export function CreateAgentModal({
                 type="checkbox"
                 checked={tools.includes(tool)}
                 onChange={(e) => {
-                  setTools(e.target.checked ? [...tools, tool] : tools.filter((t) => { return t !== tool }))
+                  setTools(
+                    e.target.checked
+                      ? [...tools, tool]
+                      : tools.filter((t) => {
+                          return t !== tool
+                        }),
+                  )
                 }}
               />
               {TOOL_LABELS[tool]}
@@ -250,8 +349,19 @@ export function CreateAgentModal({
         </div>
       </fieldset>
       <div className="modal-actions">
-        <button className="btn" onClick={onClose}>取消</button>
-        <button className="btn btn-primary" disabled={busy} onClick={() => { void submit() }}>保存</button>
+        <button type="button" className="btn" onClick={onClose}>
+          取消
+        </button>
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={busy}
+          onClick={() => {
+            void submit()
+          }}
+        >
+          保存
+        </button>
       </div>
     </Modal>
   )
@@ -267,14 +377,26 @@ export function CreateGroupModal({
   onSubmit: (input: { memberAgentIds: string[]; dispatcherAgentId: string; title: string }) => Promise<void>
   onClose: () => void
 }) {
-  const [selected, setSelected] = useState<string[]>(agents.filter((a) => { return a.id === 'ryen' }).map((a) => { return a.id }))
+  const [selected, setSelected] = useState<string[]>(
+    agents
+      .filter((a) => {
+        return a.id === 'ryen'
+      })
+      .map((a) => {
+        return a.id
+      }),
+  )
   const [dispatcher, setDispatcher] = useState('ryen')
   const [title, setTitle] = useState('')
   const [busy, setBusy] = useState(false)
 
   const toggle = (id: string): void => {
     setSelected((prev) => {
-      return prev.includes(id) ? prev.filter((x) => { return x !== id }) : [...prev, id]
+      return prev.includes(id)
+        ? prev.filter((x) => {
+            return x !== id
+          })
+        : [...prev, id]
     })
   }
 
@@ -293,14 +415,26 @@ export function CreateGroupModal({
     <Modal title="新建群聊" onClose={onClose}>
       <label className="field">
         <span>群名</span>
-        <input value={title} placeholder="群聊" onChange={(e) => { setTitle(e.target.value) }} />
+        <input
+          value={title}
+          placeholder="群聊"
+          onChange={(e) => {
+            setTitle(e.target.value)
+          }}
+        />
       </label>
       <fieldset className="field">
         <span>选择成员</span>
         <div className="member-checks">
           {agents.map((agent) => (
             <label key={agent.id}>
-              <input type="checkbox" checked={selected.includes(agent.id)} onChange={() => { toggle(agent.id) }} />
+              <input
+                type="checkbox"
+                checked={selected.includes(agent.id)}
+                onChange={() => {
+                  toggle(agent.id)
+                }}
+              />
               <Avatar avatarKey={agent.avatar} name={agent.name} seed={agent.id} size={22} />
               {agent.name}
             </label>
@@ -309,16 +443,38 @@ export function CreateGroupModal({
       </fieldset>
       <label className="field">
         <span>调度员（无 @ 消息的默认响应者）</span>
-        <select value={dispatcher} onChange={(e) => { setDispatcher(e.target.value) }}>
+        <select
+          value={dispatcher}
+          onChange={(e) => {
+            setDispatcher(e.target.value)
+          }}
+        >
           {selected.map((id) => {
-            const agent = agents.find((a) => { return a.id === id })
-            return agent === undefined ? null : <option key={id} value={id}>{agent.name}</option>
+            const agent = agents.find((a) => {
+              return a.id === id
+            })
+            return agent === undefined ? null : (
+              <option key={id} value={id}>
+                {agent.name}
+              </option>
+            )
           })}
         </select>
       </label>
       <div className="modal-actions">
-        <button className="btn" onClick={onClose}>取消</button>
-        <button className="btn btn-primary" disabled={busy || selected.length === 0} onClick={() => { void submit() }}>创建</button>
+        <button type="button" className="btn" onClick={onClose}>
+          取消
+        </button>
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={busy || selected.length === 0}
+          onClick={() => {
+            void submit()
+          }}
+        >
+          创建
+        </button>
       </div>
     </Modal>
   )

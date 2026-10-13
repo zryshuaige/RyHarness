@@ -1,10 +1,10 @@
 # RyAgent
 
-从 [deepseek-harness](../deepseek-harness)（DeepSeek Harness / dsh 上游原版，TypeScript pnpm monorepo，cordis DI）裁剪出的精简内核 + 社交化多 Agent 桌面应用。
+从 deepseek-harness（DeepSeek Harness / dsh 上游原版，TypeScript pnpm monorepo，cordis DI）裁剪出的精简内核 + 社交化多 Agent 桌面应用。
 
 ![通讯录](apps/desktop/docs/screenshot-contacts.png)
 
-**定位**：类微信的社交化 Agent 桌面应用，但不是微信克隆——过程播报气泡、产物文件卡片、群聊接力链可视化、猫管家吉祥物 Ryen（三态 SVG）。底层是完全自有的精简内核（LLM 服务缝 + 消息/工具循环 + 群聊调度 + SQLite 持久化），LLM 走 OpenAI 兼容协议的多供应商适配层。
+**定位**：类微信的社交化 Agent 桌面应用，但不是微信克隆——过程播报气泡、产物文件卡片、群聊接力链可视化、猫管家吉祥物 Ryen（三态 SVG）。底层是完全自有的精简内核（LLM 服务缝 + 消息/工具循环 + 群聊调度 + SQLite 持久化 + 长期记忆/自我进化闭环），LLM 走 OpenAI 兼容协议的多供应商适配层。
 
 ## 架构
 
@@ -19,6 +19,8 @@
 │  @ryagent/group   群聊调度器（@直路由 + 调度员自然语言选路 + loop-guard 护栏）           │
 │  @ryagent/session SQLite 持久化（SCHEMA_VERSION=3 单调迁移）+ SessionCoordinator        │
 │  @ryagent/tools   fs_read/fs_write/shell_exec/file_produce（产物卡片）                  │
+│  @ryagent/memory  长期记忆：异步抽取管线 + embedding/FTS5 混合召回（RRF + 时间衰减）      │
+│  @ryagent/evolve  自我进化：ACE playbook + Reflexion 反思 + 反馈闭环 + 巩固调度          │
 ├───────────────────────────── LLM 层 ─────────────────────────────────────────────────┤
 │  @ryagent/llm         dsh-llm 契约：LlmAdapter/LlmRuntime/StreamChunk/BlockAssembler  │
 │  @ryagent/llm-openai  OpenAI 兼容适配器（SSE、tool calling、usage、多供应商路由）        │
@@ -30,6 +32,8 @@
 裁剪决策与依赖盘点见 [M0-dependency-audit.md](./M0-dependency-audit.md)：不带上游 agent-loop 的 32k LOC 生态（sandbox/ptc/approval），agent 循环与 SQLite 持久化均为自写精简版。
 
 ## 快速开始
+
+前置要求：**Node ^22.19 或 >= 24**（持久化依赖内置 `node:sqlite`），**pnpm 11**（根 `package.json` 的 `packageManager` 字段已钉版本，建议经 corepack 启用）。
 
 ```sh
 pnpm install
@@ -58,14 +62,16 @@ pnpm --filter @ryagent/desktop dev          # 开发模式（Vite HMR + Electron
 - **单聊**：流式气泡、agent "正在输入"、过程播报（工具调用进度行）、产物文件卡片（打开/下载）。
 - **群聊**：@提及直路由；无 @ 时调度员（默认 Ryen）自然语言选路——生成即路由，回复里的 @ 就是接力信号；接力链可视化（流转提示，loop-guard/max-turns 红色标注）；调度轨迹留在右栏。
 - **Agent**：内置 Ryen（猫管家总管）+ 5 个模板（通用/Coding/写作/翻译/文件整理）；fork 模板、改人设/模型/工具白名单；builtin 删除保护。
-- **持久化**：SQLite（WAL），agents/conversations/messages/dispatch_events 四表，单调迁移；未读徽标（seq 比较，本人消息不计）；per-conversation 消息串行队列（排队有 WS 提示）。
+- **长期记忆**（`@ryagent/memory`）：每轮对话异步抽取记忆（mem0 式管线），召回走 embedding 余弦 + FTS5 BM25（中文 bigram）混合检索、RRF 融合、时间衰减；共享用户画像注入每轮 prompt；「我的」页可见画像列表。
+- **自我进化**（`@ryagent/evolve`）：ACE 式经验手册（策略/坑/偏好/工具用法，helpful-harmful 计数驱动升降级）+ Reflexion 确定性反思 + 👍/👎 用户反馈归因 + 定时巩固调度，闭环不烧额外 LLM 调用。
+- **持久化**：SQLite（WAL），agents/conversations/messages/dispatch_events 等表单调迁移；未读徽标（seq 比较，本人消息不计）；per-conversation 消息串行队列（排队有 WS 提示）。
 - **LLM 层**：`chat/completions` + SSE；流式 tool-call 组装；usage 提取（含 reasoning/cache token）；统一错误码（RATE_LIMIT/QUOTA/CONTEXT_WINDOW_EXCEEDED/…）；配置驱动多供应商路由。
 
 ## 测试
 
 ```sh
-pnpm test          # 168 个测试：内核单测 + mock SSE 适配器 + 真实 HTTP/WS 集成 + jsdom 组件测试
-pnpm typecheck     # 严格模式（根程序；vendor 由其自身 tsc build 校验）
+pnpm test          # 194 个测试：内核单测 + mock SSE 适配器 + 真实 HTTP/WS 集成 + jsdom 组件测试
+pnpm typecheck     # 严格模式（先构建 vendor 产物再跑根 tsc，干净 clone 可直接跑）
 pnpm -r build      # 全量构建（vendor 用 tsc，packages 用 tsdown，desktop = tsdown + vite）
 pnpm demo:agent    # M2 集成：mock 适配器跑 AgentLoop + 落库断言
 pnpm demo:group    # M3 三场景：接力链 / @直路由 / loop-guard
@@ -83,8 +89,13 @@ packages/
   llm/llm/     @ryagent/llm      LLM 服务缝（dsh-llm 裁剪）
   llm/openai/  @ryagent/llm-openai  OpenAI 兼容适配器
   agent/ group/ tools/ session/  自写运行时
+  memory/ evolve/                长期记忆与自我进化闭环
   typert/protocol/ attachment/types/ util/ runtime-diagnostics/  地基与 stub
-vendor/        cordis / cosmokit / schemastery（dsh vendor 改名）
-scripts/       demo-*.ts 冒烟与集成脚本、tsdown-decorators.mjs
-docs（各包 README）· M0-dependency-audit.md · .zcode/ 分析脚本
+vendor/        cordis / cosmokit / schemastery（dsh vendor 改名，各附上游 MIT LICENSE）
+scripts/       demo-*.ts 冒烟与集成脚本、e2e-driver.mjs（CDP 驱动，用法见文件头）
+docs（各包 README）· M0-dependency-audit.md · LICENSE · NOTICE.md
 ```
+
+## 许可
+
+MIT（见 [LICENSE](./LICENSE)）。第三方资产署名与许可明细见 [NOTICE.md](./NOTICE.md)。

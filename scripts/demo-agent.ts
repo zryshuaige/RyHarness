@@ -9,15 +9,14 @@ import assert from 'node:assert/strict'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { Context } from '@ryagent/cordis'
-import LlmRuntime, { LlmAdapter } from '@ryagent/llm'
-import type { GenerateOptions, StreamChunk } from '@ryagent/llm'
-import { brandString } from '@ryagent/brand'
-import type { ToolCallId } from '@ryagent/llm'
-import { AgentLoop, forkTemplate, RYEN_TEMPLATE } from '@ryagent/agent'
 import type { AgentLoopEvent } from '@ryagent/agent'
-import { fsWrite } from '@ryagent/tools'
+import { AgentLoop, forkTemplate, RYEN_TEMPLATE } from '@ryagent/agent'
+import { brandString } from '@ryagent/brand'
+import { Context } from '@ryagent/cordis'
+import type { GenerateOptions, StreamChunk, ToolCallId } from '@ryagent/llm'
+import LlmRuntime, { LlmAdapter } from '@ryagent/llm'
 import { SessionStore } from '@ryagent/session'
+import { fsWrite } from '@ryagent/tools'
 
 /** 录制两轮响应的假适配器：记录每次请求。 */
 class MockAdapter extends LlmAdapter {
@@ -33,21 +32,39 @@ class MockAdapter extends LlmAdapter {
     this.requests.push({ ...options, messages: [...options.messages] })
     this.call++
     const callId = brandString<ToolCallId>('demo-call-1')
-    const chunks: StreamChunk[] = this.call === 1
-      ? [
-          { type: 'block-start', index: 0, blockType: 'tool-call' },
-          { type: 'tool-call-delta', index: 0, id: callId, name: 'fs_write', argumentsDelta: '{"path":"hello.md","content":"# 你好，RyAgent\\n"}' },
-          { type: 'block-end', index: 0, block: { type: 'tool-call', id: callId, name: 'fs_write', arguments: '{"path":"hello.md","content":"# 你好，RyAgent\\n"}' } },
-          { type: 'finish', reason: { kind: 'tool-calls' } },
-        ]
-      : [
-          { type: 'block-start', index: 0, blockType: 'text' },
-          { type: 'text-delta', index: 0, text: '已经写好 hello.md。' },
-          { type: 'block-end', index: 0, block: { type: 'text', text: '已经写好 hello.md。' } },
-          { type: 'usage', usage: { inputTokens: 42, outputTokens: 7, totalTokens: 49 } },
-          { type: 'finish', reason: { kind: 'stop' } },
-        ]
-    return (async function* (): AsyncGenerator<StreamChunk> { yield* chunks })()
+    const chunks: StreamChunk[] =
+      this.call === 1
+        ? [
+            { type: 'block-start', index: 0, blockType: 'tool-call' },
+            {
+              type: 'tool-call-delta',
+              index: 0,
+              id: callId,
+              name: 'fs_write',
+              argumentsDelta: '{"path":"hello.md","content":"# 你好，RyAgent\\n"}',
+            },
+            {
+              type: 'block-end',
+              index: 0,
+              block: {
+                type: 'tool-call',
+                id: callId,
+                name: 'fs_write',
+                arguments: '{"path":"hello.md","content":"# 你好，RyAgent\\n"}',
+              },
+            },
+            { type: 'finish', reason: { kind: 'tool-calls' } },
+          ]
+        : [
+            { type: 'block-start', index: 0, blockType: 'text' },
+            { type: 'text-delta', index: 0, text: '已经写好 hello.md。' },
+            { type: 'block-end', index: 0, block: { type: 'text', text: '已经写好 hello.md。' } },
+            { type: 'usage', usage: { inputTokens: 42, outputTokens: 7, totalTokens: 49 } },
+            { type: 'finish', reason: { kind: 'stop' } },
+          ]
+    return (async function* (): AsyncGenerator<StreamChunk> {
+      yield* chunks
+    })()
   }
 }
 
@@ -87,12 +104,17 @@ try {
       process.stdout.write(event.text)
       streamedText += event.text
     } else {
-      console.log(`\n[event] ${event.type}`, event.type === 'tool-result' ? `${event.name} isError=${event.isError}` : '')
+      console.log(
+        `\n[event] ${event.type}`,
+        event.type === 'tool-result' ? `${event.name} isError=${event.isError}` : '',
+      )
     }
   }
 
   // ---- 断言 1：事件序列 ----
-  const kinds = events.map((e) => { return e.type })
+  const kinds = events.map((e) => {
+    return e.type
+  })
   assert.deepEqual(kinds, ['tool-call-start', 'tool-result', 'text-delta', 'done'], `事件序列不符: ${kinds.join(',')}`)
   assert.equal((events[0] as { name: string }).name, 'fs_write')
   assert.equal((events[1] as { isError: boolean }).isError, false)
@@ -142,7 +164,10 @@ try {
   const messages = store.listMessages(conversation.id)
   assert.equal(messages.length, 3)
   assert.equal(messages[0]!.senderType, 'user')
-  assert.equal(messages[2]!.contentBlocks[0] && (messages[2]!.contentBlocks[0] as { text: string }).text, '已经写好 hello.md。')
+  assert.equal(
+    messages[2]!.contentBlocks[0] && (messages[2]!.contentBlocks[0] as { text: string }).text,
+    '已经写好 hello.md。',
+  )
   assert.ok(store.getConversation(conversation.id)!.updatedAt >= conversation.createdAt)
   console.log('✓ SQLite 持久化正确：agents 1 条、conversations 1 条、messages 3 条')
 

@@ -1,14 +1,9 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
-import {
-  EvolveService,
-  NEGATIVE_FEEDBACK_RE,
-  seedIfEmpty,
-  AUTO_DEPRECATE_HARMFUL,
-} from '@ryagent/evolve'
 import type { EvolveLlm, TurnTrajectory } from '@ryagent/evolve'
+import { AUTO_DEPRECATE_HARMFUL, EvolveService, NEGATIVE_FEEDBACK_RE, seedIfEmpty } from '@ryagent/evolve'
+import { afterEach, describe, expect, it } from 'vitest'
 
 const dirs: string[] = []
 function service(llm?: EvolveLlm): EvolveService {
@@ -21,11 +16,15 @@ afterEach(() => {
   while (dirs.length > 0) {
     try {
       rmSync(dirs.pop() as string, { recursive: true, force: true, maxRetries: 5 })
-    } catch { /* Windows 句柄滞后 */ }
+    } catch {
+      /* Windows 句柄滞后 */
+    }
   }
 })
 
-const turn = (overrides: Partial<TurnTrajectory & { injectedPlaybookEntryIds: string[]; injectedReflectionIds: string[] }> = {}) => {
+const turn = (
+  overrides: Partial<TurnTrajectory & { injectedPlaybookEntryIds: string[]; injectedReflectionIds: string[] }> = {},
+) => {
   return {
     userText: '你好',
     assistantText: '好的',
@@ -38,10 +37,9 @@ const turn = (overrides: Partial<TurnTrajectory & { injectedPlaybookEntryIds: st
 }
 
 /** 脚本化 Curator/Reflector。 */
-function mockLlm(overrides: {
-  deltas?: import('@ryagent/evolve').PlaybookDelta[]
-  reflectLesson?: string
-} = {}): EvolveLlm {
+function mockLlm(
+  overrides: { deltas?: import('@ryagent/evolve').PlaybookDelta[]; reflectLesson?: string } = {},
+): EvolveLlm {
   return {
     async proposeDeltas() {
       return overrides.deltas ?? []
@@ -89,10 +87,15 @@ describe('Reflector 归因计数', () => {
     await s.flush()
     expect(s.store.getEntry(entry.id)!.helpful).toBe(1)
 
-    s.enqueueTurn('a1', 'A', 'c1', turn({
-      injectedPlaybookEntryIds: [entry.id],
-      userText: '不对，错了',
-    }))
+    s.enqueueTurn(
+      'a1',
+      'A',
+      'c1',
+      turn({
+        injectedPlaybookEntryIds: [entry.id],
+        userText: '不对，错了',
+      }),
+    )
     await s.flush()
     expect(s.store.getEntry(entry.id)!.harmful).toBe(1)
   })
@@ -101,10 +104,15 @@ describe('Reflector 归因计数', () => {
     const s = service()
     const entry = s.store.insertEntry({ agentId: 'a1', section: 'strategy', content: 'x', source: 'seed' })
     for (let i = 0; i < AUTO_DEPRECATE_HARMFUL; i++) {
-      s.enqueueTurn('a1', 'A', 'c1', turn({
-        injectedPlaybookEntryIds: [entry.id],
-        userText: '错了',
-      }))
+      s.enqueueTurn(
+        'a1',
+        'A',
+        'c1',
+        turn({
+          injectedPlaybookEntryIds: [entry.id],
+          userText: '错了',
+        }),
+      )
       await s.flush()
     }
     expect(s.store.getEntry(entry.id)!.status).toBe('deprecated')
@@ -113,7 +121,15 @@ describe('Reflector 归因计数', () => {
 
 describe('Reflexion 反思（三类触发）', () => {
   const triggers: { name: string; turn: ReturnType<typeof turn> }[] = [
-    { name: '工具连续失败≥2', turn: turn({ toolResults: [{ name: 'shell_exec', isError: true }, { name: 'fs_write', isError: true }] }) },
+    {
+      name: '工具连续失败≥2',
+      turn: turn({
+        toolResults: [
+          { name: 'shell_exec', isError: true },
+          { name: 'fs_write', isError: true },
+        ],
+      }),
+    },
     { name: 'LLM error', turn: turn({ llmError: true }) },
     { name: '用户负反馈', turn: turn({ userText: '不对，重来' }) },
   ]
@@ -164,7 +180,9 @@ describe('教训验证与转正闭环', () => {
     s.enqueueTurn('a1', 'A', 'c1', turn({ injectedReflectionIds: [reflection.id] }))
     await s.flush()
     expect(s.store.getReflection(reflection.id)!.status).toBe('converted')
-    const entries = s.store.listActiveForCompile('a1').filter((e) => { return e.source === 'reflection' })
+    const entries = s.store.listActiveForCompile('a1').filter((e) => {
+      return e.source === 'reflection'
+    })
     expect(entries).toHaveLength(1)
     expect(entries[0]!.section).toBe('pitfall')
     expect(entries[0]!.content).toBe('先检查路径再写文件')
@@ -184,7 +202,9 @@ describe('Curator 增量 delta', () => {
           { op: 'deprecate', entryId: existing.entryId },
         ]
       },
-      async reflect() { return '' },
+      async reflect() {
+        return ''
+      },
     }
     const s = service(llm)
     const entry = s.store.insertEntry({ agentId: 'a1', section: 'pitfall', content: '旧条目', source: 'curator' })
@@ -194,7 +214,9 @@ describe('Curator 增量 delta', () => {
     await s.flush()
 
     const entries = s.store.listEntries('a1')
-    const added = entries.filter((e) => { return e.content === '新策略' })
+    const added = entries.filter((e) => {
+      return e.content === '新策略'
+    })
     expect(added).toHaveLength(1) // 去重生效
     // update 先执行、deprecate 后执行 → 最终 deprecated
     expect(s.store.getEntry(entry.id)!.status).toBe('deprecated')
@@ -211,10 +233,20 @@ describe('用户反馈闭环', () => {
     await s.flush()
     expect(s.store.getEntry(entry.id)!.helpful).toBe(1)
 
-    s.recordFeedback({ agentId: 'a1', conversationId: 'c1', signal: 'thumb_down', userText: '不好', assistantText: 'x' })
+    s.recordFeedback({
+      agentId: 'a1',
+      conversationId: 'c1',
+      signal: 'thumb_down',
+      userText: '不好',
+      assistantText: 'x',
+    })
     await s.flush()
     expect(s.store.getEntry(entry.id)!.harmful).toBe(1)
-    expect(s.store.listPendingReflections('a1').map((r) => { return r.lesson })).toContain('差评教训')
+    expect(
+      s.store.listPendingReflections('a1').map((r) => {
+        return r.lesson
+      }),
+    ).toContain('差评教训')
     expect(s.store.countFeedback('a1')).toEqual({ up: 0, down: 1 })
 
     s.recordFeedback({ agentId: 'a1', conversationId: 'c1', signal: 'thumb_up' })
@@ -228,7 +260,11 @@ describe('冷启动种子', () => {
     const s = service()
     expect(seedIfEmpty(s.store, 'a1', 'coding')).toBe(3)
     expect(seedIfEmpty(s.store, 'a1', 'coding')).toBe(0)
-    expect(s.store.listActiveForCompile('a1').map((e) => { return e.source })).toEqual(['seed', 'seed', 'seed'])
+    expect(
+      s.store.listActiveForCompile('a1').map((e) => {
+        return e.source
+      }),
+    ).toEqual(['seed', 'seed', 'seed'])
     expect(seedIfEmpty(s.store, 'a1', 'unknown-template')).toBe(0)
   })
 })
@@ -238,7 +274,8 @@ describe('巩固调度 runOnce（幂等）', () => {
     const s = service()
     // 30 天前的 pending 反思 → expired
     s.store.insertReflection({ agentId: 'a1', lesson: '老教训' })
-    const db = (s.store as unknown as { db: { prepare: (q: string) => { run: (...a: (number | string)[]) => void } } }).db
+    const db = (s.store as unknown as { db: { prepare: (q: string) => { run: (...a: (number | string)[]) => void } } })
+      .db
     db.prepare('UPDATE reflections SET created_at = ? WHERE agent_id = ?').run(Date.now() - 31 * 86_400_000, 'a1')
 
     // 重复记忆（同向量）→ 合并
@@ -250,9 +287,17 @@ describe('巩固调度 runOnce（幂等）', () => {
     ]
     const superseded: string[] = []
     const sweep = {
-      listSpaces: () => { return ['a1'] },
-      listActiveEmbeddings: () => { return rows.filter((r) => { return !superseded.includes(r.id) }) },
-      supersede(id: string) { superseded.push(id) },
+      listSpaces: () => {
+        return ['a1']
+      },
+      listActiveEmbeddings: () => {
+        return rows.filter((r) => {
+          return !superseded.includes(r.id)
+        })
+      },
+      supersede(id: string) {
+        superseded.push(id)
+      },
     }
 
     s.attachMemorySweep(sweep)
@@ -274,10 +319,18 @@ describe('全链路集成：失败 → 反思 → 注入 → 成功 → 转正',
     const llm = mockLlm({ reflectLesson: '写文件前先确认目录存在' })
     const s = service(llm)
     // T1 失败（工具连错）
-    s.enqueueTurn('a1', 'A', 'c1', turn({
-      userText: '写入失败了吗',
-      toolResults: [{ name: 'fs_write', isError: true }, { name: 'fs_write', isError: true }],
-    }))
+    s.enqueueTurn(
+      'a1',
+      'A',
+      'c1',
+      turn({
+        userText: '写入失败了吗',
+        toolResults: [
+          { name: 'fs_write', isError: true },
+          { name: 'fs_write', isError: true },
+        ],
+      }),
+    )
     await s.flush()
     let reflection = s.store.listPendingReflections('a1')[0]!
     expect(reflection.lesson).toBe('写文件前先确认目录存在')
@@ -296,8 +349,10 @@ describe('全链路集成：失败 → 反思 → 注入 → 成功 → 转正',
     expect(reflection.status).toBe('converted')
     const playbook = await s.compile('a1')
     expect(playbook!.text.includes('上次教训')).toBe(false) // 已清理
-    expect(s.store.listActiveForCompile('a1').some((e) => {
-      return e.source === 'reflection' && e.content === '写文件前先确认目录存在'
-    })).toBe(true)
+    expect(
+      s.store.listActiveForCompile('a1').some((e) => {
+        return e.source === 'reflection' && e.content === '写文件前先确认目录存在'
+      }),
+    ).toBe(true)
   })
 })

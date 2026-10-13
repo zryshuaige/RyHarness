@@ -8,20 +8,15 @@
  * @module @ryagent/llm-openai/adapter
  */
 
+import type { GenerateOptions, LlmModelInfo, LlmResolvedModelInfo, StreamChunk } from '@ryagent/llm'
 import {
+  assertUsableApiKey,
   attributionHeaders,
   isContextWindowExceededError,
   isQuotaExceededError,
   LlmAdapter,
   LlmError,
   QUOTA_EXCEEDED_CODE,
-} from '@ryagent/llm'
-import { assertUsableApiKey } from '@ryagent/llm'
-import type {
-  GenerateOptions,
-  LlmModelInfo,
-  LlmResolvedModelInfo,
-  StreamChunk,
 } from '@ryagent/llm'
 import { idleWatchdog, timeoutOf } from '@ryagent/timeout'
 import { assertProviderConfig, type OpenAiAdapterConfig, type OpenAiProviderConfig } from './config.ts'
@@ -52,10 +47,12 @@ async function httpError(provider: string, response: Response): Promise<LlmError
   }
   const detail = `${raw?.error?.code ?? ''} ${raw?.error?.type ?? ''} ${raw?.error?.message ?? ''} ${text}`.trim()
   const retryAfter = response.headers.get('retry-after')
-  const providerRetryAfterMs = retryAfter !== null && /^\d+$/.test(retryAfter)
-    ? Number(retryAfter) * 1000
-    : undefined
-  const failure = { message: `openai (${provider}): HTTP ${response.status} ${raw?.error?.message ?? text}`.trim(), code: classifyStatus(response.status, detail), ...providerRetryAfterMs === undefined ? {} : { providerRetryAfterMs } }
+  const providerRetryAfterMs = retryAfter !== null && /^\d+$/.test(retryAfter) ? Number(retryAfter) * 1000 : undefined
+  const failure = {
+    message: `openai (${provider}): HTTP ${response.status} ${raw?.error?.message ?? text}`.trim(),
+    code: classifyStatus(response.status, detail),
+    ...(providerRetryAfterMs === undefined ? {} : { providerRetryAfterMs }),
+  }
   return new LlmError(failure.message, failure.code, {
     cause: new Error(text.slice(0, 512)),
   })
@@ -101,13 +98,15 @@ export class OpenAiAdapter extends LlmAdapter {
   override listModels(provider: string): Promise<readonly LlmModelInfo[]> {
     const profile = this.options.providers[provider]
     if (profile === undefined) return Promise.resolve([])
-    return Promise.resolve(profile.models.map((model) => ({
-      provider,
-      id: model.id,
-      name: model.name ?? model.id,
-      ...model.description === undefined ? {} : { description: model.description },
-      inputModalities: ['text' as const],
-    })))
+    return Promise.resolve(
+      profile.models.map((model) => ({
+        provider,
+        id: model.id,
+        name: model.name ?? model.id,
+        ...(model.description === undefined ? {} : { description: model.description }),
+        inputModalities: ['text' as const],
+      })),
+    )
   }
 
   override resolveModel(provider: string, model: string, _signal?: AbortSignal): Promise<LlmResolvedModelInfo> {
@@ -118,12 +117,10 @@ export class OpenAiAdapter extends LlmAdapter {
       provider,
       id: model,
       name: configured?.name ?? model,
-      ...configured?.description === undefined ? {} : { description: configured.description },
+      ...(configured?.description === undefined ? {} : { description: configured.description }),
       inputModalities: ['text' as const],
-      ...configured?.contextWindow === undefined
-        ? {}
-        : { context: { contextWindow: configured.contextWindow } },
-      ...configured?.maxTokens === undefined ? {} : { defaultMaxTokens: configured.maxTokens },
+      ...(configured?.contextWindow === undefined ? {} : { context: { contextWindow: configured.contextWindow } }),
+      ...(configured?.maxTokens === undefined ? {} : { defaultMaxTokens: configured.maxTokens }),
     })
   }
 
@@ -149,14 +146,13 @@ export class OpenAiAdapter extends LlmAdapter {
     return assertUsableApiKey(raw, '@ryagent/llm-openai', envName)
   }
 
-  private async *generate(
-    options: GenerateOptions,
-    profile: OpenAiProviderConfig,
-  ): AsyncGenerator<StreamChunk> {
+  private async *generate(options: GenerateOptions, profile: OpenAiProviderConfig): AsyncGenerator<StreamChunk> {
     const consumer = new AbortController()
     const signal = options.signal === undefined ? consumer.signal : AbortSignal.any([consumer.signal, options.signal])
     using watchdog = idleWatchdog(signal, profile.streamIdleTimeoutMs ?? this.idleTimeoutMs, 'OPENAI_IDLE')
-    const iterator = this.request(options, profile, watchdog.signal, () => { watchdog.pulse() })
+    const iterator = this.request(options, profile, watchdog.signal, () => {
+      watchdog.pulse()
+    })
     try {
       while (true) {
         const next = await watchdog.next(iterator)
@@ -200,8 +196,8 @@ export class OpenAiAdapter extends LlmAdapter {
       headers: {
         ...attributionHeaders(),
         'content-type': 'application/json',
-        'accept': 'text/event-stream',
-        'authorization': `Bearer ${apiKey}`,
+        accept: 'text/event-stream',
+        authorization: `Bearer ${apiKey}`,
         ...profile.headers,
       },
     })

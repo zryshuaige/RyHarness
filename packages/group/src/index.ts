@@ -8,6 +8,11 @@
  * @module @ryagent/group
  */
 
-export { parseMentions } from './mentions.ts'
-export { buildGroupContext, DISPATCHER_ROUTING_SUFFIX, DEFAULT_HISTORY_BUDGET_CHARS, GroupDispatcher } from './dispatcher.ts'
 export type { GroupDispatcherOptions, GroupEvent, GroupHistoryEntry } from './dispatcher.ts'
+export {
+  buildGroupContext,
+  DEFAULT_HISTORY_BUDGET_CHARS,
+  DISPATCHER_ROUTING_SUFFIX,
+  GroupDispatcher,
+} from './dispatcher.ts'
+export { parseMentions } from './mentions.ts'

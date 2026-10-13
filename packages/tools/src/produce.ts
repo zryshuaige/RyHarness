@@ -71,9 +71,10 @@ export const fileProduce: Tool = {
   async execute(args, ctx) {
     const name = sanitizeLeafName(argString(args, 'name'))
     const content = argString(args, 'content')
-    const mime = typeof args === 'object' && args !== null && typeof (args as Record<string, unknown>).mime === 'string'
-      ? (args as Record<string, unknown>).mime as string
-      : guessMime(name)
+    const mime =
+      typeof args === 'object' && args !== null && typeof (args as Record<string, unknown>).mime === 'string'
+        ? ((args as Record<string, unknown>).mime as string)
+        : guessMime(name)
     const dir = resolveInWorkspace(ctx.workspaceRoot, ARTIFACTS_DIR)
     mkdirSync(dir, { recursive: true })
     const target = join(dir, name)

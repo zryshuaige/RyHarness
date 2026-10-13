@@ -6,8 +6,8 @@
  * @module @ryagent/llm-openai/sse
  */
 
-import { createParser } from 'eventsource-parser'
 import { LlmError } from '@ryagent/llm'
+import { createParser } from 'eventsource-parser'
 
 /**
  * Yield each SSE `data` payload in arrival order.

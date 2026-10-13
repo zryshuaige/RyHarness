@@ -21,7 +21,10 @@ export type Handler = (req: Request, res: ServerResponse) => Promise<void>
 
 /** 客户端请求错误（非法 JSON body 等）：dispatch 捕获后回对应 4xx，不再冒泡成 500。 */
 export class HttpRequestError extends Error {
-  constructor(readonly status: number, message: string) {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
     super(message)
     this.name = 'HttpRequestError'
   }
@@ -38,18 +41,34 @@ export class Router {
   private readonly routes: Route[] = []
 
   private add(method: string, pattern: string, handler: Handler): void {
-    this.routes.push({ method, segments: pattern.split('/').filter((s) => { return s.length > 0 }), handler })
+    this.routes.push({
+      method,
+      segments: pattern.split('/').filter((s) => {
+        return s.length > 0
+      }),
+      handler,
+    })
   }
 
-  get(pattern: string, handler: Handler): void { this.add('GET', pattern, handler) }
-  post(pattern: string, handler: Handler): void { this.add('POST', pattern, handler) }
-  patch(pattern: string, handler: Handler): void { this.add('PATCH', pattern, handler) }
-  delete(pattern: string, handler: Handler): void { this.add('DELETE', pattern, handler) }
+  get(pattern: string, handler: Handler): void {
+    this.add('GET', pattern, handler)
+  }
+  post(pattern: string, handler: Handler): void {
+    this.add('POST', pattern, handler)
+  }
+  patch(pattern: string, handler: Handler): void {
+    this.add('PATCH', pattern, handler)
+  }
+  delete(pattern: string, handler: Handler): void {
+    this.add('DELETE', pattern, handler)
+  }
 
   /** 分发一个请求；无匹配返回 false（调用方回 404）。 */
   async dispatch(req: IncomingMessage, res: ServerResponse, pathname: string): Promise<boolean> {
     const url = new URL(pathname, 'http://localhost')
-    const segments = url.pathname.split('/').filter((s) => { return s.length > 0 })
+    const segments = url.pathname.split('/').filter((s) => {
+      return s.length > 0
+    })
     for (const route of this.routes) {
       if (route.method !== req.method || route.segments.length !== segments.length) continue
       const params: Record<string, string> = {}

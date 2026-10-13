@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { ApiClient } from '../renderer/src/api.ts'
 import type { StampedWsEvent, WsConnectionStatus } from '../renderer/src/api.ts'
+import { ApiClient } from '../renderer/src/api.ts'
 
 /** 可控的假 WebSocket：测试手动触发 open/message/close。 */
 class FakeWebSocket {
@@ -34,7 +34,9 @@ class FakeWebSocket {
 }
 
 const sleep = (ms: number): Promise<void> => {
-  return new Promise((resolve) => { setTimeout(resolve, ms) })
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms)
+  })
 }
 
 describe('ApiClient.subscribe 断线重连与 seq 缺口', () => {
@@ -54,7 +56,9 @@ describe('ApiClient.subscribe 断线重连与 seq 缺口', () => {
     const statuses: WsConnectionStatus[] = []
     const unsubscribe = api.subscribe('c1', () => {}, {
       reconnectDelays: [5, 1000],
-      onStatus: (status) => { statuses.push(status) },
+      onStatus: (status) => {
+        statuses.push(status)
+      },
     })
     expect(FakeWebSocket.instances).toHaveLength(1)
     FakeWebSocket.instances[0]!.open()
@@ -70,7 +74,17 @@ describe('ApiClient.subscribe 断线重连与 seq 缺口', () => {
   it('seq 缺口触发 onGap；连续事件不触发', async () => {
     const events: StampedWsEvent[] = []
     let gaps = 0
-    const unsubscribe = api.subscribe('c1', (event) => { events.push(event) }, { onGap: () => { gaps += 1 } })
+    const unsubscribe = api.subscribe(
+      'c1',
+      (event) => {
+        events.push(event)
+      },
+      {
+        onGap: () => {
+          gaps += 1
+        },
+      },
+    )
     const ws = FakeWebSocket.instances[0]!
     ws.open()
     const delta = (seq: number): object => {
@@ -91,7 +105,9 @@ describe('ApiClient.subscribe 断线重连与 seq 缺口', () => {
     let gaps = 0
     const unsubscribe = api.subscribe('c1', () => {}, {
       reconnectDelays: [5],
-      onGap: () => { gaps += 1 },
+      onGap: () => {
+        gaps += 1
+      },
     })
     FakeWebSocket.instances[0]!.open()
     expect(gaps).toBe(0) // 首次连接不算缺口

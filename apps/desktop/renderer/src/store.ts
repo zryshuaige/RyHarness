@@ -67,9 +67,11 @@ export class ChatStore {
     return this.agentNames.get(senderId) ?? fallback ?? senderId
   }
 
-  subscribe = (listener: () => void): () => void => {
+  subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener)
-    return () => { this.listeners.delete(listener) }
+    return () => {
+      this.listeners.delete(listener)
+    }
   }
 
   getSnapshot = (): ChatSnapshot => {
@@ -89,11 +91,13 @@ export class ChatStore {
 
   private mutate(fn: (draft: ChatSnapshot) => void): void {
     const draft: ChatSnapshot = {
-      messages: this.snapshot.messages.map((m) => { return { ...m, parts: [...m.parts] } }),
+      messages: this.snapshot.messages.map((m) => {
+        return { ...m, parts: [...m.parts] }
+      }),
       relays: [...this.snapshot.relays],
       typing: { ...this.snapshot.typing },
       queueing: this.snapshot.queueing,
-      ...this.snapshot.error === undefined ? {} : { error: this.snapshot.error },
+      ...(this.snapshot.error === undefined ? {} : { error: this.snapshot.error }),
     }
     fn(draft)
     this.snapshot = draft
@@ -106,11 +110,13 @@ export class ChatStore {
   }
 
   /** 加载历史调度事件（打开会话时一次性灌入）。 */
-  setDispatchHistory(events: readonly { fromAgent?: string; toAgent: string; reason: string; turnIndex: number }[]): void {
+  setDispatchHistory(
+    events: readonly { fromAgent?: string; toAgent: string; reason: string; turnIndex: number }[],
+  ): void {
     this.mutate((draft) => {
       draft.relays = events.map((event) => {
         return {
-          ...event.fromAgent === undefined ? {} : { fromAgent: event.fromAgent },
+          ...(event.fromAgent === undefined ? {} : { fromAgent: event.fromAgent }),
           toAgent: event.toAgent,
           reason: event.reason,
           turnIndex: event.turnIndex,
@@ -129,11 +135,20 @@ export class ChatStore {
         }
         this.mutate((draft) => {
           const key = this.streamingKey(event.senderId, event.turnIndex)
-          if (draft.messages.some((m) => { return m.key === key })) return
+          if (
+            draft.messages.some((m) => {
+              return m.key === key
+            })
+          )
+            return
           draft.messages.push({
-            key, senderType: 'agent', senderId: event.senderId,
+            key,
+            senderType: 'agent',
+            senderId: event.senderId,
             senderName: this.nameOf(event.senderId, event.senderName),
-            turnIndex: event.turnIndex, parts: [], done: false,
+            turnIndex: event.turnIndex,
+            parts: [],
+            done: false,
           })
           draft.typing[event.senderId] = (draft.typing[event.senderId] ?? 0) + 1
         })
@@ -151,8 +166,11 @@ export class ChatStore {
           const message = this.findStreaming(draft, event.senderId)
           if (message === undefined) return
           message.parts.push({
-            kind: 'tool', callId: event.callId, name: event.name,
-            arguments: event.arguments, status: 'running',
+            kind: 'tool',
+            callId: event.callId,
+            name: event.name,
+            arguments: event.arguments,
+            status: 'running',
           })
         })
         return
@@ -160,7 +178,9 @@ export class ChatStore {
       case 'tool-result': {
         this.mutate((draft) => {
           for (const message of draft.messages) {
-            const tool = message.parts.find((part) => { return part.kind === 'tool' && part.callId === event.callId })
+            const tool = message.parts.find((part) => {
+              return part.kind === 'tool' && part.callId === event.callId
+            })
             if (tool !== undefined && tool.kind === 'tool') {
               tool.status = 'done'
               tool.isError = event.isError
@@ -174,8 +194,11 @@ export class ChatStore {
           const message = this.findStreaming(draft, event.senderId)
           if (message === undefined) return
           message.parts.push({
-            kind: 'file', callId: event.callId,
-            name: event.card.name, size: event.card.size, mime: event.card.mime,
+            kind: 'file',
+            callId: event.callId,
+            name: event.card.name,
+            size: event.card.size,
+            mime: event.card.mime,
           })
         })
         return
@@ -183,8 +206,10 @@ export class ChatStore {
       case 'dispatch': {
         this.mutate((draft) => {
           draft.relays.push({
-            ...event.fromAgent === undefined ? {} : { fromAgent: event.fromAgent },
-            toAgent: event.toAgent, reason: event.reason, turnIndex: event.turnIndex,
+            ...(event.fromAgent === undefined ? {} : { fromAgent: event.fromAgent }),
+            toAgent: event.toAgent,
+            reason: event.reason,
+            turnIndex: event.turnIndex,
           })
         })
         return
@@ -193,7 +218,9 @@ export class ChatStore {
         this.mutate((draft) => {
           draft.queueing = false
           const key = this.streamingKey(event.senderId, event.turnIndex)
-          const index = draft.messages.findIndex((m) => { return m.key === key })
+          const index = draft.messages.findIndex((m) => {
+            return m.key === key
+          })
           if (index >= 0) {
             draft.messages[index]!.key = `done:${event.senderId}:${event.turnIndex}:${index}`
             draft.messages[index]!.done = true
@@ -226,8 +253,12 @@ export class ChatStore {
     this.mutate((draft) => {
       draft.messages.push({
         key: `user:${Date.now()}`,
-        senderType: 'user', senderId: 'user', senderName: '我',
-        turnIndex, parts: [{ kind: 'text', text }], done: true,
+        senderType: 'user',
+        senderId: 'user',
+        senderName: '我',
+        turnIndex,
+        parts: [{ kind: 'text', text }],
+        done: true,
       })
     })
   }
@@ -267,5 +298,7 @@ export function mentionQueryAt(text: string, cursor: number): { start: number; q
 /** 按 query 过滤候选名字（大小写不敏感包含匹配）。 */
 export function filterMentions<T extends { id: string; name: string }>(members: T[], query: string): T[] {
   const lowered = query.toLowerCase()
-  return members.filter((member) => { return member.name.toLowerCase().includes(lowered) })
+  return members.filter((member) => {
+    return member.name.toLowerCase().includes(lowered)
+  })
 }

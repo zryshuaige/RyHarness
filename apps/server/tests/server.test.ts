@@ -2,12 +2,12 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { connect } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
-import { Context } from '@ryagent/cordis'
-import LlmRuntime, { LlmAdapter } from '@ryagent/llm'
+import type { Context } from '@ryagent/cordis'
 import type { GenerateOptions, StreamChunk } from '@ryagent/llm'
-import { RyAgentServer } from '@ryagent/server'
+import LlmRuntime, { LlmAdapter } from '@ryagent/llm'
 import type { WsEvent } from '@ryagent/server'
+import { RyAgentServer } from '@ryagent/server'
+import { afterEach, describe, expect, it } from 'vitest'
 import WebSocket from 'ws'
 
 /** 按调用顺序消费脚本回复的 mock 适配器。 */
@@ -37,6 +37,7 @@ class MockAdapter extends LlmAdapter {
   }
 
   /** 子类可覆盖：决定本次调用的回复文本。 */
+  // biome-ignore lint/correctness/noUnusedFunctionParameters: 子类覆盖点，基类实现不需要 options
   protected scriptedText(options: GenerateOptions): string {
     return this.replies[this.calls - 1] ?? ''
   }
@@ -48,7 +49,9 @@ class MockAdapter extends LlmAdapter {
       { type: 'block-end', index: 0, block: { type: 'text', text } },
       { type: 'finish', reason: { kind: 'stop' } },
     ]
-    return (async function* (): AsyncGenerator<StreamChunk> { yield* chunks })()
+    return (async function* (): AsyncGenerator<StreamChunk> {
+      yield* chunks
+    })()
   }
 }
 
@@ -80,16 +83,20 @@ afterEach(() => {
 
 async function getJson(base: string, path: string): Promise<{ status: number; body: Record<string, unknown> }> {
   const response = await fetch(`${base}${path}`)
-  return { status: response.status, body: await response.json() as Record<string, unknown> }
+  return { status: response.status, body: (await response.json()) as Record<string, unknown> }
 }
 
-async function postJson(base: string, path: string, payload: unknown): Promise<{ status: number; body: Record<string, unknown> }> {
+async function postJson(
+  base: string,
+  path: string,
+  payload: unknown,
+): Promise<{ status: number; body: Record<string, unknown> }> {
   const response = await fetch(`${base}${path}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(payload),
   })
-  return { status: response.status, body: await response.json() as Record<string, unknown> }
+  return { status: response.status, body: (await response.json()) as Record<string, unknown> }
 }
 
 /** 收集 WS 事件：先等连接建立（ready）再触发动作，直到满足条件或超时。 */
@@ -100,15 +107,27 @@ function collectWs(
   timeoutMs = 8000,
 ): { ready: Promise<void>; done: Promise<WsEvent[]> } {
   let readyResolve: () => void = () => {}
-  const ready = new Promise<void>((resolve) => { readyResolve = resolve })
+  const ready = new Promise<void>((resolve) => {
+    readyResolve = resolve
+  })
   const done = new Promise<WsEvent[]>((resolve, reject) => {
     const ws = new WebSocket(`${base.replace('http', 'ws')}/ws?conversationId=${conversationId}`)
     const events: WsEvent[] = []
     const timer = setTimeout(() => {
       ws.terminate()
-      reject(new Error(`WS collection timed out after ${timeoutMs}ms; events so far: ${events.map((e) => { return e.type }).join(',')}`))
+      reject(
+        new Error(
+          `WS collection timed out after ${timeoutMs}ms; events so far: ${events
+            .map((e) => {
+              return e.type
+            })
+            .join(',')}`,
+        ),
+      )
     }, timeoutMs)
-    ws.on('open', () => { readyResolve() })
+    ws.on('open', () => {
+      readyResolve()
+    })
     ws.on('message', (data) => {
       const event = JSON.parse(String(data)) as WsEvent
       events.push(event)
@@ -131,7 +150,9 @@ async function waitFor(cond: () => boolean): Promise<void> {
   const deadline = Date.now() + 5000
   while (!cond()) {
     if (Date.now() > deadline) throw new Error('waitFor timed out')
-    await new Promise((resolve) => { setTimeout(resolve, 10) })
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10)
+    })
   }
 }
 
@@ -141,11 +162,15 @@ describe('RyAgentServer', () => {
     try {
       const templates = await getJson(base, '/api/agent-templates')
       expect(templates.status).toBe(200)
-      const keys = (templates.body.templates as { key: string }[]).map((t) => { return t.key })
+      const keys = (templates.body.templates as { key: string }[]).map((t) => {
+        return t.key
+      })
       expect(keys).toEqual(['general', 'coding', 'writing', 'translation', 'file-organizer'])
 
       const agents = await getJson(base, '/api/agents')
-      const seeded = (agents.body.agents as { id: string; isBuiltin: boolean }[]).find((a) => { return a.id === 'ryen' })
+      const seeded = (agents.body.agents as { id: string; isBuiltin: boolean }[]).find((a) => {
+        return a.id === 'ryen'
+      })
       expect(seeded?.isBuiltin).toBe(true)
 
       const created = await postJson(base, '/api/agents', { templateKey: 'coding', name: 'Coder' })
@@ -174,10 +199,7 @@ describe('RyAgentServer', () => {
   })
 
   it('group chat end-to-end: REST + WS events + persisted messages', async () => {
-    const { server, base } = await startServer([
-      '收到，我来协调。@Coder 写个草案',
-      '草案写好了。',
-    ])
+    const { server, base } = await startServer(['收到，我来协调。@Coder 写个草案', '草案写好了。'])
     try {
       // 把种子的 Ryen 与新建 agent 的 provider 指到 mock 路由（默认是 siliconflow）
       await fetch(`${base}/api/agents/ryen`, {
@@ -187,58 +209,91 @@ describe('RyAgentServer', () => {
       })
       // 建 Coding Agent + 群（Ryen + Coder）
       const created = await postJson(base, '/api/agents', {
-        templateKey: 'coding', name: 'Coder', provider: 'mock', model: 'mock',
+        templateKey: 'coding',
+        name: 'Coder',
+        provider: 'mock',
+        model: 'mock',
       })
       const coderId = (created.body as { agent: { id: string } }).agent.id
       const group = await postJson(base, '/api/conversations', {
-        kind: 'group', memberAgentIds: ['ryen', coderId], title: '验证群',
+        kind: 'group',
+        memberAgentIds: ['ryen', coderId],
+        title: '验证群',
       })
       expect(group.status).toBe(201)
       const conversationId = (group.body as { conversation: { id: string; dispatcherAgentId: string } }).conversation.id
-      expect((group.body as { conversation: { dispatcherAgentId: string } }).conversation.dispatcherAgentId).toBe('ryen')
+      expect((group.body as { conversation: { dispatcherAgentId: string } }).conversation.dispatcherAgentId).toBe(
+        'ryen',
+      )
 
       // WS 先订阅（等连接建立），再发消息
-      const collector = collectWs(
-        base,
-        conversationId,
-        (events) => {
-          const dones = events.filter((e) => { return e.type === 'message-done' })
-          return dones.some((e) => { return e.type === 'message-done' && e.senderId === 'ryen' })
-            && dones.some((e) => { return e.type === 'message-done' && e.senderId === coderId })
-        },
-      )
+      const collector = collectWs(base, conversationId, (events) => {
+        const dones = events.filter((e) => {
+          return e.type === 'message-done'
+        })
+        return (
+          dones.some((e) => {
+            return e.type === 'message-done' && e.senderId === 'ryen'
+          }) &&
+          dones.some((e) => {
+            return e.type === 'message-done' && e.senderId === coderId
+          })
+        )
+      })
       await collector.ready
       const posted = await postJson(base, `/api/conversations/${conversationId}/messages`, { text: '这个需求怎么做？' })
       expect(posted.status).toBe(202)
       const events = await collector.done
 
-      const kinds = events.map((e) => { return e.type })
+      const kinds = events.map((e) => {
+        return e.type
+      })
       // 用户消息起播 + 调度员入口 + 接力 + 两条发言完成
       expect(kinds[0]).toBe('message-start')
-      expect(kinds.filter((k) => { return k === 'message-start' })).toHaveLength(3)
-      expect(kinds.filter((k) => { return k === 'message-done' })).toHaveLength(2)
+      expect(
+        kinds.filter((k) => {
+          return k === 'message-start'
+        }),
+      ).toHaveLength(3)
+      expect(
+        kinds.filter((k) => {
+          return k === 'message-done'
+        }),
+      ).toHaveLength(2)
       expect(kinds).toContain('dispatch')
       expect(kinds).toContain('text-delta')
-      const dispatches = events.filter((e) => { return e.type === 'dispatch' })
-      expect(dispatches.map((d) => { return d.type === 'dispatch' ? `${d.reason}->${d.toAgent}` : '' }))
-        .toEqual(['default-dispatcher->ryen', `relay @Coder->${coderId}`])
+      const dispatches = events.filter((e) => {
+        return e.type === 'dispatch'
+      })
+      expect(
+        dispatches.map((d) => {
+          return d.type === 'dispatch' ? `${d.reason}->${d.toAgent}` : ''
+        }),
+      ).toEqual(['default-dispatcher->ryen', `relay @Coder->${coderId}`])
 
       // 拉消息列表断言与 WS 一致
       const messages = await getJson(base, `/api/conversations/${conversationId}/messages`)
       const rows = (messages.body as { messages: { senderType: string; senderId?: string }[] }).messages
-      expect(rows.map((m) => { return `${m.senderType}:${m.senderId ?? '-'}` }))
-        .toEqual(['user:user', 'agent:ryen', `agent:${coderId}`])
+      expect(
+        rows.map((m) => {
+          return `${m.senderType}:${m.senderId ?? '-'}`
+        }),
+      ).toEqual(['user:user', 'agent:ryen', `agent:${coderId}`])
 
       // 会话列表含预览与真实未读数（两条 agent 发言未读）
       const list = await getJson(base, '/api/conversations')
-      const entry = (list.body.conversations as { id: string; lastMessagePreview: string; unreadCount: number }[])
-        .find((c) => { return c.id === conversationId })
+      const entry = (list.body.conversations as { id: string; lastMessagePreview: string; unreadCount: number }[]).find(
+        (c) => {
+          return c.id === conversationId
+        },
+      )
       expect(entry?.lastMessagePreview).toBe('草案写好了。')
       expect(entry?.unreadCount).toBe(2)
       await postJson(base, `/api/conversations/${conversationId}/read`, {})
       const listAfterRead = await getJson(base, '/api/conversations')
-      const entryAfter = (listAfterRead.body.conversations as { id: string; unreadCount: number }[])
-        .find((c) => { return c.id === conversationId })
+      const entryAfter = (listAfterRead.body.conversations as { id: string; unreadCount: number }[]).find((c) => {
+        return c.id === conversationId
+      })
       expect(entryAfter?.unreadCount).toBe(0)
 
       // 删会话级联清消息
@@ -266,8 +321,16 @@ describe('RyAgentServer', () => {
     try {
       const res = await getJson(server.url, '/api/agents/ryen/memories')
       const body = res.body as { agent: { content: string }[]; shared: { content: string }[] }
-      expect(body.agent.map((m) => { return m.content })).toContain('Ryen 的私有约定')
-      expect(body.shared.map((m) => { return m.content })).toContain('用户是产品经理')
+      expect(
+        body.agent.map((m) => {
+          return m.content
+        }),
+      ).toContain('Ryen 的私有约定')
+      expect(
+        body.shared.map((m) => {
+          return m.content
+        }),
+      ).toContain('用户是产品经理')
 
       const stats = await getJson(server.url, '/api/memory/stats')
       expect((stats.body as { enabled: boolean }).enabled).toBe(true)
@@ -298,8 +361,8 @@ describe('RyAgentServer', () => {
 
       const missing = await fetch(`${base}/api/files/nope.txt`)
       expect(missing.status).toBe(404)
-      const escape = await fetch(`${base}/api/files/..%2Fryagent.db`)
-      expect(escape.status).toBe(400)
+      const traversal = await fetch(`${base}/api/files/..%2Fryagent.db`)
+      expect(traversal.status).toBe(400)
     } finally {
       await server.close()
     }
@@ -317,20 +380,28 @@ describe('RyAgentServer', () => {
       expect(direct.status).toBe(201)
       const conversationId = (direct.body as { conversation: { id: string } }).conversation.id
 
-      const collector = collectWs(
-        base, conversationId,
-        (events) => { return events.some((e) => { return e.type === 'message-done' }) },
-      )
+      const collector = collectWs(base, conversationId, (events) => {
+        return events.some((e) => {
+          return e.type === 'message-done'
+        })
+      })
       await collector.ready
       const posted = await postJson(base, `/api/conversations/${conversationId}/messages`, { text: '在吗' })
       expect(posted.status).toBe(202)
       const events = await collector.done
-      expect(events.map((e) => { return e.type }))
-        .toEqual(['message-start', 'message-start', 'text-delta', 'message-done'])
+      expect(
+        events.map((e) => {
+          return e.type
+        }),
+      ).toEqual(['message-start', 'message-start', 'text-delta', 'message-done'])
       expect((events[1] as { senderId: string }).senderId).toBe('ryen')
       const messages = await getJson(base, `/api/conversations/${conversationId}/messages`)
       const rows = (messages.body as { messages: { senderType: string; senderId?: string }[] }).messages
-      expect(rows.map((m) => { return `${m.senderType}:${m.senderId ?? '-'}` })).toEqual(['user:user', 'agent:ryen'])
+      expect(
+        rows.map((m) => {
+          return `${m.senderType}:${m.senderId ?? '-'}`
+        }),
+      ).toEqual(['user:user', 'agent:ryen'])
     } finally {
       await server.close()
     }
@@ -339,7 +410,9 @@ describe('RyAgentServer', () => {
   it('同会话消息串行：第二个请求排队，queued 事件先行，顺序不乱', async () => {
     // 第一个回复延迟 300ms，给第二条消息留出"撞上忙期"的窗口。
     let releaseFirst: () => void = () => {}
-    const gate = new Promise<void>((resolve) => { releaseFirst = resolve })
+    const gate = new Promise<void>((resolve) => {
+      releaseFirst = resolve
+    })
     const calls: string[] = []
     class GatedAdapter extends MockAdapter {
       protected override scriptedText(options: GenerateOptions): string {
@@ -361,23 +434,33 @@ describe('RyAgentServer', () => {
     tmpDirs.push(dataDir)
     const adapter = new GatedAdapter(['', ''])
     const server = await RyAgentServer.create({
-      port: 0, dataDir,
-      mountLlm: (ctx) => { ctx.llm.registerAdapter(['mock'], adapter) },
+      port: 0,
+      dataDir,
+      mountLlm: (ctx) => {
+        ctx.llm.registerAdapter(['mock'], adapter)
+      },
     })
     try {
       await fetch(`${server.url}/api/agents/ryen`, {
-        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ provider: 'mock', model: 'mock' }),
       })
-      const { conversation } = await (await fetch(`${server.url}/api/conversations`, {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ kind: 'direct', agentId: 'ryen' }),
-      })).json() as { conversation: { id: string } }
+      const { conversation } = (await (
+        await fetch(`${server.url}/api/conversations`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ kind: 'direct', agentId: 'ryen' }),
+        })
+      ).json()) as { conversation: { id: string } }
 
-      const collector = collectWs(
-        server.url, conversation.id,
-        (events) => { return events.filter((e) => { return e.type === 'message-done' }).length >= 2 },
-      )
+      const collector = collectWs(server.url, conversation.id, (events) => {
+        return (
+          events.filter((e) => {
+            return e.type === 'message-done'
+          }).length >= 2
+        )
+      })
       await collector.ready
       const first = await postJson(server.url, `/api/conversations/${conversation.id}/messages`, { text: '第一条' })
       expect(first.status).toBe(202)
@@ -386,11 +469,17 @@ describe('RyAgentServer', () => {
       releaseFirst()
       const events = await collector.done
       // queued 事件在第二条处理前到达。
-      expect(events.some((e) => { return e.type === 'queued' })).toBe(true)
+      expect(
+        events.some((e) => {
+          return e.type === 'queued'
+        }),
+      ).toBe(true)
       expect(calls).toEqual(['第一条', '第二条'])
       const messages = await getJson(server.url, `/api/conversations/${conversation.id}/messages`)
       const rows = (messages.body as { messages: { contentBlocks: { text?: string }[] }[] }).messages
-      const texts = rows.map((m) => { return (m.contentBlocks[0] as { text?: string }).text })
+      const texts = rows.map((m) => {
+        return (m.contentBlocks[0] as { text?: string }).text
+      })
       expect(texts).toEqual(['第一条', 'R1', '第二条', 'R2'])
     } finally {
       await server.close()
@@ -401,24 +490,31 @@ describe('RyAgentServer', () => {
     const { server, base } = await startServer(['未读回复。'])
     try {
       await fetch(`${base}/api/agents/ryen`, {
-        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ provider: 'mock', model: 'mock' }),
       })
-      const { conversation } = await (await fetch(`${base}/api/conversations`, {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ kind: 'direct', agentId: 'ryen' }),
-      })).json() as { conversation: { id: string } }
+      const { conversation } = (await (
+        await fetch(`${base}/api/conversations`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ kind: 'direct', agentId: 'ryen' }),
+        })
+      ).json()) as { conversation: { id: string } }
 
       const collector = collectWs(base, conversation.id, (events) => {
-        return events.some((e) => { return e.type === 'message-done' })
+        return events.some((e) => {
+          return e.type === 'message-done'
+        })
       })
       await collector.ready
       await postJson(base, `/api/conversations/${conversation.id}/messages`, { text: '在吗' })
       await collector.done
 
       const list1 = await getJson(base, '/api/conversations')
-      const entry1 = (list1.body.conversations as { id: string; unreadCount: number }[])
-        .find((c) => { return c.id === conversation.id })
+      const entry1 = (list1.body.conversations as { id: string; unreadCount: number }[]).find((c) => {
+        return c.id === conversation.id
+      })
       expect(entry1?.unreadCount).toBe(1)
 
       const read = await postJson(base, `/api/conversations/${conversation.id}/read`, {})
@@ -426,8 +522,9 @@ describe('RyAgentServer', () => {
       expect((read.body as { lastReadSeq: number }).lastReadSeq).toBeGreaterThan(0)
 
       const list2 = await getJson(base, '/api/conversations')
-      const entry2 = (list2.body.conversations as { id: string; unreadCount: number }[])
-        .find((c) => { return c.id === conversation.id })
+      const entry2 = (list2.body.conversations as { id: string; unreadCount: number }[]).find((c) => {
+        return c.id === conversation.id
+      })
       expect(entry2?.unreadCount).toBe(0)
     } finally {
       await server.close()
@@ -496,7 +593,9 @@ describe('RyAgentServer', () => {
           ws.terminate()
           reject(new Error('WS upgrade should have been refused for a foreign origin'))
         })
-        ws.on('error', () => { resolve() })
+        ws.on('error', () => {
+          resolve()
+        })
       })
     } finally {
       await server.close()
@@ -520,14 +619,17 @@ describe('RyAgentServer', () => {
       const direct = await postJson(base, '/api/conversations', { kind: 'direct', agentId: 'ryen' })
       const conversationId = (direct.body as { conversation: { id: string } }).conversation.id
 
-      const collector = collectWs(
-        base, conversationId,
-        (events) => { return events.some((e) => { return e.type === 'message-done' }) },
-      )
+      const collector = collectWs(base, conversationId, (events) => {
+        return events.some((e) => {
+          return e.type === 'message-done'
+        })
+      })
       await collector.ready
       await postJson(base, `/api/conversations/${conversationId}/messages`, { text: '在吗' })
       const events = await collector.done
-      const seqs = events.map((e) => { return (e as { seq?: number }).seq })
+      const seqs = events.map((e) => {
+        return (e as { seq?: number }).seq
+      })
       expect(seqs).toEqual([1, 2, 3, 4])
     } finally {
       await server.close()
@@ -541,7 +643,9 @@ describe('RyAgentServer', () => {
       port: 0,
       dataDir,
       wsHeartbeatMs: 60,
-      mountLlm: (ctx) => { ctx.llm.registerAdapter(['mock'], new MockAdapter([])) },
+      mountLlm: (ctx) => {
+        ctx.llm.registerAdapter(['mock'], new MockAdapter([]))
+      },
     })
     try {
       const port = Number(new URL(server.url).port)
@@ -551,12 +655,12 @@ describe('RyAgentServer', () => {
         socket.once('error', reject)
         socket.once('connect', () => {
           socket.write(
-            'GET /ws?conversationId=c1 HTTP/1.1\r\n'
-            + 'Host: 127.0.0.1\r\n'
-            + 'Upgrade: websocket\r\n'
-            + 'Connection: Upgrade\r\n'
-            + 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n'
-            + 'Sec-WebSocket-Version: 13\r\n\r\n',
+            'GET /ws?conversationId=c1 HTTP/1.1\r\n' +
+              'Host: 127.0.0.1\r\n' +
+              'Upgrade: websocket\r\n' +
+              'Connection: Upgrade\r\n' +
+              'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n' +
+              'Sec-WebSocket-Version: 13\r\n\r\n',
           )
           resolve()
         })
@@ -579,7 +683,9 @@ describe('RyAgentServer', () => {
 
   it('优雅停机：close() 先等在途 turn 完成再关库（事件能送达客户端）', async () => {
     let release: () => void = () => {}
-    const gate = new Promise<void>((resolve) => { release = resolve })
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
     const calls: string[] = []
     class GatedAdapter extends MockAdapter {
       protected override scriptedText(options: GenerateOptions): string {
@@ -599,42 +705,63 @@ describe('RyAgentServer', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'ryagent-server-drain-'))
     tmpDirs.push(dataDir)
     const server = await RyAgentServer.create({
-      port: 0, dataDir,
-      mountLlm: (ctx) => { ctx.llm.registerAdapter(['mock'], new GatedAdapter([])) },
+      port: 0,
+      dataDir,
+      mountLlm: (ctx) => {
+        ctx.llm.registerAdapter(['mock'], new GatedAdapter([]))
+      },
     })
     await fetch(`${server.url}/api/agents/ryen`, {
-      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ provider: 'mock', model: 'mock' }),
     })
-    const { conversation } = await (await fetch(`${server.url}/api/conversations`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ kind: 'direct', agentId: 'ryen' }),
-    })).json() as { conversation: { id: string } }
+    const { conversation } = (await (
+      await fetch(`${server.url}/api/conversations`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind: 'direct', agentId: 'ryen' }),
+      })
+    ).json()) as { conversation: { id: string } }
 
-    const collector = collectWs(
-      server.url, conversation.id,
-      (events) => { return events.some((e) => { return e.type === 'message-done' }) },
-    )
+    const collector = collectWs(server.url, conversation.id, (events) => {
+      return events.some((e) => {
+        return e.type === 'message-done'
+      })
+    })
     await collector.ready
     await postJson(server.url, `/api/conversations/${conversation.id}/messages`, { text: '慢慢来' })
-    await waitFor(() => { return calls.length > 0 })
+    await waitFor(() => {
+      return calls.length > 0
+    })
 
     const closePromise = server.close()
     const early = await Promise.race([
-      closePromise.then(() => { return 'closed' as const }),
-      new Promise<'waiting'>((resolve) => { setTimeout(() => { resolve('waiting') }, 300) }),
+      closePromise.then(() => {
+        return 'closed' as const
+      }),
+      new Promise<'waiting'>((resolve) => {
+        setTimeout(() => {
+          resolve('waiting')
+        }, 300)
+      }),
     ])
     expect(early).toBe('waiting') // turn 未完成前 close 不得关库返回
     release()
     const events = await collector.done
-    expect(events.map((e) => { return e.type }))
-      .toEqual(['message-start', 'message-start', 'text-delta', 'message-done'])
+    expect(
+      events.map((e) => {
+        return e.type
+      }),
+    ).toEqual(['message-start', 'message-start', 'text-delta', 'message-done'])
     await closePromise
   }, 20_000)
 
   it('优雅停机超时兜底：在途 turn 卡死时 close() 也在超时后完成', async () => {
     let release: () => void = () => {}
-    const gate = new Promise<void>((resolve) => { release = resolve })
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
     const calls: string[] = []
     class StuckAdapter extends MockAdapter {
       protected override scriptedText(options: GenerateOptions): string {
@@ -654,19 +781,29 @@ describe('RyAgentServer', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'ryagent-server-timeout-'))
     tmpDirs.push(dataDir)
     const server = await RyAgentServer.create({
-      port: 0, dataDir, shutdownTimeoutMs: 200,
-      mountLlm: (ctx) => { ctx.llm.registerAdapter(['mock'], new StuckAdapter([])) },
+      port: 0,
+      dataDir,
+      shutdownTimeoutMs: 200,
+      mountLlm: (ctx) => {
+        ctx.llm.registerAdapter(['mock'], new StuckAdapter([]))
+      },
     })
     await fetch(`${server.url}/api/agents/ryen`, {
-      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ provider: 'mock', model: 'mock' }),
     })
-    const { conversation } = await (await fetch(`${server.url}/api/conversations`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ kind: 'direct', agentId: 'ryen' }),
-    })).json() as { conversation: { id: string } }
+    const { conversation } = (await (
+      await fetch(`${server.url}/api/conversations`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind: 'direct', agentId: 'ryen' }),
+      })
+    ).json()) as { conversation: { id: string } }
     await postJson(server.url, `/api/conversations/${conversation.id}/messages`, { text: '卡住' })
-    await waitFor(() => { return calls.length > 0 })
+    await waitFor(() => {
+      return calls.length > 0
+    })
     await server.close() // turn 永不放行也应 ~200ms 后完成停机
     release() // 放行悬挂的 turn；写已关闭的库由 runTurn 的 catch 兜住
   }, 20_000)

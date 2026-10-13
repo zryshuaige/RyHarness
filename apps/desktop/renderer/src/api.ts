@@ -99,9 +99,30 @@ export interface ReflectionRow {
 export type WsEvent =
   | { type: 'message-start'; conversationId: string; senderId: string; senderName: string; turnIndex: number }
   | { type: 'text-delta'; conversationId: string; senderId: string; text: string }
-  | { type: 'tool-call-start'; conversationId: string; senderId: string; callId: string; name: string; arguments: string }
-  | { type: 'tool-result'; conversationId: string; senderId: string; callId: string; name: string; isError: boolean; content: string }
-  | { type: 'produce-card'; conversationId: string; senderId: string; callId: string; card: { path: string; name: string; size: number; mime: string } }
+  | {
+      type: 'tool-call-start'
+      conversationId: string
+      senderId: string
+      callId: string
+      name: string
+      arguments: string
+    }
+  | {
+      type: 'tool-result'
+      conversationId: string
+      senderId: string
+      callId: string
+      name: string
+      isError: boolean
+      content: string
+    }
+  | {
+      type: 'produce-card'
+      conversationId: string
+      senderId: string
+      callId: string
+      card: { path: string; name: string; size: number; mime: string }
+    }
   | { type: 'dispatch'; conversationId: string; fromAgent?: string; toAgent: string; reason: string; turnIndex: number }
   | { type: 'message-done'; conversationId: string; senderId: string; turnIndex: number }
   | { type: 'error'; conversationId: string; message: string; code: string }
@@ -140,7 +161,9 @@ export class ApiClient {
       ...init,
       headers: { 'content-type': 'application/json', ...init?.headers },
     })
-    const body = await response.json().catch(() => { return {} }) as T & { error?: string }
+    const body = (await response.json().catch(() => {
+      return {}
+    })) as T & { error?: string }
     if (!response.ok) throw new Error(body.error ?? `HTTP ${response.status}`)
     return body
   }
@@ -169,11 +192,18 @@ export class ApiClient {
     return this.request('/api/conversations')
   }
 
-  createConversation(input: { kind: 'direct'; agentId: string } | { kind: 'group'; memberAgentIds: string[]; dispatcherAgentId?: string; title?: string }): Promise<{ conversation: Conversation }> {
+  createConversation(
+    input:
+      | { kind: 'direct'; agentId: string }
+      | { kind: 'group'; memberAgentIds: string[]; dispatcherAgentId?: string; title?: string },
+  ): Promise<{ conversation: Conversation }> {
     return this.request('/api/conversations', { method: 'POST', body: JSON.stringify(input) })
   }
 
-  messages(conversationId: string, opts: { limit?: number; before?: number } = {}): Promise<{ messages: MessageRow[] }> {
+  messages(
+    conversationId: string,
+    opts: { limit?: number; before?: number } = {},
+  ): Promise<{ messages: MessageRow[] }> {
     const params = new URLSearchParams()
     params.set('limit', String(opts.limit ?? 50))
     if (opts.before !== undefined) params.set('before', String(opts.before))
@@ -181,7 +211,10 @@ export class ApiClient {
   }
 
   postMessage(conversationId: string, text: string): Promise<{ accepted: boolean }> {
-    return this.request(`/api/conversations/${conversationId}/messages`, { method: 'POST', body: JSON.stringify({ text }) })
+    return this.request(`/api/conversations/${conversationId}/messages`, {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+    })
   }
 
   /** 标记会话已读（未读徽标归零）。 */
@@ -190,7 +223,9 @@ export class ApiClient {
   }
 
   /** 调度事件历史。 */
-  listDispatchEvents(conversationId: string): Promise<{ events: { fromAgent?: string; toAgent: string; reason: string; turnIndex: number }[] }> {
+  listDispatchEvents(
+    conversationId: string,
+  ): Promise<{ events: { fromAgent?: string; toAgent: string; reason: string; turnIndex: number }[] }> {
     return this.request(`/api/conversations/${conversationId}/dispatch`)
   }
 
@@ -275,7 +310,9 @@ export class ApiClient {
         attempts += 1
         timer = setTimeout(connect, delay)
       }
-      ws.onerror = () => { ws.close() }
+      ws.onerror = () => {
+        ws.close()
+      }
     }
     connect()
 
@@ -290,7 +327,11 @@ export class ApiClient {
 /** 从消息行提取展示文本。 */
 export function messageText(row: MessageRow): string {
   return row.contentBlocks
-    .filter((block) => { return block.type === 'text' && typeof block.text === 'string' })
-    .map((block) => { return block.text ?? '' })
+    .filter((block) => {
+      return block.type === 'text' && typeof block.text === 'string'
+    })
+    .map((block) => {
+      return block.text ?? ''
+    })
     .join('\n')
 }

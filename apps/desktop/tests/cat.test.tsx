@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest'
+
 import { renderToStaticMarkup } from 'react-dom/server'
+import { describe, expect, it } from 'vitest'
 import { Cat } from '../renderer/src/components/Cat.tsx'
 
 describe('Cat 吉祥物三态', () => {

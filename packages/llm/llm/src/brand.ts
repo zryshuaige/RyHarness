@@ -10,7 +10,7 @@
  * @module @ryagent/llm/brand
  */
 
-import { brandString, type Branded } from '@ryagent/brand'
+import { type Branded, brandString } from '@ryagent/brand'
 
 /** Stable identity carried by one message across inbox, log, and model-request boundaries. */
 export type MessageId = Branded<'MessageId'>

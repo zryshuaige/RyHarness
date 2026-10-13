@@ -4,14 +4,6 @@
     "noEmit": true,
     "rootDir": "."
   },
-  "include": [
-    "packages",
-    "apps",
-    "scripts",
-    "vitest.config.ts"
-  ],
-  "exclude": [
-    "**/lib",
-    "**/node_modules"
-  ]
+  "include": ["packages", "apps", "scripts", "vitest.config.ts"],
+  "exclude": ["**/lib", "**/node_modules"]
 }

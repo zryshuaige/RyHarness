@@ -7,3 +7,7 @@ dist/
 .zcode-tmp/
 .DS_Store
 data/
+apps/desktop/main/
+apps/desktop/capture.png
+coverage/
+*.tsbuildinfo

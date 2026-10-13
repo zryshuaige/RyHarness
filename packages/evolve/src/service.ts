@@ -14,12 +14,12 @@
  * @module @ryagent/evolve/service
  */
 
-import { EvolveStore } from './store.ts'
-import type { PlaybookEntry } from './store.ts'
-import { AUTO_DEPRECATE_HARMFUL, CONVERT_HIT_THRESHOLD } from './schema.ts'
-import type { PlaybookSection } from './schema.ts'
-import { NEGATIVE_FEEDBACK_RE } from './llm.ts'
 import type { EvolveLlm, TurnTrajectory } from './llm.ts'
+import { NEGATIVE_FEEDBACK_RE } from './llm.ts'
+import type { PlaybookSection } from './schema.ts'
+import { AUTO_DEPRECATE_HARMFUL, CONVERT_HIT_THRESHOLD } from './schema.ts'
+import type { PlaybookEntry } from './store.ts'
+import { EvolveStore } from './store.ts'
 
 /** 一轮轨迹 + 注入归因（AgentLoop 在编译后记录）。 */
 export interface EvolutionTurn extends TurnTrajectory {
@@ -89,7 +89,11 @@ export class EvolveService implements AgentEvolutionHooks {
   constructor(options: EvolveServiceOptions) {
     this.store = new EvolveStore(options.dbPath)
     this.llm = options.llm
-    this.log = options.logger ?? ((message) => { console.log(message) })
+    this.log =
+      options.logger ??
+      ((message) => {
+        console.log(message)
+      })
   }
 
   close(): void {
@@ -104,8 +108,11 @@ export class EvolveService implements AgentEvolutionHooks {
    * section 分组）+ 最近 pending 教训。无内容返回 undefined。
    */
   async compile(agentId: string): Promise<CompiledEvolution | undefined> {
-    const entries = this.store.listActiveForCompile(agentId)
-      .sort((a, b) => { return (b.helpful - b.harmful) - (a.helpful - a.harmful) })
+    const entries = this.store
+      .listActiveForCompile(agentId)
+      .sort((a, b) => {
+        return b.helpful - b.harmful - (a.helpful - a.harmful)
+      })
       .slice(0, COMPILE_TOP_N)
     const reflections = this.store.listPendingReflections(agentId, REFLECTION_INJECT_MAX)
 
@@ -121,13 +128,31 @@ export class EvolveService implements AgentEvolutionHooks {
       for (const section of SECTION_ORDER) {
         const list = bySection.get(section)
         if (list === undefined) continue
-        sections.push(`${SECTION_LABELS[section]}：${list.map((e) => { return e.content }).join('；')}`)
-        playbookEntryIds.push(...list.map((e) => { return e.id }))
+        sections.push(
+          `${SECTION_LABELS[section]}：${list
+            .map((e) => {
+              return e.content
+            })
+            .join('；')}`,
+        )
+        playbookEntryIds.push(
+          ...list.map((e) => {
+            return e.id
+          }),
+        )
       }
     }
-    const reflectionIds = reflections.map((r) => { return r.id })
+    const reflectionIds = reflections.map((r) => {
+      return r.id
+    })
     if (reflections.length > 0) {
-      sections.push(`上次教训：\n${reflections.map((r) => { return `- ${r.lesson}` }).join('\n')}`)
+      sections.push(
+        `上次教训：\n${reflections
+          .map((r) => {
+            return `- ${r.lesson}`
+          })
+          .join('\n')}`,
+      )
     }
 
     if (sections.length === 0) return undefined
@@ -156,29 +181,49 @@ export class EvolveService implements AgentEvolutionHooks {
     await this.queue
   }
 
-  private async runTurnWithRetry(agentId: string, agentName: string, conversationId: string, turn: EvolutionTurn): Promise<void> {
+  private async runTurnWithRetry(
+    agentId: string,
+    agentName: string,
+    conversationId: string,
+    turn: EvolutionTurn,
+  ): Promise<void> {
     try {
       await this.runTurn(agentId, agentName, conversationId, turn)
     } catch (error) {
-      this.log(`@ryagent/evolve: turn pipeline failed, retrying once: ${error instanceof Error ? error.message : String(error)}`)
+      this.log(
+        `@ryagent/evolve: turn pipeline failed, retrying once: ${error instanceof Error ? error.message : String(error)}`,
+      )
       try {
         await this.runTurn(agentId, agentName, conversationId, turn)
       } catch (retryError) {
-        this.log(`@ryagent/evolve: turn pipeline gave up: ${retryError instanceof Error ? retryError.message : String(retryError)}`)
+        this.log(
+          `@ryagent/evolve: turn pipeline gave up: ${retryError instanceof Error ? retryError.message : String(retryError)}`,
+        )
       }
     }
   }
 
-  private async runTurn(agentId: string, agentName: string, conversationId: string, turn: EvolutionTurn): Promise<void> {
+  private async runTurn(
+    agentId: string,
+    agentName: string,
+    conversationId: string,
+    turn: EvolutionTurn,
+  ): Promise<void> {
     const negativeFeedback = NEGATIVE_FEEDBACK_RE.test(turn.userText)
-    const toolErrors = turn.toolResults.filter((t) => { return t.isError }).length
+    const toolErrors = turn.toolResults.filter((t) => {
+      return t.isError
+    }).length
     const failed = turn.llmError || toolErrors >= 2 || negativeFeedback
 
     // ---- Reflector：注入归因计数（确定性，不烧 LLM）----
     for (const entryId of turn.injectedPlaybookEntryIds) {
       this.store.addCounts(entryId, failed ? { harmful: 1 } : { helpful: 1 })
       const entry = this.store.getEntry(entryId)
-      if (entry !== undefined && entry.status === 'active' && entry.harmful + (failed ? 1 : 0) >= AUTO_DEPRECATE_HARMFUL) {
+      if (
+        entry !== undefined &&
+        entry.status === 'active' &&
+        entry.harmful + (failed ? 1 : 0) >= AUTO_DEPRECATE_HARMFUL
+      ) {
         this.store.setEntryStatus(entryId, 'deprecated')
         this.log(`@ryagent/evolve: entry ${entryId} auto-deprecated (harmful>=${AUTO_DEPRECATE_HARMFUL})`)
       }
@@ -254,7 +299,13 @@ export class EvolveService implements AgentEvolutionHooks {
    * 👎：即时反思入库 + 归因条目 harmful+1；👍：归因条目 helpful+1。
    * 归因 = 该 agent 在该会话最近一次注入的集合（串行队列下的近似）。
    */
-  recordFeedback(input: { agentId: string; conversationId: string; signal: 'thumb_up' | 'thumb_down'; userText?: string; assistantText?: string }): void {
+  recordFeedback(input: {
+    agentId: string
+    conversationId: string
+    signal: 'thumb_up' | 'thumb_down'
+    userText?: string
+    assistantText?: string
+  }): void {
     this.store.recordFeedback({
       agentId: input.agentId,
       conversationId: input.conversationId,
@@ -286,7 +337,9 @@ export class EvolveService implements AgentEvolutionHooks {
           const lesson = await this.llm!.reflect({ agentName: '', trajectory, reason: '用户点了差评' })
           this.store.insertReflection({ agentId: input.agentId, lesson, sourceConversationId: input.conversationId })
         } catch (error) {
-          this.log(`@ryagent/evolve: feedback reflection failed: ${error instanceof Error ? error.message : String(error)}`)
+          this.log(
+            `@ryagent/evolve: feedback reflection failed: ${error instanceof Error ? error.message : String(error)}`,
+          )
         }
       })
     }
@@ -350,7 +403,9 @@ export class EvolveService implements AgentEvolutionHooks {
         this.log(`@ryagent/evolve: consolidate failed: ${error instanceof Error ? error.message : String(error)}`)
       }
     }, intervalMs)
-    return () => { this.stopConsolidation() }
+    return () => {
+      this.stopConsolidation()
+    }
   }
 
   stopConsolidation(): void {

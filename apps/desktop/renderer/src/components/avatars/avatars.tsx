@@ -8,9 +8,10 @@
  * agent.avatar 字段编码：`db:{styleKey}:{seed}`；'cat' 保留 Ryen 定制橘猫；
  * 未知值回退首字符暖色块（旧库数据平滑降级）。
  */
-import { createAvatar } from '@dicebear/core'
+
 import { adventurer, bigEars, funEmoji, lorelei, notionists, thumbs } from '@dicebear/collection'
 import type { Style } from '@dicebear/core'
+import { createAvatar } from '@dicebear/core'
 
 export interface AvatarStyleDef {
   key: string
@@ -29,7 +30,11 @@ export const AVATAR_STYLES: AvatarStyleDef[] = [
 ]
 
 export const AVATAR_STYLE_BY_KEY: Readonly<Record<string, AvatarStyleDef>> = Object.freeze(
-  Object.fromEntries(AVATAR_STYLES.map((s) => { return [s.key, s] })),
+  Object.fromEntries(
+    AVATAR_STYLES.map((s) => {
+      return [s.key, s]
+    }),
+  ),
 )
 
 /** 解析 avatar 字段。 */
@@ -42,9 +47,11 @@ export function parseAvatarSpec(avatar: string | undefined): { styleKey: string;
 }
 
 /** 生成随机 avatar 字段值。 */
-export function randomAvatarSpec(random: () => string = () => {
-  return Math.random().toString(36).slice(2, 10)
-}): string {
+export function randomAvatarSpec(
+  random: () => string = () => {
+    return Math.random().toString(36).slice(2, 10)
+  },
+): string {
   const style = AVATAR_STYLES[Math.floor(Math.random() * AVATAR_STYLES.length)]!
   return `db:${style.key}:${random()}`
 }
@@ -61,9 +68,18 @@ export function dicebearSvg(styleKey: string, seed: string): string | null {
 
 /** 首字符兜底色环（暖色系 12 色，按 seed 哈希取色）。 */
 export const FALLBACK_COLORS = [
-  '#F59E0B', '#F2752B', '#E8845C', '#D9A06B',
-  '#C98D5A', '#EFC883', '#E5B25C', '#F3C6C6',
-  '#B9AE9F', '#F2A03D', '#E58A7E', '#D98A7E',
+  '#F59E0B',
+  '#F2752B',
+  '#E8845C',
+  '#D9A06B',
+  '#C98D5A',
+  '#EFC883',
+  '#E5B25C',
+  '#F3C6C6',
+  '#B9AE9F',
+  '#F2A03D',
+  '#E58A7E',
+  '#D98A7E',
 ] as const
 
 export function fallbackColor(seed: string): string {

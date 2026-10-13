@@ -7,7 +7,10 @@ import { resolve, sep } from 'node:path'
 
 /** 路径逃逸工作区时抛出。 */
 export class PathEscapeError extends Error {
-  constructor(readonly root: string, readonly path: string) {
+  constructor(
+    readonly root: string,
+    readonly path: string,
+  ) {
     super(`path "${path}" escapes workspace root "${root}"`)
     this.name = 'PathEscapeError'
   }

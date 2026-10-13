@@ -7,32 +7,25 @@
  * @module @ryagent/server/app
  */
 
-import { createServer, type Server, type ServerResponse, type IncomingMessage } from 'node:http'
-import { existsSync, mkdirSync, createReadStream } from 'node:fs'
+import { createReadStream, existsSync, mkdirSync } from 'node:fs'
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { join } from 'node:path'
+import type { AgentDefinition, AgentEvolutionHooks, AgentMemoryHooks } from '@ryagent/agent'
 import { Context } from '@ryagent/cordis'
-import LlmRuntime from '@ryagent/llm'
-import type { AgentDefinition } from '@ryagent/agent'
-import { apply as applyOpenAi } from '@ryagent/llm-openai'
-import { ARTIFACTS_DIR, fileProduce, fsRead, fsWrite, guessMime, shellExec } from '@ryagent/tools'
-import { SessionCoordinator, SessionStore } from '@ryagent/session'
-import {
-  ChatMemoryLlm,
-  MemoryService,
-  NullEmbeddings,
-  SiliconFlowEmbeddings,
-} from '@ryagent/memory'
 import { ChatEvolveLlm, EvolveService, seedIfEmpty } from '@ryagent/evolve'
-import type { AgentEvolutionHooks } from '@ryagent/agent'
-import type { AgentMemoryHooks } from '@ryagent/agent'
-import { WebSocketServer } from 'ws'
+import LlmRuntime from '@ryagent/llm'
+import { apply as applyOpenAi } from '@ryagent/llm-openai'
+import { ChatMemoryLlm, MemoryService, NullEmbeddings, SiliconFlowEmbeddings } from '@ryagent/memory'
+import { SessionCoordinator, SessionStore } from '@ryagent/session'
+import { ARTIFACTS_DIR, fileProduce, fsRead, fsWrite, guessMime, shellExec } from '@ryagent/tools'
 import type { WebSocket as WsSocket } from 'ws'
+import { WebSocketServer } from 'ws'
 import { EventHub } from './bus.ts'
-import type { WsEvent } from './events.ts'
-import { loadProvidersConfig, providerKeyConfigured, toAdapterConfig } from './config.ts'
 import type { ProvidersConfigFile } from './config.ts'
+import { loadProvidersConfig, providerKeyConfigured, toAdapterConfig } from './config.ts'
+import type { WsEvent } from './events.ts'
+import { HttpRequestError, json, Router, strField } from './router.ts'
 import { AGENT_TEMPLATES, ensureSeedAgents, instantiateTemplate } from './seed.ts'
-import { HttpRequestError, Router, json, strField } from './router.ts'
 
 /** 工具全集：协调器按各 agent 定义白名单过滤。 */
 const ALL_TOOLS = [fsRead, fsWrite, shellExec, fileProduce]
@@ -79,7 +72,12 @@ function agentFieldOverrides(body: unknown): Partial<Omit<AgentDefinition, 'id' 
     overrides.temperature = record.temperature
   }
   if (record.tools !== undefined) {
-    if (!Array.isArray(record.tools) || record.tools.some((tool) => { return typeof tool !== 'string' })) {
+    if (
+      !Array.isArray(record.tools) ||
+      record.tools.some((tool) => {
+        return typeof tool !== 'string'
+      })
+    ) {
       throw new HttpRequestError(400, 'field "tools" must be an array of strings')
     }
     overrides.tools = record.tools as string[]
@@ -135,12 +133,8 @@ function createDefaultMemory(dataDir: string): MemoryService {
   const hasKey = apiKey.length > 0
   return new MemoryService({
     dbPath: join(dataDir, 'ryagent.db'),
-    embeddings: hasKey
-      ? new SiliconFlowEmbeddings({ apiKey })
-      : new NullEmbeddings(),
-    llm: hasKey
-      ? new ChatMemoryLlm({ apiKey })
-      : undefined,
+    embeddings: hasKey ? new SiliconFlowEmbeddings({ apiKey }) : new NullEmbeddings(),
+    llm: hasKey ? new ChatMemoryLlm({ apiKey }) : undefined,
   })
 }
 
@@ -183,7 +177,9 @@ export class RyAgentServer {
     mkdirSync(workspaceRoot, { recursive: true })
 
     const store = new SessionStore(join(dataDir, 'ryagent.db'))
-    ensureSeedAgents((input) => { store.upsertAgent(input) })
+    ensureSeedAgents((input) => {
+      store.upsertAgent(input)
+    })
 
     const ctx = new Context()
     await ctx.plugin(LlmRuntime)
@@ -193,14 +189,15 @@ export class RyAgentServer {
       const providers = options.providersConfig ?? loadProvidersConfig(join(dataDir, 'config', 'providers.json'))
       applyOpenAi(ctx, toAdapterConfig(providers))
     }
-    const providers = options.providersConfig
-      ?? (options.mountLlm !== undefined
+    const providers =
+      options.providersConfig ??
+      (options.mountLlm !== undefined
         ? { providers: {} }
         : loadProvidersConfig(join(dataDir, 'config', 'providers.json')))
 
-    const memoryOption = options.memory === null ? undefined : options.memory ?? createDefaultMemory(dataDir)
+    const memoryOption = options.memory === null ? undefined : (options.memory ?? createDefaultMemory(dataDir))
     const memoryService = memoryOption instanceof MemoryService ? memoryOption : undefined
-    const evolutionOption = options.evolution === null ? undefined : options.evolution ?? createDefaultEvolve(dataDir)
+    const evolutionOption = options.evolution === null ? undefined : (options.evolution ?? createDefaultEvolve(dataDir))
     const evolutionService = evolutionOption instanceof EvolveService ? evolutionOption : undefined
     // 冷启动种子：内置 Ryen 播通用模板手册。
     if (evolutionService !== undefined) seedIfEmpty(evolutionService.store, 'ryen', 'general')
@@ -223,29 +220,44 @@ export class RyAgentServer {
             }
           })
         },
-        supersede: (id) => { memoryService.store.supersede(id, 'superseded') },
+        supersede: (id) => {
+          memoryService.store.supersede(id, 'superseded')
+        },
       })
     }
     const coordinator = new SessionCoordinator({
-      store, llm: ctx.llm, tools: ALL_TOOLS,
-      ...memoryOption === undefined ? {} : { memory: memoryOption },
-      ...evolutionOption === undefined ? {} : { evolution: evolutionOption },
+      store,
+      llm: ctx.llm,
+      tools: ALL_TOOLS,
+      ...(memoryOption === undefined ? {} : { memory: memoryOption }),
+      ...(evolutionOption === undefined ? {} : { evolution: evolutionOption }),
     })
     const hub = new EventHub()
     if (evolutionService !== undefined && options.consolidationIntervalMs !== 0) {
       evolutionService.startConsolidation(options.consolidationIntervalMs ?? 6 * 3_600_000)
     }
     const server = new RyAgentServer(
-      store, coordinator, memoryOption, memoryService, evolutionOption, evolutionService,
-      createServer(), new WebSocketServer({ noServer: true }), hub,
-      dataDir, workspaceRoot, providers,
+      store,
+      coordinator,
+      memoryOption,
+      memoryService,
+      evolutionOption,
+      evolutionService,
+      createServer(),
+      new WebSocketServer({ noServer: true }),
+      hub,
+      dataDir,
+      workspaceRoot,
+      providers,
       options.wsHeartbeatMs ?? DEFAULT_WS_HEARTBEAT_MS,
       options.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS,
     )
-    server.http.on('request', (req, res) => { server.onRequest(req, res).catch((error: unknown) => {
-      if (!res.headersSent) json(res, 500, { error: error instanceof Error ? error.message : String(error) })
-      res.end()
-    }) })
+    server.http.on('request', (req, res) => {
+      server.onRequest(req, res).catch((error: unknown) => {
+        if (!res.headersSent) json(res, 500, { error: error instanceof Error ? error.message : String(error) })
+        res.end()
+      })
+    })
     server.attachWs()
     await new Promise<void>((resolve) => {
       server.http.listen(options.port ?? DEFAULT_PORT, options.host ?? DEFAULT_HOST, resolve)
@@ -270,14 +282,18 @@ export class RyAgentServer {
       let timer: ReturnType<typeof setTimeout> | undefined
       await Promise.race([
         Promise.allSettled(pending),
-        new Promise((resolve) => { timer = setTimeout(resolve, this.shutdownTimeoutMs) }),
+        new Promise((resolve) => {
+          timer = setTimeout(resolve, this.shutdownTimeoutMs)
+        }),
       ])
       if (timer !== undefined) clearTimeout(timer)
     }
     for (const client of this.wss.clients) client.terminate()
     this.wss.close()
     await new Promise<void>((resolve, reject) => {
-      this.http.close((error) => { return error === undefined || error === null ? resolve() : reject(error) })
+      this.http.close((error) => {
+        return error === undefined || error === null ? resolve() : reject(error)
+      })
     })
     this.store.close()
     this.memoryService?.close()
@@ -318,7 +334,9 @@ export class RyAgentServer {
       }
       this.wss.handleUpgrade(req, socket, head, (ws) => {
         this.wsAlive.set(ws, true)
-        ws.on('pong', () => { this.wsAlive.set(ws, true) })
+        ws.on('pong', () => {
+          this.wsAlive.set(ws, true)
+        })
         const unsubscribe = this.hub.subscribe(conversationId, (event) => {
           if (ws.readyState !== ws.OPEN) return
           // 慢消费者背压：缓冲堆积超上限说明客户端跟不上，断开比堆积内存安全。
@@ -386,16 +404,17 @@ export class RyAgentServer {
       // 白名单校验失败抛 HttpRequestError，由 dispatch 统一回 400。
       const overrides = agentFieldOverrides(body)
       try {
-        const definition: AgentDefinition = templateKey !== undefined
-          ? instantiateTemplate(templateKey, overrides)
-          : {
-            id: strField(body, 'id') ?? crypto.randomUUID(),
-            name: overrides.name ?? '未命名 Agent',
-            systemPrompt: overrides.systemPrompt ?? '你是一个乐于助人的助手。',
-            provider: overrides.provider ?? 'siliconflow',
-            model: overrides.model ?? 'deepseek-ai/DeepSeek-V3',
-            tools: overrides.tools ?? [],
-          }
+        const definition: AgentDefinition =
+          templateKey !== undefined
+            ? instantiateTemplate(templateKey, overrides)
+            : {
+                id: strField(body, 'id') ?? crypto.randomUUID(),
+                name: overrides.name ?? '未命名 Agent',
+                systemPrompt: overrides.systemPrompt ?? '你是一个乐于助人的助手。',
+                provider: overrides.provider ?? 'siliconflow',
+                model: overrides.model ?? 'deepseek-ai/DeepSeek-V3',
+                tools: overrides.tools ?? [],
+              }
         const stored = store.upsertAgent({ ...definition, isBuiltin: false })
         json(res, 201, { agent: stored })
       } catch (error) {
@@ -499,8 +518,7 @@ export class RyAgentServer {
       const conversationId = strField(body, 'conversationId')
       const agentId = strField(body, 'agentId')
       const signal = strField(body, 'signal')
-      if (conversationId === undefined || agentId === undefined
-        || (signal !== 'thumb_up' && signal !== 'thumb_down')) {
+      if (conversationId === undefined || agentId === undefined || (signal !== 'thumb_up' && signal !== 'thumb_down')) {
         json(res, 400, { error: 'conversationId, agentId and signal(thumb_up|thumb_down) are required' })
         return
       }
@@ -576,7 +594,7 @@ export class RyAgentServer {
           if (store.getAgent(agentId) === undefined) throw new Error(`unknown agent "${agentId}"`)
           const conversation = store.createConversation({
             kind: 'direct',
-            title: strField(body, 'title') ?? (store.getAgent(agentId)?.name ?? ''),
+            title: strField(body, 'title') ?? store.getAgent(agentId)?.name ?? '',
             memberAgentIds: [agentId],
           })
           json(res, 201, { conversation })
@@ -651,7 +669,7 @@ export class RyAgentServer {
       const before = req.query.get('before')
       const rows = store.listMessages(conversationId, {
         limit: Number.isFinite(limit) && limit > 0 ? Math.min(limit, 200) : 50,
-        ...before === null || before.length === 0 ? {} : { beforeSeq: Number(before) },
+        ...(before === null || before.length === 0 ? {} : { beforeSeq: Number(before) }),
       })
       json(res, 200, { messages: rows })
     })
@@ -669,7 +687,10 @@ export class RyAgentServer {
         return
       }
       this.publish({
-        type: 'message-start', conversationId, senderId: 'user', senderName: '用户',
+        type: 'message-start',
+        conversationId,
+        senderId: 'user',
+        senderName: '用户',
         turnIndex: store.nextTurnIndex(conversationId),
       })
       // 202：处理异步进行，过程经 WS 推送；同会话消息串行排队。
@@ -687,8 +708,8 @@ export class RyAgentServer {
           apiKeyConfigured: providerKeyConfigured(provider),
           models: provider.models.map((model) => ({
             id: model.id,
-            ...model.name === undefined ? {} : { name: model.name },
-            ...model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow },
+            ...(model.name === undefined ? {} : { name: model.name }),
+            ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
           })),
         })),
       })
@@ -715,25 +736,29 @@ export class RyAgentServer {
   }
 
   /** 把一轮对话排进该会话的串行链；上一 turn 未结束时先发 queued 事件。 */
-  private enqueueTurn(
-    conversation: { id: string; kind: string; memberAgentIds: string[] },
-    text: string,
-  ): void {
+  private enqueueTurn(conversation: { id: string; kind: string; memberAgentIds: string[] }, text: string): void {
     const tail = this.turnChains.get(conversation.id)
     if (tail !== undefined) {
       this.publish({
-        type: 'queued', conversationId: conversation.id, senderId: 'user',
+        type: 'queued',
+        conversationId: conversation.id,
+        senderId: 'user',
         turnIndex: this.store.nextTurnIndex(conversation.id),
       })
     }
-    const run = (tail ?? Promise.resolve()).catch(() => {}).then(() => {
-      return this.runTurn(conversation, text)
-    })
-    const chain = run.then(() => {
-      if (this.turnChains.get(conversation.id) === chain) this.turnChains.delete(conversation.id)
-    }, () => {
-      if (this.turnChains.get(conversation.id) === chain) this.turnChains.delete(conversation.id)
-    })
+    const run = (tail ?? Promise.resolve())
+      .catch(() => {})
+      .then(() => {
+        return this.runTurn(conversation, text)
+      })
+    const chain = run.then(
+      () => {
+        if (this.turnChains.get(conversation.id) === chain) this.turnChains.delete(conversation.id)
+      },
+      () => {
+        if (this.turnChains.get(conversation.id) === chain) this.turnChains.delete(conversation.id)
+      },
+    )
     this.turnChains.set(conversation.id, chain)
   }
 
@@ -749,8 +774,11 @@ export class RyAgentServer {
         const agentId = conversation.memberAgentIds[0] as string
         const senderName = store.getAgent(agentId)?.name ?? agentId
         this.publish({
-          type: 'message-start', conversationId: conversation.id,
-          senderId: agentId, senderName, turnIndex: store.nextTurnIndex(conversation.id) - 1,
+          type: 'message-start',
+          conversationId: conversation.id,
+          senderId: agentId,
+          senderName,
+          turnIndex: store.nextTurnIndex(conversation.id) - 1,
         })
         for await (const event of coordinator.chatDirect(conversation.id, agentId, text, runContext)) {
           switch (event.type) {
@@ -759,25 +787,39 @@ export class RyAgentServer {
               break
             case 'tool-call-start':
               this.publish({
-                type: 'tool-call-start', conversationId: conversation.id, senderId: agentId,
-                callId: event.callId, name: event.name, arguments: event.arguments,
+                type: 'tool-call-start',
+                conversationId: conversation.id,
+                senderId: agentId,
+                callId: event.callId,
+                name: event.name,
+                arguments: event.arguments,
               })
               break
             case 'tool-result':
               this.publish({
-                type: 'tool-result', conversationId: conversation.id, senderId: agentId,
-                callId: event.callId, name: event.name, isError: event.isError, content: event.result.content,
+                type: 'tool-result',
+                conversationId: conversation.id,
+                senderId: agentId,
+                callId: event.callId,
+                name: event.name,
+                isError: event.isError,
+                content: event.result.content,
               })
               if (event.result.produce !== undefined) {
                 this.publish({
-                  type: 'produce-card', conversationId: conversation.id, senderId: agentId,
-                  callId: event.callId, card: event.result.produce,
+                  type: 'produce-card',
+                  conversationId: conversation.id,
+                  senderId: agentId,
+                  callId: event.callId,
+                  card: event.result.produce,
                 })
               }
               break
             case 'done':
               this.publish({
-                type: 'message-done', conversationId: conversation.id, senderId: agentId,
+                type: 'message-done',
+                conversationId: conversation.id,
+                senderId: agentId,
                 turnIndex: store.nextTurnIndex(conversation.id) - 1,
               })
               break
@@ -794,8 +836,10 @@ export class RyAgentServer {
         if (started.has(agentId)) return
         started.add(agentId)
         this.publish({
-          type: 'message-start', conversationId: conversation.id,
-          senderId: agentId, senderName: store.getAgent(agentId)?.name ?? agentId,
+          type: 'message-start',
+          conversationId: conversation.id,
+          senderId: agentId,
+          senderName: store.getAgent(agentId)?.name ?? agentId,
           turnIndex: store.nextTurnIndex(conversation.id) - 1,
         })
       }
@@ -803,43 +847,62 @@ export class RyAgentServer {
         switch (event.type) {
           case 'dispatch':
             this.publish({
-              type: 'dispatch', conversationId: conversation.id,
-              ...event.fromAgent === undefined ? {} : { fromAgent: event.fromAgent },
-              toAgent: event.toAgent, reason: event.reason, turnIndex: event.turnIndex,
+              type: 'dispatch',
+              conversationId: conversation.id,
+              ...(event.fromAgent === undefined ? {} : { fromAgent: event.fromAgent }),
+              toAgent: event.toAgent,
+              reason: event.reason,
+              turnIndex: event.turnIndex,
             })
             break
           case 'text-delta':
             ensureStart(event.agentId)
             this.publish({
-              type: 'text-delta', conversationId: conversation.id,
-              senderId: event.agentId, text: event.text,
+              type: 'text-delta',
+              conversationId: conversation.id,
+              senderId: event.agentId,
+              text: event.text,
             })
             break
           case 'tool-call-start':
             ensureStart(event.agentId)
             this.publish({
-              type: 'tool-call-start', conversationId: conversation.id, senderId: event.agentId,
-              callId: event.callId, name: event.name, arguments: event.arguments,
+              type: 'tool-call-start',
+              conversationId: conversation.id,
+              senderId: event.agentId,
+              callId: event.callId,
+              name: event.name,
+              arguments: event.arguments,
             })
             break
           case 'tool-result':
             ensureStart(event.agentId)
             this.publish({
-              type: 'tool-result', conversationId: conversation.id, senderId: event.agentId,
-              callId: event.callId, name: event.name, isError: event.isError, content: event.result.content,
+              type: 'tool-result',
+              conversationId: conversation.id,
+              senderId: event.agentId,
+              callId: event.callId,
+              name: event.name,
+              isError: event.isError,
+              content: event.result.content,
             })
             if (event.result.produce !== undefined) {
               this.publish({
-                type: 'produce-card', conversationId: conversation.id, senderId: event.agentId,
-                callId: event.callId, card: event.result.produce,
+                type: 'produce-card',
+                conversationId: conversation.id,
+                senderId: event.agentId,
+                callId: event.callId,
+                card: event.result.produce,
               })
             }
             break
           case 'agent-message':
             ensureStart(event.agentId)
             this.publish({
-              type: 'message-done', conversationId: conversation.id,
-              senderId: event.agentId, turnIndex: store.nextTurnIndex(conversation.id) - 1,
+              type: 'message-done',
+              conversationId: conversation.id,
+              senderId: event.agentId,
+              turnIndex: store.nextTurnIndex(conversation.id) - 1,
             })
             break
           case 'error':
@@ -851,8 +914,10 @@ export class RyAgentServer {
       }
     } catch (error) {
       this.publish({
-        type: 'error', conversationId: conversation.id,
-        message: error instanceof Error ? error.message : String(error), code: 'INTERNAL',
+        type: 'error',
+        conversationId: conversation.id,
+        message: error instanceof Error ? error.message : String(error),
+        code: 'INTERNAL',
       })
     }
   }

@@ -1,7 +1,7 @@
 /** 列表骨架屏（shimmer 1.5s）。 */
 export function ConversationSkeleton({ rows = 6 }: { rows?: number }) {
   return (
-    <div aria-label="加载中">
+    <div role="status" aria-label="加载中">
       {Array.from({ length: rows }, (_, index) => (
         <div key={index} className="skeleton-item">
           <span className="skeleton" style={{ width: 48, height: 48, borderRadius: '50%' }} />

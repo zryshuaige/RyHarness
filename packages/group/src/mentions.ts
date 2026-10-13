@@ -19,7 +19,9 @@ const NAME_CONTINUATION = /[\w一-龥]/
  * @returns 被 @ 到的成员（不含重复）。
  */
 export function parseMentions(text: string, members: readonly AgentDefinition[]): AgentDefinition[] {
-  const byLength = [...members].sort((a, b) => { return b.name.length - a.name.length })
+  const byLength = [...members].sort((a, b) => {
+    return b.name.length - a.name.length
+  })
   const found: { index: number; agent: AgentDefinition }[] = []
   for (const agent of byLength) {
     const needle = `@${agent.name}`
@@ -38,8 +40,12 @@ export function parseMentions(text: string, members: readonly AgentDefinition[])
   }
   const seen = new Set<string>()
   return found
-    .sort((a, b) => { return a.index - b.index })
-    .map((hit) => { return hit.agent })
+    .sort((a, b) => {
+      return a.index - b.index
+    })
+    .map((hit) => {
+      return hit.agent
+    })
     .filter((agent) => {
       if (seen.has(agent.id)) return false
       seen.add(agent.id)

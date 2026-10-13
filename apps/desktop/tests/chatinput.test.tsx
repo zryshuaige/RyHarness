@@ -20,7 +20,9 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  act(() => { root.unmount() })
+  act(() => {
+    root.unmount()
+  })
   container.remove()
 })
 
@@ -63,7 +65,9 @@ describe('ChatInput @补全菜单', () => {
 
   it('Esc 关闭菜单且不污染输入文本（无零宽字符）', () => {
     const sent: string[] = []
-    render((text) => { sent.push(text) })
+    render((text) => {
+      sent.push(text)
+    })
     typeText('@R')
     expect(container.querySelector('.mention-menu')).not.toBeNull()
     keyDown('Escape')
@@ -77,7 +81,9 @@ describe('ChatInput @补全菜单', () => {
 
   it('Esc 关闭后 Enter 直接发送原文', () => {
     const sent: string[] = []
-    render((text) => { sent.push(text) })
+    render((text) => {
+      sent.push(text)
+    })
     typeText('@R')
     keyDown('Escape')
     keyDown('Enter')

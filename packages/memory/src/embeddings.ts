@@ -15,12 +15,14 @@ export interface EmbeddingProvider {
 export class SiliconFlowEmbeddings implements EmbeddingProvider {
   readonly available: boolean
 
-  constructor(private readonly config: {
-    apiKey: string
-    baseURL?: string
-    model?: string
-    fetchImpl?: typeof fetch
-  }) {
+  constructor(
+    private readonly config: {
+      apiKey: string
+      baseURL?: string
+      model?: string
+      fetchImpl?: typeof fetch
+    },
+  ) {
     this.available = config.apiKey.length > 0
   }
 
@@ -36,12 +38,12 @@ export class SiliconFlowEmbeddings implements EmbeddingProvider {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'authorization': `Bearer ${this.config.apiKey}`,
+        authorization: `Bearer ${this.config.apiKey}`,
       },
       body: JSON.stringify({ model: this.config.model ?? DEFAULT_EMBEDDING_MODEL, input: [...texts] }),
     })
     if (!response.ok) return null
-    const body = await response.json() as { data?: { embedding: number[] }[] }
+    const body = (await response.json()) as { data?: { embedding: number[] }[] }
     if (body.data === undefined || body.data.length !== texts.length) return null
     return body.data.map((entry) => {
       return Float32Array.from(entry.embedding)
@@ -65,7 +67,9 @@ export class HashEmbeddings implements EmbeddingProvider {
   }
 
   async embed(texts: readonly string[]): Promise<Float32Array[]> {
-    return texts.map((text) => { return this.vectorOf(text) })
+    return texts.map((text) => {
+      return this.vectorOf(text)
+    })
   }
 
   vectorOf(text: string): Float32Array {
@@ -73,8 +77,8 @@ export class HashEmbeddings implements EmbeddingProvider {
     let seed = 2166136261
     for (let i = 0; i < text.length; i++) seed = Math.imul(seed ^ text.charCodeAt(i), 16777619) >>> 0
     for (let i = 0; i < this.dim; i++) {
-      seed = Math.imul(seed ^ (seed >>> 13), 0x5BD1E995) >>> 0
-      vector[i] = ((seed % 2000) / 1000) - 1
+      seed = Math.imul(seed ^ (seed >>> 13), 0x5bd1e995) >>> 0
+      vector[i] = (seed % 2000) / 1000 - 1
     }
     const norm = Math.hypot(...vector) || 1
     for (let i = 0; i < this.dim; i++) vector[i] = vector[i] / norm

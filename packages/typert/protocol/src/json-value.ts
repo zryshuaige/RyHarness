@@ -32,8 +32,8 @@ function visitJsonValue(value: unknown, ancestors: Set<object>): boolean {
   ancestors.add(value)
   try {
     if (Array.isArray(value)) {
-      if (Object.getPrototypeOf(value) !== Array.prototype
-        || Reflect.ownKeys(value).length !== value.length + 1) return false
+      if (Object.getPrototypeOf(value) !== Array.prototype || Reflect.ownKeys(value).length !== value.length + 1)
+        return false
       for (let index = 0; index < value.length; index++) {
         if (!Object.hasOwn(value, index) || !visitJsonValue(value[index], ancestors)) return false
       }

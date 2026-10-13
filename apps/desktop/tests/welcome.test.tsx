@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest'
+
 import { renderToStaticMarkup } from 'react-dom/server'
-import { greetingForHour, WelcomeHome } from '../renderer/src/components/WelcomeHome.tsx'
-import { RelayChain } from '../renderer/src/components/MessageBubble.tsx'
+import { describe, expect, it } from 'vitest'
 import type { AgentDef, Conversation } from '../renderer/src/api.ts'
+import { RelayChain } from '../renderer/src/components/MessageBubble.tsx'
+import { greetingForHour, WelcomeHome } from '../renderer/src/components/WelcomeHome.tsx'
 
 describe('欢迎主页', () => {
   it('按时辰问候（纯函数）', () => {
@@ -17,12 +18,27 @@ describe('欢迎主页', () => {
 
   it('渲染猫管家、问候、建议 chips 与最近会话', () => {
     const agents: AgentDef[] = [
-      { id: 'ryen', name: 'Ryen', avatar: 'cat', systemPrompt: 'p', provider: 'x', model: 'm', tools: [], isBuiltin: true },
+      {
+        id: 'ryen',
+        name: 'Ryen',
+        avatar: 'cat',
+        systemPrompt: 'p',
+        provider: 'x',
+        model: 'm',
+        tools: [],
+        isBuiltin: true,
+      },
     ]
     const conversations: Conversation[] = [
       {
-        id: 'c1', kind: 'direct', title: 'Ryen', memberAgentIds: ['ryen'], lastReadSeq: 0,
-        createdAt: 1, updatedAt: 2, lastMessagePreview: '周报写好了',
+        id: 'c1',
+        kind: 'direct',
+        title: 'Ryen',
+        memberAgentIds: ['ryen'],
+        lastReadSeq: 0,
+        createdAt: 1,
+        updatedAt: 2,
+        lastMessagePreview: '周报写好了',
       },
     ]
     const html = renderToStaticMarkup(
@@ -49,7 +65,9 @@ describe('接力链头像流转', () => {
     { id: 'b', name: '乙', avatar: 'owl', systemPrompt: 'p', provider: 'x', model: 'm', tools: [], isBuiltin: false },
   ]
   const avatarOf = (id: string) => {
-    const agent = agents.find((x) => { return x.id === id })
+    const agent = agents.find((x) => {
+      return x.id === id
+    })
     return { avatarKey: agent?.avatar, name: agent?.name ?? id }
   }
 
@@ -57,7 +75,9 @@ describe('接力链头像流转', () => {
     const html = renderToStaticMarkup(
       <RelayChain
         turnIndex={0}
-        nameOf={(id) => { return avatarOf(id).name }}
+        nameOf={(id) => {
+          return avatarOf(id).name
+        }}
         avatarOf={avatarOf}
         relays={[
           { toAgent: 'a', reason: 'default-dispatcher', turnIndex: 0 },
@@ -76,7 +96,12 @@ describe('接力链头像流转', () => {
 
   it('无本 turn 事件返回空', () => {
     const html = renderToStaticMarkup(
-      <RelayChain turnIndex={1} nameOf={() => 'x'} avatarOf={avatarOf} relays={[{ toAgent: 'a', reason: 'default-dispatcher', turnIndex: 0 }]} />,
+      <RelayChain
+        turnIndex={1}
+        nameOf={() => 'x'}
+        avatarOf={avatarOf}
+        relays={[{ toAgent: 'a', reason: 'default-dispatcher', turnIndex: 0 }]}
+      />,
     )
     expect(html).toBe('')
   })

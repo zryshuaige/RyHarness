@@ -4,8 +4,8 @@
  * @module @ryagent/evolve/seeds
  */
 
-import type { EvolveStore } from './store.ts'
 import type { PlaybookSection } from './schema.ts'
+import type { EvolveStore } from './store.ts'
 
 export const SEED_PLAYBOOKS: Readonly<Record<string, readonly { section: PlaybookSection; content: string }[]>> = {
   general: [

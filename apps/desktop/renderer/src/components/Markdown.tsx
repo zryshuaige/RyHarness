@@ -3,9 +3,10 @@
  * 不走 HTML 字符串/dangerouslySetInnerHTML，原始 HTML 一律按纯文本转义；
  * 链接/图片只允许 http(s)/mailto，其余协议（javascript: 等）降级为纯文本。
  */
-import type { ReactNode } from 'react'
-import { lexer } from 'marked'
+
 import type { Token, Tokens } from 'marked'
+import { lexer } from 'marked'
+import type { ReactNode } from 'react'
 
 /** 只允许安全协议的链接地址；不安全返回 undefined（调用方降级为文本）。 */
 export function safeHref(href: string | null | undefined): string | undefined {
@@ -32,7 +33,11 @@ function renderInline(tokens: Token[] | undefined): ReactNode[] {
         const link = token as Tokens.Link
         const href = safeHref(link.href)
         if (href === undefined) return <span key={key}>{renderInline(link.tokens)}</span>
-        return <a key={key} href={href} target="_blank" rel="noreferrer">{renderInline(link.tokens)}</a>
+        return (
+          <a key={key} href={href} target="_blank" rel="noreferrer">
+            {renderInline(link.tokens)}
+          </a>
+        )
       }
       case 'image': {
         const image = token as Tokens.Image
@@ -55,12 +60,18 @@ function renderBlock(token: Token, key: number): ReactNode {
       const heading = token as Tokens.Heading
       const children = renderInline(heading.tokens)
       switch (heading.depth) {
-        case 1: return <h1 key={key}>{children}</h1>
-        case 2: return <h2 key={key}>{children}</h2>
-        case 3: return <h3 key={key}>{children}</h3>
-        case 4: return <h4 key={key}>{children}</h4>
-        case 5: return <h5 key={key}>{children}</h5>
-        default: return <h6 key={key}>{children}</h6>
+        case 1:
+          return <h1 key={key}>{children}</h1>
+        case 2:
+          return <h2 key={key}>{children}</h2>
+        case 3:
+          return <h3 key={key}>{children}</h3>
+        case 4:
+          return <h4 key={key}>{children}</h4>
+        case 5:
+          return <h5 key={key}>{children}</h5>
+        default:
+          return <h6 key={key}>{children}</h6>
       }
     }
     case 'paragraph':
@@ -82,20 +93,34 @@ function renderBlock(token: Token, key: number): ReactNode {
       const items = list.items.map((item, itemIndex) => {
         return <li key={itemIndex}>{renderBlocks(item.tokens)}</li>
       })
-      return list.ordered
-        ? <ol key={key} start={typeof list.start === 'number' && list.start > 1 ? list.start : undefined}>{items}</ol>
-        : <ul key={key}>{items}</ul>
+      return list.ordered ? (
+        <ol key={key} start={typeof list.start === 'number' && list.start > 1 ? list.start : undefined}>
+          {items}
+        </ol>
+      ) : (
+        <ul key={key}>{items}</ul>
+      )
     }
     case 'table': {
       const table = token as Tokens.Table
       return (
         <table key={key}>
           <thead>
-            <tr>{table.header.map((cell, cellIndex) => { return <th key={cellIndex}>{renderInline(cell.tokens)}</th> })}</tr>
+            <tr>
+              {table.header.map((cell, cellIndex) => {
+                return <th key={cellIndex}>{renderInline(cell.tokens)}</th>
+              })}
+            </tr>
           </thead>
           <tbody>
             {table.rows.map((row, rowIndex) => {
-              return <tr key={rowIndex}>{row.map((cell, cellIndex) => { return <td key={cellIndex}>{renderInline(cell.tokens)}</td> })}</tr>
+              return (
+                <tr key={rowIndex}>
+                  {row.map((cell, cellIndex) => {
+                    return <td key={cellIndex}>{renderInline(cell.tokens)}</td>
+                  })}
+                </tr>
+              )
             })}
           </tbody>
         </table>
@@ -116,7 +141,9 @@ function renderBlock(token: Token, key: number): ReactNode {
 }
 
 function renderBlocks(tokens: Token[]): ReactNode[] {
-  return tokens.map((token, index) => { return renderBlock(token, index) })
+  return tokens.map((token, index) => {
+    return renderBlock(token, index)
+  })
 }
 
 /** 把 Markdown 源渲染为 React 元素（永不产生原始 HTML）。 */

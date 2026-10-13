@@ -31,7 +31,7 @@ pnpm dev          # 等价于 tsx src/main.ts（在 apps/server 目录）
 
 | 方法与路径 | 说明 |
 |---|---|
-| `GET /api/conversations` | 按 updatedAt 倒序；每项附 `lastMessagePreview`（前 120 字符）与 `unreadCount`（占位，恒 0，未读体系 M4b 后定）。 |
+| `GET /api/conversations` | 按 updatedAt 倒序；每项附 `lastMessagePreview`（前 120 字符）与 `unreadCount`（seq > lastReadSeq 且非用户发送、含文本块的消息条数）。 |
 | `POST /api/conversations` | `{"kind":"direct","agentId"}` 或 `{"kind":"group","memberAgentIds":[...],"dispatcherAgentId?","title?"}`（dispatcher 默认 `ryen`；成员须已存在）。 |
 | `GET /api/conversations/:id` | 详情。 |
 | `DELETE /api/conversations/:id` | 删除；消息与调度事件级联清除。 |

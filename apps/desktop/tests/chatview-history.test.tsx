@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
-import { fromHistory, nextTurnIndex } from '../renderer/src/components/ChatView.tsx'
 import type { MessageRow } from '../renderer/src/api.ts'
+import { fromHistory, nextTurnIndex } from '../renderer/src/components/ChatView.tsx'
 
 function row(partial: Partial<MessageRow> & Pick<MessageRow, 'id' | 'seq'>): MessageRow {
   return {
@@ -16,7 +16,9 @@ function row(partial: Partial<MessageRow> & Pick<MessageRow, 'id' | 'seq'>): Mes
   }
 }
 
-const nameOf = (id: string): string => { return id }
+const nameOf = (id: string): string => {
+  return id
+}
 
 describe('fromHistory', () => {
   it('普通文本消息转换为 text 部件并保留 seq', () => {
@@ -27,19 +29,27 @@ describe('fromHistory', () => {
   })
 
   it('纯 tool_call（无文本块、无 toolCallId）的 assistant 消息被跳过，不产生空气泡', () => {
-    const messages = fromHistory([
-      row({ id: 'm1', seq: 1 }),
-      row({ id: 'm2', seq: 2, contentBlocks: [{ type: 'tool-call', text: undefined }] }),
-      row({ id: 'm3', seq: 3, contentBlocks: [{ type: 'tool-call' }] }),
-      row({ id: 'm4', seq: 4, contentBlocks: [] }),
-    ], nameOf)
-    expect(messages.map((m) => { return m.key })).toEqual(['hist:m1'])
+    const messages = fromHistory(
+      [
+        row({ id: 'm1', seq: 1 }),
+        row({ id: 'm2', seq: 2, contentBlocks: [{ type: 'tool-call', text: undefined }] }),
+        row({ id: 'm3', seq: 3, contentBlocks: [{ type: 'tool-call' }] }),
+        row({ id: 'm4', seq: 4, contentBlocks: [] }),
+      ],
+      nameOf,
+    )
+    expect(
+      messages.map((m) => {
+        return m.key
+      }),
+    ).toEqual(['hist:m1'])
   })
 
   it('带 toolCallId 的工具结果行仍渲染为工具部件', () => {
-    const messages = fromHistory([
-      row({ id: 'm5', seq: 5, toolCallId: 'c1', contentBlocks: [{ type: 'text', text: '〔tool〕fs_read: ok' }] }),
-    ], nameOf)
+    const messages = fromHistory(
+      [row({ id: 'm5', seq: 5, toolCallId: 'c1', contentBlocks: [{ type: 'text', text: '〔tool〕fs_read: ok' }] })],
+      nameOf,
+    )
     expect(messages).toHaveLength(1)
     expect(messages[0]!.parts[0]).toMatchObject({ kind: 'tool', callId: 'c1', name: 'fs_read', status: 'done' })
   })

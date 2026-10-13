@@ -3,9 +3,9 @@
  * 零额外依赖，直接 spawn 三个子进程。
  */
 import { spawn } from 'node:child_process'
-import { createServer } from 'vite'
-import react from '@vitejs/plugin-react'
 import { fileURLToPath } from 'node:url'
+import react from '@vitejs/plugin-react'
+import { createServer } from 'vite'
 
 const here = fileURLToPath(new URL('..', import.meta.url))
 
@@ -19,7 +19,9 @@ console.log('[dev] vite renderer at http://localhost:5173')
 
 const buildMain = spawn('pnpm', ['run', 'build:main'], { cwd: here, stdio: 'inherit', shell: true })
 await new Promise((resolve, reject) => {
-  buildMain.on('exit', (code) => { return code === 0 ? resolve() : reject(new Error(`build:main exit ${code}`)) })
+  buildMain.on('exit', (code) => {
+    return code === 0 ? resolve() : reject(new Error(`build:main exit ${code}`))
+  })
 })
 console.log('[dev] main process bundled')
 

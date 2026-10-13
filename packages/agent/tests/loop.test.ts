@@ -1,8 +1,8 @@
-import { describe, expect, it } from 'vitest'
-import { brandString } from '@ryagent/brand'
-import type { LlmRuntime, StreamChunk, ToolCallId } from '@ryagent/llm'
 import type { AgentDefinition, AgentLoopEvent, Tool, ToolResult } from '@ryagent/agent'
 import { AgentLoop, BUILTIN_TEMPLATES, forkTemplate, RYEN_TEMPLATE } from '@ryagent/agent'
+import { brandString } from '@ryagent/brand'
+import type { LlmRuntime, StreamChunk, ToolCallId } from '@ryagent/llm'
+import { describe, expect, it } from 'vitest'
 
 /** 脚本化的假 LlmRuntime：每次 stream() 消耗一段录制 chunk。 */
 function mockLlm(scripted: StreamChunk[][]): LlmRuntime {
@@ -66,12 +66,14 @@ describe('builtin templates', () => {
 
 describe('AgentLoop', () => {
   it('streams text and finishes on a plain reply', async () => {
-    const llm = mockLlm([[
-      { type: 'block-start', index: 0, blockType: 'text' },
-      { type: 'text-delta', index: 0, text: '你好' },
-      { type: 'block-end', index: 0, block: { type: 'text', text: '你好' } },
-      finishStop(),
-    ]])
+    const llm = mockLlm([
+      [
+        { type: 'block-start', index: 0, blockType: 'text' },
+        { type: 'text-delta', index: 0, text: '你好' },
+        { type: 'block-end', index: 0, block: { type: 'text', text: '你好' } },
+        finishStop(),
+      ],
+    ])
     const loop = new AgentLoop({ definition: DEFINITION, llm, tools: [echoTool] })
     const events = await collect(loop.run({ text: 'hi' }, { workspaceRoot: process.cwd() }))
     expect(events).toEqual([
@@ -86,7 +88,11 @@ describe('AgentLoop', () => {
       [
         { type: 'block-start', index: 0, blockType: 'tool-call' },
         { type: 'tool-call-delta', index: 0, id: callId, name: 'echo', argumentsDelta: '{"text":"喵"}' },
-        { type: 'block-end', index: 0, block: { type: 'tool-call', id: callId, name: 'echo', arguments: '{"text":"喵"}' } },
+        {
+          type: 'block-end',
+          index: 0,
+          block: { type: 'tool-call', id: callId, name: 'echo', arguments: '{"text":"喵"}' },
+        },
         { type: 'finish', reason: { kind: 'tool-calls' } },
       ],
       [
@@ -106,23 +112,25 @@ describe('AgentLoop', () => {
   })
 
   it('never calls tools outside the definition whitelist', async () => {
-    const llm = mockLlm([[
-      { type: 'block-start', index: 0, blockType: 'tool-call' },
-      { type: 'tool-call-delta', index: 0, id: brandString<ToolCallId>('c9'), name: 'echo', argumentsDelta: '{}' },
-      {
-        type: 'block-end',
-        index: 0,
-        block: { type: 'tool-call', id: brandString<ToolCallId>('c9'), name: 'echo', arguments: '{}' },
-      },
-      { type: 'finish', reason: { kind: 'tool-calls' } },
-    ], [
-      { type: 'text-delta', index: 0, text: 'end' },
-      finishStop(),
-    ]])
+    const llm = mockLlm([
+      [
+        { type: 'block-start', index: 0, blockType: 'tool-call' },
+        { type: 'tool-call-delta', index: 0, id: brandString<ToolCallId>('c9'), name: 'echo', argumentsDelta: '{}' },
+        {
+          type: 'block-end',
+          index: 0,
+          block: { type: 'tool-call', id: brandString<ToolCallId>('c9'), name: 'echo', arguments: '{}' },
+        },
+        { type: 'finish', reason: { kind: 'tool-calls' } },
+      ],
+      [{ type: 'text-delta', index: 0, text: 'end' }, finishStop()],
+    ])
     const definition = { ...DEFINITION, tools: [] }
     const loop = new AgentLoop({ definition, llm, tools: [echoTool] })
     const events = await collect(loop.run({ text: 'hi' }, { workspaceRoot: process.cwd() }))
-    const result = events.find((e) => { return e.type === 'tool-result' })
+    const result = events.find((e) => {
+      return e.type === 'tool-result'
+    })
     // 白名单为空 → 工具未注册 → 未知工具错误结果，且第二步请求里没有 tools 字段。
     expect(result).toMatchObject({ type: 'tool-result', name: 'echo', isError: true })
     expect((result as { result: ToolResult }).result.content).toContain('unknown tool')
@@ -143,14 +151,13 @@ describe('AgentLoop', () => {
         },
         { type: 'finish', reason: { kind: 'tool-calls' } },
       ],
-      [
-        { type: 'text-delta', index: 0, text: 'done' },
-        finishStop(),
-      ],
+      [{ type: 'text-delta', index: 0, text: 'done' }, finishStop()],
     ])
     const loop = new AgentLoop({ definition: DEFINITION, llm, tools: [echoTool] })
     const events = await collect(loop.run({ text: 'hi' }, { workspaceRoot: process.cwd() }))
-    const results = events.filter((e) => { return e.type === 'tool-result' })
+    const results = events.filter((e) => {
+      return e.type === 'tool-result'
+    })
     expect(results).toHaveLength(2)
     expect(results[0]).toMatchObject({ name: 'nope', isError: true })
     expect(results[1]).toMatchObject({ name: 'echo', isError: true })
@@ -160,6 +167,7 @@ describe('AgentLoop', () => {
   it('surfaces stream failures as error events', async () => {
     const failing = {
       stream() {
+        // biome-ignore lint/correctness/useYield: 测试替身——流立刻失败，不需要 yield
         return (async function* (): AsyncGenerator<StreamChunk> {
           throw new Error('boom')
         })()
@@ -173,21 +181,27 @@ describe('AgentLoop', () => {
   })
 
   it('终态 error finish 传播为 error 事件而不是 done（半截回复不算完成）', async () => {
-    const llm = mockLlm([[
-      { type: 'text-delta', index: 0, text: '半截' },
-      { type: 'block-end', index: 0, block: { type: 'text', text: '半截' } },
-      { type: 'finish', reason: { kind: 'error', failure: { message: 'provider exploded', code: 'SERVER' } } },
-    ]])
+    const llm = mockLlm([
+      [
+        { type: 'text-delta', index: 0, text: '半截' },
+        { type: 'block-end', index: 0, block: { type: 'text', text: '半截' } },
+        { type: 'finish', reason: { kind: 'error', failure: { message: 'provider exploded', code: 'SERVER' } } },
+      ],
+    ])
     const loop = new AgentLoop({ definition: DEFINITION, llm, tools: [echoTool] })
     const events = await collect(loop.run({ text: 'hi' }, { workspaceRoot: process.cwd() }))
-    expect(events.some((event) => { return event.type === 'done' })).toBe(false)
+    expect(
+      events.some((event) => {
+        return event.type === 'done'
+      }),
+    ).toBe(false)
     expect(events.at(-1)).toEqual({ type: 'error', message: 'provider exploded', code: 'SERVER' })
   })
 
   it('终态 aborted finish 同样传播为 error 事件', async () => {
-    const llm = mockLlm([[
-      { type: 'finish', reason: { kind: 'aborted', failure: { message: 'client went away', code: 'ABORTED' } } },
-    ]])
+    const llm = mockLlm([
+      [{ type: 'finish', reason: { kind: 'aborted', failure: { message: 'client went away', code: 'ABORTED' } } }],
+    ])
     const loop = new AgentLoop({ definition: DEFINITION, llm, tools: [echoTool] })
     const events = await collect(loop.run({ text: 'hi' }, { workspaceRoot: process.cwd() }))
     expect(events).toEqual([{ type: 'error', message: 'client went away', code: 'ABORTED' }])
@@ -206,7 +220,9 @@ describe('AgentLoop', () => {
     const loop = new AgentLoop({ definition: DEFINITION, llm, tools: [echoTool], maxSteps: 3 })
     const events = await collect(loop.run({ text: 'hi' }, { workspaceRoot: process.cwd() }))
     expect(events.at(-1)).toMatchObject({ type: 'error', code: 'MAX_STEPS' })
-    const toolResults = events.filter((e) => { return e.type === 'tool-result' })
+    const toolResults = events.filter((e) => {
+      return e.type === 'tool-result'
+    })
     expect(toolResults).toHaveLength(3)
   })
 })

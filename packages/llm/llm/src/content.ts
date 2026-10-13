@@ -1,12 +1,23 @@
 /** Content-block structure helpers. @module @ryagent/llm/content */
 
-import type { ContentBlock, ImageBlock, LlmImageRequestBudget, ToolSchema, ToolUpdate, ToolHistory } from './types.ts'
-import type { RequestMessage } from './types.ts'
-import type { Message } from './message.ts'
 import type {
-  AttachmentStore, FileAttachmentRef, ImageAttachmentRef, ImageMediaType, RequestImageAttachment,
+  AttachmentStore,
+  FileAttachmentRef,
+  ImageAttachmentRef,
+  ImageMediaType,
+  RequestImageAttachment,
 } from '@ryagent/attachment'
 import { assertNever } from '@ryagent/util-values'
+import type { Message } from './message.ts'
+import type {
+  ContentBlock,
+  ImageBlock,
+  LlmImageRequestBudget,
+  RequestMessage,
+  ToolHistory,
+  ToolSchema,
+  ToolUpdate,
+} from './types.ts'
 
 /** Execution-world path that model tools can use to read one normalized attachment. */
 export interface ImageAttachmentAccess {
@@ -47,25 +58,30 @@ function quoted(value: string): string {
 }
 
 function imageIdentity(ref: ImageAttachmentRef): string {
-  return ref.name === undefined
-    ? String(ref.attachmentId)
-    : `${quoted(ref.name)} (${ref.attachmentId})`
+  return ref.name === undefined ? String(ref.attachmentId) : `${quoted(ref.name)} (${ref.attachmentId})`
 }
 
 function extension(mediaType: ImageMediaType): string {
   switch (mediaType) {
-    case 'image/png': return '.png'
-    case 'image/jpeg': return '.jpg'
-    case 'image/webp': return '.webp'
-    case 'image/gif': return '.gif'
-    default: return assertNever(mediaType, 'image extension')
+    case 'image/png':
+      return '.png'
+    case 'image/jpeg':
+      return '.jpg'
+    case 'image/webp':
+      return '.webp'
+    case 'image/gif':
+      return '.gif'
+    default:
+      return assertNever(mediaType, 'image extension')
   }
 }
 
 function normalizedAccessText(ref: ImageAttachmentRef, access: ImageAttachmentAccess): string {
-  return ` Normalized copy (read-only; may be resized or re-encoded): ${quoted(access.readonlyPath)} (${ref.width}x${ref.height}px, ${ref.mediaType}).`
-    + ' Source dimensions, format, and byte size may differ.'
-    + ` Copy to a writable path ending in ${extension(ref.mediaType)} before editing.`
+  return (
+    ` Normalized copy (read-only; may be resized or re-encoded): ${quoted(access.readonlyPath)} (${ref.width}x${ref.height}px, ${ref.mediaType}).` +
+    ' Source dimensions, format, and byte size may differ.' +
+    ` Copy to a writable path ending in ${extension(ref.mediaType)} before editing.`
+  )
 }
 
 /**
@@ -105,10 +121,7 @@ export function requestImageHandleText(
  * @param access - optional provider-resolved path for model tools.
  * @returns identity, normalized metadata, and the available recovery path.
  */
-export function offloadedImageText(
-  ref: ImageAttachmentRef,
-  access?: ImageAttachmentAccess,
-): string {
+export function offloadedImageText(ref: ImageAttachmentRef, access?: ImageAttachmentAccess): string {
   const identity = `image omitted to fit request image limits; ${imageIdentity(ref)}.`
   if (access === undefined) {
     return `[${identity} No local normalized image path is available; ask the user to attach it again if needed.]`
@@ -124,7 +137,7 @@ export function offloadedImageText(
  * @returns whether any block is an image.
  */
 export function contentHasImage(content: readonly ContentBlock[]): boolean {
-  return content.some(block => block.type === 'image')
+  return content.some((block) => block.type === 'image')
 }
 
 /**
@@ -171,7 +184,7 @@ function replaceFilesWithHandles(
     }
     next?.push(block)
   }
-  return next ?? blocks as ContentBlock[]
+  return next ?? (blocks as ContentBlock[])
 }
 
 /**
@@ -200,7 +213,7 @@ export function projectFilesToText(
   messages: readonly RequestMessage[],
   resolvePath: (ref: FileAttachmentRef) => string | undefined,
 ): readonly RequestMessage[] {
-  if (!messages.some(message => contentHasFile(message.content))) return messages
+  if (!messages.some((message) => contentHasFile(message.content))) return messages
   return messages.map((message) => {
     const content = replaceFilesWithHandles(message.content, resolvePath)
     return content === message.content ? message : { ...message, content }
@@ -237,7 +250,7 @@ function replaceOffloadedImages(
     }
     next?.push(block)
   }
-  return next ?? blocks as ContentBlock[]
+  return next ?? (blocks as ContentBlock[])
 }
 
 /**
@@ -296,8 +309,8 @@ function offloadedImagePrefixCount(
   let count = 0
   let removedBytes = 0
   for (const imageBytes of lengths) {
-    const byteTargetMet = removeBytes === 0
-      || (byteQuantum === 1 ? removedBytes >= removeBytes : removedBytes > removeBytes)
+    const byteTargetMet =
+      removeBytes === 0 || (byteQuantum === 1 ? removedBytes >= removeBytes : removedBytes > removeBytes)
     if (count >= removeCount && byteTargetMet) break
     removedBytes += imageBytes
     count += 1
@@ -342,7 +355,7 @@ function replaceImagesForTextModel(blocks: readonly ContentBlock[]): ContentBloc
     }
     next?.push(block)
   }
-  return next ?? blocks as ContentBlock[]
+  return next ?? (blocks as ContentBlock[])
 }
 
 /**
@@ -358,7 +371,7 @@ export function projectImagesForTextModel(messages: readonly Message[]): readonl
  */
 export function projectImagesForTextModel(messages: readonly RequestMessage[]): readonly RequestMessage[]
 export function projectImagesForTextModel(messages: readonly RequestMessage[]): readonly RequestMessage[] {
-  if (!messages.some(message => contentHasImage(message.content))) return messages
+  if (!messages.some((message) => contentHasImage(message.content))) return messages
   return messages.map((message) => {
     const content = replaceImagesForTextModel(message.content)
     return content === message.content ? message : { ...message, content }
@@ -374,7 +387,7 @@ export interface ProjectedToolUpdates {
 }
 
 function withoutDeveloperMessages(messages: readonly RequestMessage[]): readonly RequestMessage[] {
-  const retained = messages.filter(message => message.role !== 'developer')
+  const retained = messages.filter((message) => message.role !== 'developer')
   return retained.length === messages.length ? messages : retained
 }
 
@@ -383,7 +396,7 @@ function toolDeclarations(
   mode: ToolUpdate,
   history: ToolHistory,
 ): Map<string, ToolSchema> {
-  const declarations = new Map(history.tools.map(tool => [tool.name, tool]))
+  const declarations = new Map(history.tools.map((tool) => [tool.name, tool]))
   for (const update of history.updates) {
     for (const tool of update.additions) {
       if (!declarations.has(tool.name)) {
@@ -399,7 +412,7 @@ function toolDeclarations(
       return declarations
     case 'addition-only': {
       // Without removal support, the declaration list must omit inactive tools.
-      const activeNames = new Set(tools?.map(tool => tool.name))
+      const activeNames = new Set(tools?.map((tool) => tool.name))
       for (const name of declarations.keys()) {
         if (!activeNames.has(name)) declarations.delete(name)
       }
@@ -430,7 +443,7 @@ export function projectToolUpdates(
   if (toolUpdate === undefined) {
     // Unsupported routes need immediately available tools and no update messages.
     let immediateTools = tools
-    if (tools?.some(tool => tool.deferLoading === true)) {
+    if (tools?.some((tool) => tool.deferLoading === true)) {
       immediateTools = tools.map(({ deferLoading: _loading, ...tool }) => tool)
     }
     return { messages: withoutDeveloperMessages(messages), tools: immediateTools }
@@ -440,16 +453,16 @@ export function projectToolUpdates(
     // Current schemas alone cannot resolve definitions referenced by past updates.
     return { messages: withoutDeveloperMessages(messages), tools }
   }
-  const messageIds = new Set(messages.flatMap(message => message.role === 'developer' ? [message.id] : []))
-  if (history.updates.some(update => !messageIds.has(update.messageId))) {
+  const messageIds = new Set(messages.flatMap((message) => (message.role === 'developer' ? [message.id] : [])))
+  if (history.updates.some((update) => !messageIds.has(update.messageId))) {
     // An auxiliary prefix may omit updates needed to activate historical declarations.
     return { messages: withoutDeveloperMessages(messages), tools }
   }
 
   const declarations = toolDeclarations(tools, toolUpdate, history)
-  const updateIds = new Set(history.updates.map(update => update.messageId))
+  const updateIds = new Set(history.updates.map((update) => update.messageId))
   // Deferred baseline tools still need their first addition to become available.
-  const offered = new Set(history.tools.filter(tool => !tool.deferLoading).map(tool => tool.name))
+  const offered = new Set(history.tools.filter((tool) => !tool.deferLoading).map((tool) => tool.name))
   const projectedMessages: RequestMessage[] = []
   for (const message of messages) {
     if (message.role !== 'developer') {
@@ -483,8 +496,9 @@ export function projectToolUpdates(
     }
   }
 
-  const unchanged = projectedMessages.length === messages.length
-    && projectedMessages.every((message, index) => message === messages[index])
+  const unchanged =
+    projectedMessages.length === messages.length &&
+    projectedMessages.every((message, index) => message === messages[index])
   return {
     messages: unchanged ? messages : projectedMessages,
     tools: [...declarations.values()],

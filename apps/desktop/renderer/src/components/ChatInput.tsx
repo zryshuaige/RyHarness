@@ -1,5 +1,5 @@
-import { useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
+import { useRef, useState } from 'react'
 import { filterMentions, mentionQueryAt } from '../store.ts'
 import { Avatar } from './avatars/Avatar.tsx'
 import { Icon } from './Icon.tsx'
@@ -84,17 +84,22 @@ export function ChatInput({
     onSend(trimmed)
     setText('')
     setCursor(0)
-    requestAnimationFrame(() => { autoGrow(ref.current) })
+    requestAnimationFrame(() => {
+      autoGrow(ref.current)
+    })
   }
 
   return (
     <>
       <div className="chat-input-box">
         {candidates.length > 0 && (
+          // biome-ignore lint/a11y/noNoninteractiveElementToInteractiveRole: 提及菜单焦点留在 textarea，aria-selected 表达选中态
           <ul className="mention-menu" role="listbox">
             {candidates.map((member, index) => (
+              // biome-ignore lint/a11y/useFocusableInteractive: 焦点不离开输入框，选中态经 aria-selected 暴露
               <li
                 key={member.id}
+                // biome-ignore lint/a11y/noNoninteractiveElementToInteractiveRole: 提及菜单项由键盘在 textarea 内驱动
                 role="option"
                 aria-selected={index === selected}
                 className={index === selected ? 'is-selected' : ''}
@@ -102,13 +107,16 @@ export function ChatInput({
                   event.preventDefault()
                   complete(member.name)
                 }}
-                onMouseEnter={() => { setSelected(index) }}
+                onMouseEnter={() => {
+                  setSelected(index)
+                }}
               >
                 <Avatar avatarKey={member.avatar} name={member.name} seed={member.id} size={24} />
-                <span className="mention-name"><Icon name="at-sign" size={12} />{member.name}</span>
-                {(member.tools?.length ?? 0) > 0 && (
-                  <span className="mention-badge">{member.tools!.length} 工具</span>
-                )}
+                <span className="mention-name">
+                  <Icon name="at-sign" size={12} />
+                  {member.name}
+                </span>
+                {(member.tools?.length ?? 0) > 0 && <span className="mention-badge">{member.tools!.length} 工具</span>}
               </li>
             ))}
           </ul>
@@ -129,10 +137,15 @@ export function ChatInput({
             autoGrow(event.target)
           }}
           onKeyDown={handleKey}
-          onSelect={(event) => { setCursor(event.currentTarget.selectionStart ?? 0) }}
+          onSelect={(event) => {
+            setCursor(event.currentTarget.selectionStart ?? 0)
+          }}
         />
       </div>
-      <button className="send-btn" onClick={submit} disabled={disabled || text.trim().length === 0}><Icon name="send" size={16} /><span>发送</span></button>
+      <button type="button" className="send-btn" onClick={submit} disabled={disabled || text.trim().length === 0}>
+        <Icon name="send" size={16} />
+        <span>发送</span>
+      </button>
     </>
   )
 }

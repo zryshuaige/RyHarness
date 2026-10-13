@@ -16,8 +16,8 @@
 | notionists（文艺） | CC0 1.0 | 无 |
 | thumbs（拇指） | CC0 1.0 | 无 |
 | adventurer（冒险家） | CC BY 4.0 | 需署名：DiceBear Adventurer by Lisa Wischofsky |
-| bigEars（大耳） | CC BY 4.0 | 需署名：DiceBear Big Ears by [licensor]，见 dicebear.com 风格页 |
-| funEmoji（趣脸） | CC BY 4.0 | 需署名：DiceBear Fun Emoji by [licensor]，见 dicebear.com 风格页 |
+| bigEars（大耳） | CC BY 4.0 | 需署名：DiceBear Big Ears by The Visual Team |
+| funEmoji（趣脸） | CC BY 4.0 | 需署名：DiceBear Fun Emoji by Davis Uche |
 
 CC BY 4.0 署名的完整文本见 https://creativecommons.org/licenses/by/4.0/ ；分发时随应用附本文件即可满足署名义务。
 

@@ -16,18 +16,42 @@ try {
   const server = await RyAgentServer.create({ port: 0, dataDir })
   console.log(`[demo] server at ${server.url} (data: ${dataDir})`)
 
-  const templates = await (await fetch(`${server.url}/api/agent-templates`)).json() as { templates: { key: string; name: string }[] }
-  console.log(`[demo] templates: ${templates.templates.map((t) => { return t.name }).join(' / ')}`)
+  const templates = (await (await fetch(`${server.url}/api/agent-templates`)).json()) as {
+    templates: { key: string; name: string }[]
+  }
+  console.log(
+    `[demo] templates: ${templates.templates
+      .map((t) => {
+        return t.name
+      })
+      .join(' / ')}`,
+  )
 
-  const providers = await (await fetch(`${server.url}/api/providers`)).json() as { providers: { id: string; models: { id: string }[] }[] }
+  const providers = (await (await fetch(`${server.url}/api/providers`)).json()) as {
+    providers: { id: string; models: { id: string }[] }[]
+  }
   for (const provider of providers.providers) {
-    console.log(`[demo] provider ${provider.id}: ${provider.models.map((m) => { return m.id }).join(', ')}`)
+    console.log(
+      `[demo] provider ${provider.id}: ${provider.models
+        .map((m) => {
+          return m.id
+        })
+        .join(', ')}`,
+    )
   }
 
-  const agents = await (await fetch(`${server.url}/api/agents`)).json() as { agents: { id: string; name: string; isBuiltin: boolean }[] }
-  console.log(`[demo] seeded agents: ${agents.agents.map((a) => { return `${a.name}${a.isBuiltin ? '(builtin)' : ''}` }).join(', ')}`)
+  const agents = (await (await fetch(`${server.url}/api/agents`)).json()) as {
+    agents: { id: string; name: string; isBuiltin: boolean }[]
+  }
+  console.log(
+    `[demo] seeded agents: ${agents.agents
+      .map((a) => {
+        return `${a.name}${a.isBuiltin ? '(builtin)' : ''}`
+      })
+      .join(', ')}`,
+  )
 
-  const conversations = await (await fetch(`${server.url}/api/conversations`)).json() as { conversations: unknown[] }
+  const conversations = (await (await fetch(`${server.url}/api/conversations`)).json()) as { conversations: unknown[] }
   console.log(`[demo] conversations: ${conversations.conversations.length}`)
 
   console.log('[demo] 只读端点全部正常；真实对话需 SILICONFLOW_API_KEY（见 pnpm smoke:siliconflow）。')

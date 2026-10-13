@@ -12,7 +12,11 @@
  * @module @ryagent/evolve
  */
 
-export { EvolveService } from './service.ts'
+export type { EvolveLlm, PlaybookDelta, TurnTrajectory } from './llm.ts'
+export { ChatEvolveLlm, NEGATIVE_FEEDBACK_RE } from './llm.ts'
+export type { EntryStatus, PlaybookSection, ReflectionStatus } from './schema.ts'
+export { AUTO_DEPRECATE_HARMFUL, CONVERT_HIT_THRESHOLD, EVOLVE_SCHEMA_VERSION, migrateEvolve } from './schema.ts'
+export { SEED_PLAYBOOKS, seedIfEmpty } from './seeds.ts'
 export type {
   AgentEvolutionHooks,
   CompiledEvolution,
@@ -20,10 +24,6 @@ export type {
   EvolveServiceOptions,
   MemorySweep,
 } from './service.ts'
-export { EvolveStore } from './store.ts'
+export { EvolveService } from './service.ts'
 export type { PlaybookEntry, ReflectionRow } from './store.ts'
-export { migrateEvolve, EVOLVE_SCHEMA_VERSION, AUTO_DEPRECATE_HARMFUL, CONVERT_HIT_THRESHOLD } from './schema.ts'
-export type { PlaybookSection, EntryStatus, ReflectionStatus } from './schema.ts'
-export { ChatEvolveLlm, NEGATIVE_FEEDBACK_RE } from './llm.ts'
-export type { EvolveLlm, TurnTrajectory, PlaybookDelta } from './llm.ts'
-export { SEED_PLAYBOOKS, seedIfEmpty } from './seeds.ts'
+export { EvolveStore } from './store.ts'

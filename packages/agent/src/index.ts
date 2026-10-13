@@ -7,6 +7,9 @@
  * @module @ryagent/agent
  */
 
+export { BUILTIN_TEMPLATES, forkTemplate, RYEN_TEMPLATE } from './builtin.ts'
+export type { AgentEvolutionHooks, AgentLoopOptions, AgentMemoryHooks, EvolutionTurnData } from './loop.ts'
+export { AgentLoop } from './loop.ts'
 export type {
   AgentDefinition,
   AgentLoopEvent,
@@ -15,6 +18,3 @@ export type {
   ToolContext,
   ToolResult,
 } from './types.ts'
-export { BUILTIN_TEMPLATES, RYEN_TEMPLATE, forkTemplate } from './builtin.ts'
-export { AgentLoop } from './loop.ts'
-export type { AgentLoopOptions, AgentMemoryHooks, AgentEvolutionHooks, EvolutionTurnData } from './loop.ts'

@@ -9,8 +9,8 @@
 import { brandString } from '@ryagent/brand'
 import { assertNever } from '@ryagent/util-values'
 import type { ToolCallId } from './brand.ts'
-import { createAssistantMessage } from './message.ts'
 import type { AssistantMessage, ModelMessageSource } from './message.ts'
+import { createAssistantMessage } from './message.ts'
 import type { ContentBlock, FinishReason, ReplayEnvelope, StreamChunk, TokenUsage } from './types.ts'
 
 interface PartialBlock {
@@ -91,7 +91,9 @@ export class BlockAssembler {
         this._replayState = chunk.replayState
         return
       }
-      default: return assertNever(chunk, 'BlockAssembler.push')
+      default:
+        // biome-ignore lint/correctness/noVoidTypeReturn: assertNever 返回 never，return 之是穷尽检查的惯用写法
+        return assertNever(chunk, 'BlockAssembler.push')
     }
   }
 
@@ -108,15 +110,19 @@ export class BlockAssembler {
   private assemble(partial: PartialBlock, index: number): ContentBlock {
     if (partial.block) return partial.block
     switch (partial.blockType) {
-      case 'text': return { type: 'text', text: partial.text }
-      case 'reasoning': return { type: 'reasoning', text: partial.text }
-      case 'tool-call': return {
-        type: 'tool-call',
-        id: partial.toolCallId ?? brandString<ToolCallId>(`call-${index}`),
-        name: partial.toolCallName ?? '',
-        arguments: partial.toolCallArguments,
-      }
-      default: throw new Error(`cannot assemble incomplete block of type "${partial.blockType}"`)
+      case 'text':
+        return { type: 'text', text: partial.text }
+      case 'reasoning':
+        return { type: 'reasoning', text: partial.text }
+      case 'tool-call':
+        return {
+          type: 'tool-call',
+          id: partial.toolCallId ?? brandString<ToolCallId>(`call-${index}`),
+          name: partial.toolCallName ?? '',
+          arguments: partial.toolCallArguments,
+        }
+      default:
+        throw new Error(`cannot assemble incomplete block of type "${partial.blockType}"`)
     }
   }
 
@@ -133,19 +139,18 @@ export class BlockAssembler {
    * and replay metadata both derive from this result, so they cannot disagree.
    */
   private assembled(): { blocks: ContentBlock[]; replay: ReplayEnvelope | undefined } {
-    const all = this.order.map(index => this.assemble(this.mustGet(index), index))
-    const kept = this.finish.kind === 'max-tokens'
-      ? all.map(block => block.type !== 'tool-call')
-      : undefined
+    const all = this.order.map((index) => this.assemble(this.mustGet(index), index))
+    const kept = this.finish.kind === 'max-tokens' ? all.map((block) => block.type !== 'tool-call') : undefined
     const blocks = kept === undefined ? all : all.filter((_, position) => kept[position])
     const envelope = this._replayState
     if (envelope?.blocks === undefined) return { blocks, replay: envelope }
     if (envelope.blocks.length !== all.length) return { blocks, replay: undefined }
     return {
       blocks,
-      replay: kept === undefined || blocks.length === all.length
-        ? envelope
-        : { response: envelope.response, blocks: envelope.blocks.filter((_, position) => kept[position]) },
+      replay:
+        kept === undefined || blocks.length === all.length
+          ? envelope
+          : { response: envelope.response, blocks: envelope.blocks.filter((_, position) => kept[position]) },
     }
   }
 
@@ -174,8 +179,10 @@ export class BlockAssembler {
         if (type !== 'text' && type !== 'reasoning') return undefined
         return this.assemble(partial, index)
       })
-      .filter((block): block is ContentBlock =>
-        (block?.type === 'text' || block?.type === 'reasoning') && block.text.trim() !== '')
+      .filter(
+        (block): block is ContentBlock =>
+          (block?.type === 'text' || block?.type === 'reasoning') && block.text.trim() !== '',
+      )
   }
 
   /** Usage from the `usage` chunk; undefined until one arrives. */

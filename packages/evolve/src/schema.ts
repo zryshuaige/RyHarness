@@ -71,12 +71,19 @@ const MIGRATIONS: Readonly<Record<number, (db: DatabaseSync) => void>> = { 1: mi
 
 /** 迁移到 EVOLVE_SCHEMA_VERSION；幂等。 */
 export function migrateEvolve(db: DatabaseSync): void {
-  const probe = db.prepare(
-    "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'evolve_meta'",
-  ).get() as { count: number }
-  const current = Number(probe.count) === 0
-    ? 0
-    : Number((db.prepare("SELECT value FROM evolve_meta WHERE key = 'schema_version'").get() as { value: string } | undefined)?.value ?? 0)
+  const probe = db
+    .prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'evolve_meta'")
+    .get() as { count: number }
+  const current =
+    Number(probe.count) === 0
+      ? 0
+      : Number(
+          (
+            db.prepare("SELECT value FROM evolve_meta WHERE key = 'schema_version'").get() as
+              | { value: string }
+              | undefined
+          )?.value ?? 0,
+        )
   if (current >= EVOLVE_SCHEMA_VERSION) return
   db.exec('BEGIN')
   try {
@@ -86,8 +93,8 @@ export function migrateEvolve(db: DatabaseSync): void {
       migration(db)
     }
     db.prepare(
-      'INSERT INTO evolve_meta (key, value) VALUES (\'schema_version\', ?)'
-      + ' ON CONFLICT (key) DO UPDATE SET value = excluded.value',
+      "INSERT INTO evolve_meta (key, value) VALUES ('schema_version', ?)" +
+        ' ON CONFLICT (key) DO UPDATE SET value = excluded.value',
     ).run(String(EVOLVE_SCHEMA_VERSION))
     db.exec('COMMIT')
   } catch (error) {

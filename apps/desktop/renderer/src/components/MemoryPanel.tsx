@@ -4,7 +4,10 @@ import { Icon } from './Icon.tsx'
 import { Modal } from './Modal.tsx'
 
 const KIND_LABELS: Record<MemoryRow['kind'], string> = {
-  profile: '画像', fact: '事实', preference: '偏好', event: '事件',
+  profile: '画像',
+  fact: '事实',
+  preference: '偏好',
+  event: '事件',
 }
 
 function formatDate(ts: number): string {
@@ -32,7 +35,12 @@ export function MemoryPanel({
   const [memories, setMemories] = useState<{ agent: MemoryRow[]; shared: MemoryRow[] } | undefined>(undefined)
 
   const reload = useCallback(() => {
-    api.listAgentMemories(agentId).then(setMemories).catch(() => { setMemories({ agent: [], shared: [] }) })
+    api
+      .listAgentMemories(agentId)
+      .then(setMemories)
+      .catch(() => {
+        setMemories({ agent: [], shared: [] })
+      })
   }, [api, agentId])
   useEffect(reload, [reload])
 
@@ -43,7 +51,10 @@ export function MemoryPanel({
 
   const renderRow = (memory: MemoryRow, isShared: boolean) => (
     <li key={memory.id} className="memory-row">
-      <span className={`memory-kind kind-${memory.kind}`}>{KIND_LABELS[memory.kind]}{isShared ? ' · 共享' : ''}</span>
+      <span className={`memory-kind kind-${memory.kind}`}>
+        {KIND_LABELS[memory.kind]}
+        {isShared ? ' · 共享' : ''}
+      </span>
       <span className="memory-content">{memory.content}</span>
       <span className="memory-meta">
         {formatDate(memory.updatedAt)}
@@ -51,7 +62,16 @@ export function MemoryPanel({
           ? ` · ${conversationTitles.get(memory.sourceConversationId) ?? '会话'}`
           : ''}
       </span>
-      <button className="memory-delete" title="删除（软删）" onClick={() => { void remove(memory.id) }}><Icon name="x" size={11} /></button>
+      <button
+        type="button"
+        className="memory-delete"
+        title="删除（软删）"
+        onClick={() => {
+          void remove(memory.id)
+        }}
+      >
+        <Icon name="x" size={11} />
+      </button>
     </li>
   )
 
@@ -64,14 +84,24 @@ export function MemoryPanel({
           {memories.shared.length > 0 && (
             <>
               <p className="section-title">共享画像（Ryen 了解你）</p>
-              <ul className="memory-list">{memories.shared.map((m) => { return renderRow(m, true) })}</ul>
+              <ul className="memory-list">
+                {memories.shared.map((m) => {
+                  return renderRow(m, true)
+                })}
+              </ul>
             </>
           )}
-          <p className="section-title">{agentName} 的私有记忆（{memories.agent.length}）</p>
+          <p className="section-title">
+            {agentName} 的私有记忆（{memories.agent.length}）
+          </p>
           {memories.agent.length === 0 && memories.shared.length === 0 ? (
             <p className="panel-empty">还没有记忆——多聊几轮，我会默默记住重要的事情。</p>
           ) : (
-            <ul className="memory-list">{memories.agent.map((m) => { return renderRow(m, false) })}</ul>
+            <ul className="memory-list">
+              {memories.agent.map((m) => {
+                return renderRow(m, false)
+              })}
+            </ul>
           )}
         </>
       )}

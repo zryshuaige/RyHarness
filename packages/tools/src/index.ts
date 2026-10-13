@@ -5,6 +5,6 @@
  */
 
 export { fsRead, fsWrite } from './fs.ts'
-export { shellExec } from './shell.ts'
 export { ARTIFACTS_DIR, fileProduce, guessMime } from './produce.ts'
+export { shellExec } from './shell.ts'
 export { PathEscapeError, resolveInWorkspace, truncateOutput } from './workspace.ts'

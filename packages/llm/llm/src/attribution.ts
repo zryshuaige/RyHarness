@@ -61,8 +61,6 @@ export function userAgent(identity: AppIdentity = APP_IDENTITY): string {
  * @param identity - the identity to send; defaults to {@link APP_IDENTITY} — omission cannot suppress attribution.
  * @returns headers to merge into the provider request (currently just `user-agent`).
  */
-export function attributionHeaders(
-  identity: AppIdentity = APP_IDENTITY,
-): Record<string, string> {
+export function attributionHeaders(identity: AppIdentity = APP_IDENTITY): Record<string, string> {
   return { 'user-agent': userAgent(identity) }
 }

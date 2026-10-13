@@ -9,9 +9,9 @@ const host = process.env.RYAGENT_HOST ?? '127.0.0.1'
 const dataDir = process.env.RYAGENT_DATA_DIR
 
 const server = await RyAgentServer.create({
-  ...Number.isFinite(port) ? { port } : {},
+  ...(Number.isFinite(port) ? { port } : {}),
   host,
-  ...dataDir === undefined ? {} : { dataDir },
+  ...(dataDir === undefined ? {} : { dataDir }),
 })
 
 console.log(`[ryagent] server listening at ${server.url}`)
@@ -22,12 +22,15 @@ const shutdown = (): void => {
   if (shuttingDown) return
   shuttingDown = true
   console.log('\n[ryagent] shutting down…')
-  server.close().then(() => {
-    process.exit(0)
-  }, (error: unknown) => {
-    console.error('[ryagent] shutdown failed:', error)
-    process.exit(1)
-  })
+  server.close().then(
+    () => {
+      process.exit(0)
+    },
+    (error: unknown) => {
+      console.error('[ryagent] shutdown failed:', error)
+      process.exit(1)
+    },
+  )
 }
 process.on('SIGINT', shutdown)
 process.on('SIGTERM', shutdown)

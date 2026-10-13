@@ -1,15 +1,35 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest'
+
 import { renderToStaticMarkup } from 'react-dom/server'
+import { describe, expect, it } from 'vitest'
 import { ICONS, Icon } from '../renderer/src/components/Icon.tsx'
 
 describe('Lucide 图标系统', () => {
   it('注册表覆盖全部 23 个需求图标', () => {
     const required = [
-      'chat-bubble', 'users', 'cat-face', 'sun', 'moon', 'gear', 'search', 'send',
-      'brain', 'plus', 'x', 'chevron-right', 'chevron-left', 'panel-right',
-      'copy', 'check', 'file', 'thumbs-up', 'thumbs-down', 'at-sign', 'group',
-      'pencil', 'alert',
+      'chat-bubble',
+      'users',
+      'cat-face',
+      'sun',
+      'moon',
+      'gear',
+      'search',
+      'send',
+      'brain',
+      'plus',
+      'x',
+      'chevron-right',
+      'chevron-left',
+      'panel-right',
+      'copy',
+      'check',
+      'file',
+      'thumbs-up',
+      'thumbs-down',
+      'at-sign',
+      'group',
+      'pencil',
+      'alert',
     ]
     for (const name of required) {
       expect(typeof ICONS[name as keyof typeof ICONS], name).toBe('string')

@@ -78,12 +78,11 @@ currentColor），`<Icon name="send" size={18} />`。尺寸节奏：rail 22px、
 - **软件图标**：`assets/icon-master.svg`（squircle + 琥珀渐变 + 领结猫）经 `pnpm --filter @ryagent/desktop gen:icon`（sharp + png-to-ico）导出 16–1024 PNG 与 icon.ico；BrowserWindow 与 rail logo 均使用。
 - **微交互**：hover 120ms、按压 scale(.97)、消息进入 fade+slide、typing 三点错峰、流式 40ms 批量重绘、距底 <100px 才自动跟随（否则浮出「跳至最新」）、骨架屏 shimmer、右栏展开/收起 200ms 过渡。
 
-## 实测截图（逐页真机截取，docs/redesign-*.png）
+## 实测截图（逐页真机截取，docs/*.png）
 
-- `redesign-01-chats.png`：聊天列表（群九宫格头像、未读徽标、猫管家口吻空态）。
-- `redesign-01b-chats-dark.png`：暗色聊天列表（主题持久化生效）。
-- `redesign-02-dm.png`：单聊（琥珀渐变气泡 + 方向直角、工具行、连续消息收紧、右栏资料卡 + 装饰环头像）。
-- `redesign-03-group.png`：群聊浅色（接力链、成员网格、调度轨迹）。
-- `redesign-04-contacts.png`：通讯录（SVG 头像卡片 + 模板区）。
-- `redesign-05-me.png`：我的（主题切换、供应商 key 状态）。
-- `redesign-06-dark.png`：暗色群聊（tonal elevation、降明度气泡暖白字、历史调度时间线）。
+- `redesign4-01-welcome.png`：欢迎页（chips 快速入口、最近会话）。
+- `redesign4-01-feedback.png`：消息反馈（agent 气泡 👍/👎，归因进自我进化闭环）。
+- `redesign4-02-contacts.png` / `screenshot-contacts.png`：通讯录（SVG 头像卡片 + 模板区）。
+- `redesign4-02-playbook.png`：经验手册（ACE playbook 条目、helpful/harmful 计数）。
+- `redesign4-03-create-agent.png`：模板建 Agent（人设/模型/工具白名单）。
+- `redesign4-04-group.png`：群聊（接力链、成员网格、调度轨迹）。

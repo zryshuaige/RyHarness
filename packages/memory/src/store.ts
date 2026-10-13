@@ -4,11 +4,10 @@
  * @module @ryagent/memory/store
  */
 
+import { createHash, randomUUID } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
-import { randomUUID, createHash } from 'node:crypto'
-import { migrateMemory } from './schema.ts'
 import type { MemoryKind, MemoryStatus } from './schema.ts'
-import { SHARED_SPACE } from './schema.ts'
+import { migrateMemory, SHARED_SPACE } from './schema.ts'
 
 export interface MemoryRow {
   id: string
@@ -36,9 +35,8 @@ export interface InsertMemoryInput {
 }
 
 function rowToMemory(row: Record<string, unknown>): MemoryRow {
-  const embedding = row.embedding === null || row.embedding === undefined
-    ? null
-    : toFloat32(row.embedding as ArrayBuffer)
+  const embedding =
+    row.embedding === null || row.embedding === undefined ? null : toFloat32(row.embedding as ArrayBuffer)
   return {
     id: String(row.id),
     agentId: String(row.agent_id),
@@ -50,13 +48,13 @@ function rowToMemory(row: Record<string, unknown>): MemoryRow {
     updatedAt: Number(row.updated_at),
     lastAccessedAt: Number(row.last_accessed_at),
     accessCount: Number(row.access_count),
-    ...row.source_conversation_id === null || row.source_conversation_id === undefined
+    ...(row.source_conversation_id === null || row.source_conversation_id === undefined
       ? {}
-      : { sourceConversationId: String(row.source_conversation_id) },
+      : { sourceConversationId: String(row.source_conversation_id) }),
     status: String(row.status) as MemoryStatus,
-    ...row.supersedes_id === null || row.supersedes_id === undefined
+    ...(row.supersedes_id === null || row.supersedes_id === undefined
       ? {}
-      : { supersedesId: String(row.supersedes_id) },
+      : { supersedesId: String(row.supersedes_id) }),
   }
 }
 
@@ -105,16 +103,26 @@ export class MemoryStore {
     const now = Date.now()
     const id = randomUUID()
     const dim = input.embedding === undefined || input.embedding === null ? null : input.embedding.length
-    this.db.prepare(`
+    this.db
+      .prepare(`
       INSERT INTO memories (id, agent_id, kind, content, embedding, dim, created_at, updated_at,
                             source_conversation_id, status, supersedes_id)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
-    `).run(
-      id, input.agentId, input.kind, input.content,
-      input.embedding ?? null, dim, now, now,
-      input.sourceConversationId ?? null, input.supersedesId ?? null,
-    )
-    this.db.prepare('INSERT INTO memories_fts (rowid, content) VALUES (?, ?)')
+    `)
+      .run(
+        id,
+        input.agentId,
+        input.kind,
+        input.content,
+        input.embedding ?? null,
+        dim,
+        now,
+        now,
+        input.sourceConversationId ?? null,
+        input.supersedesId ?? null,
+      )
+    this.db
+      .prepare('INSERT INTO memories_fts (rowid, content) VALUES (?, ?)')
       .run(this.rowidOf(id), bigrams(input.content))
     const row = this.get(id)
     if (row === undefined) throw new Error('@ryagent/memory: insert did not persist')
@@ -145,12 +153,16 @@ export class MemoryStore {
     // OR 语义：候选事实常比记忆长，全 AND 会零命中；BM25 按命中比例排序。
     const matchQuery = bigrams(query).split(' ').join(' OR ')
     if (matchQuery.length === 0) return []
-    const rowids = this.db.prepare(
-      'SELECT rowid, bm25(memories_fts) AS score FROM memories_fts WHERE memories_fts MATCH ? ORDER BY score LIMIT ?',
-    ).all(matchQuery, limit * 3) as { rowid: number }[]
+    const rowids = this.db
+      .prepare(
+        'SELECT rowid, bm25(memories_fts) AS score FROM memories_fts WHERE memories_fts MATCH ? ORDER BY score LIMIT ?',
+      )
+      .all(matchQuery, limit * 3) as { rowid: number }[]
     const out: MemoryRow[] = []
     for (const hit of rowids) {
-      const row = this.db.prepare('SELECT * FROM memories WHERE rowid = ?').get(Number(hit.rowid)) as Record<string, unknown> | undefined
+      const row = this.db.prepare('SELECT * FROM memories WHERE rowid = ?').get(Number(hit.rowid)) as
+        | Record<string, unknown>
+        | undefined
       if (row === undefined) continue
       const memory = rowToMemory(row)
       if (memory.status === 'active' && (memory.agentId === agentId || memory.agentId === SHARED_SPACE)) {
@@ -163,24 +175,30 @@ export class MemoryStore {
 
   /** 拉取某空间全部 active 记忆（用于内存余弦；单用户规模 <10k，暴力即可）。 */
   listActiveEmbeddings(agentId: string): MemoryRow[] {
-    const rows = this.db.prepare(
-      "SELECT * FROM memories WHERE status = 'active' AND embedding IS NOT NULL AND (agent_id = ? OR agent_id = ?)",
-    ).all(agentId, SHARED_SPACE) as Record<string, unknown>[]
+    const rows = this.db
+      .prepare(
+        "SELECT * FROM memories WHERE status = 'active' AND embedding IS NOT NULL AND (agent_id = ? OR agent_id = ?)",
+      )
+      .all(agentId, SHARED_SPACE) as Record<string, unknown>[]
     return rows.map(rowToMemory)
   }
 
   /** 共享画像：profile 类全量（量小，Core 式注入）。 */
   listSharedProfile(): MemoryRow[] {
-    const rows = this.db.prepare(
-      "SELECT * FROM memories WHERE status = 'active' AND agent_id = ? AND kind = 'profile' ORDER BY updated_at DESC",
-    ).all(SHARED_SPACE) as Record<string, unknown>[]
+    const rows = this.db
+      .prepare(
+        "SELECT * FROM memories WHERE status = 'active' AND agent_id = ? AND kind = 'profile' ORDER BY updated_at DESC",
+      )
+      .all(SHARED_SPACE) as Record<string, unknown>[]
     return rows.map(rowToMemory)
   }
 
   /** 访问计数 + 时间更新（召回命中后调用）。 */
   touchAccess(ids: readonly string[]): void {
     const now = Date.now()
-    const stmt = this.db.prepare('UPDATE memories SET access_count = access_count + 1, last_accessed_at = ? WHERE id = ?')
+    const stmt = this.db.prepare(
+      'UPDATE memories SET access_count = access_count + 1, last_accessed_at = ? WHERE id = ?',
+    )
     for (const id of ids) stmt.run(now, id)
   }
 
@@ -191,40 +209,57 @@ export class MemoryStore {
 
   /** 某 agent 的 active 记忆列表。 */
   listActiveForAgent(agentId: string, limit = 200): MemoryRow[] {
-    const rows = this.db.prepare(
-      "SELECT * FROM memories WHERE status = 'active' AND agent_id = ? ORDER BY updated_at DESC LIMIT ?",
-    ).all(agentId, limit) as Record<string, unknown>[]
+    const rows = this.db
+      .prepare("SELECT * FROM memories WHERE status = 'active' AND agent_id = ? ORDER BY updated_at DESC LIMIT ?")
+      .all(agentId, limit) as Record<string, unknown>[]
     return rows.map(rowToMemory)
   }
 
   // ---- embedding 缓存 ----
 
   cachedEmbedding(text: string): Float32Array | null {
-    const row = this.db.prepare('SELECT vector FROM embedding_cache WHERE hash = ?').get(textHash(text)) as { vector: ArrayBuffer } | undefined
+    const row = this.db.prepare('SELECT vector FROM embedding_cache WHERE hash = ?').get(textHash(text)) as
+      | { vector: ArrayBuffer }
+      | undefined
     return row === undefined ? null : toFloat32(row.vector)
   }
 
   cacheEmbedding(text: string, vector: Float32Array): void {
-    this.db.prepare('INSERT OR IGNORE INTO embedding_cache (hash, vector, dim, created_at) VALUES (?, ?, ?, ?)')
+    this.db
+      .prepare('INSERT OR IGNORE INTO embedding_cache (hash, vector, dim, created_at) VALUES (?, ?, ?, ?)')
       .run(textHash(text), Buffer.from(vector.buffer, vector.byteOffset, vector.byteLength), vector.length, Date.now())
   }
 
   // ---- 统计 ----
 
-  stats(): { total: number; bySpace: Record<string, number>; byKind: Record<string, number>; byStatus: Record<string, number> } {
+  stats(): {
+    total: number
+    bySpace: Record<string, number>
+    byKind: Record<string, number>
+    byStatus: Record<string, number>
+  } {
     const count = (sql: string, ...args: (string | number)[]) => {
       return Number((this.db.prepare(sql).get(...args) as { count: number }).count)
     }
     const bySpace: Record<string, number> = {}
-    for (const row of this.db.prepare('SELECT agent_id, COUNT(*) AS count FROM memories GROUP BY agent_id').all() as { agent_id: string; count: number }[]) {
+    for (const row of this.db.prepare('SELECT agent_id, COUNT(*) AS count FROM memories GROUP BY agent_id').all() as {
+      agent_id: string
+      count: number
+    }[]) {
       bySpace[row.agent_id] = Number(row.count)
     }
     const byKind: Record<string, number> = {}
-    for (const row of this.db.prepare('SELECT kind, COUNT(*) AS count FROM memories GROUP BY kind').all() as { kind: string; count: number }[]) {
+    for (const row of this.db.prepare('SELECT kind, COUNT(*) AS count FROM memories GROUP BY kind').all() as {
+      kind: string
+      count: number
+    }[]) {
       byKind[row.kind] = Number(row.count)
     }
     const byStatus: Record<string, number> = {}
-    for (const row of this.db.prepare('SELECT status, COUNT(*) AS count FROM memories GROUP BY status').all() as { status: string; count: number }[]) {
+    for (const row of this.db.prepare('SELECT status, COUNT(*) AS count FROM memories GROUP BY status').all() as {
+      status: string
+      count: number
+    }[]) {
       byStatus[row.status] = Number(row.count)
     }
     return { total: count('SELECT COUNT(*) AS count FROM memories'), bySpace, byKind, byStatus }

@@ -1,20 +1,33 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest'
+
 import { renderToStaticMarkup } from 'react-dom/server'
+import { describe, expect, it } from 'vitest'
 import { MessageBubble, RelayChain } from '../renderer/src/components/MessageBubble.tsx'
 import type { UiMessage } from '../renderer/src/store.ts'
 
-const fileUrl = (name: string): string => { return `/api/files/${name}` }
+const fileUrl = (name: string): string => {
+  return `/api/files/${name}`
+}
 
 describe('MessageBubble', () => {
   it('用户气泡右侧琥珀色、agent 气泡左侧白底', () => {
     const user: UiMessage = {
-      key: 'u1', senderType: 'user', senderId: 'user', senderName: '我',
-      turnIndex: 0, done: true, parts: [{ kind: 'text', text: '你好' }],
+      key: 'u1',
+      senderType: 'user',
+      senderId: 'user',
+      senderName: '我',
+      turnIndex: 0,
+      done: true,
+      parts: [{ kind: 'text', text: '你好' }],
     }
     const agent: UiMessage = {
-      key: 'a1', senderType: 'agent', senderId: 'ryen', senderName: 'Ryen',
-      turnIndex: 0, done: true, parts: [{ kind: 'text', text: '欢迎回家' }],
+      key: 'a1',
+      senderType: 'agent',
+      senderId: 'ryen',
+      senderName: 'Ryen',
+      turnIndex: 0,
+      done: true,
+      parts: [{ kind: 'text', text: '欢迎回家' }],
     }
     const userHtml = renderToStaticMarkup(<MessageBubble message={user} fileUrl={fileUrl} />)
     const agentHtml = renderToStaticMarkup(<MessageBubble message={agent} fileUrl={fileUrl} />)
@@ -26,8 +39,12 @@ describe('MessageBubble', () => {
 
   it('工具过程渲染为进度行（运行中/完成/失败）', () => {
     const running: UiMessage = {
-      key: 't1', senderType: 'agent', senderId: 'ryen', senderName: 'Ryen',
-      turnIndex: 0, done: false,
+      key: 't1',
+      senderType: 'agent',
+      senderId: 'ryen',
+      senderName: 'Ryen',
+      turnIndex: 0,
+      done: false,
       parts: [{ kind: 'tool', callId: 'c1', name: 'fs_write', arguments: '{}', status: 'running' }],
     }
     const html = renderToStaticMarkup(<MessageBubble message={running} fileUrl={fileUrl} />)
@@ -43,8 +60,12 @@ describe('MessageBubble', () => {
 
   it('产物卡片渲染文件名/大小/打开链接', () => {
     const message: UiMessage = {
-      key: 'f1', senderType: 'agent', senderId: 'ryen', senderName: 'Ryen',
-      turnIndex: 0, done: true,
+      key: 'f1',
+      senderType: 'agent',
+      senderId: 'ryen',
+      senderName: 'Ryen',
+      turnIndex: 0,
+      done: true,
       parts: [{ kind: 'file', callId: 'c1', name: 'report.md', size: 2048, mime: 'text/markdown' }],
     }
     const html = renderToStaticMarkup(<MessageBubble message={message} fileUrl={fileUrl} />)
@@ -55,8 +76,13 @@ describe('MessageBubble', () => {
 
   it('流式中显示光标', () => {
     const message: UiMessage = {
-      key: 's1', senderType: 'agent', senderId: 'ryen', senderName: 'Ryen',
-      turnIndex: 0, done: false, parts: [{ kind: 'text', text: '正在' }],
+      key: 's1',
+      senderType: 'agent',
+      senderId: 'ryen',
+      senderName: 'Ryen',
+      turnIndex: 0,
+      done: false,
+      parts: [{ kind: 'text', text: '正在' }],
     }
     expect(renderToStaticMarkup(<MessageBubble message={message} fileUrl={fileUrl} />)).toContain('bubble-cursor')
   })
@@ -65,7 +91,7 @@ describe('MessageBubble', () => {
 describe('RelayChain 接力链', () => {
   const nameOf = (id: string): string => ({ ryen: 'Ryen', codebot: 'CodeBot' })[id] ?? id
   const avatarOf = (id: string) => {
-    return { avatarKey: ({ ryen: 'cat', codebot: 'bot' })[id], name: nameOf(id) } as { avatarKey?: string; name: string }
+    return { avatarKey: { ryen: 'cat', codebot: 'bot' }[id], name: nameOf(id) } as { avatarKey?: string; name: string }
   }
 
   it('渲染头像流转与护栏样式', () => {

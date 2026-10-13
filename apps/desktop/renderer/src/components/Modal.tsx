@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react'
 import type { ReactNode } from 'react'
+import { useEffect, useRef } from 'react'
 import { Icon } from './Icon.tsx'
 
 const FOCUSABLE = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
@@ -16,8 +16,9 @@ export function Modal({ title, children, onClose }: { title: string; children: R
     if (modal === null) return
     const restoreTo = document.activeElement instanceof HTMLElement ? document.activeElement : null
     const focusables = (): HTMLElement[] => {
-      return Array.from(modal.querySelectorAll<HTMLElement>(FOCUSABLE))
-        .filter((el) => { return !el.hasAttribute('disabled') })
+      return Array.from(modal.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((el) => {
+        return !el.hasAttribute('disabled')
+      })
     }
     ;(focusables()[0] ?? modal).focus()
 
@@ -53,7 +54,9 @@ export function Modal({ title, children, onClose }: { title: string; children: R
   }, [onClose])
 
   return (
+    // biome-ignore lint/a11y/noStaticElementInteractions lint/a11y/useKeyWithClickEvents: 遮罩点击关闭（Esc 由全局 keydown 处理）
     <div className="modal-mask" onClick={onClose}>
+      {/* biome-ignore lint/a11y/useKeyWithClickEvents: 仅拦截点击冒泡到遮罩，本身不是交互 */}
       <div
         className="modal"
         role="dialog"
@@ -61,11 +64,15 @@ export function Modal({ title, children, onClose }: { title: string; children: R
         aria-label={title}
         tabIndex={-1}
         ref={modalRef}
-        onClick={(event) => { event.stopPropagation() }}
+        onClick={(event) => {
+          event.stopPropagation()
+        }}
       >
         <header className="modal-header">
           <h3>{title}</h3>
-          <button onClick={onClose} aria-label="关闭"><Icon name="x" size={15} /></button>
+          <button type="button" onClick={onClose} aria-label="关闭">
+            <Icon name="x" size={15} />
+          </button>
         </header>
         {children}
       </div>

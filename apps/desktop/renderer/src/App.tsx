@@ -1,17 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ApiClient, resolveApiBase } from './api.ts'
 import type { AgentDef, AgentTemplate, Conversation, ProviderInfo } from './api.ts'
-import { ChatStore } from './store.ts'
-import { useChat } from './store.ts'
-import { ConversationList } from './components/ConversationList.tsx'
+import { ApiClient, resolveApiBase } from './api.ts'
+import { AppIcon } from './components/AppIcon.tsx'
 import { ChatView } from './components/ChatView.tsx'
+import { ContactsPage, CreateAgentModal, CreateGroupModal } from './components/ContactsPage.tsx'
+import { ConversationList } from './components/ConversationList.tsx'
+import type { IconName } from './components/Icon.tsx'
+import { Icon } from './components/Icon.tsx'
+import { MePage } from './components/MePage.tsx'
 import { RightPanel } from './components/RightPanel.tsx'
 import { WelcomeHome } from './components/WelcomeHome.tsx'
-import { ContactsPage, CreateAgentModal, CreateGroupModal } from './components/ContactsPage.tsx'
-import { MePage } from './components/MePage.tsx'
-import { AppIcon } from './components/AppIcon.tsx'
-import { Icon } from './components/Icon.tsx'
-import type { IconName } from './components/Icon.tsx'
+import { ChatStore, useChat } from './store.ts'
 
 type Tab = 'chats' | 'contacts' | 'me'
 
@@ -39,7 +38,9 @@ const RAIL_TABS: { key: Tab; icon: IconName; label: string }[] = [
 ]
 
 export function App() {
-  const api = useMemo(() => { return new ApiClient(resolveApiBase()) }, [])
+  const api = useMemo(() => {
+    return new ApiClient(resolveApiBase())
+  }, [])
   const [tab, setTab] = useState<Tab>('chats')
   const [theme, setTheme] = useState<Theme>(loadTheme)
   const [agents, setAgents] = useState<AgentDef[]>([])
@@ -51,10 +52,14 @@ export function App() {
   const [modal, setModal] = useState<'agent' | 'group' | undefined>(undefined)
   const [panelCollapsed, setPanelCollapsed] = useState(false)
   const [loadError, setLoadError] = useState<string | undefined>(undefined)
-  const [store] = useState(() => { return new ChatStore() })
+  const [store] = useState(() => {
+    return new ChatStore()
+  })
   const snapshot = useChat(store)
 
-  useEffect(() => { applyTheme(theme) }, [theme])
+  useEffect(() => {
+    applyTheme(theme)
+  }, [theme])
 
   const changeTheme = (next: Theme): void => {
     setTheme(next)
@@ -68,13 +73,22 @@ export function App() {
   const refresh = async (): Promise<void> => {
     try {
       const [agentRes, templateRes, providerRes, conversationRes] = await Promise.all([
-        api.listAgents(), api.templates(), api.providers(), api.conversations(),
+        api.listAgents(),
+        api.templates(),
+        api.providers(),
+        api.conversations(),
       ])
       setAgents(agentRes.agents)
       setTemplates(templateRes.templates)
       setProviders(providerRes.providers)
       setConversations(conversationRes.conversations)
-      store.setAgentNames(new Map(agentRes.agents.map((a) => { return [a.id, a.name] })))
+      store.setAgentNames(
+        new Map(
+          agentRes.agents.map((a) => {
+            return [a.id, a.name]
+          }),
+        ),
+      )
       setLoadError(undefined)
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : String(error))
@@ -83,10 +97,16 @@ export function App() {
     }
   }
 
-  useEffect(() => { void refresh() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    void refresh()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const active = conversations.find((c) => { return c.id === activeId })
-  const ryen = agents.find((a) => { return a.id === 'ryen' })
+  const active = conversations.find((c) => {
+    return c.id === activeId
+  })
+  const ryen = agents.find((a) => {
+    return a.id === 'ryen'
+  })
 
   /** 与 agent 的单聊：找已有 direct 会话，没有就建。 */
   const openDirectChat = async (agentId: string): Promise<void> => {
@@ -100,7 +120,9 @@ export function App() {
     }
     try {
       const { conversation } = await api.createConversation({ kind: 'direct', agentId })
-      setConversations((prev) => { return [conversation, ...prev] })
+      setConversations((prev) => {
+        return [conversation, ...prev]
+      })
       setActiveId(conversation.id)
       setTab('chats')
     } catch (error) {
@@ -115,9 +137,10 @@ export function App() {
       const existing = conversations.find((c) => {
         return c.kind === 'direct' && c.memberAgentIds.length === 1 && c.memberAgentIds[0] === ryen.id
       })
-      const conversationId = existing !== undefined
-        ? existing.id
-        : (await api.createConversation({ kind: 'direct', agentId: ryen.id })).conversation.id
+      const conversationId =
+        existing !== undefined
+          ? existing.id
+          : (await api.createConversation({ kind: 'direct', agentId: ryen.id })).conversation.id
       if (existing === undefined) await refresh()
       setActiveId(conversationId)
       setTab('chats')
@@ -132,8 +155,11 @@ export function App() {
       <div className="app-error">
         <h2>无法连接 RyAgent 后端</h2>
         <p>{loadError}</p>
-        <p>请确认桌面服务已启动（Electron 内嵌或 <code>pnpm --filter @ryagent/server dev</code>）。</p>
+        <p>
+          请确认桌面服务已启动（Electron 内嵌或 <code>pnpm --filter @ryagent/server dev</code>）。
+        </p>
         <button
+          type="button"
           className="btn btn-primary"
           onClick={() => {
             setLoadError(undefined)
@@ -151,26 +177,45 @@ export function App() {
     <div className="app-shell">
       {/* 栏 1：72px icon rail */}
       <nav className="rail" aria-label="主导航">
-        <span className="rail-logo"><AppIcon size={40} /></span>
+        <span className="rail-logo">
+          <AppIcon size={40} />
+        </span>
         {RAIL_TABS.map((item) => (
           <button
+            type="button"
             key={item.key}
             className={`rail-tab ${tab === item.key ? 'is-active' : ''}`}
-            onClick={() => { setTab(item.key) }}
+            onClick={() => {
+              setTab(item.key)
+            }}
           >
-            <span className="rail-icon" aria-hidden="true"><Icon name={item.icon} size={22} /></span>
+            <span className="rail-icon" aria-hidden="true">
+              <Icon name={item.icon} size={22} />
+            </span>
             {item.label}
           </button>
         ))}
         <span className="rail-spacer" />
         <button
+          type="button"
           className="rail-icon-btn"
           title={theme === 'light' ? '切换到暗色' : '切换到浅色'}
-          onClick={() => { changeTheme(theme === 'light' ? 'dark' : 'light') }}
+          onClick={() => {
+            changeTheme(theme === 'light' ? 'dark' : 'light')
+          }}
         >
           <Icon name={theme === 'light' ? 'moon' : 'sun'} size={18} />
         </button>
-        <button className="rail-icon-btn" title="我的 / 设置" onClick={() => { setTab('me') }}><Icon name="gear" size={18} /></button>
+        <button
+          type="button"
+          className="rail-icon-btn"
+          title="我的 / 设置"
+          onClick={() => {
+            setTab('me')
+          }}
+        >
+          <Icon name="gear" size={18} />
+        </button>
       </nav>
 
       {/* 栏 2：列表栏（聊天 tab）或空（通讯录/我的为整页） */}
@@ -181,7 +226,9 @@ export function App() {
             agents={agents}
             activeId={activeId}
             loading={listLoading}
-            onSelect={(id) => { setActiveId(id) }}
+            onSelect={(id) => {
+              setActiveId(id)
+            }}
           />
         </aside>
       )}
@@ -195,7 +242,9 @@ export function App() {
             conversation={active}
             agents={agents}
             store={store}
-            onRead={() => { void refresh() }}
+            onRead={() => {
+              void refresh()
+            }}
           />
         ) : (
           <section className="chat-view">
@@ -204,8 +253,12 @@ export function App() {
                 ryen={ryen}
                 agents={agents}
                 conversations={conversations}
-                onSuggest={(text) => { void suggestToRyen(text) }}
-                onOpenConversation={(id) => { setActiveId(id) }}
+                onSuggest={(text) => {
+                  void suggestToRyen(text)
+                }}
+                onOpenConversation={(id) => {
+                  setActiveId(id)
+                }}
               />
             </div>
           </section>
@@ -215,9 +268,15 @@ export function App() {
           agents={agents}
           templates={templates}
           providers={providers}
-          onCreateAgent={() => { setModal('agent') }}
-          onCreateGroup={() => { setModal('group') }}
-          onChat={(agentId) => { void openDirectChat(agentId) }}
+          onCreateAgent={() => {
+            setModal('agent')
+          }}
+          onCreateGroup={() => {
+            setModal('group')
+          }}
+          onChat={(agentId) => {
+            void openDirectChat(agentId)
+          }}
         />
       ) : (
         <MePage
@@ -226,7 +285,9 @@ export function App() {
           providers={providers}
           theme={theme}
           onThemeChange={changeTheme}
-          onRyenPatched={() => { void refresh() }}
+          onRyenPatched={() => {
+            void refresh()
+          }}
         />
       )}
 
@@ -238,9 +299,15 @@ export function App() {
           conversations={conversations}
           relays={snapshot.relays}
           messages={[...store.getSnapshot().messages]}
-          fileUrl={(name) => { return api.fileUrl(name) }}
+          fileUrl={(name) => {
+            return api.fileUrl(name)
+          }}
           collapsed={panelCollapsed}
-          onToggle={() => { setPanelCollapsed((v) => { return !v }) }}
+          onToggle={() => {
+            setPanelCollapsed((v) => {
+              return !v
+            })
+          }}
         />
       )}
 
@@ -248,7 +315,9 @@ export function App() {
         <CreateAgentModal
           templates={templates}
           providers={providers}
-          onClose={() => { setModal(undefined) }}
+          onClose={() => {
+            setModal(undefined)
+          }}
           onSubmit={async (input) => {
             await api.createAgent(input)
             await refresh()
@@ -258,7 +327,9 @@ export function App() {
       {modal === 'group' && (
         <CreateGroupModal
           agents={agents}
-          onClose={() => { setModal(undefined) }}
+          onClose={() => {
+            setModal(undefined)
+          }}
           onSubmit={async (input) => {
             const { conversation } = await api.createConversation({ kind: 'group', ...input })
             await refresh()

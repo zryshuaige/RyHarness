@@ -10,18 +10,12 @@
  * @module @ryagent/session/coordinator
  */
 
-import { brandString } from '@ryagent/brand'
-import { AgentLoop } from '@ryagent/agent'
 import type { AgentDefinition, AgentEvolutionHooks, AgentLoopEvent, AgentMemoryHooks, Tool } from '@ryagent/agent'
-import { GroupDispatcher, parseMentions } from '@ryagent/group'
+import { AgentLoop } from '@ryagent/agent'
+import { brandString } from '@ryagent/brand'
 import type { GroupEvent, GroupHistoryEntry } from '@ryagent/group'
-import type {
-  ContentBlock,
-  LlmRuntime,
-  Message,
-  MessageId,
-  ToolCallId,
-} from '@ryagent/llm'
+import { GroupDispatcher, parseMentions } from '@ryagent/group'
+import type { ContentBlock, LlmRuntime, Message, MessageId, ToolCallId } from '@ryagent/llm'
 import type { SessionStore } from './store.ts'
 import type { StoredMessage } from './types.ts'
 
@@ -59,7 +53,9 @@ function rebuildMessage(row: StoredMessage, agent: AgentDefinition): Message | u
       return { id, role: 'tool', toolCallId: callId, content: blocks, source: { kind: 'tool', callId } }
     }
     return {
-      id, role: 'assistant', content: blocks,
+      id,
+      role: 'assistant',
+      content: blocks,
       source: { kind: 'model', provider: agent.provider, model: agent.model },
     }
   }
@@ -70,13 +66,20 @@ function rebuildMessage(row: StoredMessage, agent: AgentDefinition): Message | u
 function toGroupEntry(row: StoredMessage, agentNames: Map<string, string>): GroupHistoryEntry | undefined {
   if (row.senderType === 'system' || row.toolCallId !== undefined) return undefined
   const text = (row.contentBlocks as ContentBlock[])
-    .filter((block) => { return block.type === 'text' })
-    .map((block) => { return block.type === 'text' ? block.text : '' })
+    .filter((block) => {
+      return block.type === 'text'
+    })
+    .map((block) => {
+      return block.type === 'text' ? block.text : ''
+    })
     .join('\n')
   if (text.trim().length === 0) return undefined
-  const speaker = row.senderType === 'user'
-    ? '用户'
-    : (row.senderId !== undefined ? (agentNames.get(row.senderId) ?? row.senderId) : 'agent')
+  const speaker =
+    row.senderType === 'user'
+      ? '用户'
+      : row.senderId !== undefined
+        ? (agentNames.get(row.senderId) ?? row.senderId)
+        : 'agent'
   return { speaker, text }
 }
 
@@ -108,26 +111,35 @@ export class SessionCoordinator {
     // 先恢复历史（不含本条用户消息），再落库用户消息，避免历史里出现重复输入。
     const history = this.loadDirectHistory(conversationId, agent)
     store.appendMessage({
-      conversationId, senderType: 'user', senderId: 'user',
-      contentBlocks: [{ type: 'text', text }], turnIndex,
+      conversationId,
+      senderType: 'user',
+      senderId: 'user',
+      contentBlocks: [{ type: 'text', text }],
+      turnIndex,
     })
 
     const memory = this.bindMemory(conversationId)
     const evolution = this.bindEvolution(conversationId)
     const loop = new AgentLoop({
-      definition: agent, llm, tools, history,
+      definition: agent,
+      llm,
+      tools,
+      history,
       // 每步组装出的 assistant 消息（含 tool_calls、可能无文本）即时落库：
       // 不持久化它们，重建历史里 tool 消息就没有前置的 assistant tool_calls
       // 消息，违反 OpenAI 消息序列契约（第二轮必 400）。
       onAssistantMessage: (message) => {
         if (message.content.length === 0) return
         store.appendMessage({
-          conversationId, senderType: 'agent', senderId: agentId,
-          contentBlocks: [...message.content], turnIndex,
+          conversationId,
+          senderType: 'agent',
+          senderId: agentId,
+          contentBlocks: [...message.content],
+          turnIndex,
         })
       },
-      ...memory === undefined ? {} : { memory },
-      ...evolution === undefined ? {} : { evolution },
+      ...(memory === undefined ? {} : { memory }),
+      ...(evolution === undefined ? {} : { evolution }),
     })
 
     let failed: { message: string; code: string } | undefined
@@ -135,9 +147,12 @@ export class SessionCoordinator {
       yield event
       if (event.type === 'tool-result') {
         store.appendMessage({
-          conversationId, senderType: 'agent', senderId: agentId,
+          conversationId,
+          senderType: 'agent',
+          senderId: agentId,
           contentBlocks: [{ type: 'text', text: `${TOOL_RESULT_PREFIX}${event.name}: ${event.result.content}` }],
-          toolCallId: event.callId, turnIndex,
+          toolCallId: event.callId,
+          turnIndex,
         })
       }
       if (event.type === 'error') failed = { message: event.message, code: event.code }
@@ -145,7 +160,8 @@ export class SessionCoordinator {
 
     if (failed !== undefined) {
       store.appendMessage({
-        conversationId, senderType: 'system',
+        conversationId,
+        senderType: 'system',
         contentBlocks: [{ type: 'text', text: `[error:${failed.code}] ${failed.message}` }],
         turnIndex,
       })
@@ -161,11 +177,7 @@ export class SessionCoordinator {
    * @param context - 工作区根目录等。
    * @returns GroupDispatcher 事件流（透传）。
    */
-  async *chatGroup(
-    conversationId: string,
-    text: string,
-    context: RunContext,
-  ): AsyncGenerator<GroupEvent> {
+  async *chatGroup(conversationId: string, text: string, context: RunContext): AsyncGenerator<GroupEvent> {
     const { store, llm, tools } = this.options
     const conversation = store.getConversation(conversationId)
     if (conversation === undefined) throw new Error(`@ryagent/session: unknown conversation "${conversationId}"`)
@@ -181,13 +193,23 @@ export class SessionCoordinator {
     const dispatcherId = conversation.dispatcherAgentId ?? members[0]!.id
 
     const turnIndex = store.nextTurnIndex(conversationId)
-    const mentions = parseMentions(text, members).map((member) => { return member.id })
+    const mentions = parseMentions(text, members).map((member) => {
+      return member.id
+    })
     store.appendMessage({
-      conversationId, senderType: 'user', senderId: 'user',
-      contentBlocks: [{ type: 'text', text }], mentions, turnIndex,
+      conversationId,
+      senderType: 'user',
+      senderId: 'user',
+      contentBlocks: [{ type: 'text', text }],
+      mentions,
+      turnIndex,
     })
 
-    const agentNames = new Map(members.map((member) => { return [member.id, member.name] }))
+    const agentNames = new Map(
+      members.map((member) => {
+        return [member.id, member.name]
+      }),
+    )
     const history: GroupHistoryEntry[] = []
     for (const row of store.listMessages(conversationId, { limit: HISTORY_PAGE_SIZE })) {
       if (row.turnIndex === turnIndex) break // 只取本 turn 之前的历史
@@ -196,35 +218,48 @@ export class SessionCoordinator {
     }
 
     const dispatcher = new GroupDispatcher({
-      llm, members, dispatcherId, tools,
-      ...this.bindMemory(conversationId) === undefined ? {} : { memory: this.bindMemory(conversationId) },
-      ...this.bindEvolution(conversationId) === undefined ? {} : { evolution: this.bindEvolution(conversationId) },
+      llm,
+      members,
+      dispatcherId,
+      tools,
+      ...(this.bindMemory(conversationId) === undefined ? {} : { memory: this.bindMemory(conversationId) }),
+      ...(this.bindEvolution(conversationId) === undefined ? {} : { evolution: this.bindEvolution(conversationId) }),
     })
     for await (const event of dispatcher.runTurn({ text, history, workspaceRoot: context.workspaceRoot, turnIndex })) {
       yield event
       switch (event.type) {
         case 'dispatch':
           store.recordDispatchEvent({
-            conversationId, fromAgent: event.fromAgent, toAgent: event.toAgent,
-            reason: event.reason, turnIndex,
+            conversationId,
+            fromAgent: event.fromAgent,
+            toAgent: event.toAgent,
+            reason: event.reason,
+            turnIndex,
           })
           break
         case 'agent-message':
           store.appendMessage({
-            conversationId, senderType: 'agent', senderId: event.agentId,
-            contentBlocks: [...event.message.content], turnIndex,
+            conversationId,
+            senderType: 'agent',
+            senderId: event.agentId,
+            contentBlocks: [...event.message.content],
+            turnIndex,
           })
           break
         case 'tool-result':
           store.appendMessage({
-            conversationId, senderType: 'agent', senderId: event.agentId,
+            conversationId,
+            senderType: 'agent',
+            senderId: event.agentId,
             contentBlocks: [{ type: 'text', text: `${TOOL_RESULT_PREFIX}${event.name}: ${event.result.content}` }],
-            toolCallId: event.callId, turnIndex,
+            toolCallId: event.callId,
+            turnIndex,
           })
           break
         case 'error':
           store.appendMessage({
-            conversationId, senderType: 'system',
+            conversationId,
+            senderType: 'system',
             contentBlocks: [{ type: 'text', text: `[error:${event.code}] ${event.message}` }],
             turnIndex,
           })
@@ -240,7 +275,9 @@ export class SessionCoordinator {
     const memory = this.options.memory
     if (memory === undefined) return undefined
     return {
-      recall: (agentId, inputText) => { return memory.recall(agentId, inputText) },
+      recall: (agentId, inputText) => {
+        return memory.recall(agentId, inputText)
+      },
       enqueueExtraction: (agentId, agentName, _conversationId, turnText) => {
         memory.enqueueExtraction(agentId, agentName, conversationId, turnText)
       },
@@ -252,7 +289,9 @@ export class SessionCoordinator {
     const evolution = this.options.evolution
     if (evolution === undefined) return undefined
     return {
-      compile: (agentId) => { return evolution.compile(agentId) },
+      compile: (agentId) => {
+        return evolution.compile(agentId)
+      },
       enqueueTurn: (agentId, agentName, _conversationId, turn) => {
         evolution.enqueueTurn(agentId, agentName, conversationId, turn)
       },

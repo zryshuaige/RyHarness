@@ -34,6 +34,7 @@ export function typertOwnedValue<Value>(value: Value, release: () => void): Type
  * @returns whether the result carries invocation cleanup.
  */
 export function isTypertOwnedValue(value: unknown): value is TypertOwnedValue<unknown> {
-  return typeof value === 'object' && value !== null
-    && TYPERT_OWNED_VALUE in value && value[TYPERT_OWNED_VALUE] === true
+  return (
+    typeof value === 'object' && value !== null && TYPERT_OWNED_VALUE in value && value[TYPERT_OWNED_VALUE] === true
+  )
 }

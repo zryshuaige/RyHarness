@@ -23,8 +23,16 @@ describe('filterMentions', () => {
   ]
 
   it('大小写不敏感的包含匹配', () => {
-    expect(filterMentions(members, 'code').map((m) => { return m.id })).toEqual(['2'])
-    expect(filterMentions(members, 'r').map((m) => { return m.id })).toEqual(['1', '3'])
+    expect(
+      filterMentions(members, 'code').map((m) => {
+        return m.id
+      }),
+    ).toEqual(['2'])
+    expect(
+      filterMentions(members, 'r').map((m) => {
+        return m.id
+      }),
+    ).toEqual(['1', '3'])
     expect(filterMentions(members, '')).toHaveLength(3)
     expect(filterMentions(members, 'zzz')).toHaveLength(0)
   })

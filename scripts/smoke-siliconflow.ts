@@ -16,8 +16,8 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Context } from '@ryagent/cordis'
-import LlmRuntime, { createUserMessage } from '@ryagent/llm'
 import type { StreamChunk, ToolCallBlock } from '@ryagent/llm'
+import LlmRuntime, { createUserMessage } from '@ryagent/llm'
 import { apply } from '@ryagent/llm-openai'
 
 function loadDotEnv(): Record<string, string> {
@@ -36,7 +36,7 @@ function loadDotEnv(): Record<string, string> {
   }
 }
 
-const env = { ...loadDotEnv(), ...process.env as Record<string, string> }
+const env = { ...loadDotEnv(), ...(process.env as Record<string, string>) }
 const apiKey = env.SILICONFLOW_API_KEY
 if (apiKey === undefined || apiKey.length === 0) {
   console.log('[smoke] 未找到 SILICONFLOW_API_KEY（环境变量或 RyAgent/.env），跳过 SiliconFlow 冒烟。')
@@ -66,7 +66,9 @@ try {
   const stream = ctx.llm.stream({
     provider,
     model,
-    messages: [createUserMessage({ content: [{ type: 'text', text: '用一句中文介绍你自己。' }], source: { kind: 'user' } })],
+    messages: [
+      createUserMessage({ content: [{ type: 'text', text: '用一句中文介绍你自己。' }], source: { kind: 'user' } }),
+    ],
   })
   let text = ''
   let usage: Extract<StreamChunk, { type: 'usage' }>['usage'] | undefined
@@ -81,27 +83,35 @@ try {
     }
   }
   if (text.length === 0) throw new Error('场景 (a) 未收到任何文本')
-  console.log(`[smoke] (a) 通过：收到 ${text.length} 字符文本`
-    + (usage === undefined ? '' : `，usage input=${usage.inputTokens} output=${usage.outputTokens} total=${usage.totalTokens}`))
+  console.log(
+    `[smoke] (a) 通过：收到 ${text.length} 字符文本` +
+      (usage === undefined
+        ? ''
+        : `，usage input=${usage.inputTokens} output=${usage.outputTokens} total=${usage.totalTokens}`),
+  )
 
   // ---- 场景 (b)：一轮 tool calling ----
   console.log('[smoke] (b) tool calling：声明 echo 工具，要求模型调用它')
   const toolStream = ctx.llm.stream({
     provider,
     model,
-    messages: [createUserMessage({
-      content: [{ type: 'text', text: '请调用 echo 工具，参数 text 设为 "smoke-ok"。不要输出其他内容。' }],
-      source: { kind: 'user' },
-    })],
-    tools: [{
-      name: 'echo',
-      description: '回显输入文本',
-      parameters: {
-        type: 'object',
-        properties: { text: { type: 'string', description: '要回显的文本' } },
-        required: ['text'],
+    messages: [
+      createUserMessage({
+        content: [{ type: 'text', text: '请调用 echo 工具，参数 text 设为 "smoke-ok"。不要输出其他内容。' }],
+        source: { kind: 'user' },
+      }),
+    ],
+    tools: [
+      {
+        name: 'echo',
+        description: '回显输入文本',
+        parameters: {
+          type: 'object',
+          properties: { text: { type: 'string', description: '要回显的文本' } },
+          required: ['text'],
+        },
       },
-    }],
+    ],
   })
   const toolCalls: ToolCallBlock[] = []
   let toolFinish: Extract<StreamChunk, { type: 'finish' }>['reason'] | undefined

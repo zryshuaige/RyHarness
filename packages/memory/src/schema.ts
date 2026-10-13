@@ -64,11 +64,13 @@ const MIGRATIONS: Readonly<Record<number, (db: DatabaseSync) => void>> = { 1: mi
 
 function metaVersion(db: DatabaseSync): number {
   // memory_meta 可能不存在（全新库）：用模板表探测。
-  const probe = db.prepare(
-    "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'memory_meta'",
-  ).get() as { count: number }
+  const probe = db
+    .prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'memory_meta'")
+    .get() as { count: number }
   if (Number(probe.count) === 0) return 0
-  const row = db.prepare("SELECT value FROM memory_meta WHERE key = 'schema_version'").get() as { value: string } | undefined
+  const row = db.prepare("SELECT value FROM memory_meta WHERE key = 'schema_version'").get() as
+    | { value: string }
+    | undefined
   return row === undefined ? 0 : Number(row.value)
 }
 
@@ -84,8 +86,8 @@ export function migrateMemory(db: DatabaseSync): void {
       migration(db)
     }
     db.prepare(
-      'INSERT INTO memory_meta (key, value) VALUES (\'schema_version\', ?)'
-      + ' ON CONFLICT (key) DO UPDATE SET value = excluded.value',
+      "INSERT INTO memory_meta (key, value) VALUES ('schema_version', ?)" +
+        ' ON CONFLICT (key) DO UPDATE SET value = excluded.value',
     ).run(String(MEMORY_SCHEMA_VERSION))
     db.exec('COMMIT')
   } catch (error) {

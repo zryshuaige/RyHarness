@@ -17,12 +17,14 @@ export function assertNever(value: never, context?: string): never {
 /** Whether a realm-owned intrinsic prototype is backed by its native constructor. */
 function hasIntrinsicConstructor(prototype: object, name: 'Array' | 'Object'): boolean {
   const descriptor = Object.getOwnPropertyDescriptor(prototype, 'constructor')
-  const constructor: unknown = descriptor?.value
-  if (typeof constructor !== 'function') return false
+  const ctor: unknown = descriptor?.value
+  if (typeof ctor !== 'function') return false
   try {
-    return constructor.name === name
-      && constructor.prototype === prototype
-      && Function.prototype.toString.call(constructor) === `function ${name}() { [native code] }`
+    return (
+      ctor.name === name &&
+      ctor.prototype === prototype &&
+      Function.prototype.toString.call(ctor) === `function ${name}() { [native code] }`
+    )
   } catch {
     return false
   }
@@ -38,22 +40,20 @@ function hasPlainArrayPrototype(value: unknown[]): boolean {
   const prototype: unknown = Object.getPrototypeOf(value)
   if (!Array.isArray(prototype) || !hasIntrinsicConstructor(prototype, 'Array')) return false
   const objectPrototype: unknown = Object.getPrototypeOf(prototype)
-  return typeof objectPrototype === 'object'
-    && objectPrototype !== null
-    && isIntrinsicObjectPrototype(objectPrototype)
+  return typeof objectPrototype === 'object' && objectPrototype !== null && isIntrinsicObjectPrototype(objectPrototype)
 }
 
 /** Whether an object is a plain or null-prototype record from any JavaScript realm. */
 function hasPlainObjectPrototype(value: object): boolean {
   const prototype: unknown = Object.getPrototypeOf(value)
-  return prototype === null
-    || typeof prototype === 'object' && isIntrinsicObjectPrototype(prototype)
+  return prototype === null || (typeof prototype === 'object' && isIntrinsicObjectPrototype(prototype))
 }
 
 /** Return every JSON-visible object key, or reject own data JSON would discard. */
 function enumerableStringKeys(value: object): string[] | undefined {
   const keys = Reflect.ownKeys(value)
-  if (keys.some(key => typeof key !== 'string' || !Object.prototype.propertyIsEnumerable.call(value, key))) return undefined
+  if (keys.some((key) => typeof key !== 'string' || !Object.prototype.propertyIsEnumerable.call(value, key)))
+    return undefined
   return keys as string[]
 }
 
@@ -88,22 +88,26 @@ function walkJsonValue(value: unknown, detach: boolean): JsonValue | true | unde
     }
   }
 
-  const tasks: JsonWalkTask[] = [{
-    kind: 'visit',
-    value,
-    ...(detach ? { destination: { kind: 'root' } as const } : {}),
-  }]
+  const tasks: JsonWalkTask[] = [
+    {
+      kind: 'visit',
+      value,
+      ...(detach ? { destination: { kind: 'root' } as const } : {}),
+    },
+  ]
   for (let task = tasks.pop(); task !== undefined; task = tasks.pop()) {
     if (task.kind === 'leave') {
       ancestors.delete(task.source)
       continue
     }
     if (task.kind === 'array-item') {
-      if (!Object.prototype.hasOwnProperty.call(task.source, task.index)) return undefined
+      if (!Object.hasOwn(task.source, task.index)) return undefined
       tasks.push({
         kind: 'visit',
         value: task.source[task.index],
-        ...(task.target === undefined ? {} : { destination: { kind: 'array', target: task.target, index: task.index } as const }),
+        ...(task.target === undefined
+          ? {}
+          : { destination: { kind: 'array', target: task.target, index: task.index } as const }),
       })
       continue
     }
@@ -111,7 +115,9 @@ function walkJsonValue(value: unknown, detach: boolean): JsonValue | true | unde
       tasks.push({
         kind: 'visit',
         value: task.source[task.key],
-        ...(task.target === undefined ? {} : { destination: { kind: 'object', target: task.target, key: task.key } as const }),
+        ...(task.target === undefined
+          ? {}
+          : { destination: { kind: 'object', target: task.target, key: task.key } as const }),
       })
       continue
     }
@@ -137,7 +143,7 @@ function walkJsonValue(value: unknown, detach: boolean): JsonValue | true | unde
       if (!hasPlainArrayPrototype(current)) return undefined
       const length = current.length
       if (Reflect.ownKeys(current).length !== length + 1) return undefined
-      const target = detach ? [] as JsonValue[] : undefined
+      const target = detach ? ([] as JsonValue[]) : undefined
       if (target !== undefined) assign(task.destination, target)
       ancestors.add(current)
       tasks.push({ kind: 'leave', source: current })
@@ -150,7 +156,7 @@ function walkJsonValue(value: unknown, detach: boolean): JsonValue | true | unde
     if (!hasPlainObjectPrototype(current)) return undefined
     const keys = enumerableStringKeys(current)
     if (keys === undefined) return undefined
-    const target = detach ? {} as { [key: string]: JsonValue } : undefined
+    const target = detach ? ({} as { [key: string]: JsonValue }) : undefined
     if (target !== undefined) assign(task.destination, target)
     ancestors.add(current)
     tasks.push({ kind: 'leave', source: current })
@@ -158,7 +164,12 @@ function walkJsonValue(value: unknown, detach: boolean): JsonValue | true | unde
       const key = keys[index]
       /* v8 ignore next -- the loop is bounded by the captured key count. */
       if (key === undefined) return undefined
-      tasks.push({ kind: 'object-property', source: current as Record<string, unknown>, key, ...(target === undefined ? {} : { target }) })
+      tasks.push({
+        kind: 'object-property',
+        source: current as Record<string, unknown>,
+        key,
+        ...(target === undefined ? {} : { target }),
+      })
     }
   }
   return detach ? root : true
@@ -199,7 +210,7 @@ export function deepEqualJson(a: unknown, b: unknown): boolean {
   const right = b as Record<string, unknown>
   const keys = Object.keys(left)
   if (keys.length !== Object.keys(right).length) return false
-  return keys.every(key => key in right && deepEqualJson(left[key], right[key]))
+  return keys.every((key) => key in right && deepEqualJson(left[key], right[key]))
 }
 
 /**

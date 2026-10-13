@@ -1,18 +1,34 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest'
+
 import { renderToStaticMarkup } from 'react-dom/server'
-import {
-  AVATAR_STYLES, AVATAR_STYLE_BY_KEY, dicebearSvg, fallbackColor, parseAvatarSpec, randomAvatarSpec,
-} from '../renderer/src/components/avatars/avatars.tsx'
+import { describe, expect, it } from 'vitest'
 import { Avatar } from '../renderer/src/components/avatars/Avatar.tsx'
+import {
+  AVATAR_STYLE_BY_KEY,
+  AVATAR_STYLES,
+  dicebearSvg,
+  fallbackColor,
+  parseAvatarSpec,
+  randomAvatarSpec,
+} from '../renderer/src/components/avatars/avatars.tsx'
 import { GroupAvatar, groupGridAreas } from '../renderer/src/components/avatars/GroupAvatar.tsx'
 
 describe('DiceBear 头像体系', () => {
   it('6 个预置风格，license 已核实（CC0 / CC BY 4.0）', () => {
     expect(AVATAR_STYLES.length).toBe(6)
-    const licenses = AVATAR_STYLES.map((s) => { return s.license })
-    expect(licenses.filter((l) => { return l === 'CC0-1.0' }).length).toBe(3)
-    expect(licenses.filter((l) => { return l === 'CC-BY-4.0' }).length).toBe(3)
+    const licenses = AVATAR_STYLES.map((s) => {
+      return s.license
+    })
+    expect(
+      licenses.filter((l) => {
+        return l === 'CC0-1.0'
+      }).length,
+    ).toBe(3)
+    expect(
+      licenses.filter((l) => {
+        return l === 'CC-BY-4.0'
+      }).length,
+    ).toBe(3)
     for (const style of AVATAR_STYLES) {
       expect(AVATAR_STYLE_BY_KEY[style.key]).toBe(style)
     }
@@ -35,7 +51,11 @@ describe('DiceBear 头像体系', () => {
 
   it('randomAvatarSpec 生成合法编码', () => {
     for (let i = 0; i < 20; i++) {
-      const spec = parseAvatarSpec(randomAvatarSpec(() => { return 'fixedseed' }))
+      const spec = parseAvatarSpec(
+        randomAvatarSpec(() => {
+          return 'fixedseed'
+        }),
+      )
       expect(spec).not.toBeNull()
       expect(AVATAR_STYLE_BY_KEY[spec!.styleKey]).toBeDefined()
     }

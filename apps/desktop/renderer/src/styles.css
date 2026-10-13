@@ -531,6 +531,16 @@ input, textarea, select { font-family: inherit; color: var(--text-primary); }
 .me-row .me-row-body { flex: 1; min-width: 0; }
 .me-row .me-row-title { font-size: var(--fs-base); font-weight: 600; }
 .me-row .me-row-sub { font-size: var(--fs-xs); color: var(--text-secondary); }
+.me-row-btn {
+  width: 100%; text-align: left; font: inherit; color: inherit; cursor: pointer;
+}
+.me-row-btn:hover { border-color: var(--text-disabled); }
+.about-body { padding: 0 var(--space-4) var(--space-4); font-size: var(--fs-sm); }
+.about-body p { margin: var(--space-2) 0; }
+.about-heading { font-weight: 600; }
+.about-list { margin: var(--space-2) 0; padding-left: var(--space-5); }
+.about-list li { margin: var(--space-1) 0; }
+.about-note { color: var(--text-secondary); }
 .theme-toggle {
   display: inline-flex; border: 1px solid var(--border-subtle); border-radius: 999px; overflow: hidden;
 }

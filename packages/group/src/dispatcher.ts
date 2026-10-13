@@ -17,8 +17,8 @@
  * @module @ryagent/group/dispatcher
  */
 
-import { AgentLoop } from '@ryagent/agent'
 import type { AgentDefinition, AgentEvolutionHooks, AgentMemoryHooks, Tool, ToolResult } from '@ryagent/agent'
+import { AgentLoop } from '@ryagent/agent'
 import type { AssistantMessage, LlmRuntime, ToolCallId } from '@ryagent/llm'
 import { parseMentions } from './mentions.ts'
 
@@ -72,8 +72,12 @@ const DEFAULT_MAX_TURNS = 8
 
 /** 把群历史格式化为"名字: 内容"行，并按预算从最旧裁剪。 */
 export function buildGroupContext(history: readonly GroupHistoryEntry[], budgetChars: number): string {
-  const lines = history.map((entry) => { return `${entry.speaker}: ${entry.text}` })
-  let total = lines.reduce((sum, line) => { return sum + line.length + 1 }, 0)
+  const lines = history.map((entry) => {
+    return `${entry.speaker}: ${entry.text}`
+  })
+  let total = lines.reduce((sum, line) => {
+    return sum + line.length + 1
+  }, 0)
   let start = 0
   while (total > budgetChars && start < lines.length) {
     total -= (lines[start] as string).length + 1
@@ -84,8 +88,12 @@ export function buildGroupContext(history: readonly GroupHistoryEntry[], budgetC
 
 function messageText(message: AssistantMessage): string {
   return message.content
-    .filter((block) => { return block.type === 'text' })
-    .map((block) => { return block.type === 'text' ? block.text : '' })
+    .filter((block) => {
+      return block.type === 'text'
+    })
+    .map((block) => {
+      return block.type === 'text' ? block.text : ''
+    })
     .join('\n')
 }
 
@@ -95,7 +103,11 @@ export class GroupDispatcher {
 
   constructor(private readonly options: GroupDispatcherOptions) {
     this.maxTurns = options.maxTurns ?? DEFAULT_MAX_TURNS
-    if (!options.members.some((member) => { return member.id === options.dispatcherId })) {
+    if (
+      !options.members.some((member) => {
+        return member.id === options.dispatcherId
+      })
+    ) {
       throw new Error(`@ryagent/group: dispatcher "${options.dispatcherId}" is not a group member`)
     }
   }
@@ -115,7 +127,11 @@ export class GroupDispatcher {
     const { llm, members, dispatcherId } = this.options
     const budget = input.historyBudgetChars ?? DEFAULT_HISTORY_BUDGET_CHARS
     const context = buildGroupContext(input.history, budget)
-    const memberById = new Map(members.map((member) => { return [member.id, member] }))
+    const memberById = new Map(
+      members.map((member) => {
+        return [member.id, member]
+      }),
+    )
     const turnIndex = input.turnIndex
 
     // ---- 入口路由 ----
@@ -137,20 +153,30 @@ export class GroupDispatcher {
 
     while (queue.length > 0) {
       if (turns >= this.maxTurns) {
-        yield { type: 'dispatch', fromAgent: speakers[speakers.length - 1], toAgent: queue[0] as string, reason: 'max-turns', turnIndex }
+        yield {
+          type: 'dispatch',
+          fromAgent: speakers[speakers.length - 1],
+          toAgent: queue[0] as string,
+          reason: 'max-turns',
+          turnIndex,
+        }
         break
       }
       const nextId = queue.shift() as string
       const member = memberById.get(nextId)
       if (member === undefined) {
-        yield { type: 'error', message: `@ryagent/group: agent "${nextId}" is not a group member`, code: 'UNKNOWN_AGENT' }
+        yield {
+          type: 'error',
+          message: `@ryagent/group: agent "${nextId}" is not a group member`,
+          code: 'UNKNOWN_AGENT',
+        }
         break
       }
 
       // ---- 接力护栏（首个响应者免检）----
       if (speakers.length > 0) {
         const last = speakers[speakers.length - 1] as string
-        const twoBack = speakers.length >= 2 ? speakers[speakers.length - 2] as string : undefined
+        const twoBack = speakers.length >= 2 ? (speakers[speakers.length - 2] as string) : undefined
         if (nextId === last || (twoBack !== undefined && nextId === twoBack)) {
           yield { type: 'dispatch', fromAgent: last, toAgent: nextId, reason: 'loop-guard', turnIndex }
           break
@@ -158,19 +184,27 @@ export class GroupDispatcher {
       }
 
       // ---- 生成回复 ----
-      const definition: AgentDefinition = member.id === dispatcherId
-        ? { ...member, systemPrompt: member.systemPrompt + DISPATCHER_ROUTING_SUFFIX }
-        : member
-      const promptText = speakers.length === 0
-        ? (context.length > 0 ? `${context}\n\n——新消息——\n${input.text}` : input.text)
-        : (context.length > 0 ? `${context}\n\n——新消息——\n${relayText}` : relayText)
+      const definition: AgentDefinition =
+        member.id === dispatcherId
+          ? { ...member, systemPrompt: member.systemPrompt + DISPATCHER_ROUTING_SUFFIX }
+          : member
+      const promptText =
+        speakers.length === 0
+          ? context.length > 0
+            ? `${context}\n\n——新消息——\n${input.text}`
+            : input.text
+          : context.length > 0
+            ? `${context}\n\n——新消息——\n${relayText}`
+            : relayText
       const loop = new AgentLoop({
         definition,
         llm,
         tools: this.options.tools,
-        onAssistantMessage: (message) => { assistant = message },
-        ...this.options.memory === undefined ? {} : { memory: this.options.memory },
-        ...this.options.evolution === undefined ? {} : { evolution: this.options.evolution },
+        onAssistantMessage: (message) => {
+          assistant = message
+        },
+        ...(this.options.memory === undefined ? {} : { memory: this.options.memory }),
+        ...(this.options.evolution === undefined ? {} : { evolution: this.options.evolution }),
       })
       let assistant: AssistantMessage | undefined
       let failed = false
@@ -180,10 +214,23 @@ export class GroupDispatcher {
             yield { type: 'text-delta', agentId: member.id, agentName: member.name, text: event.text }
             break
           case 'tool-call-start':
-            yield { type: 'tool-call-start', agentId: member.id, callId: event.callId, name: event.name, arguments: event.arguments }
+            yield {
+              type: 'tool-call-start',
+              agentId: member.id,
+              callId: event.callId,
+              name: event.name,
+              arguments: event.arguments,
+            }
             break
           case 'tool-result':
-            yield { type: 'tool-result', agentId: member.id, callId: event.callId, name: event.name, isError: event.isError, result: event.result }
+            yield {
+              type: 'tool-result',
+              agentId: member.id,
+              callId: event.callId,
+              name: event.name,
+              isError: event.isError,
+              result: event.result,
+            }
             break
           case 'done':
             break

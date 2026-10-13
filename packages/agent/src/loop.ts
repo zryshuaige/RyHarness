@@ -11,23 +11,17 @@
  * @module @ryagent/agent/loop
  */
 
-import {
-  BlockAssembler,
-  createToolResultMessage,
-  createUserMessage,
-  errorChain,
-  isHarnessError,
-} from '@ryagent/llm'
 import type {
   AssistantMessage,
   FinishReason,
   GenerateOptions,
   LlmRuntime,
   Message,
+  ToolCallBlock,
   ToolCallId,
   ToolSchema,
-  ToolCallBlock,
 } from '@ryagent/llm'
+import { BlockAssembler, createToolResultMessage, createUserMessage, errorChain, isHarnessError } from '@ryagent/llm'
 import type { AgentDefinition, AgentLoopEvent, Tool, ToolContext } from './types.ts'
 
 /** AgentLoop 构造参数。 */
@@ -95,8 +89,15 @@ export class AgentLoop {
 
   constructor(private readonly options: AgentLoopOptions) {
     const wanted = new Set(options.definition.tools)
-    this.allowedTools = new Map(options.tools.filter((tool) => { return wanted.has(tool.name) })
-      .map((tool) => { return [tool.name, tool] }))
+    this.allowedTools = new Map(
+      options.tools
+        .filter((tool) => {
+          return wanted.has(tool.name)
+        })
+        .map((tool) => {
+          return [tool.name, tool]
+        }),
+    )
   }
 
   /**
@@ -111,8 +112,9 @@ export class AgentLoop {
     const history: Message[] = [...(this.options.history ?? [])]
     history.push(createUserMessage({ content: [{ type: 'text', text: input.text }], source: { kind: 'user' } }))
 
-    const toolSchemas: ToolSchema[] = [...this.allowedTools.values()]
-      .map((tool) => { return { name: tool.name, description: tool.description, parameters: tool.parameters } })
+    const toolSchemas: ToolSchema[] = [...this.allowedTools.values()].map((tool) => {
+      return { name: tool.name, description: tool.description, parameters: tool.parameters }
+    })
 
     // 长期记忆召回（组装前注入；故障静默降级为无人设增强）。
     let memoryBlock: string | undefined
@@ -137,11 +139,11 @@ export class AgentLoop {
         evolutionBlock = undefined
       }
     }
-    const systemPrompt = [
-      definition.systemPrompt,
-      memoryBlock,
-      evolutionBlock,
-    ].filter((part): part is string => { return part !== undefined }).join('\n\n')
+    const systemPrompt = [definition.systemPrompt, memoryBlock, evolutionBlock]
+      .filter((part): part is string => {
+        return part !== undefined
+      })
+      .join('\n\n')
 
     let steps = 0
     let assistantText = ''
@@ -155,8 +157,8 @@ export class AgentLoop {
           model: definition.model,
           system: systemPrompt,
           messages: history,
-          ...toolSchemas.length === 0 ? {} : { tools: toolSchemas },
-          ...definition.temperature === undefined ? {} : { temperature: definition.temperature },
+          ...(toolSchemas.length === 0 ? {} : { tools: toolSchemas }),
+          ...(definition.temperature === undefined ? {} : { temperature: definition.temperature }),
         }
 
         const assembler = new BlockAssembler()
@@ -185,10 +187,16 @@ export class AgentLoop {
         this.options.onAssistantMessage?.(message)
         history.push(message)
         assistantText += message.content
-          .filter((block) => { return block.type === 'text' })
-          .map((block) => { return block.type === 'text' ? block.text : '' })
+          .filter((block) => {
+            return block.type === 'text'
+          })
+          .map((block) => {
+            return block.type === 'text' ? block.text : ''
+          })
           .join('\n')
-        const calls = message.content.filter((block): block is ToolCallBlock => { return block.type === 'tool-call' })
+        const calls = message.content.filter((block): block is ToolCallBlock => {
+          return block.type === 'tool-call'
+        })
         const finish: FinishReason = assembler.finish
 
         // 终态 error/aborted 不是正常收尾：传播为 error 事件，让协调器落
@@ -218,11 +226,13 @@ export class AgentLoop {
             isError: result.isError === true,
             result,
           }
-          history.push(createToolResultMessage({
-            callId: call.id as ToolCallId,
-            content: [{ type: 'text', text: result.content }],
-            isError: result.isError === true,
-          }))
+          history.push(
+            createToolResultMessage({
+              callId: call.id as ToolCallId,
+              content: [{ type: 'text', text: result.content }],
+              isError: result.isError === true,
+            }),
+          )
         }
       }
 
@@ -234,8 +244,10 @@ export class AgentLoop {
     } finally {
       // 自我进化：每轮轨迹入队（Reflector/Reflexion/Curator，异步）。
       // 无 assistant 文本但发生错误/工具调用的轮次也要入队（反思需要失败信号）。
-      if (this.options.evolution !== undefined
-        && (assistantText.trim().length > 0 || llmError || toolResults.length > 0)) {
+      if (
+        this.options.evolution !== undefined &&
+        (assistantText.trim().length > 0 || llmError || toolResults.length > 0)
+      ) {
         try {
           this.options.evolution.enqueueTurn(definition.id, definition.name, '', {
             userText: input.text,

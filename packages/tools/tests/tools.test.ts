@@ -1,9 +1,9 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
 import type { ToolContext } from '@ryagent/agent'
 import { fileProduce, fsRead, fsWrite, PathEscapeError, resolveInWorkspace, shellExec } from '@ryagent/tools'
+import { afterEach, describe, expect, it } from 'vitest'
 
 const roots: string[] = []
 function workspace(): { root: string; ctx: ToolContext } {
@@ -20,8 +20,12 @@ describe('resolveInWorkspace', () => {
   it('resolves relative paths inside the root and rejects escapes', () => {
     const { root } = workspace()
     expect(resolveInWorkspace(root, 'a/b.txt')).toBe(join(root, 'a', 'b.txt'))
-    expect(() => { resolveInWorkspace(root, '../evil.txt') }).toThrow(PathEscapeError)
-    expect(() => { resolveInWorkspace(root, 'a/../../evil.txt') }).toThrow(/escapes/)
+    expect(() => {
+      resolveInWorkspace(root, '../evil.txt')
+    }).toThrow(PathEscapeError)
+    expect(() => {
+      resolveInWorkspace(root, 'a/../../evil.txt')
+    }).toThrow(/escapes/)
     expect(resolveInWorkspace(root, root)).toBe(root)
   })
 })

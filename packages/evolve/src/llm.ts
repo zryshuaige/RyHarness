@@ -46,12 +46,14 @@ const REFLECT_PROMPT = `你是反思者。这轮对话出现了失败信号（�
 
 /** OpenAI 兼容 chat/completions 默认实现。 */
 export class ChatEvolveLlm implements EvolveLlm {
-  constructor(private readonly config: {
-    apiKey: string
-    baseURL?: string
-    model?: string
-    fetchImpl?: typeof fetch
-  }) {}
+  constructor(
+    private readonly config: {
+      apiKey: string
+      baseURL?: string
+      model?: string
+      fetchImpl?: typeof fetch
+    },
+  ) {}
 
   private async chatJson(system: string, user: string): Promise<unknown> {
     const fetchImpl = this.config.fetchImpl ?? fetch
@@ -61,26 +63,34 @@ export class ChatEvolveLlm implements EvolveLlm {
       headers: { 'content-type': 'application/json', authorization: `Bearer ${this.config.apiKey}` },
       body: JSON.stringify({
         model: this.config.model ?? 'deepseek-ai/DeepSeek-V3',
-        messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
         temperature: 0,
         response_format: { type: 'json_object' },
       }),
     })
     if (!response.ok) throw new Error(`evolve llm HTTP ${response.status}`)
-    const body = await response.json() as { choices?: { message?: { content?: string } }[] }
+    const body = (await response.json()) as { choices?: { message?: { content?: string } }[] }
     const content = body.choices?.[0]?.message?.content
     if (typeof content !== 'string') throw new Error('evolve llm: empty response')
     return JSON.parse(content) as unknown
   }
 
   async proposeDeltas(input: { agentName: string; trajectory: TurnTrajectory }): Promise<PlaybookDelta[]> {
-    const tools = input.trajectory.toolResults.length > 0
-      ? input.trajectory.toolResults.map((t) => { return `${t.name}${t.isError ? '(失败)' : '(成功)'}` }).join('、')
-      : '无'
-    const parsed = await this.chatJson(
+    const tools =
+      input.trajectory.toolResults.length > 0
+        ? input.trajectory.toolResults
+            .map((t) => {
+              return `${t.name}${t.isError ? '(失败)' : '(成功)'}`
+            })
+            .join('、')
+        : '无'
+    const parsed = (await this.chatJson(
       '你只输出合法 JSON。',
       `${CURATOR_PROMPT}（agent：${input.agentName}）\n\n用户：${input.trajectory.userText}\n${input.agentName}：${input.trajectory.assistantText.slice(0, 800)}\n工具：${tools}\n流错误：${input.trajectory.llmError ? '是' : '否'}`,
-    ) as { deltas?: Record<string, unknown>[] }
+    )) as { deltas?: Record<string, unknown>[] }
     if (!Array.isArray(parsed.deltas)) return []
     const sections: PlaybookSection[] = ['strategy', 'pitfall', 'preference', 'tooling']
     return parsed.deltas
@@ -97,14 +107,16 @@ export class ChatEvolveLlm implements EvolveLlm {
         }
         return undefined
       })
-      .filter((d): d is PlaybookDelta => { return d !== undefined })
+      .filter((d): d is PlaybookDelta => {
+        return d !== undefined
+      })
   }
 
   async reflect(input: { agentName: string; trajectory: TurnTrajectory; reason: string }): Promise<string> {
-    const parsed = await this.chatJson(
+    const parsed = (await this.chatJson(
       '你只输出合法 JSON。',
       `${REFLECT_PROMPT}用户：${input.trajectory.userText}\n${input.agentName}：${input.trajectory.assistantText.slice(0, 800)}\n\n失败原因：${input.reason}`,
-    ) as { lesson?: unknown }
+    )) as { lesson?: unknown }
     return typeof parsed.lesson === 'string' && parsed.lesson.trim().length > 0
       ? parsed.lesson.trim().slice(0, 300)
       : '本轮出现问题，下次先检查再行动。'

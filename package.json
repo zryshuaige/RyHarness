@@ -3,12 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "RyAgent: 从 deepseek-harness 裁剪的精简 agent 内核（M1：monorepo + LLM 层 + OpenAI 兼容适配器）",
+  "description": "RyAgent：单机多 Agent 即时通讯桌面应用（Electron + React + cordis 内核）",
+  "license": "MIT",
+  "packageManager": "pnpm@11.7.0",
   "engines": {
     "node": "^22.19 || >=24"
   },
   "scripts": {
-    "typecheck": "tsc -p tsconfig.typecheck.json",
+    "typecheck": "pnpm -r --filter \"./vendor/**\" run build && tsc -p tsconfig.typecheck.json",
+    "lint": "biome check .",
     "test": "vitest run",
     "build": "pnpm -r run build",
     "smoke:siliconflow": "tsx scripts/smoke-siliconflow.ts",
@@ -17,11 +20,12 @@
     "demo:server": "tsx scripts/demo-server.ts"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.15",
     "@types/node": "^22.20.0",
-    "tsx": "^4.22.4",
     "tsdown": "^0.22.2",
+    "tsx": "^4.22.4",
     "typescript": "^6.0.3",
-    "vite-tsconfig-paths": "^6.1.1",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.8",
+    "ws": "^8.18.3"
   }
 }

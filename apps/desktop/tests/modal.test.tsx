@@ -1,6 +1,5 @@
 // @vitest-environment jsdom
-import { act } from 'react'
-import { useState } from 'react'
+import { act, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { Modal } from '../renderer/src/components/Modal.tsx'
@@ -16,7 +15,9 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  act(() => { root.unmount() })
+  act(() => {
+    root.unmount()
+  })
   container.remove()
 })
 
@@ -24,13 +25,27 @@ function Harness({ onClose }: { onClose: () => void }) {
   const [open, setOpen] = useState(false)
   return (
     <>
-      <button id="trigger" onClick={() => { setOpen(true) }}>打开</button>
-      <button id="outside">外部按钮</button>
+      <button
+        type="button"
+        id="trigger"
+        onClick={() => {
+          setOpen(true)
+        }}
+      >
+        打开
+      </button>
+      <button type="button" id="outside">
+        外部按钮
+      </button>
       {open && (
         <Modal title="测试弹窗" onClose={onClose}>
-          <button id="first">第一个</button>
+          <button type="button" id="first">
+            第一个
+          </button>
           <input id="field" />
-          <button id="last">最后一个</button>
+          <button type="button" id="last">
+            最后一个
+          </button>
         </Modal>
       )}
     </>
@@ -47,7 +62,9 @@ function render(onClose = () => {}): void {
 function openModal(): void {
   const trigger = container.querySelector<HTMLButtonElement>('#trigger')!
   trigger.focus()
-  act(() => { trigger.click() })
+  act(() => {
+    trigger.click()
+  })
 }
 
 function keyDownOnDocument(key: string, shiftKey = false): void {
@@ -65,7 +82,9 @@ describe('Modal 焦点管理', () => {
 
   it('Esc 关闭弹窗并回调 onClose，焦点还原到触发元素', () => {
     let closed = 0
-    render(() => { closed += 1 })
+    render(() => {
+      closed += 1
+    })
     openModal()
     keyDownOnDocument('Escape')
     expect(closed).toBe(1)
@@ -88,10 +107,31 @@ describe('Modal 焦点管理', () => {
       const [open, setOpen] = useState(false)
       return (
         <>
-          <button id="trigger" onClick={() => { setOpen(true) }}>打开</button>
+          <button
+            type="button"
+            id="trigger"
+            onClick={() => {
+              setOpen(true)
+            }}
+          >
+            打开
+          </button>
           {open && (
-            <Modal title="t" onClose={() => { setOpen(false) }}>
-              <button id="first" onClick={() => { setOpen(false) }}>关</button>
+            <Modal
+              title="t"
+              onClose={() => {
+                setOpen(false)
+              }}
+            >
+              <button
+                type="button"
+                id="first"
+                onClick={() => {
+                  setOpen(false)
+                }}
+              >
+                关
+              </button>
             </Modal>
           )}
         </>
@@ -103,7 +143,9 @@ describe('Modal 焦点管理', () => {
     })
     openModal()
     expect(document.activeElement?.getAttribute('aria-label')).toBe('关闭')
-    act(() => { container.querySelector<HTMLButtonElement>('#first')!.click() })
+    act(() => {
+      container.querySelector<HTMLButtonElement>('#first')!.click()
+    })
     expect(document.activeElement?.id).toBe('trigger')
   })
 })

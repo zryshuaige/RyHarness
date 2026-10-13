@@ -21,10 +21,7 @@ export type MemoryOperation =
 
 /** 记忆管线需要的 LLM 能力（与具体供应商解耦）。 */
 export interface MemoryLlm {
-  extractFacts(input: {
-    agentName: string
-    conversationText: string
-  }): Promise<CandidateFact[]>
+  extractFacts(input: { agentName: string; conversationText: string }): Promise<CandidateFact[]>
   decideOperations(input: {
     candidate: CandidateFact
     similar: { id: string; content: string }[]
@@ -54,12 +51,14 @@ const DECIDE_PROMPT = `你是记忆管理员。给定一条候选事实和若干
 
 /** 基于 OpenAI 兼容 chat/completions 的默认实现。 */
 export class ChatMemoryLlm implements MemoryLlm {
-  constructor(private readonly config: {
-    apiKey: string
-    baseURL?: string
-    model?: string
-    fetchImpl?: typeof fetch
-  }) {}
+  constructor(
+    private readonly config: {
+      apiKey: string
+      baseURL?: string
+      model?: string
+      fetchImpl?: typeof fetch
+    },
+  ) {}
 
   private async chatJson(system: string, user: string): Promise<unknown> {
     const fetchImpl = this.config.fetchImpl ?? fetch
@@ -68,7 +67,7 @@ export class ChatMemoryLlm implements MemoryLlm {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'authorization': `Bearer ${this.config.apiKey}`,
+        authorization: `Bearer ${this.config.apiKey}`,
       },
       body: JSON.stringify({
         model: this.config.model ?? 'deepseek-ai/DeepSeek-V3',
@@ -81,24 +80,24 @@ export class ChatMemoryLlm implements MemoryLlm {
       }),
     })
     if (!response.ok) throw new Error(`memory llm HTTP ${response.status}`)
-    const body = await response.json() as { choices?: { message?: { content?: string } }[] }
+    const body = (await response.json()) as { choices?: { message?: { content?: string } }[] }
     const content = body.choices?.[0]?.message?.content
     if (typeof content !== 'string') throw new Error('memory llm: empty response')
     return JSON.parse(content) as unknown
   }
 
   async extractFacts(input: { agentName: string; conversationText: string }): Promise<CandidateFact[]> {
-    const parsed = await this.chatJson(
+    const parsed = (await this.chatJson(
       '你只输出合法 JSON。',
       `${EXTRACT_PROMPT}${input.conversationText}\n\n（agent：${input.agentName}）`,
-    ) as { facts?: unknown }
+    )) as { facts?: unknown }
     if (!Array.isArray(parsed.facts)) return []
     const out: CandidateFact[] = []
     for (const item of parsed.facts as Record<string, unknown>[]) {
       if (typeof item?.text !== 'string' || item.text.trim().length === 0) continue
       const scope = item.scope === 'agent' ? 'agent' : 'shared'
       const kind = ['profile', 'preference', 'event', 'fact'].includes(String(item.kind))
-        ? String(item.kind) as CandidateFact['kind']
+        ? (String(item.kind) as CandidateFact['kind'])
         : 'fact'
       out.push({ text: item.text.trim().slice(0, 500), scope, kind })
     }
@@ -109,13 +108,18 @@ export class ChatMemoryLlm implements MemoryLlm {
     candidate: CandidateFact
     similar: { id: string; content: string }[]
   }): Promise<MemoryOperation[]> {
-    const similarText = input.similar.length === 0
-      ? '（无相似旧记忆）'
-      : input.similar.map((memory, index) => { return `${index + 1}. [${memory.id}] ${memory.content}` }).join('\n')
-    const parsed = await this.chatJson(
+    const similarText =
+      input.similar.length === 0
+        ? '（无相似旧记忆）'
+        : input.similar
+            .map((memory, index) => {
+              return `${index + 1}. [${memory.id}] ${memory.content}`
+            })
+            .join('\n')
+    const parsed = (await this.chatJson(
       '你只输出合法 JSON。',
       `${DECIDE_PROMPT}${input.candidate.text}\n\n（scope=${input.candidate.scope}）\n\n相似旧记忆：\n${similarText}`,
-    ) as { operations?: Record<string, unknown>[] }
+    )) as { operations?: Record<string, unknown>[] }
     if (!Array.isArray(parsed.operations)) return [{ action: 'NOOP' }]
     return parsed.operations
       .map((op): MemoryOperation | undefined => {
@@ -128,6 +132,8 @@ export class ChatMemoryLlm implements MemoryLlm {
         if (action === 'NOOP') return { action: 'NOOP' }
         return undefined
       })
-      .filter((op): op is MemoryOperation => { return op !== undefined })
+      .filter((op): op is MemoryOperation => {
+        return op !== undefined
+      })
   }
 }

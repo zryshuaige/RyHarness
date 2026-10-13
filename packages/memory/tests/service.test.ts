@@ -1,10 +1,9 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import type { CandidateFact, EmbeddingProvider, MemoryLlm, MemoryOperation } from '@ryagent/memory'
 import { HashEmbeddings, MemoryService, NullEmbeddings, SHARED_SPACE } from '@ryagent/memory'
-import type { EmbeddingProvider } from '@ryagent/memory'
-import type { CandidateFact, MemoryLlm, MemoryOperation } from '@ryagent/memory'
+import { afterEach, describe, expect, it } from 'vitest'
 
 const dirs: string[] = []
 function dbPath(): string {
@@ -78,11 +77,23 @@ describe('抽取管线：四操作', () => {
     await service.flush()
 
     const shared = service.store.listSharedProfile()
-    expect(shared.map((m) => { return m.content })).toContain('用户养了一只橘猫叫布丁')
+    expect(
+      shared.map((m) => {
+        return m.content
+      }),
+    ).toContain('用户养了一只橘猫叫布丁')
     const agentSpace = service.store.listActiveForAgent('ryen')
-    expect(agentSpace.map((m) => { return m.content })).toContain('用户希望周报用简洁的条目式')
+    expect(
+      agentSpace.map((m) => {
+        return m.content
+      }),
+    ).toContain('用户希望周报用简洁的条目式')
     // 共享画像不进入 agent 私有列表
-    expect(agentSpace.some((m) => { return m.agentId === SHARED_SPACE })).toBe(false)
+    expect(
+      agentSpace.some((m) => {
+        return m.agentId === SHARED_SPACE
+      }),
+    ).toBe(false)
     service.close()
   })
 
@@ -172,7 +183,9 @@ describe('抽取管线：四操作', () => {
   it('NOOP：不产生写入', async () => {
     const llm = mockLlm({
       facts: [{ text: '用户住在北京', scope: 'shared', kind: 'profile' }],
-      decide: () => { return [{ action: 'NOOP' }] },
+      decide: () => {
+        return [{ action: 'NOOP' }]
+      },
     })
     const service = new MemoryService({ dbPath: dbPath(), embeddings: new HashEmbeddings(), llm })
     service.enqueueExtraction('ryen', 'Ryen', 'c1', '用户：我住在北京')
@@ -185,13 +198,25 @@ describe('抽取管线：四操作', () => {
     const logs: string[] = []
     const llm = mockLlm({ facts: [], failTimes: 3 })
     const service = new MemoryService({
-      dbPath: dbPath(), embeddings: new HashEmbeddings(), llm,
-      logger: (m) => { logs.push(m) },
+      dbPath: dbPath(),
+      embeddings: new HashEmbeddings(),
+      llm,
+      logger: (m) => {
+        logs.push(m)
+      },
     })
     service.enqueueExtraction('ryen', 'Ryen', 'c1', '用户：你好')
     await service.flush()
-    expect(logs.filter((m) => { return m.includes('retrying') })).toHaveLength(1)
-    expect(logs.filter((m) => { return m.includes('gave up') })).toHaveLength(1)
+    expect(
+      logs.filter((m) => {
+        return m.includes('retrying')
+      }),
+    ).toHaveLength(1)
+    expect(
+      logs.filter((m) => {
+        return m.includes('gave up')
+      }),
+    ).toHaveLength(1)
     service.close()
   })
 })
@@ -212,8 +237,18 @@ describe('检索管线：混合召回', () => {
       dbPath: path,
       embeddings: scriptedVectors(vectors),
     })
-    withEmb.store.insert({ agentId: 'a1', kind: 'fact', content: 'A', embedding: Float32Array.from(vectors.A as number[]) })
-    withEmb.store.insert({ agentId: 'a1', kind: 'fact', content: 'B 关键词命中', embedding: Float32Array.from(vectors.B as number[]) })
+    withEmb.store.insert({
+      agentId: 'a1',
+      kind: 'fact',
+      content: 'A',
+      embedding: Float32Array.from(vectors.A as number[]),
+    })
+    withEmb.store.insert({
+      agentId: 'a1',
+      kind: 'fact',
+      content: 'B 关键词命中',
+      embedding: Float32Array.from(vectors.B as number[]),
+    })
     const ranked = await withEmb.hybridRecall('a1', 'query', 2)
     expect(ranked[0]!.content).toBe('A') // 语义通道压过 BM25
     withEmb.close()
@@ -257,7 +292,9 @@ describe('检索管线：混合召回', () => {
       available: true,
       async embed(texts) {
         calls += texts.length
-        return texts.map(() => { return Float32Array.from([1, 0, 0, 0]) })
+        return texts.map(() => {
+          return Float32Array.from([1, 0, 0, 0])
+        })
       },
     }
     const service = new MemoryService({ dbPath: dbPath(), embeddings: counting })

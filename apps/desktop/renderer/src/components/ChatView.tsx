@@ -5,9 +5,9 @@ import type { ChatStore, UiMessage } from '../store.ts'
 import { useChat } from '../store.ts'
 import { Cat } from './Cat.tsx'
 import { ChatInput } from './ChatInput.tsx'
+import { Icon } from './Icon.tsx'
 import { MessageBubble, RelayChain } from './MessageBubble.tsx'
 import { TypingDots } from './TypingDots.tsx'
-import { Icon } from './Icon.tsx'
 
 function formatTime(ts: number): string {
   const date = new Date(ts)
@@ -41,7 +41,15 @@ export function fromHistory(rows: MessageRow[], nameOf: (id: string) => string):
       createdAt: row.createdAt,
       done: true,
       parts: isTool
-        ? [{ kind: 'tool' as const, callId: row.toolCallId ?? row.id, name: text.split(':')[0] ?? 'tool', arguments: '', status: 'done' as const }]
+        ? [
+            {
+              kind: 'tool' as const,
+              callId: row.toolCallId ?? row.id,
+              name: text.split(':')[0] ?? 'tool',
+              arguments: '',
+              status: 'done' as const,
+            },
+          ]
         : [{ kind: 'text' as const, text }],
     })
   }
@@ -98,11 +106,20 @@ export function ChatView({
   const restoreScroll = useRef<{ prevHeight: number; prevTop: number } | null>(null)
   const [catMood, setCatMood] = useState<'idle' | 'thinking' | 'happy'>('idle')
 
-  const nameOf = useCallback((id: string): string => {
-    return agents.find((a) => { return a.id === id })?.name ?? id
-  }, [agents])
+  const nameOf = useCallback(
+    (id: string): string => {
+      return (
+        agents.find((a) => {
+          return a.id === id
+        })?.name ?? id
+      )
+    },
+    [agents],
+  )
   const agentById = (id: string): AgentDef | undefined => {
-    return agents.find((a) => { return a.id === id })
+    return agents.find((a) => {
+      return a.id === id
+    })
   }
 
   /** 断线缺口/重连后重拉最新一页历史 + 调度事件，重置流式状态。 */
@@ -110,13 +127,19 @@ export function ChatView({
     store.reset()
     setRenderCap(RENDER_CAP)
     stickToBottom.current = true
-    api.messages(conversation.id, { limit: PAGE_SIZE }).then(({ messages }) => {
-      setHistory(fromHistory(messages, nameOf))
-      setHasMore(messages.length === PAGE_SIZE)
-    }).catch(() => {})
-    api.listDispatchEvents(conversation.id).then(({ events }) => {
-      store.setDispatchHistory(events)
-    }).catch(() => {})
+    api
+      .messages(conversation.id, { limit: PAGE_SIZE })
+      .then(({ messages }) => {
+        setHistory(fromHistory(messages, nameOf))
+        setHasMore(messages.length === PAGE_SIZE)
+      })
+      .catch(() => {})
+    api
+      .listDispatchEvents(conversation.id)
+      .then(({ events }) => {
+        store.setDispatchHistory(events)
+      })
+      .catch(() => {})
   }, [api, conversation.id, nameOf, store])
   const reloadRef = useRef(reloadLatest)
   reloadRef.current = reloadLatest
@@ -131,28 +154,45 @@ export function ChatView({
     setConn('open')
     setConnDismissed(false)
     stickToBottom.current = true
-    api.messages(conversation.id, { limit: PAGE_SIZE }).then(({ messages }) => {
-      if (cancelled) return
-      setHistory(fromHistory(messages, nameOf))
-      setHasMore(messages.length === PAGE_SIZE)
-      setHistoryLoaded(true)
-    }).catch(() => {
-      if (!cancelled) setHistoryLoaded(true)
-    })
-    api.markRead(conversation.id).then(() => { onRead?.() }).catch(() => {})
-    api.listDispatchEvents(conversation.id).then(({ events }) => {
-      if (!cancelled) store.setDispatchHistory(events)
-    }).catch(() => {})
-    const unsubscribe = api.subscribe(conversation.id, (event) => { store.apply(event) }, {
-      onStatus: (status) => {
+    api
+      .messages(conversation.id, { limit: PAGE_SIZE })
+      .then(({ messages }) => {
         if (cancelled) return
-        setConn(status)
-        if (status === 'open') setConnDismissed(false)
+        setHistory(fromHistory(messages, nameOf))
+        setHasMore(messages.length === PAGE_SIZE)
+        setHistoryLoaded(true)
+      })
+      .catch(() => {
+        if (!cancelled) setHistoryLoaded(true)
+      })
+    api
+      .markRead(conversation.id)
+      .then(() => {
+        onRead?.()
+      })
+      .catch(() => {})
+    api
+      .listDispatchEvents(conversation.id)
+      .then(({ events }) => {
+        if (!cancelled) store.setDispatchHistory(events)
+      })
+      .catch(() => {})
+    const unsubscribe = api.subscribe(
+      conversation.id,
+      (event) => {
+        store.apply(event)
       },
-      onGap: () => {
-        if (!cancelled) reloadRef.current()
+      {
+        onStatus: (status) => {
+          if (cancelled) return
+          setConn(status)
+          if (status === 'open') setConnDismissed(false)
+        },
+        onGap: () => {
+          if (!cancelled) reloadRef.current()
+        },
       },
-    })
+    )
     return () => {
       cancelled = true
       unsubscribe()
@@ -171,8 +211,12 @@ export function ChatView({
       const node = scrollRef.current
       if (node !== null) restoreScroll.current = { prevHeight: node.scrollHeight, prevTop: node.scrollTop }
       setHasMore(messages.length === PAGE_SIZE)
-      setHistory((prev) => { return [...older, ...prev] })
-      setRenderCap((cap) => { return cap + PAGE_SIZE })
+      setHistory((prev) => {
+        return [...older, ...prev]
+      })
+      setRenderCap((cap) => {
+        return cap + PAGE_SIZE
+      })
     } catch {
       // 加载失败保持现状，用户可重试。
     } finally {
@@ -219,14 +263,24 @@ export function ChatView({
       return
     }
     setCatMood('happy')
-    const timer = setTimeout(() => { setCatMood('idle') }, 1600)
-    return () => { clearTimeout(timer) }
+    const timer = setTimeout(() => {
+      setCatMood('idle')
+    }, 1600)
+    return () => {
+      clearTimeout(timer)
+    }
   }, [typingCount])
 
   const members = useMemo(() => {
     return conversation.memberAgentIds
-      .map((id) => { return agents.find((a) => { return a.id === id }) })
-      .filter((a): a is AgentDef => { return a !== undefined })
+      .map((id) => {
+        return agents.find((a) => {
+          return a.id === id
+        })
+      })
+      .filter((a): a is AgentDef => {
+        return a !== undefined
+      })
   }, [conversation.memberAgentIds, agents])
 
   const send = async (text: string): Promise<void> => {
@@ -236,7 +290,12 @@ export function ChatView({
     try {
       await api.postMessage(conversation.id, text)
     } catch (error) {
-      store.apply({ type: 'error', conversationId: conversation.id, message: error instanceof Error ? error.message : String(error), code: 'HTTP' })
+      store.apply({
+        type: 'error',
+        conversationId: conversation.id,
+        message: error instanceof Error ? error.message : String(error),
+        code: 'HTTP',
+      })
     }
   }
 
@@ -247,31 +306,47 @@ export function ChatView({
   allMessagesRef.current = allMessages
 
   // 稳定引用：MessageBubble 的 memo 依赖这两个 prop 的身份不变。
-  const fileUrl = useCallback((name: string): string => { return api.fileUrl(name) }, [api])
-  const onFeedback = useCallback((target: UiMessage, signal: 'thumb_up' | 'thumb_down'): void => {
-    const textOf = (m: UiMessage): string => {
-      return m.parts.filter((p) => { return p.kind === 'text' })
-        .map((p) => { return p.kind === 'text' ? p.text : '' }).join(' ')
-    }
-    // 找目标消息之前最近的用户消息作为反馈上下文。
-    const msgs = allMessagesRef.current
-    const targetIndex = msgs.indexOf(target)
-    let userText = ''
-    for (let i = (targetIndex < 0 ? msgs.length : targetIndex) - 1; i >= 0; i--) {
-      const candidate = msgs[i]!
-      if (candidate.senderType === 'user') {
-        userText = textOf(candidate)
-        break
+  const fileUrl = useCallback(
+    (name: string): string => {
+      return api.fileUrl(name)
+    },
+    [api],
+  )
+  const onFeedback = useCallback(
+    (target: UiMessage, signal: 'thumb_up' | 'thumb_down'): void => {
+      const textOf = (m: UiMessage): string => {
+        return m.parts
+          .filter((p) => {
+            return p.kind === 'text'
+          })
+          .map((p) => {
+            return p.kind === 'text' ? p.text : ''
+          })
+          .join(' ')
       }
-    }
-    void api.sendFeedback({
-      conversationId: conversation.id,
-      agentId: target.senderId,
-      signal,
-      userText: userText.slice(0, 300),
-      assistantText: textOf(target).slice(0, 300),
-    }).catch(() => {})
-  }, [api, conversation.id])
+      // 找目标消息之前最近的用户消息作为反馈上下文。
+      const msgs = allMessagesRef.current
+      const targetIndex = msgs.indexOf(target)
+      let userText = ''
+      for (let i = (targetIndex < 0 ? msgs.length : targetIndex) - 1; i >= 0; i--) {
+        const candidate = msgs[i]!
+        if (candidate.senderType === 'user') {
+          userText = textOf(candidate)
+          break
+        }
+      }
+      void api
+        .sendFeedback({
+          conversationId: conversation.id,
+          agentId: target.senderId,
+          signal,
+          userText: userText.slice(0, 300),
+          assistantText: textOf(target).slice(0, 300),
+        })
+        .catch(() => {})
+    },
+    [api, conversation.id],
+  )
 
   // 按 turn 分组；turn 间插时间分隔；同 sender 相邻收紧。
   const turns = useMemo(() => {
@@ -287,7 +362,9 @@ export function ChatView({
     return groups
   }, [visibleMessages])
 
-  const typingAgents = Object.keys(snapshot.typing).filter((id) => { return id !== 'user' })
+  const typingAgents = Object.keys(snapshot.typing).filter((id) => {
+    return id !== 'user'
+  })
 
   return (
     <section className="chat-view">
@@ -302,7 +379,14 @@ export function ChatView({
       {conn === 'reconnecting' && !connDismissed && (
         <p className="conn-banner" role="status">
           <Icon name="alert" size={14} /> 连接已断开，正在重连…
-          <button className="conn-banner-close" aria-label="关闭提示" onClick={() => { setConnDismissed(true) }}>
+          <button
+            type="button"
+            className="conn-banner-close"
+            aria-label="关闭提示"
+            onClick={() => {
+              setConnDismissed(true)
+            }}
+          >
             <Icon name="x" size={12} />
           </button>
         </p>
@@ -312,7 +396,14 @@ export function ChatView({
         <div className="chat-col">
           {!historyLoaded && <p className="chat-hint">载入历史中…</p>}
           {historyLoaded && hasMore && (
-            <button className="load-earlier" disabled={loadingEarlier} onClick={() => { void loadEarlier() }}>
+            <button
+              type="button"
+              className="load-earlier"
+              disabled={loadingEarlier}
+              onClick={() => {
+                void loadEarlier()
+              }}
+            >
               {loadingEarlier ? '载入中…' : '↑ 加载更早消息'}
             </button>
           )}
@@ -345,7 +436,9 @@ export function ChatView({
             </div>
           ))}
           {snapshot.error !== undefined && (
-            <p className="error-banner"><Icon name="alert" size={14} /> [{snapshot.error.code}] {snapshot.error.message}</p>
+            <p className="error-banner">
+              <Icon name="alert" size={14} /> [{snapshot.error.code}] {snapshot.error.message}
+            </p>
           )}
           {typingAgents.length > 0 && (
             <p className="typing-indicator">
@@ -355,26 +448,35 @@ export function ChatView({
           )}
           {historyLoaded && allMessages.length === 0 && (
             <div className="empty-state">
-              <span className="empty-cat"><Cat mood="idle" size={88} /></span>
+              <span className="empty-cat">
+                <Cat mood="idle" size={88} />
+              </span>
               <h3>新的对话，从一句话开始</h3>
               <p>我是 {nameOf(conversation.memberAgentIds[0] ?? '')}，有事尽管吩咐——写东西、跑命令、整理文件都行。</p>
             </div>
           )}
         </div>
         {showJump && (
-          <button className="jump-latest" onClick={jumpToLatest}><Icon name="chevron-right" size={12} className="jump-icon" /> 跳至最新</button>
+          <button type="button" className="jump-latest" onClick={jumpToLatest}>
+            <Icon name="chevron-right" size={12} className="jump-icon" /> 跳至最新
+          </button>
         )}
       </div>
 
       <div className="chat-input-wrap">
         <div className="chat-input-col">
           {snapshot.queueing && (
-            <p className="queue-hint"><span className="queue-pulse" />上一条还在处理，你的消息已排队…</p>
+            <p className="queue-hint">
+              <span className="queue-pulse" />
+              上一条还在处理，你的消息已排队…
+            </p>
           )}
           <div className="chat-input-row">
             <ChatInput
               members={conversation.kind === 'group' ? members : []}
-              onSend={(text) => { void send(text) }}
+              onSend={(text) => {
+                void send(text)
+              }}
               disabled={snapshot.queueing}
             />
           </div>
@@ -385,7 +487,9 @@ export function ChatView({
 }
 
 function maxTurn(messages: { turnIndex: number }[]): number {
-  return messages.reduce((max, m) => { return Math.max(max, m.turnIndex) }, -1)
+  return messages.reduce((max, m) => {
+    return Math.max(max, m.turnIndex)
+  }, -1)
 }
 
 /** 下一个 turn 序号（传入历史 + 流式快照的合并列表，与服务端口径一致）。 */

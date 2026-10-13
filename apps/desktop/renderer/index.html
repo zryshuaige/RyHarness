@@ -3,7 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <!-- CSP：单文件内联产物需要 script/style 的 unsafe-inline；网络只放行本机回环的 http/ws。 -->
+    <!-- CSP：script/style 的 unsafe-inline 是必须的——scripts/inline-dist.mjs 把打包后的 JS/CSS
+         内联进单个 index.html（file:// 单文件产物），无法改用外部文件或 nonce；网络面已收紧：
+         connect-src 只放行本机回环 http/ws（内嵌 server 随机端口），img-src 仅 self+data:。 -->
     <meta
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src http://127.0.0.1:* ws://127.0.0.1:*; img-src 'self' data:"

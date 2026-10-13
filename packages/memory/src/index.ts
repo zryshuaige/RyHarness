@@ -10,19 +10,19 @@
  * @module @ryagent/memory
  */
 
-export { MemoryService } from './service.ts'
-export type { AgentMemory, MemoryServiceOptions } from './service.ts'
-export { MemoryStore } from './store.ts'
-export type { MemoryRow, InsertMemoryInput } from './store.ts'
-export { migrateMemory, MEMORY_SCHEMA_VERSION, SHARED_SPACE } from './schema.ts'
-export type { MemoryKind, MemoryStatus } from './schema.ts'
+export type { EmbeddingProvider } from './embeddings.ts'
 export {
-  SiliconFlowEmbeddings,
+  cosine,
+  DEFAULT_EMBEDDING_MODEL,
   HashEmbeddings,
   NullEmbeddings,
-  DEFAULT_EMBEDDING_MODEL,
-  cosine,
+  SiliconFlowEmbeddings,
 } from './embeddings.ts'
-export type { EmbeddingProvider } from './embeddings.ts'
+export type { CandidateFact, MemoryLlm, MemoryOperation } from './llm.ts'
 export { ChatMemoryLlm } from './llm.ts'
-export type { MemoryLlm, CandidateFact, MemoryOperation } from './llm.ts'
+export type { MemoryKind, MemoryStatus } from './schema.ts'
+export { MEMORY_SCHEMA_VERSION, migrateMemory, SHARED_SPACE } from './schema.ts'
+export type { AgentMemory, MemoryServiceOptions } from './service.ts'
+export { MemoryService } from './service.ts'
+export type { InsertMemoryInput, MemoryRow } from './store.ts'
+export { MemoryStore } from './store.ts'

@@ -8,10 +8,10 @@
 import { Context, Service } from '@ryagent/cordis'
 import type { TypertContextMap } from './types.ts'
 
-export { RemoteError, remoteErrorOf } from './remote-error.ts'
-export { TYPERT_OWNED_VALUE, isTypertOwnedValue, typertOwnedValue } from './owned-value.ts'
-export type { TypertOwnedValue } from './owned-value.ts'
 export { isRemoteJsonValue, isRemoteUplinkItem } from './json-value.ts'
+export type { TypertOwnedValue } from './owned-value.ts'
+export { isTypertOwnedValue, TYPERT_OWNED_VALUE, typertOwnedValue } from './owned-value.ts'
+export { RemoteError, remoteErrorOf } from './remote-error.ts'
 
 const TYPERT_REMOTE_SEGMENT_PATTERN = /^[A-Za-z0-9_$.-]+$/
 
@@ -37,9 +37,9 @@ export type {
   RemoteResult,
   RemoteStream,
   RemoteStreamHandle,
+  TypertClientContextAdapter,
   TypertClientEventListener,
   TypertClientRemote,
-  TypertClientContextAdapter,
   TypertCodec,
   TypertContext,
   TypertContextMap,
@@ -56,12 +56,12 @@ export type {
   TypertLookupHost,
   TypertLookupMap,
   TypertLookupProvider,
-  TypertLookupResolver,
   TypertLookupRegistry,
+  TypertLookupResolver,
   TypertLookupWire,
-  TypertRemoteScopeApi,
-  TypertRemoteScopeMap,
-  TypertRemoteScopeNamespace,
+  TypertRegistryChange,
+  TypertRegistryContract,
+  TypertRegistryListener,
   TypertRemoteContribution,
   TypertRemoteEvent,
   TypertRemoteEventSelection,
@@ -69,10 +69,10 @@ export type {
   TypertRemoteNamespace,
   TypertRemoteNamespaceMap,
   TypertRemoteRegistry,
-  TypertRegistryChange,
-  TypertRegistryListener,
+  TypertRemoteScopeApi,
+  TypertRemoteScopeMap,
+  TypertRemoteScopeNamespace,
   TypertSchema,
-  TypertRegistryContract,
 } from './types.ts'
 
 /** Options for an explicit Service-to-Gateway binding. */
@@ -208,14 +208,14 @@ export function Remote(option: string | RemoteMethodOptions): RemoteMethodDecora
 export function Remote<This extends object, Args extends unknown[], Result>(
   methodExportOrOptions: string | RemoteMethodOptions | ((this: This, ...args: Args) => Result),
   context?: ClassMethodDecoratorContext<This, (this: This, ...args: Args) => Result>,
+  // biome-ignore lint/suspicious/noConfusingVoidType: 装饰器契约就是 void | decorator
 ): void | RemoteMethodDecorator {
   if (typeof methodExportOrOptions === 'string') {
     validateName('Remote export name', methodExportOrOptions)
     return remoteDecorator({ kind: 'direct' }, undefined, methodExportOrOptions)
   }
   if (typeof methodExportOrOptions === 'object') {
-    if (remoteOptionMode(methodExportOrOptions) !== 'stream'
-      || Reflect.ownKeys(methodExportOrOptions).length !== 1) {
+    if (remoteOptionMode(methodExportOrOptions) !== 'stream' || Reflect.ownKeys(methodExportOrOptions).length !== 1) {
       throw new TypeError('typert-protocol: Remote options must contain exactly mode: "stream"')
     }
     return remoteDecorator({ kind: 'direct' }, 'stream')
@@ -233,10 +233,10 @@ function remoteDecorator(
   mode?: 'stream',
   exportName?: string,
 ): RemoteMethodDecorator {
-  return function <This extends object, Args extends unknown[], Result>(
+  return <This extends object, Args extends unknown[], Result>(
     _method: (this: This, ...args: Args) => Result,
     context: ClassMethodDecoratorContext<This, (this: This, ...args: Args) => Result>,
-  ): void {
+  ): void => {
     addMarkerInitializer(context, invocation, mode, exportName)
   }
 }
@@ -247,10 +247,7 @@ function remoteDecorator(
  * @param exportName - optional Remote export name; defaults to the method name.
  * @returns a standard method decorator that records a versioned prototype descriptor.
  */
-export function RemoteScope(
-  key: Extract<keyof TypertContextMap, string>,
-  exportName?: string,
-): RemoteMethodDecorator {
+export function RemoteScope(key: Extract<keyof TypertContextMap, string>, exportName?: string): RemoteMethodDecorator {
   validateName('Scope key', key)
   if (exportName !== undefined) validateName('Remote export name', exportName)
   return remoteDecorator({ kind: 'context', context: key }, undefined, exportName)
@@ -265,7 +262,7 @@ export function RemoteScope(
 export function remoteMethods(service: object): readonly RemoteMethodMarker[] {
   const prototype = Object.getPrototypeOf(service) as object | null
   if (prototype === null) return []
-  return (readRemoteMethodDescriptor(prototype)?.methods ?? []).map(marker => ({ ...marker }))
+  return (readRemoteMethodDescriptor(prototype)?.methods ?? []).map((marker) => ({ ...marker }))
 }
 
 function readRemoteMethodDescriptor(prototype: object): RemoteMethodDescriptorV1 | undefined {
@@ -319,11 +316,14 @@ function mark(
     ...(mode === undefined ? {} : { mode }),
     invocation: Object.freeze(invocation),
   })
-  const current = descriptor?.methods.find(candidate => candidate.method === method)
+  const current = descriptor?.methods.find((candidate) => candidate.method === method)
   if (current !== undefined) {
-    if (current.exportName === marker.exportName
-      && current.mode === marker.mode
-      && sameInvocation(current.invocation, invocation)) return
+    if (
+      current.exportName === marker.exportName &&
+      current.mode === marker.mode &&
+      sameInvocation(current.invocation, invocation)
+    )
+      return
     throw new Error(`typert-protocol: Remote method "${method}" has conflicting invocation markers`)
   }
   Object.defineProperty(prototype, REMOTE_METHOD_DESCRIPTOR, {

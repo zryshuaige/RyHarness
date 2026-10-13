@@ -1,8 +1,8 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { MEMORY_SCHEMA_VERSION, MemoryStore, migrateMemory, NullEmbeddings, SHARED_SPACE } from '@ryagent/memory'
 import { afterEach, describe, expect, it } from 'vitest'
-import { MemoryStore, migrateMemory, MEMORY_SCHEMA_VERSION, SHARED_SPACE, NullEmbeddings } from '@ryagent/memory'
 
 const dirs: string[] = []
 function store(): MemoryStore {
@@ -49,7 +49,13 @@ describe('MemoryStore', () => {
     s.insert({ agentId: 'other-agent', kind: 'fact', content: '用户养了一只橘猫叫布丁' })
     const hits = s.searchFts('a1', '用户')
     expect(hits).toHaveLength(2)
-    expect(hits.map((m) => { return m.agentId }).sort()).toEqual([SHARED_SPACE, 'a1'].sort())
+    expect(
+      hits
+        .map((m) => {
+          return m.agentId
+        })
+        .sort(),
+    ).toEqual([SHARED_SPACE, 'a1'].sort())
     s.close()
   })
 

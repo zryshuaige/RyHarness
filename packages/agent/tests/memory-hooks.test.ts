@@ -1,11 +1,15 @@
-import { describe, expect, it } from 'vitest'
-import type { LlmRuntime, StreamChunk } from '@ryagent/llm'
-import { AgentLoop } from '@ryagent/agent'
 import type { AgentDefinition, AgentMemoryHooks } from '@ryagent/agent'
+import { AgentLoop } from '@ryagent/agent'
+import type { LlmRuntime, StreamChunk } from '@ryagent/llm'
+import { describe, expect, it } from 'vitest'
 
 const DEFINITION: AgentDefinition = {
-  id: 'a1', name: 'Tester', systemPrompt: '你是测试 agent。',
-  provider: 'mock', model: 'mock', tools: [],
+  id: 'a1',
+  name: 'Tester',
+  systemPrompt: '你是测试 agent。',
+  provider: 'mock',
+  model: 'mock',
+  tools: [],
 }
 
 function mockLlm(): LlmRuntime {
@@ -46,7 +50,9 @@ describe('AgentLoop × 长期记忆', () => {
       },
     } as unknown as LlmRuntime
     const loop2 = new AgentLoop({ definition: DEFINITION, llm, tools: [], memory })
-    for await (const _ of loop2.run({ text: '帮我照顾猫' }, { workspaceRoot: process.cwd() })) { /* drain */ }
+    for await (const _ of loop2.run({ text: '帮我照顾猫' }, { workspaceRoot: process.cwd() })) {
+      /* drain */
+    }
     expect(system).toContain('你是测试 agent。')
     expect(system).toContain('[记忆] 用户画像：')
     expect(system).toContain('用户养了一只橘猫')
@@ -70,7 +76,9 @@ describe('AgentLoop × 长期记忆', () => {
 
   it('记忆 recall 抛错时静默降级（不影响对话）', async () => {
     const memory: AgentMemoryHooks = {
-      async recall() { throw new Error('memory down') },
+      async recall() {
+        throw new Error('memory down')
+      },
       enqueueExtraction() {},
     }
     const loop = new AgentLoop({ definition: DEFINITION, llm: mockLlm(), tools: [], memory })

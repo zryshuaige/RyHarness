@@ -32,9 +32,9 @@ export function mapUsage(usage: OpenAiWireUsage): TokenUsage {
     inputTokens: usage.prompt_tokens - cacheRead - cacheWrite,
     outputTokens: usage.completion_tokens,
     totalTokens: usage.total_tokens,
-    ...cacheRead === 0 ? {} : { cacheReadTokens: cacheRead },
-    ...cacheWrite === 0 ? {} : { cacheWriteTokens: cacheWrite },
-    ...reasoning === 0 ? {} : { reasoningTokens: reasoning },
+    ...(cacheRead === 0 ? {} : { cacheReadTokens: cacheRead }),
+    ...(cacheWrite === 0 ? {} : { cacheWriteTokens: cacheWrite }),
+    ...(reasoning === 0 ? {} : { reasoningTokens: reasoning }),
   }
 }
 
@@ -50,7 +50,10 @@ export function mapFinishReason(reason: string | null | undefined): FinishReason
     case 'length':
       return { kind: 'max-tokens' }
     case 'content_filter':
-      return { kind: 'error', failure: { message: 'openai: response blocked by content filter', code: 'CONTENT_FILTER' } }
+      return {
+        kind: 'error',
+        failure: { message: 'openai: response blocked by content filter', code: 'CONTENT_FILTER' },
+      }
     default:
       return { kind: 'error', failure: { message: `openai: unexpected finish_reason "${reason}"`, code: 'PROTOCOL' } }
   }
@@ -62,10 +65,7 @@ export function mapFinishReason(reason: string | null | undefined): FinishReason
  * @param model - model id used only for diagnostics.
  * @returns the chunk stream, terminated by exactly one `finish` chunk.
  */
-export async function* translateChunks(
-  events: AsyncIterable<string>,
-  model: string,
-): AsyncGenerator<StreamChunk> {
+export async function* translateChunks(events: AsyncIterable<string>, model: string): AsyncGenerator<StreamChunk> {
   const blocks: BlockState[] = []
   /** OpenAI parallel tool-call index -> output block index. */
   const toolBlockByInputIndex = new Map<number, number>()
@@ -94,7 +94,9 @@ export async function* translateChunks(
       throw new LlmError('openai: malformed stream chunk', 'PROTOCOL', { cause })
     }
     if (typeof chunk !== 'object' || chunk === null || !Array.isArray(chunk.choices)) {
-      throw new LlmError('openai: malformed stream chunk', 'PROTOCOL', { cause: new TypeError('chunk is not a chat.completion.chunk') })
+      throw new LlmError('openai: malformed stream chunk', 'PROTOCOL', {
+        cause: new TypeError('chunk is not a chat.completion.chunk'),
+      })
     }
 
     // Usage rides the terminal chunk with empty choices; defer it so it is
@@ -163,7 +165,7 @@ export async function* translateChunks(
             type: 'tool-call-delta',
             index,
             id: block.id,
-            ...sendName ? { name: block.name } : {},
+            ...(sendName ? { name: block.name } : {}),
             argumentsDelta,
           }
         }
@@ -190,7 +192,10 @@ export async function* translateChunks(
       if (pendingUsage !== undefined) yield { type: 'usage', usage: pendingUsage }
       yield {
         type: 'finish',
-        reason: { kind: 'error', failure: { message: 'openai: stream ended without a finish_reason', code: 'PROTOCOL' } },
+        reason: {
+          kind: 'error',
+          failure: { message: 'openai: stream ended without a finish_reason', code: 'PROTOCOL' },
+        },
       }
     } else {
       // Degenerate completion: the attempt produced nothing durable, and the

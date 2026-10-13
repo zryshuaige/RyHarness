@@ -12,10 +12,10 @@ export function greetingForHour(hour: number): string {
   return '夜深了'
 }
 
+import calendarSvg from '../assets/fluent-emoji/calendar.svg?raw'
+import envelopeSvg from '../assets/fluent-emoji/envelope.svg?raw'
 import memoSvg from '../assets/fluent-emoji/memo.svg?raw'
 import folderSvg from '../assets/fluent-emoji/open-file-folder.svg?raw'
-import envelopeSvg from '../assets/fluent-emoji/envelope.svg?raw'
-import calendarSvg from '../assets/fluent-emoji/calendar.svg?raw'
 
 /** 建议任务 chips（点击直接发起与 Ryen 的对话，Fluent Emoji 图标）。 */
 const SUGGESTIONS = [
@@ -45,16 +45,28 @@ export function WelcomeHome({
   const greeting = greetingForHour(new Date().getHours())
   const recent = conversations.slice(0, 3)
   const nameOf = (id: string): string => {
-    return agents.find((a) => { return a.id === id })?.name ?? id
+    return (
+      agents.find((a) => {
+        return a.id === id
+      })?.name ?? id
+    )
   }
   const avatarOf = (conversation: Conversation) => {
     if (conversation.kind === 'group') {
       const members = conversation.memberAgentIds
-        .map((id) => { return agents.find((a) => { return a.id === id }) })
-        .filter((a): a is AgentDef => { return a !== undefined })
+        .map((id) => {
+          return agents.find((a) => {
+            return a.id === id
+          })
+        })
+        .filter((a): a is AgentDef => {
+          return a !== undefined
+        })
       return <GroupAvatar members={members} size={36} />
     }
-    const other = agents.find((a) => { return a.id === conversation.memberAgentIds[0] })
+    const other = agents.find((a) => {
+      return a.id === conversation.memberAgentIds[0]
+    })
     if (other === undefined) return <Avatar name="?" seed={conversation.id} size={36} />
     return <Avatar avatarKey={other.avatar} name={other.name} seed={other.id} size={36} />
   }
@@ -64,11 +76,21 @@ export function WelcomeHome({
       <div className="welcome-cat">
         <Cat mood="idle" size={132} />
       </div>
-      <h1 className="welcome-greeting">{greeting}，我是 {ryen?.name ?? 'Ryen'}</h1>
+      <h1 className="welcome-greeting">
+        {greeting}，我是 {ryen?.name ?? 'Ryen'}
+      </h1>
       <p className="welcome-sub">喵——今天想让我做点什么？挑一个，或者直接跟我说。</p>
       <div className="welcome-chips">
         {SUGGESTIONS.map((chip) => (
-          <button key={chip.text} className="welcome-chip" onClick={() => { onSuggest(chip.text) }}>
+          <button
+            type="button"
+            key={chip.text}
+            className="welcome-chip"
+            onClick={() => {
+              onSuggest(chip.text)
+            }}
+          >
+            {/* biome-ignore lint/security/noDangerouslySetInnerHtml: chip 图标为仓库内置 Fluent Emoji SVG，无外部输入 */}
             <span className="chip-emoji" aria-hidden="true" dangerouslySetInnerHTML={{ __html: chip.icon }} />
             {chip.text}
           </button>
@@ -78,9 +100,18 @@ export function WelcomeHome({
         <div className="welcome-recent">
           <p className="section-title">最近会话</p>
           {recent.map((conversation) => (
-            <button key={conversation.id} className="welcome-recent-item" onClick={() => { onOpenConversation(conversation.id) }}>
+            <button
+              type="button"
+              key={conversation.id}
+              className="welcome-recent-item"
+              onClick={() => {
+                onOpenConversation(conversation.id)
+              }}
+            >
               {avatarOf(conversation)}
-              <span className="welcome-recent-name">{conversation.title || nameOf(conversation.memberAgentIds[0] ?? '')}</span>
+              <span className="welcome-recent-name">
+                {conversation.title || nameOf(conversation.memberAgentIds[0] ?? '')}
+              </span>
               <span className="welcome-recent-preview">{conversation.lastMessagePreview ?? ''}</span>
             </button>
           ))}

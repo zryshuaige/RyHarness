@@ -16,7 +16,10 @@ export class TimeoutReason extends Error {
    * @param code Capability-owned timeout code (e.g. `BASH_TIMEOUT`).
    * @param timeoutMs The deadline that elapsed, in milliseconds.
    */
-  constructor(readonly code: string, readonly timeoutMs: number) {
+  constructor(
+    readonly code: string,
+    readonly timeoutMs: number,
+  ) {
     super(`${code} after ${timeoutMs}ms`)
   }
 }
@@ -42,12 +45,7 @@ function assertTimerDelay(timeoutMs: number, name: string): void {
  *   bad).
  * @returns The effective timeout in milliseconds: `min(requested ?? def, max)`.
  */
-export function clampTimeout(
-  requested: number | undefined,
-  def: number,
-  max: number,
-  name = 'timeoutMs',
-): number {
+export function clampTimeout(requested: number | undefined, def: number, max: number, name = 'timeoutMs'): number {
   if (requested !== undefined && (!Number.isFinite(requested) || requested <= 0)) {
     throw new Error(`${name} must be a positive finite number`)
   }
@@ -88,11 +86,7 @@ export interface IdleWatchdog {
  * @param code Capability-owned code stamped onto the timeout's {@link TimeoutReason}.
  * @returns The fused {@link Deadline} (signal + timer cleanup).
  */
-export function deadline(
-  upstream: AbortSignal | undefined,
-  timeoutMs: number,
-  code: string,
-): Deadline {
+export function deadline(upstream: AbortSignal | undefined, timeoutMs: number, code: string): Deadline {
   if (timeoutMs <= 0) {
     // No timeout (background work): forward only the upstream signal, or a never-aborting one
     // when there is no upstream.
@@ -102,13 +96,17 @@ export function deadline(
   assertTimerDelay(timeoutMs, 'deadline timeoutMs')
 
   const timer = new AbortController()
-  const id = setTimeout(() => { timer.abort(new TimeoutReason(code, timeoutMs)) }, timeoutMs)
+  const id = setTimeout(() => {
+    timer.abort(new TimeoutReason(code, timeoutMs))
+  }, timeoutMs)
   return {
     // AbortSignal.any adopts the reason of whichever source aborts FIRST, so a
     // race resolves to a single cause: timeoutOf() reads TimeoutReason only
     // when the timeout won, and upstream-wins leaves an ordinary abort reason.
     signal: upstream !== undefined ? AbortSignal.any([upstream, timer.signal]) : timer.signal,
-    [Symbol.dispose]() { clearTimeout(id) },
+    [Symbol.dispose]() {
+      clearTimeout(id)
+    },
   }
 }
 
@@ -123,16 +121,10 @@ export function deadline(
  * @param code - capability-owned code carried by the timeout reason.
  * @returns a stable signal, guarded next operation, and timer disposer.
  */
-export function idleWatchdog(
-  upstream: AbortSignal | undefined,
-  timeoutMs: number,
-  code: string,
-): IdleWatchdog {
+export function idleWatchdog(upstream: AbortSignal | undefined, timeoutMs: number, code: string): IdleWatchdog {
   assertTimerDelay(timeoutMs, 'idleWatchdog timeoutMs')
   const timeout = new AbortController()
-  const signal = upstream === undefined
-    ? timeout.signal
-    : AbortSignal.any([upstream, timeout.signal])
+  const signal = upstream === undefined ? timeout.signal : AbortSignal.any([upstream, timeout.signal])
   let timer: ReturnType<typeof setTimeout> | undefined
   let outstanding = false
   let disposed = false

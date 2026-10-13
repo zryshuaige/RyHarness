@@ -33,7 +33,12 @@ export function Avatar({
 
   if (avatarKey === 'cat') {
     return (
-      <span className={`avatar avatar-cat ${className}`} style={{ width: size, height: size }} role="img" aria-label={name}>
+      <span
+        className={`avatar avatar-cat ${className}`}
+        style={{ width: size, height: size }}
+        role="img"
+        aria-label={name}
+      >
         <Cat mood="idle" size={size} />
       </span>
     )
@@ -45,6 +50,7 @@ export function Avatar({
         style={{ width: size, height: size }}
         role="img"
         aria-label={name}
+        // biome-ignore lint/security/noDangerouslySetInnerHtml: DiceBear 本地生成的 SVG，无外部输入
         dangerouslySetInnerHTML={{ __html: dicebear }}
       />
     )

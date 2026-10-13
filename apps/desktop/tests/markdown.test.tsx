@@ -1,16 +1,24 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest'
+
 import { renderToStaticMarkup } from 'react-dom/server'
+import { describe, expect, it } from 'vitest'
 import { Markdown, safeHref } from '../renderer/src/components/Markdown.tsx'
 import { MessageBubble } from '../renderer/src/components/MessageBubble.tsx'
 import type { UiMessage } from '../renderer/src/store.ts'
 
-const fileUrl = (name: string): string => { return `/api/files/${name}` }
+const fileUrl = (name: string): string => {
+  return `/api/files/${name}`
+}
 
 function agentMessage(text: string, done: boolean): UiMessage {
   return {
-    key: 'm1', senderType: 'agent', senderId: 'ryen', senderName: 'Ryen',
-    turnIndex: 0, done, parts: [{ kind: 'text', text }],
+    key: 'm1',
+    senderType: 'agent',
+    senderId: 'ryen',
+    senderName: 'Ryen',
+    turnIndex: 0,
+    done,
+    parts: [{ kind: 'text', text }],
   }
 }
 
@@ -69,11 +77,15 @@ describe('Markdown 渲染', () => {
 
 describe('MessageBubble 的 Markdown 开关', () => {
   it('完成的 agent 消息渲染 Markdown；流式中纯文本直出', () => {
-    const done = renderToStaticMarkup(<MessageBubble message={agentMessage('**加粗**\n\n- 甲', true)} fileUrl={fileUrl} />)
+    const done = renderToStaticMarkup(
+      <MessageBubble message={agentMessage('**加粗**\n\n- 甲', true)} fileUrl={fileUrl} />,
+    )
     expect(done).toContain('<strong>加粗</strong>')
     expect(done).toContain('<li>')
 
-    const streaming = renderToStaticMarkup(<MessageBubble message={agentMessage('**加粗**', false)} fileUrl={fileUrl} />)
+    const streaming = renderToStaticMarkup(
+      <MessageBubble message={agentMessage('**加粗**', false)} fileUrl={fileUrl} />,
+    )
     expect(streaming).not.toContain('<strong>')
     expect(streaming).toContain('**加粗**')
     expect(streaming).toContain('bubble-cursor')
@@ -81,8 +93,13 @@ describe('MessageBubble 的 Markdown 开关', () => {
 
   it('用户消息不渲染 Markdown', () => {
     const user: UiMessage = {
-      key: 'u1', senderType: 'user', senderId: 'user', senderName: '我',
-      turnIndex: 0, done: true, parts: [{ kind: 'text', text: '**不解析**' }],
+      key: 'u1',
+      senderType: 'user',
+      senderId: 'user',
+      senderName: '我',
+      turnIndex: 0,
+      done: true,
+      parts: [{ kind: 'text', text: '**不解析**' }],
     }
     const html = renderToStaticMarkup(<MessageBubble message={user} fileUrl={fileUrl} />)
     expect(html).not.toContain('<strong>')

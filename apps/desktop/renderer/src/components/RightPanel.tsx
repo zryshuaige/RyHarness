@@ -1,13 +1,16 @@
 import { useState } from 'react'
 import type { AgentDef, ApiClient, Conversation } from '../api.ts'
+import type { RelayItem, UiMessage } from '../store.ts'
+import { Avatar } from './avatars/Avatar.tsx'
+import { Icon } from './Icon.tsx'
 import { MemoryPanel } from './MemoryPanel.tsx'
 import { PlaybookPanel } from './PlaybookPanel.tsx'
-import { Icon } from './Icon.tsx'
-import { Avatar } from './avatars/Avatar.tsx'
-import type { RelayItem, UiMessage } from '../store.ts'
 
 const TOOL_LABELS: Record<string, string> = {
-  fs_read: '读文件', fs_write: '写文件', shell_exec: '执行命令', file_produce: '产出文件',
+  fs_read: '读文件',
+  fs_write: '写文件',
+  shell_exec: '执行命令',
+  file_produce: '产出文件',
 }
 
 /** 从消息流收集产物文件。 */
@@ -48,14 +51,18 @@ export function RightPanel({
   if (collapsed) {
     return (
       <aside className="right-panel is-collapsed">
-        <button className="panel-expand-btn" title="展开信息板" onClick={onToggle}><Icon name="panel-right" size={14} /></button>
+        <button type="button" className="panel-expand-btn" title="展开信息板" onClick={onToggle}>
+          <Icon name="panel-right" size={14} />
+        </button>
       </aside>
     )
   }
   return (
     <aside className="right-panel">
       <span className="panel-banner" aria-hidden="true" />
-      <button className="right-panel-toggle" title="收起信息板" onClick={onToggle}><Icon name="chevron-right" size={13} /></button>
+      <button type="button" className="right-panel-toggle" title="收起信息板" onClick={onToggle}>
+        <Icon name="chevron-right" size={13} />
+      </button>
       <div className="panel-body">
         {conversation === undefined ? (
           <p className="panel-empty">选择一个会话查看详情</p>
@@ -83,7 +90,9 @@ export function RightPanel({
           api={api}
           agentId={playbookFor.id}
           agentName={playbookFor.name}
-          onClose={() => { setPlaybookFor(undefined) }}
+          onClose={() => {
+            setPlaybookFor(undefined)
+          }}
         />
       )}
       {memoryFor !== undefined && (
@@ -91,8 +100,16 @@ export function RightPanel({
           api={api}
           agentId={memoryFor.id}
           agentName={memoryFor.name}
-          conversationTitles={new Map(conversations.map((c) => { return [c.id, c.title] }))}
-          onClose={() => { setMemoryFor(undefined) }}
+          conversationTitles={
+            new Map(
+              conversations.map((c) => {
+                return [c.id, c.title]
+              }),
+            )
+          }
+          onClose={() => {
+            setMemoryFor(undefined)
+          }}
         />
       )}
     </aside>
@@ -113,9 +130,15 @@ function ArtifactList({
     <ul className="artifact-list">
       {artifacts.map((artifact) => (
         <li key={artifact.callId}>
-          <span aria-hidden="true"><Icon name="file" size={15} /></span>
-          <span className="artifact-name" title={artifact.name}>{artifact.name}</span>
-          <a href={fileUrl(artifact.name)} target="_blank" rel="noreferrer">打开</a>
+          <span aria-hidden="true">
+            <Icon name="file" size={15} />
+          </span>
+          <span className="artifact-name" title={artifact.name}>
+            {artifact.name}
+          </span>
+          <a href={fileUrl(artifact.name)} target="_blank" rel="noreferrer">
+            打开
+          </a>
         </li>
       ))}
     </ul>
@@ -137,7 +160,9 @@ function DirectProfile({
   onShowMemories: (agent: AgentDef) => void
   onShowPlaybook: (agent: AgentDef) => void
 }) {
-  const agent = agents.find((a) => { return a.id === agentId })
+  const agent = agents.find((a) => {
+    return a.id === agentId
+  })
   if (agent === undefined) return <p className="panel-empty">未找到 agent</p>
   return (
     <>
@@ -148,22 +173,46 @@ function DirectProfile({
           {agent.isBuiltin && <span className="badge">内置</span>}
         </h3>
         <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-          <button className="btn" onClick={() => { onShowMemories(agent) }}><Icon name="brain" size={15} /> 记忆</button>
-          <button className="btn" onClick={() => { onShowPlaybook(agent) }}><Icon name="check" size={15} /> 经验手册</button>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => {
+              onShowMemories(agent)
+            }}
+          >
+            <Icon name="brain" size={15} /> 记忆
+          </button>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => {
+              onShowPlaybook(agent)
+            }}
+          >
+            <Icon name="check" size={15} /> 经验手册
+          </button>
         </div>
       </div>
       <dl className="profile-fields">
         <dt>人设</dt>
         <dd className="profile-prompt">{agent.systemPrompt}</dd>
         <dt>模型</dt>
-        <dd>{agent.provider} / {agent.model}</dd>
+        <dd>
+          {agent.provider} / {agent.model}
+        </dd>
         <dt>工具</dt>
         <dd>
           {agent.tools.length === 0 ? (
             <span className="panel-empty">无（纯对话）</span>
           ) : (
             <span className="tool-chips">
-              {agent.tools.map((tool) => { return <span key={tool} className="chip">{TOOL_LABELS[tool] ?? tool}</span> })}
+              {agent.tools.map((tool) => {
+                return (
+                  <span key={tool} className="chip">
+                    {TOOL_LABELS[tool] ?? tool}
+                  </span>
+                )
+              })}
             </span>
           )}
         </dd>
@@ -188,9 +237,21 @@ function GroupInfo({
   fileUrl: (name: string) => string
 }) {
   const members = conversation.memberAgentIds
-    .map((id) => { return agents.find((a) => { return a.id === id }) })
-    .filter((a): a is AgentDef => { return a !== undefined })
-  const nameOf = (id: string): string => { return agents.find((a) => { return a.id === id })?.name ?? id }
+    .map((id) => {
+      return agents.find((a) => {
+        return a.id === id
+      })
+    })
+    .filter((a): a is AgentDef => {
+      return a !== undefined
+    })
+  const nameOf = (id: string): string => {
+    return (
+      agents.find((a) => {
+        return a.id === id
+      })?.name ?? id
+    )
+  }
   return (
     <>
       <h4>成员（{members.length}）</h4>

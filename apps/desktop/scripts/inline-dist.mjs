@@ -3,8 +3,8 @@
  * Electron 以 file:// 加载渲染层时，外部 module script 会被 CORS 拦截；
  * 内联 module script 可以正常执行（单文件产物，~250KB 可接受）。
  */
-import { readFileSync, writeFileSync, readdirSync } from 'node:fs'
-import { join, dirname } from 'node:path'
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const dist = join(dirname(fileURLToPath(import.meta.url)), '../renderer/dist')
@@ -12,7 +12,9 @@ const htmlPath = join(dist, 'index.html')
 let html = readFileSync(htmlPath, 'utf8')
 
 const asset = (pattern) => {
-  const match = readdirSync(join(dist, 'assets')).find((name) => { return pattern.test(name) })
+  const match = readdirSync(join(dist, 'assets')).find((name) => {
+    return pattern.test(name)
+  })
   return match === undefined ? undefined : join(dist, 'assets', match)
 }
 

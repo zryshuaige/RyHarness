@@ -1,6 +1,6 @@
 # @ryagent/memory
 
-长期记忆系统：mem0 式异步抽取管线 + 混合检索（调研落地组合的记忆闭环，见 `docs/research/agent-memory-self-evolution-survey.md` §3；自我进化是后续里程碑，本次不做）。
+长期记忆系统：mem0 式异步抽取管线 + 混合检索（调研落地组合的记忆闭环，见 `docs/research/agent-memory-self-evolution-survey.md` §3；自我进化部分见 `@ryagent/evolve`）。
 
 ## 管线图
 

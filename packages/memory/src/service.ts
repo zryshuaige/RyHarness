@@ -12,15 +12,13 @@
  * @module @ryagent/memory/service
  */
 
-import { MemoryStore } from './store.ts'
-import type { MemoryRow } from './store.ts'
-import { SHARED_SPACE } from './schema.ts'
-import type { MemoryKind } from './schema.ts'
-import { cosine } from './embeddings.ts'
 import type { EmbeddingProvider } from './embeddings.ts'
-import { NullEmbeddings } from './embeddings.ts'
-import type { MemoryLlm } from './llm.ts'
-import type { CandidateFact, MemoryOperation } from './llm.ts'
+import { cosine, NullEmbeddings } from './embeddings.ts'
+import type { CandidateFact, MemoryLlm, MemoryOperation } from './llm.ts'
+import type { MemoryKind } from './schema.ts'
+import { SHARED_SPACE } from './schema.ts'
+import type { MemoryRow } from './store.ts'
+import { MemoryStore } from './store.ts'
 
 /** RRF 常数（调研 §3.4）。 */
 const RRF_K = 60
@@ -72,7 +70,11 @@ export class MemoryService implements AgentMemory {
     this.topN = options.recallTopN ?? RECALL_TOP_N
     this.embedTimeoutMs = options.embedTimeoutMs ?? DEFAULT_EMBED_TIMEOUT_MS
     this.recallBudgetMs = options.recallBudgetMs ?? DEFAULT_RECALL_BUDGET_MS
-    this.log = options.logger ?? ((message) => { console.log(message) })
+    this.log =
+      options.logger ??
+      ((message) => {
+        console.log(message)
+      })
   }
 
   get embeddingsAvailable(): boolean {
@@ -96,7 +98,13 @@ export class MemoryService implements AgentMemory {
 
     const profile = this.store.listSharedProfile()
     if (profile.length > 0) {
-      sections.push(`用户画像：\n${profile.map((m) => { return `- ${m.content}` }).join('\n')}`)
+      sections.push(
+        `用户画像：\n${profile
+          .map((m) => {
+            return `- ${m.content}`
+          })
+          .join('\n')}`,
+      )
     }
 
     // 预算守卫：画像已超预算时直接返回（profile 量小，正常不会发生）。
@@ -106,8 +114,18 @@ export class MemoryService implements AgentMemory {
 
     const recalled = await this.hybridRecall(agentId, text)
     if (recalled.length > 0) {
-      sections.push(`相关记忆：\n${recalled.map((m) => { return `- ${m.content}` }).join('\n')}`)
-      this.store.touchAccess(recalled.map((m) => { return m.id }))
+      sections.push(
+        `相关记忆：\n${recalled
+          .map((m) => {
+            return `- ${m.content}`
+          })
+          .join('\n')}`,
+      )
+      this.store.touchAccess(
+        recalled.map((m) => {
+          return m.id
+        }),
+      )
     }
 
     if (sections.length === 0) return undefined
@@ -128,13 +146,18 @@ export class MemoryService implements AgentMemory {
     }
 
     if (queryVector !== null) {
-      const semantic = this.store.listActiveEmbeddings(agentId)
+      const semantic = this.store
+        .listActiveEmbeddings(agentId)
         .map((memory) => {
           return { memory, score: cosine(queryVector, memory.embedding as Float32Array) }
         })
-        .sort((a, b) => { return b.score - a.score })
+        .sort((a, b) => {
+          return b.score - a.score
+        })
         .slice(0, RECALL_PER_CHANNEL)
-        .map((hit) => { return hit.memory })
+        .map((hit) => {
+          return hit.memory
+        })
       addRanked(semantic)
     }
 
@@ -147,9 +170,13 @@ export class MemoryService implements AgentMemory {
         const decayed = entry.rrf * Math.exp(-ageDays / DECAY_DAYS)
         return { memory: entry.memory, score: decayed }
       })
-      .sort((a, b) => { return b.score - a.score })
+      .sort((a, b) => {
+        return b.score - a.score
+      })
       .slice(0, limit)
-      .map((hit) => { return hit.memory })
+      .map((hit) => {
+        return hit.memory
+      })
   }
 
   /** embedding + 文本缓存：相同文本不重复请求；网络请求带超时，超时降级纯 FTS5。 */
@@ -158,7 +185,7 @@ export class MemoryService implements AgentMemory {
     const cached = this.store.cachedEmbedding(text)
     if (cached !== null) return cached
     const vectors = await withTimeout(this.embeddings.embed([text]), this.embedTimeoutMs)
-    const vector = vectors === null ? null : vectors[0] ?? null
+    const vector = vectors === null ? null : (vectors[0] ?? null)
     if (vector !== null) this.store.cacheEmbedding(text, vector)
     else this.log(`@ryagent/memory: embedding timed out after ${this.embedTimeoutMs}ms, falling back to FTS-only`)
     return vector
@@ -183,26 +210,41 @@ export class MemoryService implements AgentMemory {
     await this.queue
   }
 
-  private async runExtractionWithRetry(agentId: string, agentName: string, conversationId: string, text: string): Promise<void> {
+  private async runExtractionWithRetry(
+    agentId: string,
+    agentName: string,
+    conversationId: string,
+    text: string,
+  ): Promise<void> {
     try {
       await this.runExtraction(agentId, agentName, conversationId, text)
     } catch (error) {
-      this.log(`@ryagent/memory: extraction failed, retrying once: ${error instanceof Error ? error.message : String(error)}`)
+      this.log(
+        `@ryagent/memory: extraction failed, retrying once: ${error instanceof Error ? error.message : String(error)}`,
+      )
       try {
         await this.runExtraction(agentId, agentName, conversationId, text)
       } catch (retryError) {
-        this.log(`@ryagent/memory: extraction gave up: ${retryError instanceof Error ? retryError.message : String(retryError)}`)
+        this.log(
+          `@ryagent/memory: extraction gave up: ${retryError instanceof Error ? retryError.message : String(retryError)}`,
+        )
       }
     }
   }
 
-  private async runExtraction(agentId: string, agentName: string, conversationId: string, turnText: string): Promise<void> {
+  private async runExtraction(
+    agentId: string,
+    agentName: string,
+    conversationId: string,
+    turnText: string,
+  ): Promise<void> {
     if (this.llm === undefined) return
     const candidates = await this.llm.extractFacts({ agentName, conversationText: turnText })
     for (const candidate of candidates) {
       const spaceId = candidate.scope === 'shared' ? SHARED_SPACE : agentId
-      const similar = (await this.hybridRecall(spaceId, candidate.text, RECALL_PER_CHANNEL))
-        .map((memory) => { return { id: memory.id, content: memory.content } })
+      const similar = (await this.hybridRecall(spaceId, candidate.text, RECALL_PER_CHANNEL)).map((memory) => {
+        return { id: memory.id, content: memory.content }
+      })
       const operations = await this.llm.decideOperations({ candidate, similar })
       await this.applyOperations(spaceId, candidate, operations, conversationId)
     }
@@ -261,7 +303,13 @@ export class MemoryService implements AgentMemory {
 /** Promise 超时包装：超时返回 null（embedding 降级纯 FTS5 路径用）。 */
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | null> {
   return Promise.race([
-    promise.then((value) => { return value as T | null }),
-    new Promise<null>((resolve) => { return setTimeout(() => { return resolve(null) }, timeoutMs) }),
+    promise.then((value) => {
+      return value as T | null
+    }),
+    new Promise<null>((resolve) => {
+      return setTimeout(() => {
+        return resolve(null)
+      }, timeoutMs)
+    }),
   ])
 }

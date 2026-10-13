@@ -2,8 +2,8 @@
  * 从 lucide-static 拷贝 UI 需要的图标到 src/assets/lucide/（一次性，资产入库）。
  * 用法：pnpm --filter @ryagent/desktop gen:icons
  */
-import { copyFileSync, mkdirSync, existsSync } from 'node:fs'
-import { join, dirname } from 'node:path'
+import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
