@@ -144,6 +144,21 @@ describe('OpenAiAdapter', () => {
     expect(chunks.at(-1)).toEqual({ type: 'finish', reason: { kind: 'tool-calls' } })
   })
 
+  it('passes the caller signal through to fetch (fused with the idle watchdog)', async () => {
+    const controller = new AbortController()
+    let seen: AbortSignal | undefined
+    const adapter = makeAdapter(async (_input, init) => {
+      seen = init?.signal ?? undefined
+      expect(seen?.aborted).toBe(false)
+      controller.abort()
+      // 调用方取消传导到 fetch 收到的 signal。
+      expect(seen?.aborted).toBe(true)
+      return sseResponse(...ECHO_SCE)
+    })
+    await collect(adapter.stream({ ...baseOptions, signal: controller.signal }))
+    expect(seen).toBeInstanceOf(AbortSignal)
+  })
+
   it('maps 429 with quota wording to QUOTA and honors retry-after', async () => {
     const adapter = makeAdapter(
       async () =>

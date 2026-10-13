@@ -10,7 +10,7 @@
 import type { DatabaseSync } from 'node:sqlite'
 
 /** 本包 schema 版本（独立于 session 的 SCHEMA_VERSION）。 */
-export const MEMORY_SCHEMA_VERSION = 1
+export const MEMORY_SCHEMA_VERSION = 3
 
 /** 共享用户画像空间的 agent_id（写隔离、读共享，调研 §3.6）。 */
 export const SHARED_SPACE = '*shared*'
@@ -18,8 +18,13 @@ export const SHARED_SPACE = '*shared*'
 /** 记忆种类。 */
 export type MemoryKind = 'profile' | 'fact' | 'preference' | 'event'
 
-/** 记忆状态：UPDATE/DELETE 走 superseded 软删保历史（Zep 思路）。 */
-export type MemoryStatus = 'active' | 'superseded' | 'deleted'
+/**
+ * 记忆状态：
+ * - active：参与检索与注入；
+ * - superseded / deleted：软删（保留历史，用户可见）；
+ * - inactive：巩固任务对长期零访问记忆的归档（不参与检索，也不物理删除）。
+ */
+export type MemoryStatus = 'active' | 'superseded' | 'deleted' | 'inactive'
 
 /** v1：memories + FTS5 + embedding 缓存。 */
 function migrateV1(db: DatabaseSync): void {
@@ -60,7 +65,72 @@ function migrateV1(db: DatabaseSync): void {
   `)
 }
 
-const MIGRATIONS: Readonly<Record<number, (db: DatabaseSync) => void>> = { 1: migrateV1 }
+/**
+ * v2：embedding 向量带模型溯源。
+ * 换 embedding 模型后，同一段文本的旧向量与新向量语义空间不同，混在一起
+ * 会让维度不符的余弦静默返回 -1。缓存主键改为 (hash, model)，记忆行记录
+ * 向量来源模型；旧缓存行以 model='' 保留（永不命中新模型，按未命中重算）。
+ */
+function migrateV2(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE embedding_cache_v2 (
+      hash       TEXT NOT NULL,
+      model      TEXT NOT NULL,
+      vector     BLOB NOT NULL,
+      dim        INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (hash, model)
+    );
+    INSERT INTO embedding_cache_v2 (hash, model, vector, dim, created_at)
+      SELECT hash, '', vector, dim, created_at FROM embedding_cache;
+    DROP TABLE embedding_cache;
+    ALTER TABLE embedding_cache_v2 RENAME TO embedding_cache;
+
+    ALTER TABLE memories ADD COLUMN embedding_model TEXT;
+  `)
+}
+
+/**
+ * v3：状态机加入 'inactive'（巩固归档位）。SQLite 的 CHECK 约束只能随表
+ * 重建而改：新建表 → 拷贝 → 删旧表 → 改名 → 重建索引（数据零丢失）。
+ */
+function migrateV3(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE memories_v3 (
+      id            TEXT PRIMARY KEY,
+      agent_id      TEXT NOT NULL,
+      kind          TEXT NOT NULL CHECK (kind IN ('profile', 'fact', 'preference', 'event')),
+      content       TEXT NOT NULL,
+      embedding     BLOB,
+      dim           INTEGER,
+      embedding_model TEXT,
+      created_at    INTEGER NOT NULL,
+      updated_at    INTEGER NOT NULL,
+      last_accessed_at INTEGER NOT NULL DEFAULT 0,
+      access_count  INTEGER NOT NULL DEFAULT 0,
+      source_conversation_id TEXT,
+      status        TEXT NOT NULL DEFAULT 'active'
+                    CHECK (status IN ('active', 'superseded', 'deleted', 'inactive')),
+      supersedes_id TEXT
+    );
+    INSERT INTO memories_v3 (id, agent_id, kind, content, embedding, dim, embedding_model, created_at,
+                             updated_at, last_accessed_at, access_count, source_conversation_id, status,
+                             supersedes_id)
+      SELECT id, agent_id, kind, content, embedding, dim, embedding_model, created_at, updated_at,
+             last_accessed_at, access_count, source_conversation_id, status, supersedes_id
+      FROM memories;
+    DROP TABLE memories;
+    ALTER TABLE memories_v3 RENAME TO memories;
+    CREATE INDEX idx_memories_space_status ON memories (agent_id, status, kind);
+    CREATE INDEX idx_memories_updated ON memories (updated_at);
+  `)
+}
+
+export const MIGRATIONS: Readonly<Record<number, (db: DatabaseSync) => void>> = {
+  1: migrateV1,
+  2: migrateV2,
+  3: migrateV3,
+}
 
 function metaVersion(db: DatabaseSync): number {
   // memory_meta 可能不存在（全新库）：用模板表探测。

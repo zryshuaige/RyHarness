@@ -82,8 +82,13 @@ describe('注入编译（compile）', () => {
 describe('Reflector 归因计数', () => {
   it('注入条目：本轮成功 helpful+1，失败 harmful+1', async () => {
     const s = service()
-    const entry = s.store.insertEntry({ agentId: 'a1', section: 'strategy', content: 'x', source: 'seed' })
-    s.enqueueTurn('a1', 'A', 'c1', turn({ injectedPlaybookEntryIds: [entry.id] }))
+    const entry = s.store.insertEntry({
+      agentId: 'a1',
+      section: 'strategy',
+      content: '翻译前先确认目标语言',
+      source: 'seed',
+    })
+    s.enqueueTurn('a1', 'A', 'c1', turn({ injectedPlaybookEntryIds: [entry.id], userText: '帮我翻译这段话' }))
     await s.flush()
     expect(s.store.getEntry(entry.id)!.helpful).toBe(1)
 
@@ -93,16 +98,42 @@ describe('Reflector 归因计数', () => {
       'c1',
       turn({
         injectedPlaybookEntryIds: [entry.id],
-        userText: '不对，错了',
+        userText: '翻译错了重来',
       }),
     )
     await s.flush()
     expect(s.store.getEntry(entry.id)!.harmful).toBe(1)
   })
 
+  it('与本轮无关的注入条目不参与归因（噪声不拿 ±1）', async () => {
+    const s = service()
+    const relevant = s.store.insertEntry({
+      agentId: 'a1',
+      section: 'strategy',
+      content: '写文件前先确认目录存在',
+      source: 'seed',
+    })
+    const noise = s.store.insertEntry({
+      agentId: 'a1',
+      section: 'pitfall',
+      content: '部署脚本要带版本号标签',
+      source: 'seed',
+    })
+    s.enqueueTurn('a1', 'A', 'c1', turn({ injectedPlaybookEntryIds: [relevant.id, noise.id], userText: '把文件写一下' }))
+    await s.flush()
+    expect(s.store.getEntry(relevant.id)!.helpful).toBe(1)
+    expect(s.store.getEntry(noise.id)!.helpful).toBe(0)
+    expect(s.store.getEntry(noise.id)!.harmful).toBe(0)
+  })
+
   it(`harmful 达 ${AUTO_DEPRECATE_HARMFUL} 自动 deprecate`, async () => {
     const s = service()
-    const entry = s.store.insertEntry({ agentId: 'a1', section: 'strategy', content: 'x', source: 'seed' })
+    const entry = s.store.insertEntry({
+      agentId: 'a1',
+      section: 'strategy',
+      content: '部署脚本要带版本号标签',
+      source: 'seed',
+    })
     for (let i = 0; i < AUTO_DEPRECATE_HARMFUL; i++) {
       s.enqueueTurn(
         'a1',
@@ -110,7 +141,7 @@ describe('Reflector 归因计数', () => {
         'c1',
         turn({
           injectedPlaybookEntryIds: [entry.id],
-          userText: '错了',
+          userText: '部署脚本错了',
         }),
       )
       await s.flush()
@@ -227,9 +258,14 @@ describe('用户反馈闭环', () => {
   it('👎 → 即时反思入库 + 归因条目 harmful+1；👍 → 归因 helpful+1', async () => {
     const llm = mockLlm({ reflectLesson: '差评教训' })
     const s = service(llm)
-    const entry = s.store.insertEntry({ agentId: 'a1', section: 'strategy', content: 'x', source: 'seed' })
+    const entry = s.store.insertEntry({
+      agentId: 'a1',
+      section: 'strategy',
+      content: '翻译前先确认目标语言',
+      source: 'seed',
+    })
     // 一轮注入建立归因
-    s.enqueueTurn('a1', 'A', 'c1', turn({ injectedPlaybookEntryIds: [entry.id] }))
+    s.enqueueTurn('a1', 'A', 'c1', turn({ injectedPlaybookEntryIds: [entry.id], userText: '帮我翻译' }))
     await s.flush()
     expect(s.store.getEntry(entry.id)!.helpful).toBe(1)
 
@@ -286,6 +322,7 @@ describe('巩固调度 runOnce（幂等）', () => {
       { id: 'm3', content: '乙', embedding: Float32Array.from([0, 1, 0, 0]), accessCount: 1, updatedAt: Date.now() },
     ]
     const superseded: string[] = []
+    const archived: string[] = []
     const sweep = {
       listSpaces: () => {
         return ['a1']
@@ -298,6 +335,20 @@ describe('巩固调度 runOnce（幂等）', () => {
       supersede(id: string) {
         superseded.push(id)
       },
+      archiveDormant: (dormantAfterMs: number, now: number) => {
+        const hits = rows.filter(
+          (r) => r.accessCount === 0 && now - r.updatedAt > dormantAfterMs && !archived.includes(r.id),
+        )
+        archived.push(...hits.map((r) => r.id))
+        return hits.length
+      },
+      archiveColdSuperseded: (maxAgeMs: number, now: number) => {
+        const hits = rows.filter(
+          (r) => superseded.includes(r.id) && now - r.updatedAt > maxAgeMs && !archived.includes(r.id),
+        )
+        archived.push(...hits.map((r) => r.id))
+        return hits.length
+      },
     }
 
     s.attachMemorySweep(sweep)
@@ -306,11 +357,15 @@ describe('巩固调度 runOnce（幂等）', () => {
     expect(first.mergedMemories).toBe(1)
     expect(first.dormant).toBe(1)
     expect(superseded).toEqual(['m2'])
+    // 长期零访问的记忆被归档（不物理删除），陈旧软删链同样归档
+    expect(first.archivedDormant).toBeGreaterThanOrEqual(1)
+    expect(archived).toContain('m2')
 
     const second = s.runOnce()
     // 动作类指标归零（dormant 是当前状态快照，m2 已合并后自然为 0）。
     expect(second.expiredReflections).toBe(0)
     expect(second.mergedMemories).toBe(0)
+    expect(second.archivedDormant).toBe(0)
   })
 })
 
@@ -354,5 +409,64 @@ describe('全链路集成：失败 → 反思 → 注入 → 成功 → 转正',
         return e.source === 'reflection' && e.content === '写文件前先确认目录存在'
       }),
     ).toBe(true)
+  })
+})
+
+describe('Curator 看得见既有条目（update/deprecate 才可用）', () => {
+  it('proposeDeltas 收到既有条目（id+内容+得分），update 后手册被真正改写', async () => {
+    const captured: { ids: string[]; contents: string[] } = { ids: [], contents: [] }
+    const llm: EvolveLlm = {
+      async proposeDeltas(input) {
+        captured.ids = (input.entries ?? []).map((e) => {
+          return e.id
+        })
+        captured.contents = (input.entries ?? []).map((e) => {
+          return e.content
+        })
+        const target = input.entries?.[0]
+        return target === undefined
+          ? []
+          : [{ op: 'update', entryId: target.id, content: '每次检索先看索引再决定读哪些文件' }]
+      },
+      async reflect() {
+        return ''
+      },
+    }
+    const s = service(llm)
+    const entry = s.store.insertEntry({ agentId: 'a1', section: 'strategy', content: '检索时先看索引', source: 'seed' })
+    s.enqueueTurn('a1', 'A', 'c1', turn({ userText: '帮我查资料' }))
+    await s.flush()
+    expect(captured.ids).toEqual([entry.id])
+    expect(captured.contents).toEqual(['检索时先看索引'])
+    expect(s.store.getEntry(entry.id)!.content).toBe('每次检索先看索引再决定读哪些文件')
+  })
+
+  it('近似重复的 add 被去重（换措辞不会把手册撑爆）', async () => {
+    const llm = mockLlm({ deltas: [{ op: 'add', section: 'strategy', content: '检索时先看索引再读文件' }] })
+    const s = service(llm)
+    s.store.insertEntry({ agentId: 'a1', section: 'strategy', content: '检索时先看索引再读文件。', source: 'seed' })
+    s.enqueueTurn('a1', 'A', 'c1', turn({ userText: '帮我查资料' }))
+    await s.flush()
+    expect(s.store.listActiveForCompile('a1')).toHaveLength(1)
+  })
+})
+
+describe('教训注入的相关性选择', () => {
+  it('与本轮输入无关的 pending 教训不注入', async () => {
+    const s = service()
+    s.store.insertReflection({ agentId: 'a1', lesson: '写文件前先确认目录存在' })
+    const unrelated = await s.compile('a1', '帮我把这段英文翻译成中文')
+    expect(unrelated?.reflectionIds ?? []).toEqual([])
+    expect(unrelated?.text ?? '').not.toContain('写文件前先确认目录存在')
+
+    const related = await s.compile('a1', '写文件的时候记得目录')
+    expect(related?.text).toContain('写文件前先确认目录存在')
+  })
+
+  it('缺省输入时退回最近 N 条（AgentLoop 不传文本也不会丢教训）', async () => {
+    const s = service()
+    s.store.insertReflection({ agentId: 'a1', lesson: '某条教训' })
+    const compiled = await s.compile('a1')
+    expect(compiled?.text).toContain('某条教训')
   })
 })

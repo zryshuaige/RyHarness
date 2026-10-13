@@ -11,6 +11,7 @@
 export type { GroupDispatcherOptions, GroupEvent, GroupHistoryEntry } from './dispatcher.ts'
 export {
   buildGroupContext,
+  DEFAULT_FANOUT_CONCURRENCY,
   DEFAULT_HISTORY_BUDGET_CHARS,
   DISPATCHER_ROUTING_SUFFIX,
   GroupDispatcher,

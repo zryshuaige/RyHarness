@@ -145,12 +145,18 @@ export interface SubscribeOptions {
 
 // ---- 客户端 ----
 
-/** 从窗口 URL 读 API 地址（Electron 主进程注入 ?api=）。 */
-export function resolveApiBase(): string {
+/** 浏览器直连开发时的默认后端地址（生产由主进程经 ?api= 或启动事件注入）。 */
+export const DEFAULT_API_BASE = 'http://127.0.0.1:32100'
+
+/** 从窗口 URL 读主进程注入的 API 地址（?api=…）；没有则返回 undefined。 */
+export function readApiBaseFromLocation(): string | undefined {
   const fromQuery = new URLSearchParams(window.location.search).get('api')
-  if (fromQuery !== null && fromQuery.length > 0) return fromQuery
-  // 浏览器直连开发：回退到本机默认端口。
-  return 'http://127.0.0.1:32100'
+  return fromQuery !== null && fromQuery.length > 0 ? fromQuery : undefined
+}
+
+/** 解析 API 地址：query 优先，否则回退本机默认端口（同步场景用）。 */
+export function resolveApiBase(): string {
+  return readApiBaseFromLocation() ?? DEFAULT_API_BASE
 }
 
 export class ApiClient {

@@ -67,10 +67,24 @@ export const ICONS = {
 
 export type IconName = keyof typeof ICONS
 
-/** 统一图标组件：颜色继承 currentColor，尺寸默认 18，线宽可用 strokeWidth 覆盖。 */
+/**
+ * 尺寸网格：只保留 12/16/20/24 四档。非四档的旧调用点（11/13/15/18/22…）
+ * 会量化到最近的一档（等距时取大档），保证同类图标的视觉粗细与基线一致。
+ */
+export const ICON_SIZE_STEPS = [12, 16, 20, 24] as const
+
+export function quantizeIconSize(size: number): number {
+  for (const step of ICON_SIZE_STEPS) {
+    // 等距时进位：13 → 12，14 → 16，18 → 20，22 → 24。
+    if (size < step + 2) return step
+  }
+  return ICON_SIZE_STEPS[ICON_SIZE_STEPS.length - 1]
+}
+
+/** 统一图标组件：颜色继承 currentColor，尺寸默认 20，线宽可用 strokeWidth 覆盖。 */
 export function Icon({
   name,
-  size = 18,
+  size = 20,
   className = '',
   strokeWidth,
 }: {
@@ -81,15 +95,18 @@ export function Icon({
 }) {
   const body = ICONS[name]
   if (body === undefined || body.length === 0) return null
-  const svg = strokeWidth === undefined ? body : body.replace(/stroke-width="2"/, `stroke-width="${strokeWidth}"`)
+  const px = quantizeIconSize(size)
+  // replaceAll：lucide 多路径图标里每条路径各有一份 stroke-width，
+  // 只替换第一个会让同一图标内出现两种粗细。
+  const svg = strokeWidth === undefined ? body : body.replaceAll('stroke-width="2"', `stroke-width="${strokeWidth}"`)
   return (
     <span
       className={`icon ${className}`}
-      style={{ width: size, height: size, display: 'inline-flex' }}
+      style={{ width: px, height: px, display: 'inline-flex' }}
       aria-hidden="true"
       // biome-ignore lint/security/noDangerouslySetInnerHtml: lucide 本地静态图标 SVG，无外部输入
       dangerouslySetInnerHTML={{
-        __html: svg.replace('<svg', `<svg width="${size}" height="${size}"`),
+        __html: svg.replace('<svg', `<svg width="${px}" height="${px}"`),
       }}
     />
   )

@@ -571,6 +571,42 @@ describe('RyAgentServer', () => {
     }
   })
 
+  it('CORS 预检：回环源 OPTIONS 返回 204 与许可头，外部源 403', async () => {
+    const { server, base } = await startServer([])
+    try {
+      const origin = 'http://127.0.0.1:41234'
+      const preflight = await fetch(`${base}/api/agents`, {
+        method: 'OPTIONS',
+        headers: {
+          origin,
+          'access-control-request-method': 'POST',
+          'access-control-request-headers': 'content-type',
+        },
+      })
+      expect(preflight.status).toBe(204)
+      expect(preflight.headers.get('access-control-allow-origin')).toBe(origin)
+      expect(preflight.headers.get('access-control-allow-headers')).toContain('content-type')
+      expect(preflight.headers.get('access-control-allow-methods')).toContain('PATCH')
+
+      // 实际请求也要带许可头，否则渲染层仍然拿不到数据。
+      const post = await fetch(`${base}/api/agents`, {
+        method: 'POST',
+        headers: { origin, 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'CORS Probe' }),
+      })
+      expect(post.headers.get('access-control-allow-origin')).toBe(origin)
+
+      const foreign = await fetch(`${base}/api/agents`, {
+        method: 'OPTIONS',
+        headers: { origin: 'https://evil.example', 'access-control-request-method': 'POST' },
+      })
+      expect(foreign.status).toBe(403)
+      expect(foreign.headers.get('access-control-allow-origin')).toBeNull()
+    } finally {
+      await server.close()
+    }
+  })
+
   it('Origin 白名单：空/回环放行，外部源 HTTP 403、WS 拒绝升级', async () => {
     const { server, base } = await startServer([])
     try {

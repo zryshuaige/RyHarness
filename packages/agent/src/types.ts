@@ -50,12 +50,21 @@ export interface ToolResult {
   produce?: ProduceCard
 }
 
+/**
+ * 同一条 assistant 消息里的多个工具调用如何执行。
+ * - `'parallel'`（默认）：整批并发执行，结果按模型给出的 call 顺序回填。
+ * - `'sequential'`：整批退回串行，供有副作用/互斥的工具使用。
+ */
+export type ToolExecutionMode = 'sequential' | 'parallel'
+
 /** 工具抽象：name/description/parameters 映射到 @ryagent/llm 的 ToolSchema。 */
 export interface Tool {
   name: string
   description: string
   /** JSON Schema（对象）。 */
   parameters: Record<string, unknown>
+  /** 覆盖本轮默认执行模式；缺省即并发。 */
+  executionMode?: ToolExecutionMode
   execute(args: unknown, ctx: ToolContext): Promise<ToolResult>
 }
 

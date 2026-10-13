@@ -1,0 +1,11 @@
+<g id="ryen-cat-idle">
+  <g transform="translate(32 34) scale(1.05) translate(-32 -34)">
+    <circle cx="32" cy="35.5" r="15.2" fill="#FFFDF8"/>
+    <path d="M24 26.4 L17 10.4 L34 22 Z" fill="#FFFDF8"/>
+    <path d="M40 26.4 L47 9 L30 21.8 Z" fill="#FFFDF8"/>
+    <circle class="inkf" cx="26.7" cy="35.2" r="2.25" fill="#4a2e1a"/>
+    <circle class="inkf" cx="37.3" cy="35.2" r="2.25" fill="#4a2e1a"/>
+    <path class="inkf" d="M29.9 39.8 L32 42.9 L34.1 39.8 Z" fill="#4a2e1a"/>
+    <path class="ink" d="M27.1 43.9 q4.9 4.4 9.8 0" fill="none" style="stroke-width:1.9"/>
+  </g>
+</g>

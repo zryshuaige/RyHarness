@@ -2,9 +2,16 @@
  * 精简 agent 消息循环。
  *
  * 每步：组装请求（systemPrompt + 历史 + 工具白名单）→ ctx.llm.stream() →
- * 边收 chunk 边发事件、边用 BlockAssembler 组装 → 若产出 tool_call 则逐个
- * 调度执行、把 tool 结果追加进历史、进入下一步；否则以 finish 终止。
- * 达到 maxSteps 仍有未决工具调用时以 error 事件终止（防死循环）。
+ * 边收 chunk 边发事件、边用 BlockAssembler 组装 → 若产出 tool_call 则并行
+ * 调度执行（结果按 call 顺序回填）、把 tool 结果追加进历史、进入下一步；
+ * 否则以 finish 终止。达到 maxSteps 仍有未决工具调用时以 error 事件终止
+ * （防死循环）。
+ *
+ * 并发取舍：记忆 recall 与进化 compile 互不依赖，并行发起（首 token 延迟取
+ * 二者较大值而非之和）；同一条 assistant 消息里的多个工具调用并行执行，
+ * 但事件与 tool 消息一律按模型给出的 call 顺序提交，保证历史确定。传入
+ * `signal` 后，循环在每个边界检查取消，不再发起新的模型调用、不再执行后续
+ * 工具，并以 {@link AbortedError} 结束。
  *
  * 与上游 dsh-agent-loop 的关系：只保留"循环 + 工具调度"内核，不带
  * session 发布、sandbox 执行器与审批生态（M0 决策：agent 循环自写精简版）。
@@ -22,7 +29,8 @@ import type {
   ToolSchema,
 } from '@ryagent/llm'
 import { BlockAssembler, createToolResultMessage, createUserMessage, errorChain, isHarnessError } from '@ryagent/llm'
-import type { AgentDefinition, AgentLoopEvent, Tool, ToolContext } from './types.ts'
+import { abortedErrorOf, throwIfAborted } from './aborted.ts'
+import type { AgentDefinition, AgentLoopEvent, Tool, ToolContext, ToolResult } from './types.ts'
 
 /** AgentLoop 构造参数。 */
 export interface AgentLoopOptions {
@@ -33,8 +41,14 @@ export interface AgentLoopOptions {
   tools: readonly Tool[]
   /** 最大步数（模型调用次数），默认 16。 */
   maxSteps?: number
-  /** 起始历史（从持久层恢复的消息），循环会复制后追加。 */
+  /** 起始历史（从持久层恢复的消息），循环会按预算裁剪后复制追加。 */
   history?: readonly Message[]
+  /**
+   * 起始历史的字符预算（token 的字符数近似），默认 30k；超预算从最旧开始
+   * 丢弃。传 `Infinity` 关闭裁剪。本轮内新产生的消息不参与裁剪——中途丢
+   * 历史会打断 tool_call/tool_result 的配对。
+   */
+  historyBudgetChars?: number
   /** 每步组装出完整 assistant 消息时回调（群聊调度器据此持久化/解析 @提及）。 */
   onAssistantMessage?: (message: AssistantMessage) => void
   /**
@@ -75,12 +89,57 @@ export interface AgentEvolutionHooks {
 
 const DEFAULT_MAX_STEPS = 16
 
+/** 起始历史的字符预算默认值（token 的字符数近似，对齐群聊侧的 30k）。 */
+export const DEFAULT_HISTORY_BUDGET_CHARS = 30_000
+
 /** 把任意 thrown value 归一为事件用的 { message, code }。 */
 function failureOf(error: unknown): { message: string; code: string } {
   return {
     message: errorChain(error),
     code: isHarnessError(error) ? error.code : 'UNKNOWN',
   }
+}
+
+/** 一轮运行的调用方选项。 */
+export interface AgentRunOptions {
+  /**
+   * 调用方取消信号。取消后循环不再发起新的模型调用、不再执行后续工具，
+   * 并以 {@link AbortedError} 结束；缺省时沿用 ToolContext.signal。
+   */
+  signal?: AbortSignal
+}
+
+/** 估算一条消息的字符权重（4 字符 ≈ 1 token 的粗略口径）。 */
+function messageWeight(message: Message): number {
+  let total = 16
+  for (const block of message.content) {
+    if (block.type === 'text' || block.type === 'reasoning') total += block.text.length
+    else if (block.type === 'tool-call') total += block.arguments.length + block.name.length
+    else total += 64 // 图片/文件句柄的近似体积
+  }
+  return total + 4
+}
+
+/**
+ * 按字符预算从最旧开始裁剪起始历史（思路与群聊的 buildGroupContext 对齐）。
+ * @param history - 待裁剪的历史消息。
+ * @param budgetChars - 字符预算；非有限值（`Infinity`）表示不裁剪。
+ * @returns 预算内的历史窗口；始终至少保留最新一条，且窗口首条不会是孤立的
+ *   tool 结果（其 tool_call 已被裁掉，供应商会拒绝这种序列）。
+ */
+export function trimHistoryToBudget(history: readonly Message[], budgetChars: number): Message[] {
+  if (!Number.isFinite(budgetChars)) return [...history]
+  const weights = history.map(messageWeight)
+  let total = weights.reduce((sum, weight) => {
+    return sum + weight
+  }, 0)
+  let start = 0
+  while (total > budgetChars && start < history.length - 1) {
+    total -= weights[start] as number
+    start++
+  }
+  while (start < history.length - 1 && (history[start] as Message).role === 'tool') start++
+  return history.slice(start)
 }
 
 /** 精简 agent 消息循环。一个实例可反复 run；每次 run 从初始 history 派生。 */
@@ -104,41 +163,37 @@ export class AgentLoop {
    * 跑一轮用户输入。
    * @param input - 用户文本。
    * @param context - 工具执行上下文（工作区根目录等）。
+   * @param options - 调用方取消信号（缺省沿用 context.signal）。
    * @returns 事件异步流：text-delta / tool-call-start / tool-result / done / error。
+   * @throws AbortedError - 调用方取消。
    */
-  async *run(input: { text: string }, context: ToolContext): AsyncGenerator<AgentLoopEvent> {
+  async *run(input: { text: string }, context: ToolContext, options?: AgentRunOptions): AsyncGenerator<AgentLoopEvent> {
     const { definition, llm } = this.options
     const maxSteps = this.options.maxSteps ?? DEFAULT_MAX_STEPS
-    const history: Message[] = [...(this.options.history ?? [])]
+    const signal = options?.signal ?? context.signal
+    const toolContext: ToolContext = signal === context.signal ? context : { ...context, signal }
+    throwIfAborted(signal)
+
+    const history: Message[] = trimHistoryToBudget(
+      this.options.history ?? [],
+      this.options.historyBudgetChars ?? DEFAULT_HISTORY_BUDGET_CHARS,
+    )
     history.push(createUserMessage({ content: [{ type: 'text', text: input.text }], source: { kind: 'user' } }))
 
     const toolSchemas: ToolSchema[] = [...this.allowedTools.values()].map((tool) => {
       return { name: tool.name, description: tool.description, parameters: tool.parameters }
     })
 
-    // 长期记忆召回（组装前注入；故障静默降级为无人设增强）。
-    let memoryBlock: string | undefined
-    if (this.options.memory !== undefined) {
-      try {
-        memoryBlock = await this.options.memory.recall(definition.id, input.text)
-      } catch {
-        memoryBlock = undefined
-      }
-    }
-    // 自我进化编译（playbook + 上次教训）；故障静默降级。
-    let evolutionBlock: string | undefined
-    let injectedPlaybookEntryIds: string[] = []
-    let injectedReflectionIds: string[] = []
-    if (this.options.evolution !== undefined) {
-      try {
-        const compiled = await this.options.evolution.compile(definition.id)
-        evolutionBlock = compiled?.text
-        injectedPlaybookEntryIds = compiled?.playbookEntryIds ?? []
-        injectedReflectionIds = compiled?.reflectionIds ?? []
-      } catch {
-        evolutionBlock = undefined
-      }
-    }
+    // 记忆召回与进化编译互不依赖，并行发起：首 token 延迟取二者较大值而非之和
+    // （各自最坏 ~800ms embedding / playbook 编译）。两者都静默降级。
+    const [memoryBlock, compiled] = await Promise.all([
+      this.recallMemory(definition.id, input.text),
+      this.compileEvolution(definition.id),
+    ])
+    throwIfAborted(signal)
+    const evolutionBlock = compiled.text
+    const injectedPlaybookEntryIds = compiled.playbookEntryIds
+    const injectedReflectionIds = compiled.reflectionIds
     const systemPrompt = [definition.systemPrompt, memoryBlock, evolutionBlock]
       .filter((part): part is string => {
         return part !== undefined
@@ -152,6 +207,7 @@ export class AgentLoop {
     try {
       while (steps < maxSteps) {
         steps++
+        throwIfAborted(signal)
         const request: GenerateOptions = {
           provider: definition.provider,
           model: definition.model,
@@ -159,6 +215,7 @@ export class AgentLoop {
           messages: history,
           ...(toolSchemas.length === 0 ? {} : { tools: toolSchemas }),
           ...(definition.temperature === undefined ? {} : { temperature: definition.temperature }),
+          ...(signal === undefined ? {} : { signal }),
         }
 
         const assembler = new BlockAssembler()
@@ -177,6 +234,7 @@ export class AgentLoop {
             }
           }
         } catch (error) {
+          if (signal?.aborted === true) throw abortedErrorOf(signal)
           llmError = true
           const failure = failureOf(error)
           yield { type: 'error', message: failure.message, code: failure.code }
@@ -201,7 +259,9 @@ export class AgentLoop {
 
         // 终态 error/aborted 不是正常收尾：传播为 error 事件，让协调器落
         // system 错误消息、服务器推 error 事件，而不是把半截回复当完整回复。
+        // 调用方主动取消时改为抛 AbortedError，让上层区分"被取消"与"模型报错"。
         if (finish.kind === 'error' || finish.kind === 'aborted') {
+          if (signal?.aborted === true) throw abortedErrorOf(signal)
           llmError = true
           yield { type: 'error', message: finish.failure.message, code: finish.failure.code }
           return
@@ -216,8 +276,15 @@ export class AgentLoop {
           return
         }
 
-        for (const call of calls) {
-          const result = await this.executeCall(call, context)
+        // 同一批工具调用并发执行（默认策略，对齐上游的 toolExecution:
+        // "parallel"）；任一工具声明 sequential 时整批退回串行，避免有副作用
+        // 的工具互相踩踏。结果按 call 顺序回填，事件与历史顺序不随完成
+        // 先后变化，历史保持确定。
+        throwIfAborted(signal)
+        const results = await this.executeCalls(calls, toolContext)
+        throwIfAborted(signal)
+        for (const [index, call] of calls.entries()) {
+          const result = results[index] as ToolResult
           toolResults.push({ name: call.name, isError: result.isError === true })
           yield {
             type: 'tool-result',
@@ -278,8 +345,58 @@ ${definition.name}：${assistantText.trim()}`,
     }
   }
 
+  /**
+   * 执行一批 tool_call。默认并发；批次里任一工具声明 `executionMode:
+   * 'sequential'` 时整批串行（工具的副作用可能互相排斥）。
+   * @returns 与 calls 同序的结果数组。
+   */
+  private async executeCalls(calls: readonly ToolCallBlock[], context: ToolContext): Promise<ToolResult[]> {
+    const sequential = calls.some((call) => {
+      return this.allowedTools.get(call.name)?.executionMode === 'sequential'
+    })
+    if (sequential || calls.length === 1) {
+      const results: ToolResult[] = []
+      for (const call of calls) {
+        results.push(await this.executeCall(call, context))
+      }
+      return results
+    }
+    return await Promise.all(calls.map((call) => this.executeCall(call, context)))
+  }
+
+  /** 长期记忆召回（故障静默降级为无人设增强）。 */
+  private async recallMemory(agentId: string, inputText: string): Promise<string | undefined> {
+    if (this.options.memory === undefined) return undefined
+    try {
+      return await this.options.memory.recall(agentId, inputText)
+    } catch {
+      return undefined
+    }
+  }
+
+  /** 自我进化编译（playbook + 上次教训；故障静默降级）。 */
+  private async compileEvolution(agentId: string): Promise<{
+    text?: string
+    playbookEntryIds: string[]
+    reflectionIds: string[]
+  }> {
+    if (this.options.evolution === undefined) {
+      return { playbookEntryIds: [], reflectionIds: [] }
+    }
+    try {
+      const compiled = await this.options.evolution.compile(agentId)
+      return {
+        ...(compiled?.text === undefined ? {} : { text: compiled.text }),
+        playbookEntryIds: compiled?.playbookEntryIds ?? [],
+        reflectionIds: compiled?.reflectionIds ?? [],
+      }
+    } catch {
+      return { playbookEntryIds: [], reflectionIds: [] }
+    }
+  }
+
   /** 执行一个 tool_call：未知工具与参数解析失败都转化为错误结果而非抛异常。 */
-  private async executeCall(call: ToolCallBlock, context: ToolContext) {
+  private async executeCall(call: ToolCallBlock, context: ToolContext): Promise<ToolResult> {
     const tool = this.allowedTools.get(call.name)
     if (tool === undefined) {
       return { content: `unknown tool "${call.name}"`, isError: true }

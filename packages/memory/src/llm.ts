@@ -1,9 +1,12 @@
 /**
  * 记忆管线的 LLM 接缝：事实抽取 + 四操作判定（ADD/UPDATE/DELETE/NOOP）。
- * 默认实现走 OpenAI 兼容 chat/completions + JSON 结构化输出；
- * 测试注入脚本化 mock。结构化输出而非自由文本解析（调研 §1.2）。
+ * 默认实现走 OpenAI 兼容 chat/completions + JSON 结构化输出；测试注入脚本化
+ * mock。baseURL/key/model 全部来自调用方配置（providers.json），这里不内置
+ * 任何供应商默认值——用户换供应商，记忆管线必须跟着换。
  * @module @ryagent/memory/llm
  */
+
+import { HarnessError } from '@ryagent/llm'
 
 /** 候选事实（抽取阶段输出）：scope 决定写入共享画像还是 agent 私有空间。 */
 export interface CandidateFact {
@@ -28,62 +31,132 @@ export interface MemoryLlm {
   }): Promise<MemoryOperation[]>
 }
 
+/** 抽取失败分类（稳定码，便于上层日志与重试策略路由）。 */
+export const MEMORY_LLM_CODES = {
+  config: 'MEMORY_LLM_CONFIG',
+  http: 'MEMORY_LLM_HTTP',
+  empty: 'MEMORY_LLM_EMPTY',
+  json: 'MEMORY_LLM_JSON',
+} as const
+
 const EXTRACT_PROMPT = `你是记忆抽取器。从下面的对话中抽出值得长期记住的原子事实（每条一句、具体、自包含）。
+
 规则：
-1. 关于「用户自己」的事实（身份、生活、喜好、计划、宠物、工作……）→ scope=shared，kind 取 profile（稳定属性）或 preference（偏好）或 event（近期事件）。
+1. 关于「用户自己」的事实（身份、生活、喜好、计划、宠物、工作……）→ scope=shared，kind 取 profile（稳定属性）/ preference（偏好）/ event（近期事件）。
 2. 关于「与该 agent 的互动经验」（用户对该 agent 的指令风格、委托习惯、约定）→ scope=agent。
-3. 闲聊寒暄、一次性任务细节、已在相似列表出现的重复事实 → 不抽。
+3. 闲聊寒暄、一次性任务细节、纯客套话 → 不抽。
+4. 用户在闲聊中顺口表达的喜好/习惯，**要抽**：不要因为"没有正式提出要求"就放弃。
+
+示例（对话 → 抽取结果）：
+- 「我最喜欢吃川菜，越辣越好」→ {"text":"用户偏好川菜，喜欢辣","scope":"shared","kind":"preference"}
+- 「以后给我发周报都用要点式的，别写长段落」→ {"text":"用户要求周报用要点式，不用长段落","scope":"shared","kind":"preference"}
+- 「我养了一只橘猫叫布丁」→ {"text":"用户养了一只橘猫叫布丁","scope":"shared","kind":"profile"}
+- 「下周要搬家到杭州」→ {"text":"用户下周要搬到杭州","scope":"shared","kind":"event"}
+- 「把 src/a.ts 里的第 3 行改成 foo」→ 不抽（一次性任务细节）
+- 「好的，谢谢你！」→ 不抽（寒暄）
+
 只输出 JSON：{"facts": [{"text": "...", "scope": "shared|agent", "kind": "profile|preference|event|fact"}]}
 
 对话：
 `
 
 const DECIDE_PROMPT = `你是记忆管理员。给定一条候选事实和若干条相似旧记忆，为每条旧记忆决定操作，也可新增：
-- ADD：候选事实值得新增（不与任何旧记忆重复）。
+- ADD：候选事实值得新增（与所有旧记忆都不重复，或补足了旧记忆没有的方面）。
 - UPDATE：某旧记忆与候选互补/被细化 → 给出合并后的新文本。
 - DELETE：候选事实与某旧记忆矛盾（取代它，如用户搬家、改计划）。
-- NOOP：无需变更。
-同一候选只能产生一个写操作。只输出 JSON：{"operations": [{"action": "ADD|UPDATE|DELETE|NOOP", "memoryId": "...", "newText": "..."}]}
+- NOOP：候选与某条旧记忆**含义几乎完全相同**（换个说法而已），不值得新增或改写。
+同一候选只能产生一个写操作。默认倾向写入：只有确实重复时才用 NOOP，宁可重复也不要漏记用户明确说过的偏好。
+
+只输出 JSON：{"operations": [{"action": "ADD|UPDATE|DELETE|NOOP", "memoryId": "...", "newText": "..."}]}
 其中 ADD 不带 memoryId，NOOP 可以不带任何字段。
+
+示例（候选 + 旧记忆 → 操作）：
+- 候选「用户偏好川菜，喜欢辣」，旧记忆为 [] → [{"action":"ADD"}]
+- 候选「用户偏好川菜，喜欢辣」，旧记忆「用户喜欢川菜」 → [{"action":"UPDATE","memoryId":"<id>","newText":"用户偏好川菜，喜欢辣"}]
+- 候选「用户住在杭州」，旧记忆「用户住在北京」 → [{"action":"UPDATE","memoryId":"<id>","newText":"用户住在杭州"}]
+- 候选「用户偏好川菜，喜欢辣」，旧记忆「用户偏好川菜，喜欢辣」 → [{"action":"NOOP"}]
 
 候选事实：
 `
 
-/** 基于 OpenAI 兼容 chat/completions 的默认实现。 */
+/** OpenAI 兼容 chat/completions 的默认实现（配置驱动，无供应商默认值）。 */
 export class ChatMemoryLlm implements MemoryLlm {
+  private readonly baseURL: string
+  private readonly model: string
+
   constructor(
     private readonly config: {
       apiKey: string
-      baseURL?: string
-      model?: string
+      baseURL: string
+      model: string
       fetchImpl?: typeof fetch
+      /** 单次请求超时毫秒（默认 30s）。 */
+      timeoutMs?: number
     },
-  ) {}
+  ) {
+    if (config.apiKey.length === 0) {
+      throw new HarnessError('@ryagent/memory: memory llm requires an api key', MEMORY_LLM_CODES.config)
+    }
+    if (typeof config.baseURL !== 'string' || config.baseURL.length === 0) {
+      throw new HarnessError('@ryagent/memory: memory llm requires a baseURL', MEMORY_LLM_CODES.config)
+    }
+    if (typeof config.model !== 'string' || config.model.length === 0) {
+      throw new HarnessError('@ryagent/memory: memory llm requires a model id', MEMORY_LLM_CODES.config)
+    }
+    this.baseURL = config.baseURL.replace(/\/+$/, '')
+    this.model = config.model
+  }
 
   private async chatJson(system: string, user: string): Promise<unknown> {
     const fetchImpl = this.config.fetchImpl ?? fetch
-    const base = (this.config.baseURL ?? 'https://api.siliconflow.cn/v1').replace(/\/+$/, '')
-    const response = await fetchImpl(`${base}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${this.config.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: this.config.model ?? 'deepseek-ai/DeepSeek-V3',
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: user },
-        ],
-        temperature: 0,
-        response_format: { type: 'json_object' },
-      }),
-    })
-    if (!response.ok) throw new Error(`memory llm HTTP ${response.status}`)
-    const body = (await response.json()) as { choices?: { message?: { content?: string } }[] }
-    const content = body.choices?.[0]?.message?.content
-    if (typeof content !== 'string') throw new Error('memory llm: empty response')
-    return JSON.parse(content) as unknown
+    let response: Response
+    try {
+      response = await fetchImpl(`${this.baseURL}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${this.config.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: this.model,
+          messages: [
+            { role: 'system', content: system },
+            { role: 'user', content: user },
+          ],
+          temperature: 0,
+          response_format: { type: 'json_object' },
+        }),
+        ...(this.config.timeoutMs === undefined ? {} : { signal: AbortSignal.timeout(this.config.timeoutMs) }),
+      })
+    } catch (error) {
+      throw new HarnessError(`@ryagent/memory: memory llm request failed: ${String(error)}`, MEMORY_LLM_CODES.http, {
+        cause: error,
+      })
+    }
+    if (!response.ok) {
+      // 带上供应商原文：401/404/429 的处置方式完全不同，只报状态码没法排障。
+      const detail = await response.text().catch(() => '')
+      throw new HarnessError(
+        `@ryagent/memory: memory llm HTTP ${response.status} ${detail.slice(0, 400)}`.trimEnd(),
+        MEMORY_LLM_CODES.http,
+      )
+    }
+    const body = (await response.json().catch(() => {
+      return undefined
+    })) as { choices?: { message?: { content?: unknown } }[] } | undefined
+    const content = normalizeContent(body?.choices?.[0]?.message?.content)
+    if (content === undefined || content.trim().length === 0) {
+      throw new HarnessError('@ryagent/memory: memory llm returned an empty response', MEMORY_LLM_CODES.empty)
+    }
+    try {
+      return JSON.parse(stripCodeFence(content)) as unknown
+    } catch (error) {
+      throw new HarnessError(
+        `@ryagent/memory: memory llm returned non-JSON content: ${content.slice(0, 200)}`,
+        MEMORY_LLM_CODES.json,
+        { cause: error },
+      )
+    }
   }
 
   async extractFacts(input: { agentName: string; conversationText: string }): Promise<CandidateFact[]> {
@@ -136,4 +209,28 @@ export class ChatMemoryLlm implements MemoryLlm {
         return op !== undefined
       })
   }
+}
+
+/** 供应商可能返回字符串或分段数组；统一取文本。 */
+function normalizeContent(content: unknown): string | undefined {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return undefined
+  const text = content
+    .map((part) => {
+      if (typeof part === 'string') return part
+      const text = (part as { text?: unknown })?.text
+      return typeof text === 'string' ? text : ''
+    })
+    .join('')
+  return text.length === 0 ? undefined : text
+}
+
+/** 部分供应商即使被要求 JSON 也会裹 ```json 围栏。 */
+function stripCodeFence(content: string): string {
+  const trimmed = content.trim()
+  if (!trimmed.startsWith('```')) return trimmed
+  return trimmed
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/, '')
+    .trim()
 }

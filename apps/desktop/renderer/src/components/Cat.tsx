@@ -1,38 +1,56 @@
-/** Ryen 猫管家吉祥物（SVG 三态：idle / thinking / happy）。 */
-export function Cat({ mood, size = 40 }: { mood: 'idle' | 'thinking' | 'happy'; size?: number }) {
-  const starClass = mood === 'thinking' ? 'star fast' : mood === 'happy' ? 'star joy' : 'star'
-  let eyes: string
-  if (mood === 'happy') {
-    eyes = '<path class="ink" d="M20.5 33 q3.5 -4.6 7 0"/><path class="ink" d="M36.5 33 q3.5 -4.6 7 0"/>'
-  } else if (mood === 'thinking') {
-    eyes = '<circle class="inkf" cx="25.5" cy="32" r="2.4"/><circle class="inkf" cx="39.5" cy="30.8" r="2.4"/>'
-  } else {
-    eyes = '<circle class="inkf" cx="24" cy="33" r="2.5"/><circle class="inkf" cx="40" cy="33" r="2.5"/>'
-  }
-  const mouth =
-    mood === 'happy'
-      ? '<path d="M26.5 40.5 q5.5 5.6 11 0 q-5.5 3 -11 0z" fill="#c2503a"/>'
-      : '<path class="ink" d="M29 42 q3 2.4 6 0"/>'
+/**
+ * RyAgent 品牌主角：极简几何橘猫（琥珀渐变底板 + 圆头三角耳 + 极简五官）。
+ *
+ * 矢量母版在 apps/desktop/assets/brand/cat-face*.svg —— 与 scripts/gen-icon.mjs
+ * 导出应用图标用的是同一份几何，全应用只有这一只猫（三态 idle / thinking /
+ * happy 只改眼神、嘴与星光，不改轮廓）。
+ *
+ * `shape="circle"` 供头像位使用（.avatar 是圆形裁切，圆形底板不出角）。
+ */
+import { useId } from 'react'
+import catIdle from '../../../assets/brand/cat-face.svg?raw'
+import catHappy from '../../../assets/brand/cat-face-happy.svg?raw'
+import catThinking from '../../../assets/brand/cat-face-thinking.svg?raw'
+
+/** 64×64 设计网格下的 squircle 底板（与 assets/brand/icon.svg 同一形状）。 */
+const PLATES = {
+  squircle: 'M32 2 C46.375 2 62 10.75 62 32 C62 53.25 46.375 62 32 62 C17.625 62 2 53.25 2 32 C2 10.75 17.625 2 32 2 Z',
+  circle: 'M32 1.5 A30.5 30.5 0 1 1 32 62 A30.5 30.5 0 1 1 32 1.5 Z',
+} as const
+
+const FACES: Record<'idle' | 'thinking' | 'happy', string> = {
+  idle: catIdle.trim(),
+  thinking: catThinking.trim(),
+  happy: catHappy.trim(),
+}
+
+export function Cat({
+  mood,
+  size = 40,
+  shape = 'squircle',
+}: {
+  mood: 'idle' | 'thinking' | 'happy'
+  size?: number
+  /** 底板形状：应用图标用 squircle，头像圆形裁切用 circle。 */
+  shape?: keyof typeof PLATES
+}) {
+  // 多只猫同屏时渐变 id 不能重名（否则后渲染的会引用到别人的 defs）。
+  const uid = `plate${useId().replace(/[^\dA-Za-z]/g, '')}`
   const svg =
-    '<svg class="cat" width="' +
-    size +
-    '" height="' +
-    size +
-    '" viewBox="0 0 64 64">' +
-    '<path class="' +
-    starClass +
-    '" d="M51 6 l2.4 5 5 2.4 -5 2.4 -2.4 5 -2.4 -5 -5 -2.4 5 -2.4z" fill="#FFC53D"/>' +
-    '<path d="M14 24 L9.5 8.5 L25 14.5 Z" fill="#f0a45c"/><path d="M50 24 L54.5 8.5 L39 14.5 Z" fill="#f0a45c"/>' +
-    '<path d="M15 20.5 L12.3 11 L22 15.2 Z" fill="#ffd9b3"/><path d="M49 20.5 L51.7 11 L42 15.2 Z" fill="#ffd9b3"/>' +
-    '<ellipse cx="32" cy="37" rx="22" ry="19.5" fill="#f5ac6b"/>' +
-    '<path d="M25 19.5 q3.2 3.2 0 6.4 M32 18.4 q3.2 3.2 0 6.4 M39 19.5 q3.2 3.2 0 6.4" stroke="#de8a3f" stroke-width="2.6" fill="none" stroke-linecap="round"/>' +
-    '<ellipse cx="32" cy="43.5" rx="11.5" ry="8" fill="#fff4e4"/>' +
-    eyes +
-    '<path d="M30.4 39.2 h3.2 l-1.6 2.3z" fill="#d97b3f"/>' +
-    mouth +
-    '<ellipse cx="17.5" cy="41.5" rx="3.2" ry="2.1" fill="#ffc79e" opacity=".85"/><ellipse cx="46.5" cy="41.5" rx="3.2" ry="2.1" fill="#ffc79e" opacity=".85"/>' +
-    '<path d="M10.5 37.5 h6.5 M10.5 42.5 h6.5 M47 37.5 h6.5 M47 42.5 h6.5" stroke="#e9a25f" stroke-width="1.6" stroke-linecap="round"/>' +
-    '</svg>'
-  // biome-ignore lint/security/noDangerouslySetInnerHtml: 渲染仓库内置的静态 SVG 字符串，无外部输入
-  return <span dangerouslySetInnerHTML={{ __html: svg }} aria-label={`Ryen ${mood}`} role="img" />
+    `<svg class="cat" width="${size}" height="${size}" viewBox="0 0 64 64" fill="none">` +
+    `<defs><linearGradient id="${uid}" x1="0%" y1="0%" x2="100%" y2="100%">` +
+    `<stop offset="0%" stop-color="#FBBF24"/><stop offset="100%" stop-color="#D97706"/>` +
+    `</linearGradient></defs>` +
+    `<path fill="url(#${uid})" d="${PLATES[shape]}"/>` +
+    FACES[mood] +
+    `</svg>`
+  // biome-ignore lint/security/noDangerouslySetInnerHtml: 仓库内置的静态母版 SVG，无外部输入
+  return (
+    <span
+      data-mood={mood}
+      dangerouslySetInnerHTML={{ __html: svg }}
+      aria-label={`Ryen ${mood}`}
+      role="img"
+    />
+  )
 }

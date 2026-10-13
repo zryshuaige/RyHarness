@@ -128,7 +128,11 @@ importers:
         specifier: workspace:*
         version: link:../../../vendor/cordis
 
-  packages/evolve: {}
+  packages/evolve:
+    dependencies:
+      '@ryagent/llm':
+        specifier: workspace:*
+        version: link:../llm/llm
 
   packages/group:
     dependencies:
@@ -187,7 +191,11 @@ importers:
         specifier: ^3.1.0
         version: 3.1.1
 
-  packages/memory: {}
+  packages/memory:
+    dependencies:
+      '@ryagent/llm':
+        specifier: workspace:*
+        version: link:../llm/llm
 
   packages/runtime-diagnostics/invariants:
     dependencies:

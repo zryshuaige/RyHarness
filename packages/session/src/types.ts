@@ -40,6 +40,28 @@ export interface Conversation {
 /** 消息发送者种类。 */
 export type SenderType = 'user' | 'agent' | 'system'
 
+/**
+ * 一条 assistant 消息对应的模型调用 token 用量（供应商侧 usage 的归一形态）。
+ * 缺失表示该消息没有关联的模型调用（用户/system/工具消息）或供应商未回报。
+ */
+export interface StoredUsage {
+  inputTokens: number
+  outputTokens: number
+  totalTokens?: number
+  cacheReadTokens?: number
+  cacheWriteTokens?: number
+  reasoningTokens?: number
+}
+
+/** 会话级累计用量。 */
+export interface UsageTotals {
+  inputTokens: number
+  outputTokens: number
+  totalTokens: number
+  /** 有 usage 记录的消息条数。 */
+  messages: number
+}
+
 /** 一条消息；contentBlocks 与 mentions 以 JSON 存储，保持 @ryagent/llm 的 ContentBlock 结构。 */
 export interface StoredMessage {
   id: string
@@ -55,8 +77,10 @@ export interface StoredMessage {
   mentions: string[]
   /** 工具结果消息对应的 callId（其他消息为空）。 */
   toolCallId?: string
-  /** 会话内的轮次序号（同一轮用户输入 + agent 回复 + 工具结果共享）。 */
+  /** 会话内的轮次序号（同一轮用户输入 + agent 回复 +工具结果共享）。 */
   turnIndex: number
+  /** 关联模型调用的 token 用量（assistant 消息才有）。 */
+  usage?: StoredUsage
   createdAt: number
 }
 

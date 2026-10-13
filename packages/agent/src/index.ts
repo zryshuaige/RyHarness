@@ -7,14 +7,22 @@
  * @module @ryagent/agent
  */
 
+export { ABORTED_CODE, AbortedError, isAbortedError } from './aborted.ts'
 export { BUILTIN_TEMPLATES, forkTemplate, RYEN_TEMPLATE } from './builtin.ts'
-export type { AgentEvolutionHooks, AgentLoopOptions, AgentMemoryHooks, EvolutionTurnData } from './loop.ts'
-export { AgentLoop } from './loop.ts'
+export type {
+  AgentEvolutionHooks,
+  AgentLoopOptions,
+  AgentMemoryHooks,
+  AgentRunOptions,
+  EvolutionTurnData,
+} from './loop.ts'
+export { AgentLoop, DEFAULT_HISTORY_BUDGET_CHARS, trimHistoryToBudget } from './loop.ts'
 export type {
   AgentDefinition,
   AgentLoopEvent,
   ProduceCard,
   Tool,
   ToolContext,
+  ToolExecutionMode,
   ToolResult,
 } from './types.ts'

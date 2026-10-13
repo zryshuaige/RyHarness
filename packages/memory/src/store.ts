@@ -16,6 +16,8 @@ export interface MemoryRow {
   content: string
   embedding: Float32Array | null
   dim: number | null
+  /** 向量来源模型（无向量或旧数据为空）。换模型后据此过滤，不混库。 */
+  embeddingModel?: string
   createdAt: number
   updatedAt: number
   lastAccessedAt: number
@@ -30,6 +32,8 @@ export interface InsertMemoryInput {
   kind: MemoryKind
   content: string
   embedding?: Float32Array | null
+  /** 与 embedding 一起写入的模型标识（向量身份的一部分）。 */
+  embeddingModel?: string
   sourceConversationId?: string
   supersedesId?: string
 }
@@ -44,6 +48,9 @@ function rowToMemory(row: Record<string, unknown>): MemoryRow {
     content: String(row.content),
     embedding,
     dim: row.dim === null || row.dim === undefined ? null : Number(row.dim),
+    ...(row.embedding_model === null || row.embedding_model === undefined
+      ? {}
+      : { embeddingModel: String(row.embedding_model) }),
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
     lastAccessedAt: Number(row.last_accessed_at),
@@ -105,9 +112,9 @@ export class MemoryStore {
     const dim = input.embedding === undefined || input.embedding === null ? null : input.embedding.length
     this.db
       .prepare(`
-      INSERT INTO memories (id, agent_id, kind, content, embedding, dim, created_at, updated_at,
-                            source_conversation_id, status, supersedes_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
+      INSERT INTO memories (id, agent_id, kind, content, embedding, dim, embedding_model, created_at,
+                            updated_at, source_conversation_id, status, supersedes_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
     `)
       .run(
         id,
@@ -116,6 +123,7 @@ export class MemoryStore {
         input.content,
         input.embedding ?? null,
         dim,
+        input.embeddingModel ?? null,
         now,
         now,
         input.sourceConversationId ?? null,
@@ -173,13 +181,21 @@ export class MemoryStore {
     return out
   }
 
-  /** 拉取某空间全部 active 记忆（用于内存余弦；单用户规模 <10k，暴力即可）。 */
-  listActiveEmbeddings(agentId: string): MemoryRow[] {
-    const rows = this.db
-      .prepare(
-        "SELECT * FROM memories WHERE status = 'active' AND embedding IS NOT NULL AND (agent_id = ? OR agent_id = ?)",
-      )
-      .all(agentId, SHARED_SPACE) as Record<string, unknown>[]
+  /** 拉取某空间全部 active 向量（用于内存余弦；单用户规模 <10k，暴力即可）。 */
+  listActiveEmbeddings(agentId: string, embeddingModel?: string): MemoryRow[] {
+    const rows = (
+      embeddingModel === undefined
+        ? this.db
+            .prepare(
+              "SELECT * FROM memories WHERE status = 'active' AND embedding IS NOT NULL AND (agent_id = ? OR agent_id = ?)",
+            )
+            .all(agentId, SHARED_SPACE)
+        : this.db
+            .prepare(
+              "SELECT * FROM memories WHERE status = 'active' AND embedding IS NOT NULL AND embedding_model = ? AND (agent_id = ? OR agent_id = ?)",
+            )
+            .all(embeddingModel, agentId, SHARED_SPACE)
+    ) as Record<string, unknown>[]
     return rows.map(rowToMemory)
   }
 
@@ -215,19 +231,94 @@ export class MemoryStore {
     return rows.map(rowToMemory)
   }
 
-  // ---- embedding 缓存 ----
+  // ---- embedding 缓存（按模型分桶，换模型不混库）----
 
-  cachedEmbedding(text: string): Float32Array | null {
-    const row = this.db.prepare('SELECT vector FROM embedding_cache WHERE hash = ?').get(textHash(text)) as
-      | { vector: ArrayBuffer }
-      | undefined
+  cachedEmbedding(text: string, embeddingModel: string): Float32Array | null {
+    const row = this.db
+      .prepare('SELECT vector FROM embedding_cache WHERE hash = ? AND model = ?')
+      .get(textHash(text), embeddingModel) as { vector: ArrayBuffer } | undefined
     return row === undefined ? null : toFloat32(row.vector)
   }
 
-  cacheEmbedding(text: string, vector: Float32Array): void {
+  cacheEmbedding(text: string, vector: Float32Array, embeddingModel: string): void {
     this.db
-      .prepare('INSERT OR IGNORE INTO embedding_cache (hash, vector, dim, created_at) VALUES (?, ?, ?, ?)')
-      .run(textHash(text), Buffer.from(vector.buffer, vector.byteOffset, vector.byteLength), vector.length, Date.now())
+      .prepare('INSERT OR IGNORE INTO embedding_cache (hash, model, vector, dim, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run(
+        textHash(text),
+        embeddingModel,
+        Buffer.from(vector.buffer, vector.byteOffset, vector.byteLength),
+        vector.length,
+        Date.now(),
+      )
+  }
+
+  /** 各模型桶的缓存条数（换模型观测用）。 */
+  embeddingCacheStats(): Record<string, number> {
+    const out: Record<string, number> = {}
+    for (const row of this.db
+      .prepare("SELECT COALESCE(NULLIF(model, ''), '(legacy)') AS model, COUNT(*) AS count FROM embedding_cache GROUP BY model")
+      .all() as { model: string; count: number }[]) {
+      out[row.model] = Number(row.count)
+    }
+    return out
+  }
+
+  /**
+   * active 向量按来源模型分桶：检索按当前模型过滤，被排除的旧模型向量在这里
+   * 可见（换 embedding 模型后应重算，不静默混库）。
+   */
+  embeddingModelStats(): Record<string, number> {
+    const out: Record<string, number> = {}
+    for (const row of this.db
+      .prepare(
+        "SELECT COALESCE(NULLIF(embedding_model, ''), '(legacy)') AS model, COUNT(*) AS count FROM memories WHERE embedding IS NOT NULL GROUP BY model",
+      )
+      .all() as { model: string; count: number }[]) {
+      out[row.model] = Number(row.count)
+    }
+    return out
+  }
+
+  // ---- 巩固归档（保守：不物理删除，只移出检索面）----
+
+  /**
+   * 归档长期零访问的 active 记忆 → status='inactive'。
+   * 判定基准用 last_accessed_at（没被召回过的记忆回落到 updated_at），命中即
+   * 续命，因此"稳定但被反复召回"的偏好不会被归档。
+   * @returns 归档条数。
+   */
+  archiveDormant(dormantAfterMs: number, now = Date.now()): number {
+    const result = this.db
+      .prepare(
+        `UPDATE memories SET status = 'inactive', updated_at = ?
+       WHERE status = 'active'
+         AND access_count = 0
+         AND COALESCE(NULLIF(last_accessed_at, 0), updated_at) < ?`,
+      )
+      .run(now, now - dormantAfterMs)
+    return Number(result.changes)
+  }
+
+  /**
+   * 归档陈旧软删链：superseded 且已超过保留期的历史版本 → inactive。
+   * 当前 active 记忆的直接前身保留（软删链末端的可追溯性），更早的中间版本
+   * 归档；行本身不删，`supersedes_id` 指针仍可追溯。
+   * @returns 归档条数。
+   */
+  archiveColdSuperseded(maxAgeMs: number, now = Date.now()): number {
+    const result = this.db
+      .prepare(
+        `UPDATE memories SET status = 'inactive', updated_at = ?
+       WHERE status = 'superseded'
+         AND updated_at < ?
+         AND id NOT IN (
+           SELECT y.supersedes_id FROM memories y
+           WHERE y.supersedes_id IS NOT NULL
+             AND NOT EXISTS (SELECT 1 FROM memories z WHERE z.supersedes_id = y.id)
+         )`,
+      )
+      .run(now, now - maxAgeMs)
+    return Number(result.changes)
   }
 
   // ---- 统计 ----

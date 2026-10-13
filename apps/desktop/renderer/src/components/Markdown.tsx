@@ -6,7 +6,7 @@
 
 import type { Token, Tokens } from 'marked'
 import { lexer } from 'marked'
-import type { ReactNode } from 'react'
+import { useMemo, type ReactNode } from 'react'
 
 /** 只允许安全协议的链接地址；不安全返回 undefined（调用方降级为文本）。 */
 export function safeHref(href: string | null | undefined): string | undefined {
@@ -146,7 +146,11 @@ function renderBlocks(tokens: Token[]): ReactNode[] {
   })
 }
 
-/** 把 Markdown 源渲染为 React 元素（永不产生原始 HTML）。 */
+/** 把 Markdown 源渲染为 React 元素（永不产生原始 HTML）。
+ *  lex 结果按 text 缓存：气泡里 copied/feedback 的 useState 变化不再整篇重 lex。 */
 export function Markdown({ text }: { text: string }) {
-  return <>{renderBlocks(lexer(text))}</>
+  const blocks = useMemo(() => {
+    return renderBlocks(lexer(text))
+  }, [text])
+  return <>{blocks}</>
 }

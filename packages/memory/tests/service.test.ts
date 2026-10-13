@@ -180,17 +180,39 @@ describe('抽取管线：四操作', () => {
     service.close()
   })
 
-  it('NOOP：不产生写入', async () => {
+  it('NOOP 兜底：与旧记忆几乎重复时才允许 NOOP，不写入', async () => {
     const llm = mockLlm({
       facts: [{ text: '用户住在北京', scope: 'shared', kind: 'profile' }],
       decide: () => {
         return [{ action: 'NOOP' }]
       },
     })
-    const service = new MemoryService({ dbPath: dbPath(), embeddings: new HashEmbeddings(), llm })
+    const service = new MemoryService({ dbPath: dbPath(), embeddings: new NullEmbeddings(), llm })
     service.enqueueExtraction('ryen', 'Ryen', 'c1', '用户：我住在北京')
     await service.flush()
-    expect(service.store.stats().total).toBe(0)
+    service.enqueueExtraction('ryen', 'Ryen', 'c1', '用户：我住在北京')
+    await service.flush()
+    // 第二轮与既有记忆几乎重复 → NOOP 成立，仍只有一条
+    expect(service.store.listSharedProfile()).toHaveLength(1)
+    service.close()
+  })
+
+  it('NOOP 兜底：候选与旧记忆不像时强制 ADD（闲聊偏好不再被丢掉）', async () => {
+    const llm = mockLlm({
+      facts: [{ text: '用户喜欢川菜，越辣越好', scope: 'shared', kind: 'preference' }],
+      decide: () => {
+        return [{ action: 'NOOP' }]
+      },
+    })
+    const service = new MemoryService({ dbPath: dbPath(), embeddings: new NullEmbeddings(), llm })
+    service.store.insert({ agentId: SHARED_SPACE, kind: 'profile', content: '用户养了一只橘猫叫布丁' })
+    service.enqueueExtraction('ryen', 'Ryen', 'c1', '用户：我最喜欢吃川菜')
+    await service.flush()
+    expect(
+      service.store.listActiveForAgent(SHARED_SPACE).map((m) => {
+        return m.content
+      }),
+    ).toContain('用户喜欢川菜，越辣越好')
     service.close()
   })
 
@@ -242,12 +264,14 @@ describe('检索管线：混合召回', () => {
       kind: 'fact',
       content: 'A',
       embedding: Float32Array.from(vectors.A as number[]),
+      embeddingModel: 'scripted',
     })
     withEmb.store.insert({
       agentId: 'a1',
       kind: 'fact',
       content: 'B 关键词命中',
       embedding: Float32Array.from(vectors.B as number[]),
+      embeddingModel: 'scripted',
     })
     const ranked = await withEmb.hybridRecall('a1', 'query', 2)
     expect(ranked[0]!.content).toBe('A') // 语义通道压过 BM25
@@ -267,6 +291,74 @@ describe('检索管线：混合召回', () => {
     service.store.backdate(old.id, Date.now() - 60 * 86_400_000)
     const ranked = await service.hybridRecall('a1', '同分记忆', 2)
     expect(ranked[0]!.id).toBe(recent.id)
+    service.close()
+  })
+
+  it('衰减基准是最后一次召回而非最后一次写入；命中即强化', async () => {
+    const service = new MemoryService({ dbPath: dbPath(), embeddings: new NullEmbeddings() })
+    const stale = service.store.insert({ agentId: 'a1', kind: 'preference', content: '稳定偏好甲' })
+    const fresh = service.store.insert({ agentId: 'a1', kind: 'preference', content: '稳定偏好乙' })
+    // 甲：两个月前写入，但本周刚被召回（衰减不应按写入时间算成 e⁻²）
+    service.store.backdate(stale.id, Date.now() - 60 * 86_400_000)
+    service.store.touchAccess([stale.id])
+    service.store.backdate(fresh.id, Date.now() - 60 * 86_400_000)
+
+    const ranked = await service.hybridRecall('a1', '稳定偏好', 2)
+    expect(ranked[0]!.id).toBe(stale.id)
+    expect(ranked[0]!.id).not.toBe(fresh.id)
+    service.close()
+  })
+
+  it('embedding 模型切换：旧模型向量不参与余弦（BM25 通道仍可命中）', async () => {
+    const service = new MemoryService({ dbPath: dbPath(), embeddings: scriptedVectors({}, 4) })
+    service.store.insert({
+      agentId: 'a1',
+      kind: 'fact',
+      content: '旧模型记忆',
+      embedding: Float32Array.from([1, 0, 0, 0]),
+      embeddingModel: 'other-model',
+    })
+    // 查询词与内容无词面重叠 → 只有余弦通道可能命中；旧模型向量已被排除。
+    const ranked = await service.hybridRecall('a1', 'zzz', 5)
+    expect(ranked).toHaveLength(0)
+    expect(service.embeddingModel).toBe('scripted')
+    service.close()
+  })
+
+  it('embedding 维度不符的记忆被排除并记日志（不静默参与排序）', async () => {
+    const logs: string[] = []
+    const service = new MemoryService({
+      dbPath: dbPath(),
+      embeddings: scriptedVectors({}, 4),
+      logger: (m) => {
+        logs.push(m)
+      },
+    })
+    service.store.insert({
+      agentId: 'a1',
+      kind: 'fact',
+      content: '维度不同的记忆',
+      embedding: Float32Array.from([1, 0]),
+      embeddingModel: 'scripted',
+    })
+    service.store.insert({
+      agentId: 'a1',
+      kind: 'fact',
+      content: '维度正确的记忆',
+      embedding: Float32Array.from([1, 0, 0, 0]),
+      embeddingModel: 'scripted',
+    })
+    const ranked = await service.hybridRecall('a1', 'zzz', 5)
+    expect(
+      ranked.map((m) => {
+        return m.content
+      }),
+    ).toEqual(['维度正确的记忆'])
+    expect(
+      logs.some((m) => {
+        return m.includes('embedding dim differs')
+      }),
+    ).toBe(true)
     service.close()
   })
 

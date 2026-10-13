@@ -118,23 +118,42 @@ export interface ServerOptions {
   shutdownTimeoutMs?: number
 }
 
+/**
+ * 解析记忆/进化管线要用的 LLM 连接：取第一个凭据已配置的供应商，
+ * 模型取该供应商的第一个。这样用户在 providers.json 里换成别家服务商后，
+ * 记忆与进化也跟着走，而不是写死 SiliconFlow。
+ */
+function resolveSidecarLlm(
+  providers: ProvidersConfigFile,
+): { apiKey: string; baseURL: string; model: string } | undefined {
+  for (const provider of Object.values(providers.providers)) {
+    const apiKey =
+      provider.apiKey ??
+      (provider.apiKeyEnv === undefined ? undefined : process.env[provider.apiKeyEnv])
+    if (apiKey === undefined || apiKey.length === 0) continue
+    const model = provider.models[0]?.id
+    if (model === undefined) continue
+    return { apiKey, baseURL: provider.baseURL, model }
+  }
+  return undefined
+}
+
 /** 按环境构建默认进化服务。 */
-function createDefaultEvolve(dataDir: string): EvolveService {
-  const apiKey = process.env.SILICONFLOW_API_KEY ?? ''
+function createDefaultEvolve(dataDir: string, providers: ProvidersConfigFile): EvolveService {
+  const llmConfig = resolveSidecarLlm(providers)
   return new EvolveService({
     dbPath: join(dataDir, 'ryagent.db'),
-    llm: apiKey.length > 0 ? new ChatEvolveLlm({ apiKey }) : undefined,
+    llm: llmConfig === undefined ? undefined : new ChatEvolveLlm(llmConfig),
   })
 }
 
 /** 按环境构建默认记忆服务。 */
-function createDefaultMemory(dataDir: string): MemoryService {
-  const apiKey = process.env.SILICONFLOW_API_KEY ?? ''
-  const hasKey = apiKey.length > 0
+function createDefaultMemory(dataDir: string, providers: ProvidersConfigFile): MemoryService {
+  const llmConfig = resolveSidecarLlm(providers)
   return new MemoryService({
     dbPath: join(dataDir, 'ryagent.db'),
-    embeddings: hasKey ? new SiliconFlowEmbeddings({ apiKey }) : new NullEmbeddings(),
-    llm: hasKey ? new ChatMemoryLlm({ apiKey }) : undefined,
+    embeddings: new SiliconFlowEmbeddings({ apiKey: process.env.SILICONFLOW_API_KEY ?? '' }),
+    llm: llmConfig === undefined ? undefined : new ChatMemoryLlm(llmConfig),
   })
 }
 
@@ -195,9 +214,11 @@ export class RyAgentServer {
         ? { providers: {} }
         : loadProvidersConfig(join(dataDir, 'config', 'providers.json')))
 
-    const memoryOption = options.memory === null ? undefined : (options.memory ?? createDefaultMemory(dataDir))
+    const memoryOption =
+      options.memory === null ? undefined : (options.memory ?? createDefaultMemory(dataDir, providers))
     const memoryService = memoryOption instanceof MemoryService ? memoryOption : undefined
-    const evolutionOption = options.evolution === null ? undefined : (options.evolution ?? createDefaultEvolve(dataDir))
+    const evolutionOption =
+      options.evolution === null ? undefined : (options.evolution ?? createDefaultEvolve(dataDir, providers))
     const evolutionService = evolutionOption instanceof EvolveService ? evolutionOption : undefined
     // 冷启动种子：内置 Ryen 播通用模板手册。
     if (evolutionService !== undefined) seedIfEmpty(evolutionService.store, 'ryen', 'general')
@@ -222,6 +243,12 @@ export class RyAgentServer {
         },
         supersede: (id) => {
           memoryService.store.supersede(id, 'superseded')
+        },
+        archiveDormant: (dormantAfterMs, now) => {
+          return memoryService.store.archiveDormant(dormantAfterMs, now)
+        },
+        archiveColdSuperseded: (maxAgeMs, now) => {
+          return memoryService.store.archiveColdSuperseded(maxAgeMs, now)
         },
       })
     }
@@ -367,11 +394,27 @@ export class RyAgentServer {
       json(res, 403, { error: 'origin not allowed' })
       return
     }
+    const origin = req.headers.origin
+    // 渲染层现在由回环 HTTP 伺服（不再是 file://），与后端不同源：JSON 之类的
+    // 非简单请求会先发 OPTIONS 预检。这里补齐 CORS 头 + 预检应答，来源仍走
+    // 上面的回环白名单，不是开放反射。
+    if (origin !== undefined && origin.length > 0 && origin !== 'null') {
+      res.setHeader('access-control-allow-origin', origin)
+      res.setHeader('vary', 'Origin')
+      res.setHeader('access-control-allow-headers', 'content-type, authorization')
+      res.setHeader('access-control-allow-methods', 'GET, POST, PATCH, DELETE, OPTIONS')
+      res.setHeader('access-control-max-age', '600')
+    }
     let url: URL
     try {
       url = new URL(req.url ?? '/', 'http://localhost')
     } catch {
       json(res, 400, { error: 'malformed request URL' })
+      return
+    }
+    if (req.method === 'OPTIONS') {
+      res.statusCode = 204
+      res.end()
       return
     }
     const handled = await this.router().dispatch(req, res, url.pathname + url.search)

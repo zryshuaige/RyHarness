@@ -15,9 +15,18 @@ import { AgentLoop } from '@ryagent/agent'
 import { brandString } from '@ryagent/brand'
 import type { GroupEvent, GroupHistoryEntry } from '@ryagent/group'
 import { GroupDispatcher, parseMentions } from '@ryagent/group'
-import type { ContentBlock, LlmRuntime, Message, MessageId, ToolCallId } from '@ryagent/llm'
+import type {
+  ContentBlock,
+  GenerateOptions,
+  LlmRuntime,
+  Message,
+  MessageId,
+  StreamChunk,
+  TokenUsage,
+  ToolCallId,
+} from '@ryagent/llm'
 import type { SessionStore } from './store.ts'
-import type { StoredMessage } from './types.ts'
+import type { StoredMessage, StoredUsage } from './types.ts'
 
 /** 协调器构造参数。 */
 export interface CoordinatorOptions {
@@ -31,9 +40,24 @@ export interface CoordinatorOptions {
   evolution?: AgentEvolutionHooks
 }
 
+/**
+ * 一次模型调用出账后的回调载荷（RunContext.onUsage）。
+ * usage 是本次调用、turnTotal 是本轮累计——server 拿它推 WS done 事件。
+ */
+export interface UsageReport {
+  conversationId: string
+  turnIndex: number
+  usage: StoredUsage
+  turnTotal: StoredUsage
+}
+
 /** 一次调用的运行上下文。 */
 export interface RunContext {
   workspaceRoot: string
+  /** 取消信号：透传给 AgentLoop / GroupDispatcher / 工具执行。 */
+  signal?: AbortSignal
+  /** 可选扩展点：模型调用出账后回调（server 推 WS / 记会话累计）。 */
+  onUsage?: (report: UsageReport) => void
 }
 
 const HISTORY_PAGE_SIZE = 1000
@@ -81,6 +105,78 @@ function toGroupEntry(row: StoredMessage, agentNames: Map<string, string>): Grou
         ? (agentNames.get(row.senderId) ?? row.senderId)
         : 'agent'
   return { speaker, text }
+}
+
+/** 一段用量累加器（可重置取走），零值即"没有 usage 事件"。 */
+class UsageMeter {
+  private input = 0
+  private output = 0
+  private total = 0
+  private cacheRead = 0
+  private cacheWrite = 0
+  private reasoning = 0
+  private calls = 0
+
+  add(usage: TokenUsage): void {
+    this.calls++
+    this.input += usage.inputTokens
+    this.output += usage.outputTokens
+    this.total += usage.totalTokens ?? usage.inputTokens + usage.outputTokens
+    this.cacheRead += usage.cacheReadTokens ?? 0
+    this.cacheWrite += usage.cacheWriteTokens ?? 0
+    this.reasoning += usage.reasoningTokens ?? 0
+  }
+
+  /** 取走自上次取走以来的用量；没有新事件返回 undefined。 */
+  take(): StoredUsage | undefined {
+    if (this.calls === 0) return undefined
+    const usage: StoredUsage = {
+      inputTokens: this.input,
+      outputTokens: this.output,
+      totalTokens: this.total,
+      ...(this.cacheRead === 0 ? {} : { cacheReadTokens: this.cacheRead }),
+      ...(this.cacheWrite === 0 ? {} : { cacheWriteTokens: this.cacheWrite }),
+      ...(this.reasoning === 0 ? {} : { reasoningTokens: this.reasoning }),
+    }
+    this.input = 0
+    this.output = 0
+    this.total = 0
+    this.cacheRead = 0
+    this.cacheWrite = 0
+    this.reasoning = 0
+    this.calls = 0
+    return usage
+  }
+}
+
+/**
+ * 包一层 LlmRuntime，只做一件事：截获 `usage` chunk 交给 meter。
+ *
+ * 用 Proxy 而不是继承——LlmRuntime 是 Typert 服务类，构造与装饰器都不适合
+ * 在这里复刻；AgentLoop / GroupDispatcher 也只用 `stream`，其余成员原样转发。
+ */
+function observeUsage(base: LlmRuntime, meter: UsageMeter): LlmRuntime {
+  return new Proxy(base, {
+    get(target, prop, receiver) {
+      if (prop !== 'stream') {
+        const value = Reflect.get(target, prop, receiver)
+        return typeof value === 'function' ? value.bind(target) : value
+      }
+      return (options: GenerateOptions): AsyncIterable<StreamChunk> => {
+        return (async function* (): AsyncGenerator<StreamChunk> {
+          for await (const chunk of target.stream(options)) {
+            if (chunk.type === 'usage') meter.add(chunk.usage)
+            yield chunk
+          }
+        })()
+      }
+    },
+  })
+}
+
+/** 把 TokenUsage 归一成落库形态。 */
+function toStoredUsage(usage: StoredUsage): StoredUsage {
+  return usage
 }
 
 /** Session 协调器：单聊 chatDirect + 群聊 chatGroup。 */

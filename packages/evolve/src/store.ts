@@ -5,8 +5,23 @@
 
 import { randomUUID } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
+import { normalizeText, textOverlap, textSimilarity } from './relevance.ts'
 import type { EntryStatus, PlaybookSection, ReflectionStatus } from './schema.ts'
 import { migrateEvolve } from './schema.ts'
+
+/** 近似去重的相似度阈值（Jaccard）。 */
+export const NEAR_DUPLICATE_THRESHOLD = 0.8
+/** 教训检索的最低相关度阈值。 */
+export const REFLECTION_RELEVANCE_THRESHOLD = 0.15
+/** 教训检索的候选扫描上限（pending 池很小，扫描全部即可）。 */
+const PENDING_SCAN_LIMIT = 50
+
+/** 教训与当前输入的相关度：正文与情境摘要取较大者。 */
+export function reflectionRelevance(query: string, row: ReflectionRow): number {
+  const lesson = textOverlap(query, row.lesson)
+  const context = row.contextDigest.length === 0 ? 0 : textOverlap(query, row.contextDigest)
+  return Math.max(lesson, context)
+}
 
 export interface PlaybookEntry {
   id: string
@@ -122,6 +137,34 @@ export class EvolveStore {
     return Number(row.count) > 0
   }
 
+  /**
+   * 近似去重：精确字符串匹配挡不住"同一件事换个说法"（Curator 每次改写措辞
+   * 就会新增一条），手册很快自我复制膨胀。归一化 bigram Jaccard ≥
+   * {@link NEAR_DUPLICATE_THRESHOLD} 视为同一条。
+   */
+  hasNearDuplicate(agentId: string, section: PlaybookSection, content: string, threshold = NEAR_DUPLICATE_THRESHOLD): boolean {
+    return this.hasNearDuplicateExcept(agentId, section, content, undefined, threshold)
+  }
+
+  /** 同上，但可排除某条条目自身（update 场景：条目与自己的新内容必然近似）。 */
+  hasNearDuplicateExcept(
+    agentId: string,
+    section: PlaybookSection,
+    content: string,
+    exceptId?: string,
+    threshold = NEAR_DUPLICATE_THRESHOLD,
+  ): boolean {
+    const candidates = this.db
+      .prepare(
+        "SELECT id, content FROM playbook_entries WHERE agent_id = ? AND section = ? AND status = 'active'",
+      )
+      .all(agentId, section) as { id: string; content: string }[]
+    return candidates.some((row) => {
+      if (row.id === exceptId) return false
+      return textSimilarity(row.content, content) >= threshold
+    })
+  }
+
   addCounts(id: string, delta: { helpful?: number; harmful?: number }): void {
     this.db
       .prepare('UPDATE playbook_entries SET helpful = helpful + ?, harmful = harmful + ?, updated_at = ? WHERE id = ?')
@@ -137,12 +180,12 @@ export class EvolveStore {
   }
 
   /** 编译注入用：active 条目，按 section 分组、组内 (helpful - harmful) 降序。 */
-  listActiveForCompile(agentId: string): PlaybookEntry[] {
+  listActiveForCompile(agentId: string, limit = 200): PlaybookEntry[] {
     const rows = this.db
       .prepare(
-        "SELECT * FROM playbook_entries WHERE agent_id = ? AND status = 'active' ORDER BY section, (helpful - harmful) DESC, updated_at DESC",
+        "SELECT * FROM playbook_entries WHERE agent_id = ? AND status = 'active' ORDER BY section, (helpful - harmful) DESC, updated_at DESC LIMIT ?",
       )
-      .all(agentId) as Record<string, unknown>[]
+      .all(agentId, limit) as Record<string, unknown>[]
     return rows.map(toEntry)
   }
 
@@ -191,6 +234,33 @@ export class EvolveStore {
       .prepare("SELECT * FROM reflections WHERE agent_id = ? AND status = 'pending' ORDER BY updated_at DESC LIMIT ?")
       .all(agentId, limit) as Record<string, unknown>[]
     return rows.map(toReflection)
+  }
+
+  /**
+   * 按当前输入检索待验证教训（注入用）：相关度降序，无相关项时不注入。
+   *
+   * 原实现无条件取最近 3 条，于是翻译任务也会被注入"文件操作教训"。
+   * 查询为空/无有效字符时退回最近 N 条（保持"首次反思仍能被看到"）。
+   */
+  searchPendingReflections(agentId: string, query: string, limit = 3): ReflectionRow[] {
+    const pending = this.listPendingReflections(agentId, PENDING_SCAN_LIMIT)
+    if (pending.length === 0) return []
+    if (normalizeText(query).length === 0) return pending.slice(0, limit)
+    const ranked = pending
+      .map((row) => {
+        return { row, score: reflectionRelevance(query, row) }
+      })
+      .filter((hit) => {
+        return hit.score >= REFLECTION_RELEVANCE_THRESHOLD
+      })
+      .sort((a, b) => {
+        return b.score - a.score
+      })
+      .slice(0, limit)
+      .map((hit) => {
+        return hit.row
+      })
+    return ranked
   }
 
   /** 到期清理：pending 且超过 maxAgeMs 未转正 → expired。返回处理条数。 */

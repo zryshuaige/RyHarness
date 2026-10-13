@@ -186,19 +186,23 @@ function MessageBubbleInner({
 }
 
 /**
- * memo 包装：流式期间 store 每次通知都会重建消息数组，自定义相等器按
- * （key, senderId, done, parts 序列化）比较——未变化的气泡跳过重渲染。
+ * memo 包装（O(1)）：store 定点更新 + 结构共享保证「没变的消息对象就是同一引用」，
+ * 所以这里只比 key/senderId/done/version 与几个 props——绝不序列化 parts。
+ * version 由 store 在 parts/done 变化时自增，历史消息无此字段按 0 处理。
  */
 export const MessageBubble = memo(MessageBubbleInner, (prev, next) => {
+  if (prev.tight !== next.tight) return false
+  if (prev.firstOfGroup !== next.firstOfGroup) return false
+  if (prev.onFeedback !== next.onFeedback || prev.fileUrl !== next.fileUrl) return false
+  if (prev.agent !== next.agent) return false
+  const a = prev.message
+  const b = next.message
+  if (a === b) return true
   return (
-    prev.message.key === next.message.key &&
-    prev.message.senderId === next.message.senderId &&
-    prev.message.done === next.message.done &&
-    prev.tight === next.tight &&
-    prev.firstOfGroup === next.firstOfGroup &&
-    JSON.stringify(prev.message.parts) === JSON.stringify(next.message.parts) &&
-    prev.onFeedback === next.onFeedback &&
-    prev.fileUrl === next.fileUrl
+    a.key === b.key &&
+    a.senderId === b.senderId &&
+    a.done === b.done &&
+    (a.version ?? 0) === (b.version ?? 0)
   )
 })
 

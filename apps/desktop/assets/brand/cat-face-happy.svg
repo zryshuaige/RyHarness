@@ -1,0 +1,11 @@
+<g id="ryen-cat-happy">
+  <g transform="translate(32 34) scale(1.05) translate(-32 -34)">
+    <circle cx="32" cy="35.5" r="15.2" fill="#FFFDF8"/>
+    <path d="M24 26.4 L17 10.4 L34 22 Z" fill="#FFFDF8"/>
+    <path d="M40 26.4 L47 9 L30 21.8 Z" fill="#FFFDF8"/>
+    <path class="ink" d="M24.3 36 q2.4 -3.8 4.8 0" fill="none" style="stroke-width:1.9"/>
+    <path class="ink" d="M34.9 36 q2.4 -3.8 4.8 0" fill="none" style="stroke-width:1.9"/>
+    <path class="inkf" d="M27.1 43.4 a4.9 4.9 0 0 0 9.8 0 z" fill="#4a2e1a"/>
+  </g>
+  <path class="star joy" d="M51 10.9 Q51.7 12.5 53.3 13.2 Q51.7 13.9 51 15.5 Q50.3 13.9 48.7 13.2 Q50.3 12.5 51 10.9 Z" fill="#FFFDF8"/>
+</g>

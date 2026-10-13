@@ -7,19 +7,34 @@
  *   能答就答，要转交就在回复里 @成员名。
  * - **选路即生成**：不做结构化路由 LLM 调用——调度员正常生成回复，
  *   解析其输出中的 @提及作为路由信号；输出无 @ 视为"自己回答"，一轮结束。
+ * - **扇出**：入口一次 @ 多个成员时并发起跑（上限 fanoutConcurrency，
+ *   默认 3），B 的首 token 不必等 A 跑完整轮；每个成员的事件先缓冲，
+ *   再按 @ 出现顺序提交，消息顺序确定。
  * - **接力**：任何 agent 输出含 @Y → Y 接力。护栏：
  *   - 单条用户消息触发的总接力轮次 ≤ maxTurns（默认 8）；
  *   - 连续两次路由同一 agent（自己 @ 自己 / 冷却不足）→ 停止；
  *   - A@B、B@A 互踢（A-B-A 模式）→ 停止；
  *   - 每次停止都写 dispatch 事件（reason: 'loop-guard' / 'max-turns'）。
+ *   接力链始终串行：接力的 prompt 依赖上一个发言者的输出。
  * - **上下文**：所有成员共享群历史，发言带"名字:"前缀，按字符预算从
  *   最旧裁剪（默认 30k 字符，token 的近似）。
+ * - **取消**：runTurn 接受 AbortSignal，透传给每个 AgentLoop 与工具；取消
+ *   后不再接力，以 code=ABORTED 的 error 事件收尾。
  * @module @ryagent/group/dispatcher
  */
 
-import type { AgentDefinition, AgentEvolutionHooks, AgentMemoryHooks, Tool, ToolResult } from '@ryagent/agent'
-import { AgentLoop } from '@ryagent/agent'
+import type {
+  AgentDefinition,
+  AgentEvolutionHooks,
+  AgentLoopEvent,
+  AgentMemoryHooks,
+  Tool,
+  ToolContext,
+  ToolResult,
+} from '@ryagent/agent'
+import { ABORTED_CODE, AgentLoop, isAbortedError } from '@ryagent/agent'
 import type { AssistantMessage, LlmRuntime, ToolCallId } from '@ryagent/llm'
+import { errorChain } from '@ryagent/llm'
 import { parseMentions } from './mentions.ts'
 
 /** 调度员 system prompt 追加的路由指令。 */
@@ -63,10 +78,15 @@ export interface GroupDispatcherOptions {
   evolution?: AgentEvolutionHooks
   /** 单条用户消息触发的最大接力轮次，默认 8。 */
   maxTurns?: number
+  /** 入口 @ 多成员并行扇出的并发上限，默认 3（供应商限流保护）。 */
+  fanoutConcurrency?: number
 }
 
 /** 群历史字符预算默认值（token 的字符数近似）。 */
 export const DEFAULT_HISTORY_BUDGET_CHARS = 30_000
+
+/** 入口 @ 多成员并行扇出的默认并发上限。 */
+export const DEFAULT_FANOUT_CONCURRENCY = 3
 
 const DEFAULT_MAX_TURNS = 8
 
@@ -97,12 +117,73 @@ function messageText(message: AssistantMessage): string {
     .join('\n')
 }
 
+/** 把一个成员的 AgentLoop 事件翻译为群事件（补上 agentId / agentName）。 */
+async function* memberEvents(
+  agentId: string,
+  agentName: string,
+  source: AsyncGenerator<AgentLoopEvent>,
+): AsyncGenerator<GroupEvent> {
+  for await (const event of source) {
+    switch (event.type) {
+      case 'text-delta':
+        yield { type: 'text-delta', agentId, agentName, text: event.text }
+        break
+      case 'tool-call-start':
+        yield {
+          type: 'tool-call-start',
+          agentId,
+          callId: event.callId,
+          name: event.name,
+          arguments: event.arguments,
+        }
+        break
+      case 'tool-result':
+        yield {
+          type: 'tool-result',
+          agentId,
+          callId: event.callId,
+          name: event.name,
+          isError: event.isError,
+          result: event.result,
+        }
+        break
+      case 'done':
+        break
+      case 'error':
+        yield event
+        break
+    }
+  }
+}
+
+/** 取消事件：与 AgentLoop 的 AbortedError 对齐，协调器落 [error:ABORTED] system 消息。 */
+function abortedEvent(): GroupEvent {
+  return { type: 'error', message: 'agent run aborted', code: ABORTED_CODE }
+}
+
+/** 每轮重新读取取消状态（signal 可能在 await 期间被中止）。 */
+function isAborted(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true
+}
+
+/** 一个成员一轮发言的完整结果（并行扇出时先缓冲，再按加入顺序提交）。 */
+interface MemberTurnOutcome {
+  /** 该成员产出的事件，按产生顺序。 */
+  events: GroupEvent[]
+  /** 完成发言时为该成员的完整 assistant 消息。 */
+  assistant?: AssistantMessage
+  /** 该成员是否以失败/取消收尾（不再接力）。 */
+  halted: boolean
+}
+
 /** 群聊调度器。无状态：每个 turn 调 runTurn。 */
 export class GroupDispatcher {
   private readonly maxTurns: number
+  private readonly fanoutConcurrency: number
 
   constructor(private readonly options: GroupDispatcherOptions) {
     this.maxTurns = options.maxTurns ?? DEFAULT_MAX_TURNS
+    this.fanoutConcurrency = Math.max(1, options.fanoutConcurrency ?? DEFAULT_FANOUT_CONCURRENCY)
     if (
       !options.members.some((member) => {
         return member.id === options.dispatcherId
@@ -113,8 +194,9 @@ export class GroupDispatcher {
   }
 
   /**
-   * 处理一条用户消息：入口路由 → 逐 agent 生成 → @接力 → 护栏终止。
-   * @param input - 用户原文、群历史、turn 序号与工具上下文。
+   * 处理一条用户消息：入口路由（多 @ 目标并行扇出）→ 逐 agent 生成 → @接力 →
+   * 护栏终止。
+   * @param input - 用户原文、群历史、turn 序号、工具上下文与取消信号。
    * @returns 事件异步流；dispatch 事件由协调器落 dispatch_events。
    */
   async *runTurn(input: {
@@ -123,8 +205,11 @@ export class GroupDispatcher {
     workspaceRoot: string
     turnIndex: number
     historyBudgetChars?: number
+    /** 调用方取消信号：取消后不再接力，以 code=ABORTED 的 error 事件收尾。 */
+    signal?: AbortSignal
   }): AsyncGenerator<GroupEvent> {
-    const { llm, members, dispatcherId } = this.options
+    const { members, dispatcherId } = this.options
+    const signal = input.signal
     const budget = input.historyBudgetChars ?? DEFAULT_HISTORY_BUDGET_CHARS
     const context = buildGroupContext(input.history, budget)
     const memberById = new Map(
@@ -133,6 +218,15 @@ export class GroupDispatcher {
       }),
     )
     const turnIndex = input.turnIndex
+    const toolContext: ToolContext = {
+      workspaceRoot: input.workspaceRoot,
+      ...(signal === undefined ? {} : { signal }),
+    }
+    if (signal?.aborted === true) {
+      yield abortedEvent()
+      yield { type: 'turn-done', turns: 0 }
+      return
+    }
 
     // ---- 入口路由 ----
     const userMentions = parseMentions(input.text, members)
@@ -150,8 +244,90 @@ export class GroupDispatcher {
     const speakers: string[] = []
     let turns = 0
     let relayText = ''
+    let stopped = false
 
-    while (queue.length > 0) {
+    // ---- 入口 @ 多目标并行扇出 ----
+    // 多个 @ 目标并发起跑（上限 fanoutConcurrency），谁先出首 token 谁先出，
+    // 但结果一律按 @ 出现顺序提交，事件顺序与消息落库顺序都确定。接力链
+    // 仍在下面串行执行：接力的 prompt 依赖上一个发言者的输出。
+    const entry = queue.splice(0, queue.length)
+    if (entry.length > 1) {
+      const allowed = Math.max(0, this.maxTurns - turns)
+      const targets: AgentDefinition[] = []
+      let unknownId: string | undefined
+      for (const id of entry.slice(0, allowed)) {
+        const member = memberById.get(id)
+        if (member === undefined) {
+          unknownId = id
+          break
+        }
+        targets.push(member)
+      }
+      const dropped = entry.slice(allowed)
+      if (unknownId !== undefined) {
+        yield {
+          type: 'error',
+          message: `@ryagent/group: agent "${unknownId}" is not a group member`,
+          code: 'UNKNOWN_AGENT',
+        }
+        stopped = true
+      } else {
+        const outcomes = await this.runFanout(targets, this.promptText(context, input.text), toolContext, signal)
+        const relayed: string[] = []
+        for (const [index, outcome] of outcomes.entries()) {
+          if (outcome === undefined) {
+            // 未起跑就取消：后续目标不再发言，以 ABORTED 收尾。
+            if (isAborted(signal)) yield abortedEvent()
+            stopped = true
+            break
+          }
+          const member = targets[index] as AgentDefinition
+          for (const event of outcome.events) yield event
+          if (outcome.halted || outcome.assistant === undefined) {
+            // error 事件已随缓冲发出：不再由该成员接力（其他成员的结果仍提交）。
+            stopped = true
+            continue
+          }
+          const assistant = outcome.assistant
+          turns++
+          speakers.push(member.id)
+          yield { type: 'agent-message', agentId: member.id, message: assistant }
+
+          const outputText = messageText(assistant)
+          relayText = outputText
+          if (parseMentions(outputText, [member]).length > 0) {
+            yield { type: 'dispatch', fromAgent: member.id, toAgent: member.id, reason: 'loop-guard', turnIndex }
+            continue
+          }
+          for (const target of parseMentions(outputText, members)) {
+            relayed.push(target.id)
+            yield {
+              type: 'dispatch',
+              fromAgent: member.id,
+              toAgent: target.id,
+              reason: `relay @${target.name}`,
+              turnIndex,
+            }
+          }
+        }
+        if (dropped.length > 0) {
+          yield {
+            type: 'dispatch',
+            fromAgent: speakers[speakers.length - 1],
+            toAgent: dropped[0] as string,
+            reason: 'max-turns',
+            turnIndex,
+          }
+          stopped = true
+        }
+        if (!stopped) queue.push(...relayed)
+      }
+    } else {
+      queue.push(...entry)
+    }
+
+    // ---- 接力链（串行：prompt 依赖上一个发言者）----
+    while (queue.length > 0 && !stopped) {
       if (turns >= this.maxTurns) {
         yield {
           type: 'dispatch',
@@ -184,61 +360,25 @@ export class GroupDispatcher {
       }
 
       // ---- 生成回复 ----
-      const definition: AgentDefinition =
-        member.id === dispatcherId
-          ? { ...member, systemPrompt: member.systemPrompt + DISPATCHER_ROUTING_SUFFIX }
-          : member
-      const promptText =
-        speakers.length === 0
-          ? context.length > 0
-            ? `${context}\n\n——新消息——\n${input.text}`
-            : input.text
-          : context.length > 0
-            ? `${context}\n\n——新消息——\n${relayText}`
-            : relayText
-      const loop = new AgentLoop({
-        definition,
-        llm,
-        tools: this.options.tools,
-        onAssistantMessage: (message) => {
-          assistant = message
-        },
-        ...(this.options.memory === undefined ? {} : { memory: this.options.memory }),
-        ...(this.options.evolution === undefined ? {} : { evolution: this.options.evolution }),
-      })
+      const promptText = this.promptText(context, speakers.length === 0 ? input.text : relayText)
       let assistant: AssistantMessage | undefined
+      const loop = this.createLoop(this.definitionOf(member), (message) => {
+        assistant = message
+      })
       let failed = false
-      for await (const event of loop.run({ text: promptText }, { workspaceRoot: input.workspaceRoot })) {
-        switch (event.type) {
-          case 'text-delta':
-            yield { type: 'text-delta', agentId: member.id, agentName: member.name, text: event.text }
-            break
-          case 'tool-call-start':
-            yield {
-              type: 'tool-call-start',
-              agentId: member.id,
-              callId: event.callId,
-              name: event.name,
-              arguments: event.arguments,
-            }
-            break
-          case 'tool-result':
-            yield {
-              type: 'tool-result',
-              agentId: member.id,
-              callId: event.callId,
-              name: event.name,
-              isError: event.isError,
-              result: event.result,
-            }
-            break
-          case 'done':
-            break
-          case 'error':
-            failed = true
-            yield event
-            break
+      try {
+        for await (const event of memberEvents(
+          member.id,
+          member.name,
+          loop.run({ text: promptText }, toolContext, { signal }),
+        )) {
+          if (event.type === 'error') failed = true
+          yield event
         }
+      } catch (error) {
+        if (!isAbortedError(error)) throw error
+        yield { type: 'error', message: errorChain(error), code: ABORTED_CODE }
+        break
       }
       if (failed || assistant === undefined) {
         // error 事件已发出：中断本 turn（协调器会以 system 消息落库）。
@@ -264,5 +404,90 @@ export class GroupDispatcher {
     }
 
     yield { type: 'turn-done', turns }
+  }
+
+  /** 拼接成员 prompt：群历史（已裁剪）+ 新消息/接力文本。 */
+  private promptText(context: string, body: string): string {
+    return context.length > 0 ? `${context}\n\n——新消息——\n${body}` : body
+  }
+
+  /** 调度员发言时追加路由指令。 */
+  private definitionOf(member: AgentDefinition): AgentDefinition {
+    return member.id === this.options.dispatcherId
+      ? { ...member, systemPrompt: member.systemPrompt + DISPATCHER_ROUTING_SUFFIX }
+      : member
+  }
+
+  private createLoop(definition: AgentDefinition, onAssistantMessage: (message: AssistantMessage) => void): AgentLoop {
+    return new AgentLoop({
+      definition,
+      llm: this.options.llm,
+      tools: this.options.tools,
+      onAssistantMessage,
+      ...(this.options.memory === undefined ? {} : { memory: this.options.memory }),
+      ...(this.options.evolution === undefined ? {} : { evolution: this.options.evolution }),
+    })
+  }
+
+  /**
+   * 并发跑一批成员（工作池，上限 fanoutConcurrency），结果按下标对齐，
+   * 与 @ 出现顺序一致——提交顺序不随谁先跑完变化。
+   */
+  private async runFanout(
+    targets: readonly AgentDefinition[],
+    promptText: string,
+    toolContext: ToolContext,
+    signal: AbortSignal | undefined,
+  ): Promise<(MemberTurnOutcome | undefined)[]> {
+    const outcomes: (MemberTurnOutcome | undefined)[] = new Array(targets.length)
+    let next = 0
+    const worker = async (): Promise<void> => {
+      while (next < targets.length) {
+        if (isAborted(signal)) return
+        const index = next++
+        outcomes[index] = await this.runBuffered(targets[index] as AgentDefinition, promptText, toolContext, signal)
+      }
+    }
+    const lanes = Math.min(this.fanoutConcurrency, targets.length)
+    await Promise.all(
+      Array.from({ length: lanes }, () => {
+        return worker()
+      }),
+    )
+    return outcomes
+  }
+
+  /** 跑一个成员并把事件缓冲起来（并行扇出时不在中途交错输出）。 */
+  private async runBuffered(
+    member: AgentDefinition,
+    promptText: string,
+    toolContext: ToolContext,
+    signal: AbortSignal | undefined,
+  ): Promise<MemberTurnOutcome> {
+    let assistant: AssistantMessage | undefined
+    const loop = this.createLoop(this.definitionOf(member), (message) => {
+      assistant = message
+    })
+    const events: GroupEvent[] = []
+    let failed = false
+    try {
+      for await (const event of memberEvents(
+        member.id,
+        member.name,
+        loop.run({ text: promptText }, toolContext, { signal }),
+      )) {
+        if (event.type === 'error') failed = true
+        events.push(event)
+      }
+    } catch (error) {
+      if (!isAbortedError(error)) throw error
+      events.push({ type: 'error', message: errorChain(error), code: ABORTED_CODE })
+      return { events, halted: true }
+    }
+    return {
+      events,
+      halted: failed || assistant === undefined,
+      ...(assistant === undefined ? {} : { assistant }),
+    }
   }
 }

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { AgentDef, ApiClient, Conversation } from '../api.ts'
-import type { RelayItem, UiMessage } from '../store.ts'
+import type { ChatStore, RelayItem } from '../store.ts'
+import { useChat } from '../store.ts'
 import { Avatar } from './avatars/Avatar.tsx'
 import { Icon } from './Icon.tsx'
 import { MemoryPanel } from './MemoryPanel.tsx'
@@ -13,41 +14,34 @@ const TOOL_LABELS: Record<string, string> = {
   file_produce: '产出文件',
 }
 
-/** 从消息流收集产物文件。 */
-function collectArtifacts(messages: UiMessage[]): { callId: string; name: string; size: number; mime: string }[] {
-  const out: { callId: string; name: string; size: number; mime: string }[] = []
-  for (const message of messages) {
-    for (const part of message.parts) {
-      if (part.kind === 'file') out.push({ callId: part.callId, name: part.name, size: part.size, mime: part.mime })
-    }
-  }
-  return out
-}
-
-/** 右栏信息板：单聊 = 资料卡 + 产物；群聊 = 成员网格 + 调度时间线 + 产物。 */
+/**
+ * 右栏信息板：单聊 = 资料卡 + 产物；群聊 = 成员网格 + 调度时间线 + 产物。
+ *
+ * 自己订阅 chat store（不再由 App 根组件转发 props）：App 每 40ms 的 store 通知
+ * 不再带动整棵树重渲染，且直接用 snapshot.messages 引用、不做数组拷贝。
+ */
 export function RightPanel({
   api,
+  store,
   conversation,
   agents,
   conversations,
-  relays,
-  messages,
   fileUrl,
   collapsed,
   onToggle,
 }: {
   api: ApiClient
+  store: ChatStore
   conversation: Conversation | undefined
   agents: AgentDef[]
   conversations: Conversation[]
-  relays: RelayItem[]
-  messages: UiMessage[]
   fileUrl: (name: string) => string
   collapsed: boolean
   onToggle: () => void
 }) {
   const [memoryFor, setMemoryFor] = useState<AgentDef | undefined>(undefined)
   const [playbookFor, setPlaybookFor] = useState<AgentDef | undefined>(undefined)
+  const snapshot = useChat(store)
   if (collapsed) {
     return (
       <aside className="right-panel is-collapsed">
@@ -57,6 +51,8 @@ export function RightPanel({
       </aside>
     )
   }
+  // 产物走 store 的单一 selector：内容没变时返回同一数组身份，避免每 token 重扫 parts。
+  const artifacts = store.artifacts()
   return (
     <aside className="right-panel">
       <span className="panel-banner" aria-hidden="true" />
@@ -70,7 +66,7 @@ export function RightPanel({
           <DirectProfile
             agentId={conversation.memberAgentIds[0]}
             agents={agents}
-            artifacts={collectArtifacts(messages)}
+            artifacts={artifacts}
             fileUrl={fileUrl}
             onShowMemories={setMemoryFor}
             onShowPlaybook={setPlaybookFor}
@@ -79,8 +75,8 @@ export function RightPanel({
           <GroupInfo
             conversation={conversation}
             agents={agents}
-            relays={relays}
-            artifacts={collectArtifacts(messages)}
+            relays={snapshot.relays}
+            artifacts={artifacts}
             fileUrl={fileUrl}
           />
         )}

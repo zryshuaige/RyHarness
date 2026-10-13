@@ -9,7 +9,16 @@
 import { randomUUID } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { migrate, SCHEMA_VERSION } from './schema.ts'
-import type { Conversation, ConversationKind, DispatchEvent, SenderType, StoredAgent, StoredMessage } from './types.ts'
+import type {
+  Conversation,
+  ConversationKind,
+  DispatchEvent,
+  SenderType,
+  StoredAgent,
+  StoredMessage,
+  StoredUsage,
+  UsageTotals,
+} from './types.ts'
 
 /** 创建/更新 Agent 定义的输入。 */
 export type AgentInput = Omit<StoredAgent, 'isBuiltin' | 'createdAt' | 'updatedAt'> & { isBuiltin?: boolean }
@@ -32,6 +41,8 @@ export interface MessageInput {
   /** 工具结果消息：对应 tool_call 的 callId。 */
   toolCallId?: string
   turnIndex?: number
+  /** 关联模型调用的 token 用量（assistant 消息才有）。 */
+  usage?: StoredUsage
 }
 
 /** 消息分页查询参数。 */
@@ -54,6 +65,23 @@ const HAS_TEXT_BLOCK_SQL = `EXISTS (
 function parseJsonArray(value: string): unknown[] {
   const parsed: unknown = JSON.parse(value)
   return Array.isArray(parsed) ? parsed : []
+}
+
+/** usage 列是 JSON 文本；脏数据（手工改库/旧版本）一律按无用量处理。 */
+function parseUsage(value: unknown): StoredUsage | undefined {
+  if (typeof value !== 'string' || value.length === 0) return undefined
+  try {
+    const parsed = JSON.parse(value) as Partial<StoredUsage>
+    if (typeof parsed.inputTokens !== 'number' || typeof parsed.outputTokens !== 'number') return undefined
+    return parsed as StoredUsage
+  } catch {
+    return undefined
+  }
+}
+
+/** 消息落库时序列化 usage（缺省不写列）。 */
+function usageColumn(usage: StoredUsage | undefined): string | null {
+  return usage === undefined ? null : JSON.stringify(usage)
 }
 
 /** RyAgent 会话存储。构造时打开（必要时创建）数据库并应用缺失迁移。 */
@@ -308,12 +336,13 @@ export class SessionStore {
       mentions: input.mentions ?? [],
       ...(input.toolCallId === undefined ? {} : { toolCallId: input.toolCallId }),
       turnIndex: input.turnIndex ?? 0,
+      ...(input.usage === undefined ? {} : { usage: input.usage }),
       createdAt: now,
     }
     const result = this.db
       .prepare(`
-      INSERT INTO messages (id, conversation_id, sender_type, sender_id, content_blocks, mentions, tool_call_id, turn_index, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO messages (id, conversation_id, sender_type, sender_id, content_blocks, mentions, tool_call_id, turn_index, usage, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
       .run(
         message.id,
@@ -324,11 +353,45 @@ export class SessionStore {
         JSON.stringify(message.mentions),
         message.toolCallId ?? null,
         message.turnIndex,
+        usageColumn(input.usage),
         now,
       )
     message.seq = Number(result.lastInsertRowid)
     this.touchConversation(input.conversationId, now)
     return message
+  }
+
+  /**
+   * 回填一条 assistant 消息的 token 用量。
+   *
+   * 模型调用结束后才拿到 usage，而消息在流组装完成时就落库了，因此用量走
+   * 二次 UPDATE 挂到"本次调用产出的那条消息"上，而不是写进 INSERT。
+   */
+  attachUsage(messageId: string, usage: StoredUsage): void {
+    this.db.prepare('UPDATE messages SET usage = ? WHERE id = ?').run(JSON.stringify(usage), messageId)
+  }
+
+  /** 会话级累计用量（单查询求和；total 缺失时按 input+output 兜底）。 */
+  conversationUsage(conversationId: string): UsageTotals {
+    const row = this.db
+      .prepare(
+        `SELECT
+           COALESCE(SUM(CAST(json_extract(usage, '$.inputTokens') AS INTEGER)), 0) AS input,
+           COALESCE(SUM(CAST(json_extract(usage, '$.outputTokens') AS INTEGER)), 0) AS output,
+           COALESCE(SUM(COALESCE(
+             CAST(json_extract(usage, '$.totalTokens') AS INTEGER),
+             CAST(json_extract(usage, '$.inputTokens') AS INTEGER) + CAST(json_extract(usage, '$.outputTokens') AS INTEGER)
+           )), 0) AS total,
+           COUNT(usage) AS messages
+         FROM messages WHERE conversation_id = ? AND usage IS NOT NULL`,
+      )
+      .get(conversationId) as { input: number; output: number; total: number; messages: number }
+    return {
+      inputTokens: Number(row.input),
+      outputTokens: Number(row.output),
+      totalTokens: Number(row.total),
+      messages: Number(row.messages),
+    }
   }
 
   /** 按会话取消息，seq 升序；用返回值的 seq 作为 beforeSeq 向过去翻页。 */
@@ -367,6 +430,7 @@ export class SessionStore {
       mentions: parseJsonArray(String(row.mentions)) as string[],
       ...(row.tool_call_id === null || row.tool_call_id === undefined ? {} : { toolCallId: String(row.tool_call_id) }),
       turnIndex: Number(row.turn_index),
+      ...(parseUsage(row.usage) === undefined ? {} : { usage: parseUsage(row.usage) as StoredUsage }),
       createdAt: Number(row.created_at),
     }
   }

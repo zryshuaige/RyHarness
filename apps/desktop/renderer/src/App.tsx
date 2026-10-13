@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AgentDef, AgentTemplate, Conversation, ProviderInfo } from './api.ts'
-import { ApiClient, resolveApiBase } from './api.ts'
+import { ApiClient } from './api.ts'
 import { AppIcon } from './components/AppIcon.tsx'
 import { ChatView } from './components/ChatView.tsx'
 import { ContactsPage, CreateAgentModal, CreateGroupModal } from './components/ContactsPage.tsx'
@@ -10,11 +10,17 @@ import { Icon } from './components/Icon.tsx'
 import { MePage } from './components/MePage.tsx'
 import { RightPanel } from './components/RightPanel.tsx'
 import { WelcomeHome } from './components/WelcomeHome.tsx'
-import { ChatStore, useChat } from './store.ts'
+import { useApiBase } from './lib/boot.ts'
+import { ChatStore } from './store.ts'
 
 type Tab = 'chats' | 'contacts' | 'me'
 
 type Theme = 'light' | 'dark'
+
+/** 主题切换过渡的 class（styles.css 定义 .theme-animating）。 */
+const THEME_ANIMATING_CLASS = 'theme-animating'
+/** 已读等高频刷新事件的合并窗口（ms）。 */
+const REFRESH_DEBOUNCE_MS = 800
 
 function loadTheme(): Theme {
   try {
@@ -37,10 +43,30 @@ const RAIL_TABS: { key: Tab; icon: IconName; label: string }[] = [
   { key: 'me', icon: 'cat-face', label: '我的' },
 ]
 
+/** 后端就绪前的骨架屏（复用既有样式类，不新增 CSS）。 */
+function BootSkeleton() {
+  return (
+    <div className="app-shell" aria-busy="true">
+      <div className="chat-view">
+        <div className="chat-scroll">
+          <div className="chat-col">
+            <p className="chat-hint">正在启动本地服务…</p>
+            {[72, 56, 88, 64].map((width, index) => (
+              <div className="skeleton-item" key={width}>
+                <span className="skeleton" style={{ width, height: 16, borderRadius: 8 }} />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function App() {
-  const api = useMemo(() => {
-    return new ApiClient(resolveApiBase())
-  }, [])
+  // 主进程窗口先行启动：后端就绪前先渲染骨架。
+  const apiBase = useApiBase()
+  const [api, setApi] = useState<ApiClient | undefined>(undefined)
   const [tab, setTab] = useState<Tab>('chats')
   const [theme, setTheme] = useState<Theme>(loadTheme)
   const [agents, setAgents] = useState<AgentDef[]>([])
@@ -55,13 +81,28 @@ export function App() {
   const [store] = useState(() => {
     return new ChatStore()
   })
-  const snapshot = useChat(store)
+  // 注意：App **不**订阅 chat store——流式 token 的 40ms 通知不应该带动整棵树重渲染。
+  // 右栏在 RightPanel.tsx 内自行 useChat(store)。
 
   useEffect(() => {
     applyTheme(theme)
   }, [theme])
 
+  useEffect(() => {
+    if (apiBase === undefined) return
+    setApi(new ApiClient(apiBase))
+  }, [apiBase])
+
   const changeTheme = (next: Theme): void => {
+    if (next === theme) return
+    // 过渡类先挂上，data-theme 翻转（useEffect）发生在其后；过渡结束再摘掉。
+    const body = document.body
+    body.classList.add(THEME_ANIMATING_CLASS)
+    requestAnimationFrame(() => {
+      setTimeout(() => {
+        body.classList.remove(THEME_ANIMATING_CLASS)
+      }, 250)
+    })
     setTheme(next)
     try {
       localStorage.setItem('ryagent-theme', next)
@@ -70,18 +111,26 @@ export function App() {
     }
   }
 
-  const refresh = async (): Promise<void> => {
+  const runRefresh = useCallback(async (client: ApiClient): Promise<void> => {
     try {
       const [agentRes, templateRes, providerRes, conversationRes] = await Promise.all([
-        api.listAgents(),
-        api.templates(),
-        api.providers(),
-        api.conversations(),
+        client.listAgents(),
+        client.templates(),
+        client.providers(),
+        client.conversations(),
       ])
-      setAgents(agentRes.agents)
-      setTemplates(templateRes.templates)
-      setProviders(providerRes.providers)
-      setConversations(conversationRes.conversations)
+      setAgents((prev) => {
+        return sameList(prev, agentRes.agents) ? prev : agentRes.agents
+      })
+      setTemplates((prev) => {
+        return sameList(prev, templateRes.templates) ? prev : templateRes.templates
+      })
+      setProviders((prev) => {
+        return sameList(prev, providerRes.providers) ? prev : providerRes.providers
+      })
+      setConversations((prev) => {
+        return sameList(prev, conversationRes.conversations) ? prev : conversationRes.conversations
+      })
       store.setAgentNames(
         new Map(
           agentRes.agents.map((a) => {
@@ -95,11 +144,52 @@ export function App() {
     } finally {
       setListLoading(false)
     }
-  }
+  }, [store])
+
+  /** 全量刷新：并发调用合并为一次，飞行中再来请求只排一次尾随刷新。 */
+  const refreshGate = useRef<{ inflight: Promise<void> | null; queued: boolean }>({
+    inflight: null,
+    queued: false,
+  })
+  const apiRef = useRef<ApiClient | undefined>(api)
+  apiRef.current = api
+  const refreshRef = useRef<(() => Promise<void>) | undefined>(undefined)
+
+  const refresh = useCallback(async (): Promise<void> => {
+    const client = apiRef.current
+    if (client === undefined) return
+    const gate = refreshGate.current
+    if (gate.inflight !== null) {
+      gate.queued = true
+      await gate.inflight
+      return
+    }
+    gate.inflight = runRefresh(client).finally(() => {
+      const g = refreshGate.current
+      g.inflight = null
+      if (g.queued) {
+        g.queued = false
+        void refreshRef.current?.()
+      }
+    })
+    await gate.inflight
+  }, [runRefresh])
+  refreshRef.current = refresh
+
+  /** 尾随合并：已读等高频事件在窗口内只发一次全量刷新。 */
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const scheduleRefresh = useCallback((): void => {
+    if (refreshTimer.current !== undefined) clearTimeout(refreshTimer.current)
+    refreshTimer.current = setTimeout(() => {
+      refreshTimer.current = undefined
+      void refresh()
+    }, REFRESH_DEBOUNCE_MS)
+  }, [refresh])
 
   useEffect(() => {
+    if (api === undefined) return
     void refresh()
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [api, refresh])
 
   const active = conversations.find((c) => {
     return c.id === activeId
@@ -108,8 +198,24 @@ export function App() {
     return a.id === 'ryen'
   })
 
+  /** 会话已读：本地把未读数归零（markRead 响应已带 lastReadSeq），不再发 4 个 HTTP。 */
+  const markConversationRead = useCallback((conversationId: string): void => {
+    setConversations((prev) => {
+      const index = prev.findIndex((c) => {
+        return c.id === conversationId
+      })
+      if (index < 0) return prev
+      const target = prev[index]!
+      if ((target.unreadCount ?? 0) === 0) return prev
+      const next = prev.slice()
+      next[index] = { ...target, unreadCount: 0 }
+      return next
+    })
+  }, [])
+
   /** 与 agent 的单聊：找已有 direct 会话，没有就建。 */
   const openDirectChat = async (agentId: string): Promise<void> => {
+    if (api === undefined) return
     const existing = conversations.find((c) => {
       return c.kind === 'direct' && c.memberAgentIds.length === 1 && c.memberAgentIds[0] === agentId
     })
@@ -132,7 +238,7 @@ export function App() {
 
   /** 欢迎主页的建议 chip：打开（或创建）与 Ryen 的单聊并直接发送。 */
   const suggestToRyen = async (text: string): Promise<void> => {
-    if (ryen === undefined) return
+    if (api === undefined || ryen === undefined) return
     try {
       const existing = conversations.find((c) => {
         return c.kind === 'direct' && c.memberAgentIds.length === 1 && c.memberAgentIds[0] === ryen.id
@@ -149,6 +255,8 @@ export function App() {
       setLoadError(error instanceof Error ? error.message : String(error))
     }
   }
+
+  if (api === undefined) return <BootSkeleton />
 
   if (loadError !== undefined) {
     return (
@@ -243,7 +351,9 @@ export function App() {
             agents={agents}
             store={store}
             onRead={() => {
-              void refresh()
+              markConversationRead(active.id)
+              // 列表里的预览/时间戳仍可能过期，用尾随合并刷新兜底（切会话再快也只发一次）。
+              scheduleRefresh()
             }}
           />
         ) : (
@@ -294,11 +404,10 @@ export function App() {
       {tab === 'chats' && active !== undefined && (
         <RightPanel
           api={api}
+          store={store}
           conversation={active}
           agents={agents}
           conversations={conversations}
-          relays={snapshot.relays}
-          messages={[...store.getSnapshot().messages]}
           fileUrl={(name) => {
             return api.fileUrl(name)
           }}
@@ -340,4 +449,13 @@ export function App() {
       )}
     </div>
   )
+}
+
+/** 列表内容没变就保持旧引用：省掉一次整树重渲染（refresh 会重复触发）。 */
+function sameList<T>(prev: readonly T[], next: readonly T[]): boolean {
+  if (prev.length !== next.length) return false
+  for (let i = 0; i < prev.length; i++) {
+    if (JSON.stringify(prev[i]) !== JSON.stringify(next[i])) return false
+  }
+  return true
 }

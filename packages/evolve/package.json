@@ -15,5 +15,8 @@
   },
   "scripts": {
     "build": "tsdown"
+  },
+  "dependencies": {
+    "@ryagent/llm": "workspace:*"
   }
 }

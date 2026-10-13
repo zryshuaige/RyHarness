@@ -15,7 +15,8 @@
  */
 
 import type { EvolveLlm, TurnTrajectory } from './llm.ts'
-import { NEGATIVE_FEEDBACK_RE } from './llm.ts'
+import { CURATOR_ENTRY_LIMIT, NEGATIVE_FEEDBACK_RE } from './llm.ts'
+import { maxOverlap } from './relevance.ts'
 import type { PlaybookSection } from './schema.ts'
 import { AUTO_DEPRECATE_HARMFUL, CONVERT_HIT_THRESHOLD } from './schema.ts'
 import type { PlaybookEntry } from './store.ts'
@@ -37,7 +38,7 @@ export interface CompiledEvolution {
 
 /** 供 AgentLoop 接入的薄接口。 */
 export interface AgentEvolutionHooks {
-  compile(agentId: string): Promise<CompiledEvolution | undefined>
+  compile(agentId: string, inputText?: string): Promise<CompiledEvolution | undefined>
   enqueueTurn(agentId: string, agentName: string, conversationId: string, turn: EvolutionTurn): void
 }
 
@@ -45,6 +46,16 @@ export interface AgentEvolutionHooks {
 const COMPILE_TOP_N = 12
 /** 教训注入条数上限。 */
 const REFLECTION_INJECT_MAX = 3
+/**
+ * 归因相关性阈值：注入条目与本轮输入（用户文本 / 工具名 / 助手文本）无任何词面
+ * 重叠时不算"这轮用到了它"。不设下限就等于噪声条目也拿 harmful/harmful 计数，
+ * auto-deprecate 建立在噪声之上。
+ */
+const ATTRIBUTION_RELEVANCE_THRESHOLD = 0.15
+/** 巩固：长期零访问记忆的归档门槛（天）。 */
+const DORMANT_ARCHIVE_DAYS = 90
+/** 巩固：陈旧软删链的归档保留期（天）。 */
+const SUPERSEDED_RETENTION_DAYS = 180
 
 const SECTION_LABELS: Record<PlaybookSection, string> = {
   strategy: '策略',
@@ -74,6 +85,10 @@ export interface MemorySweep {
     updatedAt: number
   }[]
   supersede(id: string, status: 'superseded'): void
+  /** 长期零访问记忆 → inactive（不物理删除）。返回归档条数。 */
+  archiveDormant(dormantAfterMs: number, now: number): number
+  /** 陈旧软删链（保留当前有效版本的直接前身）→ inactive。返回归档条数。 */
+  archiveColdSuperseded(maxAgeMs: number, now: number): number
 }
 
 export class EvolveService implements AgentEvolutionHooks {
@@ -105,16 +120,23 @@ export class EvolveService implements AgentEvolutionHooks {
 
   /**
    * 编译该 agent 的进化上下文：active playbook 条目（net 排序 top-N、按
-   * section 分组）+ 最近 pending 教训。无内容返回 undefined。
+   * section 分组）+ 与本轮输入相关的 pending 教训（top-N）。无内容返回
+   * undefined。
+   * @param agentId - agent id。
+   * @param inputText - 本轮用户输入；缺省时退回"最近 N 条教训"。AgentLoop
+   *   只传 agentId，由 SessionCoordinator 的绑定钩子把当前输入文本注入进来。
    */
-  async compile(agentId: string): Promise<CompiledEvolution | undefined> {
+  async compile(agentId: string, inputText?: string): Promise<CompiledEvolution | undefined> {
     const entries = this.store
       .listActiveForCompile(agentId)
       .sort((a, b) => {
         return b.helpful - b.harmful - (a.helpful - a.harmful)
       })
       .slice(0, COMPILE_TOP_N)
-    const reflections = this.store.listPendingReflections(agentId, REFLECTION_INJECT_MAX)
+    const reflections =
+      inputText === undefined
+        ? this.store.listPendingReflections(agentId, REFLECTION_INJECT_MAX)
+        : this.store.searchPendingReflections(agentId, inputText, REFLECTION_INJECT_MAX)
 
     const sections: string[] = []
     const playbookEntryIds: string[] = []
@@ -166,14 +188,31 @@ export class EvolveService implements AgentEvolutionHooks {
   // ---- 每轮后异步管线 ----
 
   enqueueTurn(agentId: string, agentName: string, conversationId: string, turn: EvolutionTurn): void {
+    // 归因只记与本轮有关的条目：噪声条目也 ±1 会把 harmful 排序与自动
+    // deprecate 建在噪声上。反馈闭环复用同一份集合。
+    const relevant = this.relevantEntryIds(agentId, turn)
     this.attribution.set(`${conversationId}:${agentId}`, {
-      playbookEntryIds: [...turn.injectedPlaybookEntryIds],
+      playbookEntryIds: relevant,
       reflectionIds: [...turn.injectedReflectionIds],
     })
     if (this.llm === undefined && turn.injectedPlaybookEntryIds.length === 0) return
     this.queue = this.queue.then(async () => {
-      await this.runTurnWithRetry(agentId, agentName, conversationId, turn)
+      await this.runTurnWithRetry(agentId, agentName, conversationId, turn, relevant)
     })
+  }
+
+  /** 注入条目里与本轮输入真正相关的那些（无文本可判时全部保留）。 */
+  private relevantEntryIds(agentId: string, turn: EvolutionTurn): string[] {
+    const context = turnContextTexts(turn)
+    if (context.length === 0) return [...turn.injectedPlaybookEntryIds]
+    const relevant: string[] = []
+    for (const entryId of turn.injectedPlaybookEntryIds) {
+      const entry = this.store.getEntry(entryId)
+      if (entry === undefined) continue
+      const score = maxOverlap(entry.content, context)
+      if (score >= ATTRIBUTION_RELEVANCE_THRESHOLD) relevant.push(entryId)
+    }
+    return relevant
   }
 
   /** 测试用：等队列排空。 */
@@ -186,15 +225,16 @@ export class EvolveService implements AgentEvolutionHooks {
     agentName: string,
     conversationId: string,
     turn: EvolutionTurn,
+    relevantEntryIds: readonly string[],
   ): Promise<void> {
     try {
-      await this.runTurn(agentId, agentName, conversationId, turn)
+      await this.runTurn(agentId, agentName, conversationId, turn, relevantEntryIds)
     } catch (error) {
       this.log(
         `@ryagent/evolve: turn pipeline failed, retrying once: ${error instanceof Error ? error.message : String(error)}`,
       )
       try {
-        await this.runTurn(agentId, agentName, conversationId, turn)
+        await this.runTurn(agentId, agentName, conversationId, turn, relevantEntryIds)
       } catch (retryError) {
         this.log(
           `@ryagent/evolve: turn pipeline gave up: ${retryError instanceof Error ? retryError.message : String(retryError)}`,
@@ -208,6 +248,7 @@ export class EvolveService implements AgentEvolutionHooks {
     agentName: string,
     conversationId: string,
     turn: EvolutionTurn,
+    relevantEntryIds: readonly string[],
   ): Promise<void> {
     const negativeFeedback = NEGATIVE_FEEDBACK_RE.test(turn.userText)
     const toolErrors = turn.toolResults.filter((t) => {
@@ -216,7 +257,7 @@ export class EvolveService implements AgentEvolutionHooks {
     const failed = turn.llmError || toolErrors >= 2 || negativeFeedback
 
     // ---- Reflector：注入归因计数（确定性，不烧 LLM）----
-    for (const entryId of turn.injectedPlaybookEntryIds) {
+    for (const entryId of relevantEntryIds) {
       this.store.addCounts(entryId, failed ? { harmful: 1 } : { helpful: 1 })
       const entry = this.store.getEntry(entryId)
       if (
@@ -266,19 +307,38 @@ export class EvolveService implements AgentEvolutionHooks {
 
     // ---- Curator：playbook 增量 delta ----
     if (this.llm !== undefined) {
-      const deltas = await this.llm.proposeDeltas({ agentName, trajectory: turn })
+      // 把既有条目交给 Curator：没有条目列表，模型只能 add，update/deprecate
+      // 的 entryId 全是幻觉（必然被下面的校验拒掉）。
+      const entries = this.store.listActiveForCompile(agentId, CURATOR_ENTRY_LIMIT)
+      const deltas = await this.llm.proposeDeltas({
+        agentName,
+        trajectory: turn,
+        entries: entries.map((entry) => {
+          return {
+            id: entry.id,
+            section: entry.section,
+            content: entry.content,
+            helpful: entry.helpful,
+            harmful: entry.harmful,
+          }
+        }),
+      })
       for (const delta of deltas) {
         switch (delta.op) {
           case 'add':
-            if (!this.store.hasDuplicate(agentId, delta.section, delta.content)) {
+            if (
+              !this.store.hasDuplicate(agentId, delta.section, delta.content) &&
+              !this.store.hasNearDuplicate(agentId, delta.section, delta.content)
+            ) {
               this.store.insertEntry({ agentId, section: delta.section, content: delta.content, source: 'curator' })
             }
             break
           case 'update': {
             const existing = this.store.getEntry(delta.entryId)
-            if (existing !== undefined && existing.agentId === agentId && existing.status === 'active') {
-              this.store.updateEntryContent(delta.entryId, delta.content)
-            }
+            if (existing === undefined || existing.agentId !== agentId || existing.status !== 'active') break
+            // 改写后的内容不得与另一条既有条目近似重复（否则手册自我复制）。
+            if (this.store.hasNearDuplicateExcept(agentId, existing.section, delta.content, existing.id)) break
+            this.store.updateEntryContent(delta.entryId, delta.content)
             break
           }
           case 'deprecate': {
@@ -363,19 +423,29 @@ export class EvolveService implements AgentEvolutionHooks {
    * 1. 到期反思清理（>30 天未转正 → expired）；
    * 2. 重复记忆合并：同空间 embedding 余弦 >0.95 的对 → supersede 旧条目
    *    （确定性阈值，不再烧 LLM——桌面规模下足够，LLM 判重留给未来）；
-   * 3. dormant 记忆统计（90 天零访问）记日志。
+   * 3. 记忆归档（保守）：90 天零访问 → inactive；180 天以上的软删链中间版本
+   *    → inactive。都不物理删除，只移出检索面（dormant 只统计日志等于让记忆
+   *    库无界增长）。
    */
-  runOnce(now = Date.now()): { expiredReflections: number; mergedMemories: number; dormant: number } {
+  runOnce(now = Date.now()): {
+    expiredReflections: number
+    mergedMemories: number
+    dormant: number
+    archivedDormant: number
+    archivedSuperseded: number
+  } {
     const expired = this.store.expireReflections(REFLECTION_TTL_MS, now)
     let merged = 0
     let dormant = 0
+    let archivedDormant = 0
+    let archivedSuperseded = 0
     if (this.memory !== undefined) {
       for (const space of this.memory.listSpaces()) {
         const rows = this.memory.listActiveEmbeddings(space)
         for (let i = 0; i < rows.length; i++) {
           const a = rows[i]!
           if (a.embedding === null) continue
-          if (a.accessCount === 0 && now - a.updatedAt > 90 * 86_400_000) dormant++
+          if (a.accessCount === 0 && now - a.updatedAt > DORMANT_ARCHIVE_DAYS * 86_400_000) dormant++
           for (let j = i + 1; j < rows.length; j++) {
             const b = rows[j]!
             if (b.embedding === null) continue
@@ -386,11 +456,16 @@ export class EvolveService implements AgentEvolutionHooks {
           }
         }
       }
+      archivedDormant = this.memory.archiveDormant(DORMANT_ARCHIVE_DAYS * 86_400_000, now)
+      archivedSuperseded = this.memory.archiveColdSuperseded(SUPERSEDED_RETENTION_DAYS * 86_400_000, now)
     }
-    if (expired > 0 || merged > 0 || dormant > 0) {
-      this.log(`@ryagent/evolve: consolidate expired=${expired} merged=${merged} dormant=${dormant}`)
+    if (expired > 0 || merged > 0 || dormant > 0 || archivedDormant > 0 || archivedSuperseded > 0) {
+      this.log(
+        `@ryagent/evolve: consolidate expired=${expired} merged=${merged} dormant=${dormant} ` +
+          `archived=${archivedDormant + archivedSuperseded} (dormant=${archivedDormant} superseded=${archivedSuperseded})`,
+      )
     }
-    return { expiredReflections: expired, mergedMemories: merged, dormant }
+    return { expiredReflections: expired, mergedMemories: merged, dormant, archivedDormant, archivedSuperseded }
   }
 
   /** 启动周期巩固（默认 6 小时）；返回停止函数。可关：不调用即可。 */
@@ -403,6 +478,8 @@ export class EvolveService implements AgentEvolutionHooks {
         this.log(`@ryagent/evolve: consolidate failed: ${error instanceof Error ? error.message : String(error)}`)
       }
     }, intervalMs)
+    // 周期任务不该拖住进程退出（内嵌模式/测试），与 server 的 WS 心跳一致。
+    this.consolidationTimer.unref?.()
     return () => {
       this.stopConsolidation()
     }
@@ -421,4 +498,17 @@ function cosine(a: Float32Array, b: Float32Array): number {
   let dot = 0
   for (let i = 0; i < a.length; i++) dot += (a[i] as number) * (b[i] as number)
   return dot
+}
+
+/** 归因判定的上下文文本：用户输入、工具名、助手回复。 */
+function turnContextTexts(turn: EvolutionTurn): string[] {
+  return [
+    turn.userText,
+    turn.assistantText,
+    ...turn.toolResults.map((result) => {
+      return result.name
+    }),
+  ].filter((text) => {
+    return text.trim().length > 0
+  })
 }
