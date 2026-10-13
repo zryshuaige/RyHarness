@@ -297,3 +297,21 @@
   color: var(--text-tertiary, var(--text-secondary));
   font-size: var(--fs-xs, 11px);
 }
+
+/* ---- 聊天：可展开的"更早消息"提示 ---- */
+.chat-hint-btn {
+  display: block;
+  width: 100%;
+  padding: var(--space-2);
+  border: 1px dashed var(--hair, var(--edge));
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.chat-hint-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+}

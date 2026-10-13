@@ -247,6 +247,10 @@ export function ChatView({
     const distance = node.scrollHeight - node.scrollTop - node.clientHeight
     stickToBottom.current = distance < FOLLOW_THRESHOLD
     setShowJump(distance >= FOLLOW_THRESHOLD)
+    // 触顶自动翻页：向上回看历史时不该反复点按钮，也让"窗口"随浏览自然长大。
+    if (node.scrollTop < 160 && hasMore && !loadingEarlier) {
+      void loadEarlier()
+    }
   }
 
   const jumpToLatest = (): void => {
@@ -419,7 +423,18 @@ export function ChatView({
             </button>
           )}
           {allMessages.length > renderCap && (
-            <p className="chat-hint">已省略 {allMessages.length - renderCap} 条早期消息</p>
+            <button
+              type="button"
+              className="chat-hint chat-hint-btn"
+              onClick={() => {
+                // 展开窗口而不是丢弃消息：用户点了就等于"这些我要看"。
+                setRenderCap((cap) => {
+                  return cap + PAGE_SIZE * 2
+                })
+              }}
+            >
+              ↑ 还有 {allMessages.length - renderCap} 条更早的消息，点此展开
+            </button>
           )}
           {turns.map((turn) => (
             <div key={turn.turnIndex} className="turn-block">
