@@ -43,13 +43,24 @@ const GRADIENT =
   '<stop offset="0%" stop-color="#FBBF24"/><stop offset="100%" stop-color="#D97706"/>' +
   '</linearGradient></defs>'
 
+/**
+ * 母版里的 class 只服务于应用内主题样式（ink / inkf / face 都是给渲染层 CSS 用的
+ * 钩子，静态产物里没有对应的样式表）。逐个改写成静态属性：ink 变成写死的描边色，
+ * 其余直接剥掉——漏一个就会把无意义的 class 泄漏进 icon.svg。
+ */
+const stripClasses = (svg) => {
+  return svg
+    .replaceAll('class="ink" ', `stroke="${INK}" `)
+    .replaceAll('class="inkf" ', '')
+    .replaceAll('class="face" ', '')
+}
+
 /** 彩色母版：琥珀 squircle + 几何猫脸。 */
 const iconSvg =
   `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 64 64" role="img" aria-label="RyAgent">` +
   GRADIENT +
   `<path fill="url(#ryagent-plate)" d="${SQUIRCLE}"/>` +
-  // 母版里的 class 只服务于应用内主题样式，静态产物改为直接写死描边/填充。
-  faceIdle.replaceAll('class="ink" ', `stroke="${INK}" `).replaceAll('class="inkf" ', '') +
+  stripClasses(faceIdle) +
   `</svg>`
 
 /** 单色剪影：只有猫头轮廓，透明底（深色背景/托盘/文档）。 */
@@ -65,6 +76,15 @@ const monoSvg =
 
 /** favicon：同母版，额外给出显式背景（小尺寸下边缘更稳）。 */
 const faviconSvg = iconSvg.replace('<svg ', '<svg shape-rendering="geometricPrecision" ')
+
+// 母版随时会加新的主题钩子，class 一旦漏进静态产物就没人会注意到，直到图标显示错。
+for (const [name, svg] of [
+  ['icon.svg', iconSvg],
+  ['favicon.svg', faviconSvg],
+  ['icon-mono.svg', monoSvg],
+]) {
+  if (svg.includes('class="')) throw new Error(`[icon] ${name} 残留 class 钩子，静态产物不应带 class`)
+}
 
 writeFileSync(join(brand, 'icon.svg'), `${iconSvg}\n`)
 writeFileSync(join(brand, 'icon-mono.svg'), `${monoSvg}\n`)

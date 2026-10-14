@@ -1,7 +1,9 @@
-import type { AgentDefinition } from '@ryagent/agent'
+import type { AgentDefinition, Tool, ToolResult } from '@ryagent/agent'
+import { createSessionQuota } from '@ryagent/agent'
+import { brandString } from '@ryagent/brand'
 import type { GroupEvent } from '@ryagent/group'
 import { buildGroupContext, GroupDispatcher, parseMentions } from '@ryagent/group'
-import type { LlmRuntime, StreamChunk } from '@ryagent/llm'
+import type { GenerateOptions, LlmRuntime, StreamChunk, ToolCallId } from '@ryagent/llm'
 import { describe, expect, it } from 'vitest'
 
 function agent(id: string, name: string, systemPrompt = `你是${name}。`): AgentDefinition {
@@ -196,5 +198,116 @@ describe('GroupDispatcher', () => {
     expect(guard).toHaveLength(1)
     expect(guard[0]).toMatchObject({ fromAgent: 'codebot', toAgent: 'codebot' })
     expect(calls()).toBe(1)
+  })
+})
+
+describe('GroupDispatcher 配额', () => {
+  const RYEN_TOOLER = { ...RYEN, tools: ['shell_exec'] }
+  const CODEBOT_TOOLER = { ...CODEBOT, tools: ['shell_exec'] }
+
+  /** 按 system prompt 首行分派：第一步调工具，第二步回 `replies[名字]`。 */
+  function toolThenReplyLlm(replies: Record<string, string>): LlmRuntime {
+    let calls = 0
+    return {
+      stream(options: GenerateOptions) {
+        calls++
+        const head = (options.system ?? '').split('\n')[0] ?? ''
+        const name = Object.keys(replies).find((key) => {
+          return head.includes(key)
+        })
+        const text = name === undefined ? '' : (replies[name] as string)
+        const chunks: StreamChunk[] =
+          options.messages.at(-1)?.role === 'tool'
+            ? [
+                { type: 'text-delta', index: 0, text },
+                { type: 'block-end', index: 0, block: { type: 'text', text } },
+                { type: 'finish', reason: { kind: 'stop' } },
+              ]
+            : [
+                {
+                  type: 'block-end',
+                  index: 0,
+                  block: {
+                    type: 'tool-call',
+                    id: brandString<ToolCallId>(`call-${calls}`),
+                    name: 'shell_exec',
+                    arguments: '{}',
+                  },
+                },
+                { type: 'finish', reason: { kind: 'tool-calls' } },
+              ]
+        return (async function* (): AsyncGenerator<StreamChunk> {
+          yield* chunks
+        })()
+      },
+    } as unknown as LlmRuntime
+  }
+
+  function countingShell(): { tool: Tool; executions: () => number } {
+    let executions = 0
+    return {
+      tool: {
+        name: 'shell_exec',
+        description: 'test shell',
+        parameters: { type: 'object', properties: {} },
+        async execute(): Promise<ToolResult> {
+          executions++
+          return { content: 'ok' }
+        },
+      },
+      executions: () => executions,
+    }
+  }
+
+  it('shares one quota across the members of a turn', async () => {
+    const quota = createSessionQuota({ maxShellCalls: 1 })
+    const { tool, executions } = countingShell()
+    const dispatcher = new GroupDispatcher({
+      llm: toolThenReplyLlm({ Ryen: '@CodeBot 接手', CodeBot: '好' }),
+      members: [RYEN_TOOLER, CODEBOT_TOOLER],
+      dispatcherId: 'ryen',
+      tools: [tool],
+      quota,
+    })
+    const events = await collect(
+      dispatcher.runTurn({ text: '开工', history: [], workspaceRoot: process.cwd(), turnIndex: 0 }),
+    )
+    const results = events
+      .filter((event) => {
+        return event.type === 'tool-result'
+      })
+      .map((event) => {
+        return event.type === 'tool-result' ? [event.agentId, event.isError] : []
+      })
+    // Ryen 用掉唯一一次 shell，接力到的 CodeBot 撞的是同一个闸。
+    expect(results).toEqual([
+      ['ryen', false],
+      ['codebot', true],
+    ])
+    expect(executions()).toBe(1)
+    expect(quota.usage).toEqual({ shellCalls: 1, writeBytes: 0, rejected: 1 })
+  })
+
+  it('creates its own per-turn quota when the caller passes none', async () => {
+    const { tool, executions } = countingShell()
+    const dispatcher = new GroupDispatcher({
+      llm: toolThenReplyLlm({ Ryen: '@CodeBot 接手', CodeBot: '好' }),
+      members: [RYEN_TOOLER, CODEBOT_TOOLER],
+      dispatcherId: 'ryen',
+      tools: [tool],
+    })
+    const events = await collect(
+      dispatcher.runTurn({ text: '开工', history: [], workspaceRoot: process.cwd(), turnIndex: 0 }),
+    )
+    expect(
+      events
+        .filter((event) => {
+          return event.type === 'tool-result'
+        })
+        .map((event) => {
+          return event.type === 'tool-result' ? event.isError : null
+        }),
+    ).toEqual([false, false])
+    expect(executions()).toBe(2)
   })
 })

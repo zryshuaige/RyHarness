@@ -18,6 +18,9 @@
  *   接力链始终串行：接力的 prompt 依赖上一个发言者的输出。
  * - **上下文**：所有成员共享群历史，发言带"名字:"前缀，按字符预算从
  *   最旧裁剪（默认 30k 字符，token 的近似）。
+ * - **配额**：一轮里所有成员共用同一个 {@link SessionQuota}，群聊的工具预算
+ *   是"每条用户消息"的量级，不会因为接力链变长而被放大；由调用方传入跨轮
+ *   复用的同一个闸才升级为"每会话"。
  * - **取消**：runTurn 接受 AbortSignal，透传给每个 AgentLoop 与工具；取消
  *   后不再接力，以 code=ABORTED 的 error 事件收尾。
  * @module @ryagent/group/dispatcher
@@ -28,11 +31,12 @@ import type {
   AgentEvolutionHooks,
   AgentLoopEvent,
   AgentMemoryHooks,
+  SessionQuota,
   Tool,
   ToolContext,
   ToolResult,
 } from '@ryagent/agent'
-import { ABORTED_CODE, AgentLoop, isAbortedError } from '@ryagent/agent'
+import { ABORTED_CODE, AgentLoop, createSessionQuota, isAbortedError } from '@ryagent/agent'
 import type { AssistantMessage, LlmRuntime, ToolCallId } from '@ryagent/llm'
 import { errorChain } from '@ryagent/llm'
 import { parseMentions } from './mentions.ts'
@@ -76,6 +80,12 @@ export interface GroupDispatcherOptions {
   memory?: AgentMemoryHooks
   /** 自我进化钩子（playbook 注入 + 每轮轨迹入队）。 */
   evolution?: AgentEvolutionHooks
+  /**
+   * 工具配额闸：本轮所有成员共用这一个实例（接力链再长也只有一份预算）。
+   * 缺省时调度器自建一个，只覆盖本轮；要"每会话"累计，由协调器按
+   * conversationId 缓存同一个闸传进来。
+   */
+  quota?: SessionQuota
   /** 单条用户消息触发的最大接力轮次，默认 8。 */
   maxTurns?: number
   /** 入口 @ 多成员并行扇出的并发上限，默认 3（供应商限流保护）。 */
@@ -225,10 +235,12 @@ class EventQueue {
 export class GroupDispatcher {
   private readonly maxTurns: number
   private readonly fanoutConcurrency: number
+  private readonly quota: SessionQuota
 
   constructor(private readonly options: GroupDispatcherOptions) {
     this.maxTurns = options.maxTurns ?? DEFAULT_MAX_TURNS
     this.fanoutConcurrency = Math.max(1, options.fanoutConcurrency ?? DEFAULT_FANOUT_CONCURRENCY)
+    this.quota = options.quota ?? createSessionQuota()
     if (
       !options.members.some((member) => {
         return member.id === options.dispatcherId
@@ -478,6 +490,7 @@ export class GroupDispatcher {
       llm: this.options.llm,
       tools: this.options.tools,
       onAssistantMessage,
+      quota: this.quota,
       ...(this.options.memory === undefined ? {} : { memory: this.options.memory }),
       ...(this.options.evolution === undefined ? {} : { evolution: this.options.evolution }),
     })

@@ -14,11 +14,24 @@
  * 用量：LlmRuntime 被 observeUsage 包一层拦截 usage chunk，逐次挂到产出
  * 它的那条 assistant 消息上（messages.usage），并经 RunContext.onUsage
  * 上报本轮累计；会话累计由 store.conversationUsage 求和得到。
+ *
+ * 配额：AgentLoop 每轮自建的闸只覆盖本次运行（额度实际按轮计），这里按
+ * conversationId 缓存同一个闸并传进去——单聊给 AgentLoop.quota，群聊给
+ * GroupDispatcher.quota（本轮所有成员共用），额度才是"每会话"。缓存有上界
+ * 且宿主删会话时可 {@link SessionCoordinator.releaseConversation} 释放。
  * @module @ryagent/session/coordinator
  */
 
-import type { AgentDefinition, AgentEvolutionHooks, AgentLoopEvent, AgentMemoryHooks, Tool } from '@ryagent/agent'
-import { AgentLoop } from '@ryagent/agent'
+import type {
+  AgentDefinition,
+  AgentEvolutionHooks,
+  AgentLoopEvent,
+  AgentMemoryHooks,
+  SessionQuota,
+  SessionQuotaLimits,
+  Tool,
+} from '@ryagent/agent'
+import { AgentLoop, createSessionQuota } from '@ryagent/agent'
 import { brandString } from '@ryagent/brand'
 import type { GroupEvent, GroupHistoryEntry } from '@ryagent/group'
 import { GroupDispatcher, parseMentions } from '@ryagent/group'
@@ -45,6 +58,10 @@ export interface CoordinatorOptions {
   memory?: AgentMemoryHooks
   /** 自我进化（可选）：playbook 注入 + 每轮 delta/反思。 */
   evolution?: AgentEvolutionHooks
+  /** 每会话工具配额上限（可选，缺省用 DEFAULT_SESSION_QUOTA_LIMITS）。 */
+  quotaLimits?: SessionQuotaLimits
+  /** 内存中同时保留的会话配额闸数（可选，默认 128；超出按 LRU 淘汰）。 */
+  quotaCacheSize?: number
 }
 
 /**
@@ -226,9 +243,99 @@ class TurnUsage {
   }
 }
 
+/** 内存里同时保留的会话配额闸数（会话数）；超出后按 LRU 淘汰。 */
+const DEFAULT_QUOTA_CACHE_SIZE = 128
+
+/**
+ * 会话配额闸缓存：同一会话的每一轮、每个群成员都拿到同一个闸。
+ *
+ * AgentLoop 缺省自建闸，额度按轮计——一轮 40 次 shell 用完就翻篇，跨轮拦不住
+ * "这一整个会话里反复跑命令"。这里把闸按 conversationId 缓存起来传进去。
+ *
+ * 上界：条目随会话数增长，必须有界。超限时先扫掉会话已不存在的条目（宿主直接
+ * 删库、不走 {@link ConversationQuotaCache.release} 时也能真正释放），再按 LRU
+ * 丢最久没用过的那个。代价是被淘汰的会话额度归零（下一轮重新计），比无界增长好。
+ */
+class ConversationQuotaCache {
+  /** 插入序即 LRU 序：命中后删掉再插入，迭代序始终是最久未使用在前。 */
+  private readonly entries = new Map<string, SessionQuota>()
+
+  constructor(
+    private readonly limits: SessionQuotaLimits,
+    private readonly maxEntries: number,
+    /** 会话是否还在库里（用于清理已删除会话的残留闸）。 */
+    private readonly isAlive: (conversationId: string) => boolean,
+  ) {}
+
+  /** 取该会话的闸（没有就建一个并记账）。 */
+  take(conversationId: string): SessionQuota {
+    const cached = this.entries.get(conversationId)
+    if (cached !== undefined) {
+      this.entries.delete(conversationId)
+      this.entries.set(conversationId, cached)
+      return cached
+    }
+    const quota = createSessionQuota(this.limits)
+    this.entries.set(conversationId, quota)
+    this.evict()
+    return quota
+  }
+
+  /** 只查不建：没有就返回 undefined（供宿主查看用量/清理）。 */
+  peek(conversationId: string): SessionQuota | undefined {
+    return this.entries.get(conversationId)
+  }
+
+  /** 释放一个会话的闸（会话已删除时由宿主调用）。 */
+  release(conversationId: string): boolean {
+    return this.entries.delete(conversationId)
+  }
+
+  private evict(): void {
+    if (this.entries.size <= this.maxEntries) return
+    for (const id of [...this.entries.keys()]) {
+      if (!this.isAlive(id)) this.entries.delete(id)
+    }
+    while (this.entries.size > this.maxEntries) {
+      const oldest = this.entries.keys().next()
+      if (oldest.done === true) return
+      this.entries.delete(oldest.value)
+    }
+  }
+}
+
 /** Session 协调器：单聊 chatDirect + 群聊 chatGroup。 */
 export class SessionCoordinator {
-  constructor(private readonly options: CoordinatorOptions) {}
+  private readonly quotas: ConversationQuotaCache
+
+  constructor(private readonly options: CoordinatorOptions) {
+    const { store } = options
+    this.quotas = new ConversationQuotaCache(
+      options.quotaLimits ?? {},
+      Math.max(1, options.quotaCacheSize ?? DEFAULT_QUOTA_CACHE_SIZE),
+      (conversationId) => {
+        return store.getConversation(conversationId) !== undefined
+      },
+    )
+  }
+
+  /**
+   * 查某会话当前的配额闸（只读，不创建）：没有就返回 undefined。
+   * @param conversationId - 会话 id。
+   */
+  quotaOf(conversationId: string): SessionQuota | undefined {
+    return this.quotas.peek(conversationId)
+  }
+
+  /**
+   * 释放某会话的内存态（当前只有配额闸）。宿主删除会话时调用：
+   * `store.deleteConversation(id)` 之后紧跟一句，否则额度要等缓存淘汰才回收。
+   * @param conversationId - 会话 id。
+   * @returns 该会话此前确实占用着一个闸。
+   */
+  releaseConversation(conversationId: string): boolean {
+    return this.quotas.release(conversationId)
+  }
 
   /**
    * 单聊：用户消息落库 → 从 store 恢复历史 → AgentLoop → 发言落库。
@@ -290,6 +397,8 @@ export class SessionCoordinator {
         const drained = usage.takeCall()
         this.settleUsage(row, callUsage === undefined ? drained : toStoredUsage(callUsage), usage, turnIndex, context)
       },
+      // 按会话缓存的闸：额度跨轮累计，不随这一轮的 AgentLoop 重建而清零。
+      quota: this.quotas.take(conversationId),
       ...(memory === undefined ? {} : { memory }),
       ...(evolution === undefined ? {} : { evolution }),
     })
@@ -385,6 +494,8 @@ export class SessionCoordinator {
       tools,
       ...(this.bindMemory(conversationId) === undefined ? {} : { memory: this.bindMemory(conversationId) }),
       ...(this.bindEvolution(conversationId) === undefined ? {} : { evolution: this.bindEvolution(conversationId) }),
+      // 调度器把同一个闸分给本轮所有成员：接力链变长不会放大工具预算。
+      quota: this.quotas.take(conversationId),
     })
     try {
       for await (const event of dispatcher.runTurn({

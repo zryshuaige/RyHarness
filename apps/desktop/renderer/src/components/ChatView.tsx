@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AgentDef, ApiClient, Conversation, MessageRow } from '../api.ts'
 import { messageText } from '../api.ts'
+import { formatTime } from '../lib/format.ts'
 import { toast } from '../lib/toast.ts'
 import { LEAVE_MS, prefersReducedMotion, useLeaving } from '../lib/useLeaving.ts'
 import type { ChatStore, MessageAttachment, UiMessage } from '../store.ts'
@@ -12,15 +13,6 @@ import { MessageBubble, RelayChain } from './MessageBubble.tsx'
 import { PanelSkeleton } from './Skeleton.tsx'
 import { ToastHost } from './ToastHost.tsx'
 import { TypingDots } from './TypingDots.tsx'
-
-function formatTime(ts: number): string {
-  const date = new Date(ts)
-  const today = new Date()
-  const sameDay = date.toDateString() === today.toDateString()
-  return sameDay
-    ? date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-    : date.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
-}
 
 /**
  * 历史消息行 → UiMessage 形状。
@@ -699,5 +691,3 @@ function maxTurn(messages: { turnIndex: number }[]): number {
 export function nextTurnIndex(messages: { turnIndex: number }[]): number {
   return maxTurn(messages) + 1
 }
-
-export { formatTime }

@@ -57,13 +57,6 @@ export interface ProviderVerifyResult {
 export interface DeletedApiKeyResult {
   providerId: string
   configured: boolean
-  /**
-   * 服务端**不**回这个字段，标成 never 而不是省掉：ProviderApi（ProviderSettings.tsx）
-   * 目前还把 deleteApiKey 声明成返回 `{ deleted: string }`，省掉这一行会让整个
-   * ApiClient 塞不进 MeApi。never 的作用是「谁真去读它，类型上就立刻拿到无值」，
-   * 等那层声明跟真实响应对齐之后，把这一行删掉即可。
-   */
-  deleted: never
 }
 
 /** 全文搜索命中的一行（GET /api/search）。 */

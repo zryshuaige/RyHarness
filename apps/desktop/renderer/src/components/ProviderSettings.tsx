@@ -42,8 +42,8 @@ export interface ProviderApi {
   deleteProvider?(id: string): Promise<{ deleted: string }>
   /** 测连接；缺省 = 这版服务端没有，界面禁用入口并说明。 */
   verifyProvider?(id: string): Promise<ProviderVerifyResult>
-  /** 移除已存凭据；缺省同上。 */
-  deleteApiKey?(id: string): Promise<{ deleted: string }>
+  /** 移除已存凭据；缺省同上。服务端回的是 `{ providerId, configured }`，没有 `{ deleted }`。 */
+  deleteApiKey?(id: string): Promise<{ providerId: string; configured: boolean }>
 }
 
 /**

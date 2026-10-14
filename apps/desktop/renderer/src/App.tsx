@@ -14,6 +14,7 @@ import { ToastHost } from './components/ToastHost.tsx'
 import { WelcomeHome } from './components/WelcomeHome.tsx'
 import { agentById } from './lib/agents.ts'
 import { useApiBase } from './lib/boot.ts'
+import { markFirstInteractive } from './lib/boot-trace.ts'
 import { toast } from './lib/toast.ts'
 import { ChatStore } from './store.ts'
 
@@ -171,6 +172,9 @@ export function App() {
           ),
         )
         setLoadError(undefined)
+        // 首屏「可交互」：首份数据到手这一刻，列表、通讯录、右栏才是真能点的。
+        // 打点本身幂等，后续刷新重复调只是空转。
+        markFirstInteractive()
       } catch (error) {
         setLoadError(error instanceof Error ? error.message : String(error))
       } finally {

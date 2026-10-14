@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { ApiClient, PlaybookEntryRow, ReflectionRow } from '../api.ts'
 import { toast } from '../lib/toast.ts'
+import { EntryExplain } from './GroupEvolution.tsx'
 import { Icon } from './Icon.tsx'
 import { Modal } from './Modal.tsx'
 import { PanelSkeleton } from './Skeleton.tsx'
@@ -131,7 +132,12 @@ export function PlaybookPanel({
                 <ul className="memory-list">
                   {entries.map((entry) => (
                     <li key={entry.id} className={`memory-row ${entry.status === 'deprecated' ? 'is-deprecated' : ''}`}>
-                      <span className="memory-content">{entry.content}</span>
+                      {/* 溯源入口挂在正文列里：证据链要占满一整行的宽度，挤在行尾
+                          会被正文压成一条缝。正文单占一块，入口与它天然换行。 */}
+                      <div className="memory-content">
+                        <div>{entry.content}</div>
+                        <EntryExplain api={api} entry={entry} />
+                      </div>
                       <span className={`pb-count ${net(entry) >= 0 ? 'pos' : 'neg'}`} title="helpful - harmful">
                         +{entry.helpful}/-{entry.harmful}
                       </span>

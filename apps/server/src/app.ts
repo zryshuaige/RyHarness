@@ -5,7 +5,7 @@
  * 本文件只做**组合根与生命周期**：cordis Context → LlmRuntime + OpenAI 适配器
  * （providers.json）→ SessionStore（SQLite）→ 工具 → 种子 Ryen →
  * SessionCoordinator + EventHub → HTTP/WS 出口。路由按域拆在 `routes/` 下
- * （会话 / agent / 供应商 / 设置 / 记忆 / 进化 / 遥测），turn 调度与事件翻译
+ * （会话 / agent / 供应商 / 设置 / 记忆 / 进化 / 遥测 / 用量），turn 调度与事件翻译
  * 留在本文件——它们跨越多个域，不属于任何单一域。
  * @module @ryagent/server/app
  */
@@ -51,6 +51,7 @@ import { registerMemoryRoutes } from './routes/memory.ts'
 import { registerProviderRoutes } from './routes/providers.ts'
 import { registerSettingsRoutes } from './routes/settings.ts'
 import { registerTelemetryRoutes } from './routes/telemetry.ts'
+import { registerUsageRoutes } from './routes/usage.ts'
 import { ensureSeedAgents } from './seed.ts'
 import type { TurnStatus } from './telemetry.ts'
 import { Telemetry } from './telemetry.ts'
@@ -658,6 +659,8 @@ export class RyAgentServer {
       consolidation: () => {
         return this.consolidationSnapshot()
       },
+      dataDir: this.dataDir,
+      telemetry: this.telemetry,
     })
 
     registerEvolveRoutes(router, {
@@ -707,6 +710,12 @@ export class RyAgentServer {
     })
 
     registerTelemetryRoutes(router, { telemetry: this.telemetry })
+
+    registerUsageRoutes(router, {
+      store,
+      providers: this.providers,
+      conversationStates: this.conversationStates,
+    })
 
     return router
   }

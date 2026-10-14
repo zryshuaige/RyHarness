@@ -723,7 +723,7 @@ describe('凭据生命周期', () => {
     const api = fakeApi({
       deleteApiKey: (id: string) => {
         deleted.push(id)
-        return Promise.resolve({ deleted: id })
+        return Promise.resolve({ providerId: id, configured: false })
       },
     })
     await renderSettings(api, [builtinProvider], () => {

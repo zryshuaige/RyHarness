@@ -57,6 +57,14 @@ const APP_ICON = join(here, '../assets/icon-256.png')
  * 几百 KB 的分片要重新下载、重新解析、重新编译。
  */
 export const DEFAULT_BACKEND_PORT = 32100
+/**
+ * 渲染层资源服务端口：后端 +1。
+ *
+ * 同一套理由、同一个坑：资源服务此前监听 port 0，每次冷启动 origin 都变，
+ * Chromium 的 HTTP 缓存与 V8 代码缓存一起归零，渲染层那几百 KB 分片全部重新
+ * 下载与编译。固定端口换来跨启动稳定的 origin，被占用时同样回退随机。
+ */
+export const DEFAULT_ASSETS_PORT = DEFAULT_BACKEND_PORT + 1
 /** 后端监听地址（回环；不监听 0.0.0.0，本机服务没有对外暴露的理由）。 */
 const BACKEND_HOST = '127.0.0.1'
 
@@ -1145,10 +1153,17 @@ async function main(): Promise<void> {
 
   const devServerUrl = process.env.RYAGENT_DEV_SERVER_URL
   // 渲染层资源服务：与后端无关，先就绪，窗口才能立刻开始加载。
-  const assets =
-    devServerUrl === undefined || devServerUrl.length === 0
-      ? await RendererAssets.start(join(here, '../renderer/dist'))
-      : undefined
+  let assets: RendererAssets | undefined
+  if (devServerUrl === undefined || devServerUrl.length === 0) {
+    // 与后端同一套端口策略：固定端口优先（跨启动 origin 稳定，HTTP 与 V8 缓存
+    // 不归零）；被占用时回退随机，实际地址由 assets.url 带出，调用方不必关心。
+    const assetChoice = await resolveBackendPort({ port: DEFAULT_ASSETS_PORT, host: BACKEND_HOST })
+    if (assetChoice.fallback === true) {
+      console.warn(`[ryagent] ${assetChoice.reason ?? '端口被占用'}，资源服务回退随机端口`)
+    }
+    assets = await RendererAssets.start(join(here, '../renderer/dist'), { port: assetChoice.port })
+    if (assets.fellBack) console.warn(`[ryagent] 资源服务端口 ${DEFAULT_ASSETS_PORT} 起不来，已回退 ${assets.port}`)
+  }
   bootTrace.mark('assets-ready')
   const startServer = async (): Promise<RyAgentServer> => {
     // 固定端口优先（跨启动 origin 稳定，HTTP 与 V8 缓存不归零）；被占用时回退随机，

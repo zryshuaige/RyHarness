@@ -19,5 +19,13 @@ export {
   writeProvidersConfig,
 } from './config.ts'
 export type { StampedWsEvent, WsEvent } from './events.ts'
+export type { MemoryHealthReport, MemoryRecall } from './routes/memory.ts'
+export type { ProviderUsage } from './routes/providers.ts'
+export type {
+  ConversationUsageRow,
+  ProviderAgentUsage,
+  ProviderUsageRow,
+  UsageReport,
+} from './routes/usage.ts'
 export type { AgentTemplate } from './seed.ts'
 export { AGENT_TEMPLATES, ensureSeedAgents, instantiateTemplate } from './seed.ts'

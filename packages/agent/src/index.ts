@@ -15,10 +15,15 @@ export type {
   AgentMemoryHooks,
   AgentRunOptions,
   EvolutionTurnData,
+  SessionQuota,
+  SessionQuotaLimits,
+  SessionQuotaUsage,
 } from './loop.ts'
 export {
   AgentLoop,
+  createSessionQuota,
   DEFAULT_HISTORY_BUDGET_CHARS,
+  DEFAULT_SESSION_QUOTA_LIMITS,
   MAX_LOOP_CONTEXT_CHARS,
   trimHistoryToBudget,
 } from './loop.ts'

@@ -1,11 +1,14 @@
 /**
- * 长期记忆路由：agent 记忆列表、软删、归档/恢复、重建向量与统计。
+ * 长期记忆路由：agent 记忆列表、软删、归档/恢复、重建向量、统计与整体健康度。
  * @module @ryagent/server/routes/memory
  */
 
+import { readdirSync, statSync } from 'node:fs'
+import { join } from 'node:path'
 import type { MemoryRow, MemoryService } from '@ryagent/memory'
 import type { SessionStore } from '@ryagent/session'
 import { json, type Router, strField } from '../router.ts'
+import type { Telemetry } from '../telemetry.ts'
 
 /** 巩固状态（由组合根持有定时器与时间戳，路由只负责回包）。 */
 export interface ConsolidationSnapshot {
@@ -20,10 +23,49 @@ export interface MemoryRoutes {
   memoryService: MemoryService | undefined
   /** 巩固周期与上次巩固时间。 */
   consolidation: () => ConsolidationSnapshot
+  /** 数据目录（数据库文件体积从这里量）。 */
+  dataDir: string
+  /** 运行时计量（"最近一次召回"取自轮次计量）。 */
+  telemetry: Telemetry
+}
+
+/** 最近一次召回（GET /api/memory/health 的 lastRecall）。 */
+export interface MemoryRecall {
+  conversationId: string
+  /** 注入该轮的记忆条数。 */
+  items: number
+  /** 该轮的召回耗时（毫秒，可能含多次召回的累计）。 */
+  ms: number
+  /** 该轮结束时刻（Unix 毫秒）。 */
+  at: number
+}
+
+/** GET /api/memory/health 的返回体（记忆系统关闭时只有 enabled:false）。 */
+export interface MemoryHealthReport {
+  enabled: true
+  /** 记忆总行数（口径同 /api/memory/stats：含归档与软删链）。 */
+  total: number
+  /** 已归档（status=inactive）条数。 */
+  archived: number
+  /** 缺当前 embedding 向量的条数（active + inactive）。 */
+  missingVectors: number
+  /** 各空间（agent 私有 + 共享画像）的记忆条数。 */
+  bySpace: Record<string, number>
+  /** <dataDir> 下 SQLite 数据文件占用的字节（含 WAL）。 */
+  dbBytes: number
+  embeddings: { label: string; model: string; dim?: number }
+  lastRecall?: MemoryRecall
 }
 
 /** 「最近学到 N 条」的统计窗口：近 24 小时内新增的长期记忆。 */
 const RECENT_LEARNED_WINDOW_MS = 86_400_000
+
+/** 计数用的扫描上限：健康度要的是全量条数，列表接口的默认窗口不够看。 */
+const HEALTH_COUNT_LIMIT = 10_000
+/** 找"最近一次召回"时翻的轮次数：遥测环形缓冲的默认容量，一圈足够。 */
+const RECALL_SCAN_LIMIT = 200
+/** 计入存储体积的库文件后缀：主库 + WAL（已提交但尚未 checkpoint 的页）。 */
+const DATABASE_FILE_SUFFIXES = ['.db', '.db-wal']
 
 /**
  * 记忆的对外形状（渲染层 MemoryRow）。
@@ -73,6 +115,61 @@ function countRecentLearned(store: SessionStore, memoryService: MemoryService, n
     }
   }
   return count
+}
+
+/**
+ * 记忆库占用的磁盘字节：数据目录下所有 SQLite 库文件（含 WAL）。
+ *
+ * 记忆与会话/进化共用同一个 ryagent.db，所以这是"这台机器上的数据一共多大"，
+ * 不是"记忆自己占了多少"——后者在当前存储布局下无法诚实拆出来，宁可给一个
+ * 说得清的数字，也不猜一个只属于记忆的体积。
+ */
+function databaseBytes(dataDir: string): number {
+  let entries: string[]
+  try {
+    entries = readdirSync(dataDir)
+  } catch {
+    return 0
+  }
+  let bytes = 0
+  for (const entry of entries) {
+    if (!DATABASE_FILE_SUFFIXES.some((suffix) => entry.endsWith(suffix))) continue
+    try {
+      bytes += statSync(join(dataDir, entry)).size
+    } catch {
+      // 文件可能刚被删掉（临时目录清理等）：少算一个文件不该让整格读不出来。
+    }
+  }
+  return bytes
+}
+
+/** 当前 embedding 模型下 active 向量的维度；一条向量都没有时缺省。 */
+function embeddingDim(service: MemoryService, spaces: readonly string[]): number | undefined {
+  for (const space of spaces) {
+    for (const row of service.store.listActiveEmbeddings(space, service.embeddingModel)) {
+      if (row.embedding !== null) return row.embedding.length
+    }
+  }
+  return undefined
+}
+
+/**
+ * 最近一次真的注入了记忆的轮次（遥测快照按时间倒序，取第一条命中）。
+ *
+ * 记忆召回的耗时与条数由组合根的计时钩子记在轮次计量上；轮次缓冲是环形且只活在
+ * 本进程内，所以这是"本次运行以来最近的一次"，不是历史归档——重装后为空是如实的。
+ */
+function lastRecall(telemetry: Telemetry): MemoryRecall | undefined {
+  const turn = telemetry.getSnapshot(RECALL_SCAN_LIMIT).turns.find((row) => {
+    return row.memoryItems > 0
+  })
+  if (turn === undefined) return undefined
+  return {
+    conversationId: turn.conversationId,
+    items: turn.memoryItems,
+    ms: turn.memoryRecallMs,
+    at: turn.finishedAt,
+  }
 }
 
 /** 长期记忆的路由。 */
@@ -131,6 +228,48 @@ export function registerMemoryRoutes(router: Router, deps: MemoryRoutes): void {
       consolidation: deps.consolidation(),
       ...service.store.stats(),
     })
+  })
+
+  /**
+   * 记忆库的整体健康度：总数 / 已归档 / 缺向量 / 各空间分布 / 存储体积 /
+   * embedding 状态 / 最近一次召回。
+   *
+   * 「我的」页与记忆面板要的是**一次请求里的完整画面**：此前这些数字散在
+   * /api/memory/stats、/api/memory/archived 与 /api/telemetry 三处，缺向量与
+   * 存储体积更是没有任何路由能给，只能在界面上显示「—」。这里全部从现有 store
+   * 与库文件算出来，不新增任何存储。
+   *
+   * 记忆系统关闭时回 200 `{enabled:false}`（面板每次打开都会拉，不该因此报错）。
+   */
+  router.get('/api/memory/health', async (req, res) => {
+    // 健康度没有可调项：敲错的键 400，而不是被默默忽略后回一份"看起来对"的数字。
+    for (const key of req.query.keys()) {
+      json(res, 400, { error: `unknown query parameter: ${key}` })
+      return
+    }
+    const service = memoryService()
+    if (service === undefined) {
+      json(res, 200, { enabled: false })
+      return
+    }
+    const stats = service.store.stats()
+    const dim = embeddingDim(service, Object.keys(stats.bySpace))
+    const recall = lastRecall(deps.telemetry)
+    const report: MemoryHealthReport = {
+      enabled: true,
+      total: stats.total,
+      archived: service.store.listArchived(HEALTH_COUNT_LIMIT).length,
+      missingVectors: service.store.listMissingEmbeddings(service.embeddingModel, HEALTH_COUNT_LIMIT).length,
+      bySpace: stats.bySpace,
+      dbBytes: databaseBytes(deps.dataDir),
+      embeddings: {
+        label: service.embeddingsAvailable ? 'configured' : 'none:fts-only',
+        model: service.embeddingModel,
+        ...(dim === undefined ? {} : { dim }),
+      },
+      ...(recall === undefined ? {} : { lastRecall: recall }),
+    }
+    json(res, 200, report)
   })
 
   /**

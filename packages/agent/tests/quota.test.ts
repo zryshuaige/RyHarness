@@ -1,7 +1,5 @@
-import type { AgentDefinition, AgentLoopEvent, Tool, ToolResult } from '@ryagent/agent'
-import { AgentLoop } from '@ryagent/agent'
-// 配额闸还没从包入口转出，先直引源码模块（等价于 server 侧接线后的形态）。
-import { createSessionQuota, DEFAULT_SESSION_QUOTA_LIMITS, type SessionQuota } from '@ryagent/agent/src/loop.ts'
+import type { AgentDefinition, AgentLoopEvent, SessionQuota, Tool, ToolResult } from '@ryagent/agent'
+import { AgentLoop, createSessionQuota, DEFAULT_SESSION_QUOTA_LIMITS } from '@ryagent/agent'
 import { brandString } from '@ryagent/brand'
 import type { GenerateOptions, LlmRuntime, StreamChunk, ToolCallId } from '@ryagent/llm'
 import { describe, expect, it } from 'vitest'

@@ -49,6 +49,7 @@ vi.mock('electron', () => {
 const {
   backendPortFromEnv,
   BootTrace,
+  DEFAULT_ASSETS_PORT,
   DEFAULT_BACKEND_PORT,
   readRendererBootReport,
   resolveBackendPort,
@@ -105,6 +106,18 @@ describe('后端端口策略', () => {
     expect(backendPortFromEnv({ RYAGENT_PORT: 'abc' })).toBe(DEFAULT_BACKEND_PORT)
     expect(backendPortFromEnv({ RYAGENT_PORT: '-1' })).toBe(DEFAULT_BACKEND_PORT)
     expect(backendPortFromEnv({ RYAGENT_PORT: '70000' })).toBe(DEFAULT_BACKEND_PORT)
+  })
+
+  it('渲染层资源服务占后端 +1：两个固定端口互不抢，各自被占用时各回退随机', async () => {
+    expect(DEFAULT_ASSETS_PORT).toBe(DEFAULT_BACKEND_PORT + 1)
+    const [backend, assets] = await Promise.all([
+      resolveBackendPort({ port: DEFAULT_BACKEND_PORT, host: '127.0.0.1' }),
+      resolveBackendPort({ port: DEFAULT_ASSETS_PORT, host: '127.0.0.1' }),
+    ])
+    expect(backend.port).toBe(DEFAULT_BACKEND_PORT)
+    expect(assets.port).toBe(DEFAULT_ASSETS_PORT)
+    expect(backend.fallback).toBe(false)
+    expect(assets.fallback).toBe(false)
   })
 })
 

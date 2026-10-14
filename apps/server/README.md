@@ -40,7 +40,7 @@ pnpm dev          # 等价于 tsx src/main.ts（在 apps/server 目录）
 | `GET /api/conversations/:id/stream-seq` | 该会话当前的事件序号（WS 握手前取基线用）。 |
 | `POST /api/conversations/:id/messages` | body `{ "text": "..." }` → **202** `{accepted:true, conversationId, streamSeq}`；处理异步进行，过程经 WS 推送。 |
 
-消息行结构（StoredMessage）：`{ id, seq, conversationId, senderType: 'user'|'agent'|'system', senderId?, contentBlocks, mentions, toolCallId?, turnIndex, createdAt }`。`contentBlocks` 为 @ryagent/llm 的 ContentBlock JSON。
+消息行结构（StoredMessage）：`{ id, seq, conversationId, senderType: 'user'|'agent'|'system', senderId?, contentBlocks, mentions, toolCallId?, turnIndex, usage?, createdAt }`。`contentBlocks` 为 @ryagent/llm 的 ContentBlock JSON；`usage` 只挂在模型调用产出的 assistant 消息上（`{inputTokens, outputTokens, totalTokens?, …}`），`GET /api/usage` 的账单就是从这里聚合出来的。
 
 ### Memories & 进化
 
@@ -52,10 +52,20 @@ pnpm dev          # 等价于 tsx src/main.ts（在 apps/server 目录）
 | `POST /api/memory/restore` | body `{id}`：把一条归档记忆拉回 active（重新入检索与 FTS 索引）。不存在回 **404**，非归档状态回 **409**（软删不能靠 id 复活），记忆系统关闭回 **409**。 |
 | `POST /api/memory/reembed` | 重建向量索引：为存量记忆回填当前 embedding 模型的向量（换模型后旧向量会被检索侧排除，不回填等于旧记忆静默退化成只走 BM25），返回 `{reembedded: n}`。无 embedding 凭据（纯 FTS5）或记忆系统关闭回 **409**——不假装"重建成功 0 条"。 |
 | `GET /api/memory/stats` | 记忆统计 + embedding 可用性 + `recentLearned`（近 24h 新增）+ `consolidation`（周期与上次巩固时间）。 |
+| `GET /api/memory/health` | 记忆库整体健康度（一次请求给全，不用再去拼 stats / archived / telemetry 三条）：`{ enabled:true, total, archived, missingVectors, bySpace, dbBytes, embeddings:{label,model,dim?}, lastRecall? }`。`total` 含归档与软删链（口径同 `/api/memory/stats`），`missingVectors` 只数 active + inactive 中缺**当前** embedding 模型向量的条目，`dim` 在一条向量都没有时缺省而不猜；`lastRecall` 取遥测环形缓冲里最近一轮真的注入了记忆的轮次（`{conversationId, items, ms, at}`，只存在于本次运行内）。`dbBytes` 是 `<dataDir>` 下库文件（含 WAL）的总字节——记忆与会话/进化共用同一个 `ryagent.db`，这是"数据一共多大"而非"记忆独占多少"。记忆系统关闭回 **200** `{enabled:false}`，未知查询参数回 **400**。 |
 | `POST /api/feedback` | `{conversationId, agentId, signal: thumb_up\|thumb_down}`——👎 即时反思 + 归因 harmful；👍 归因 helpful。 |
 | `GET /api/agents/:id/playbook` | 经验手册：playbook 条目（section 分组计数）+ 待验证教训。 |
 | `POST /api/playbook/:id/status` | `{status: active\|deprecated}` 手动停用/恢复条目。 |
 | `POST /api/evolve/consolidate` | 手动触发巩固（到期清理/重复记忆合并/dormant 统计）。 |
+| `GET /api/evolve/stats?limit=<n>` | 进化管线可观测性：最近 `limit` 轮（新的在前）+ 各类轮次合计与耗时。进化在服务端是后台异步跑的（反思/归因/巩固都不在用户那一轮的关键路径上），出错时界面上没有任何提示——这个端点是那条唯一的观测面。进化系统关闭回 **200** `{enabled:false}`。 |
+| `GET /api/evolve/entries/:id/explain` | 单条 playbook 条目的证据链（条目本体 + 溯源的教训/对话/记忆 + 一句人话摘要），回答"它凭什么这么说"。未知 id 回 **404**，进化系统关闭回 **409**。 |
+
+### 用量 & 运行时可观测性
+
+| 方法与路径 | 说明 |
+|---|---|
+| `GET /api/usage?since=<毫秒时间戳>` | token 账单的**两个维度**：`{ byConversation:[{conversationId,title,kind,input,output,total,messages}], byProvider:[{provider,displayName,input,output,total,agents:[{agentId,name,total}]}], totals:{input,output,total} }`。数据来自 `messages.usage`（每条 assistant 消息挂一次模型调用的开销）与 `agents.provider`，两个维度从同一批消息算出，因此 `Σ byConversation == Σ byProvider == totals`；`totalTokens` 缺失时按 `input+output` 兜底。只回有消耗的会话/供应商（空账本回空数组），两维都按花费倒序。供应商 `displayName` 取自 `GET /api/providers` 的同一份配置；发言 agent 已被删除时归到 `provider:"unknown"`（显示名"未知供应商"），花费不从账单里消失。`?since=` 缺省或空串 = 不限（`{input:0,output:0,total:0}` 空账本），非数字/负数或任何未知查询参数回 **400**。 |
+| `GET /api/telemetry?limit=<n>` | 运行时可观测性：`{ turns, requests, capacity }`，两类都是环形缓冲（各 `capacity=200`）按时间倒序。轮次项含 `firstTokenMs`（首 token 延迟）、`totalMs`、`memoryRecallMs`/`memoryItems`（该轮的召回计量）、`status`。**只含方法/路径/状态码/耗时等计量数字，不含查询串、消息正文与凭据**（快照要原样发给渲染层，搜索词与正文会随 query 进来）。 |
 
 ### Providers & 文件
 
@@ -67,6 +77,7 @@ pnpm dev          # 等价于 tsx src/main.ts（在 apps/server 目录）
 | `DELETE /api/providers/:id` | 删除用户添加的供应商（路由 + 其 key 一起清掉并热摘适配器）；内置条目回 **409**，未知 id 回 **404**。 |
 | `POST /api/settings/api-key` | `{providerId, apiKey}`：写 `api-keys.json`（0600）并热更新适配器配置；未知 provider 回 **404**。 |
 | `GET /api/files/:name` | 下载 `workspace/.ryagent-artifacts/` 下的产物文件；只允许叶子文件名（含 `/`、`\` 返回 **400**），MIME 按扩展名推断。 |
+| `POST /api/conversations/:id/files` | 上传附件：body `{name, mime?, data(base64)}` → `{name, size, mime}`。字节与消息体走同一条 JSON 通路，解码后落进工作区产物目录（与 `file_produce` 的产物同一份）；同名自动加 `-2`/`-3` 后缀不覆盖，上限 20MB（超限 **413**），base64 必须规范，文件名只放行叶子名。 |
 
 ## WebSocket 事件契约（M4b 按此开发）
 
@@ -99,7 +110,15 @@ pnpm dev          # 等价于 tsx src/main.ts（在 apps/server 目录）
 
 ## 测试
 
-`tests/server.test.ts`：真实 HTTP + WS 客户端跑通模板/CRUD/builtin 保护、PATCH 白名单校验、400/500 分界、Origin 白名单、WS seq/心跳 terminate、群聊端到端（WS 事件序列 + 落库一致）、direct 流式、文件下载白名单、close 幂等与优雅停机（等在途 turn + 超时兜底）。
-`tests/providers.test.ts`：供应商预设目录、新增/删除自定义供应商（落盘 + 0600 + 热注册 + 跨重启持久化）、凭据热更新。
-`tests/memory-admin.test.ts`：已归档列表、恢复（含 FTS 索引回来）、重建向量索引与"纯 FTS5 时 409"。
-mock 适配器注入，不触网。
+`npx vitest run apps/server`（全部用临时数据目录，mock 适配器注入，不触网）。
+
+- `tests/server.test.ts`：真实 HTTP + WS 客户端跑通模板/CRUD/builtin 保护、PATCH 白名单校验、400/500 分界、Origin 白名单、WS seq/心跳 terminate、群聊端到端（WS 事件序列 + 落库一致）、direct 流式、文件下载白名单、close 幂等与优雅停机（等在途 turn + 超时兜底）。
+- `tests/conversation-admin.test.ts`：会话改名/置顶/静音/群成员覆盖的落盘与重启后恢复、删会话/删 agent 的级联清理。
+- `tests/turn-lifecycle.test.ts`：一轮 turn 的落库与 WS 序列、取消时"半截回复已落库、消息正常收尾、再以 ABORTED 结束"。
+- `tests/attachments.test.ts`：附件上传/下载、同名不覆盖、叶子名白名单与穿越防护、20MB 上限回 413 且不留残骸。
+- `tests/providers.test.ts` / `tests/provider-verify.test.ts`：供应商预设目录、新增/删除自定义供应商（落盘 + 0600 + 热注册 + 跨重启持久化）、凭据热更新；连通性探测的三种中文诊断（401 / 连接被拒 / 网络不可达）都是 200 而非 500。
+- `tests/memory-admin.test.ts`：已归档列表、恢复（含 FTS 索引回来）、重建向量索引与"纯 FTS5 时 409"。
+- `tests/evolve-observability.test.ts`：`GET /api/evolve/stats` 与 `/explain`，以及巩固走 `runUntilIdle`（分片任务不能拿第一片当整轮结果）。
+- `tests/telemetry.test.ts`：环形缓冲与单轮累计器的语义；端到端一轮真实对话后遥测里有完整轮次计量、请求计时不含查询串与正文；多会话并发时召回计量各归各的轮次。
+- `tests/usage-health.test.ts`：`GET /api/memory/health`（总数/归档/缺向量/各空间/体积/embedding 状态、重建向量后缺向量清零、纯 FTS5 降级、记忆关闭回 `{enabled:false}`、一轮真实对话后的 `lastRecall`、未知参数 400）与 `GET /api/usage`（两维聚合口径与合计自洽、`totalTokens` 缺失兜底、`?since=` 过滤与空参数、非法参数 400、空账本、agent 已删除归未知供应商、界面态改名后的标题）。
+- `tests/seed.test.ts`：内置模板与首启种子。

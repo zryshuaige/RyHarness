@@ -1,17 +1,24 @@
 import { type CSSProperties, type ReactNode, useEffect, useRef, useState } from 'react'
 import type { AgentDef, Conversation, ConversationPatch, SearchResultRow } from '../api.ts'
 import { ApiClient, resolveApiBase } from '../api.ts'
+import { formatTime } from '../lib/format.ts'
 import { stagger } from '../lib/stagger.ts'
 import { toast } from '../lib/toast.ts'
+import { useVisibleWindow, windowSlice } from '../lib/windowed.ts'
 import { Avatar } from './avatars/Avatar.tsx'
 import { GroupAvatar } from './avatars/GroupAvatar.tsx'
-import { formatTime } from './ChatView.tsx'
 import { ConfirmDialog } from './ConfirmDialog.tsx'
 import { Icon } from './Icon.tsx'
 import { ConversationSkeleton } from './Skeleton.tsx'
 
 /** 搜索框停手多久才真去搜（ms）：边打字边打接口既吵又费。 */
 const SEARCH_DEBOUNCE_MS = 220
+
+/**
+ * 单行估算高度（px），对上 .conversation-item 的 min-height。
+ * 行高并不固定（预览文字会折行），估算偏了只是哨兵略有出入，滚动条仍连续。
+ */
+const ROW_ESTIMATE_PX = 64
 
 /** 渲染层对后端的能力只做结构化要求：缺哪个方法就降级到哪个功能不可用。 */
 export interface ConversationApi {
@@ -167,6 +174,8 @@ export function ConversationList({
   const [removed, setRemoved] = useState<string[]>([])
   const [actionFor, setActionFor] = useState<string | undefined>(undefined)
   const [deleting, setDeleting] = useState<Conversation | undefined>(undefined)
+  /** 滚动容器（.conversation-list 自身 overflow-y: auto）：窗口化靠它量 scrollTop。 */
+  const scrollRef = useRef<HTMLDivElement | null>(null)
   const mounted = useRef(true)
   useEffect(() => {
     return () => {
@@ -294,6 +303,15 @@ export function ConversationList({
 
   const searching = trimmed.length > 0 && (searchState === 'loading' || searchState === 'done')
   const groups = groupResults(hits)
+  // 会话能攒到几千条，整表进 DOM 的话首屏一次排几千行、滚动全程都在重排：
+  // 只渲染可视区，上下各留一个哨兵撑住滚动几何（lib/windowed.ts）。
+  // 搜索态走的是另一棵子树（按会话分组的命中列表），不参与窗口化。
+  const windowed = useVisibleWindow({
+    count: searching ? 0 : filtered.length,
+    estimateHeight: ROW_ESTIMATE_PX,
+    scrollRef,
+  })
+  const rows = windowSlice(filtered, windowed, ROW_ESTIMATE_PX)
 
   return (
     <>
@@ -322,7 +340,7 @@ export function ConversationList({
           </p>
         )}
       </div>
-      <div className="conversation-list">
+      <div className="conversation-list" ref={scrollRef}>
         {searching ? (
           groups.length === 0 ? (
             <div className="empty-state empty-state-inline">
@@ -368,94 +386,100 @@ export function ConversationList({
             )}
           </div>
         ) : (
-          filtered.map((conversation, index) => (
-            <div
-              key={conversation.id}
-              // 行是布局容器：行尾要放操作按钮，而 button 里嵌 button 是无效 HTML。
-              className={`conversation-item ${conversation.id === activeId ? 'is-active' : ''}`}
-              style={stagger(index)}
-            >
-              <button
-                type="button"
-                className="conversation-item-main"
-                style={ROW_MAIN}
-                aria-current={conversation.id === activeId}
-                onClick={() => {
-                  onSelect(conversation.id)
-                }}
+          <>
+            <div data-window-pad="top" aria-hidden="true" style={{ height: windowed.padTop }} />
+            {rows.visible.map((conversation, index) => (
+              <div
+                key={conversation.id}
+                // 行是布局容器：行尾要放操作按钮，而 button 里嵌 button 是无效 HTML。
+                className={`conversation-item ${conversation.id === activeId ? 'is-active' : ''}`}
+                // stagger 的 --i 是「这条会话在列表里的位置」：给整表下标，窗口化之后
+                // 同一个会话滚进滚出也不会换值（样式表把延迟封顶在 8 档，不会久等）。
+                style={stagger(windowed.start + index)}
               >
-                {avatarOf(conversation)}
-                <div className="conversation-item-body">
-                  <div className="conversation-item-top">
-                    <strong>
-                      {(conversation.pinned ?? false) && <span className="badge conversation-item-flag">置顶</span>}
-                      {conversation.title || nameOf(conversation.memberAgentIds[0] ?? '')}
-                    </strong>
-                    <time>{formatTime(conversation.updatedAt)}</time>
-                  </div>
-                  <div className="conversation-item-bottom">
-                    <span className="preview">{conversation.lastMessagePreview ?? ''}</span>
-                    {conversation.muted === true ? (
-                      <span className="conversation-item-flag is-muted">已静音</span>
-                    ) : (
-                      (conversation.unreadCount ?? 0) > 0 && (
-                        <span className="unread-badge">
-                          {(conversation.unreadCount ?? 0) > 99 ? '99+' : conversation.unreadCount}
-                        </span>
-                      )
-                    )}
-                  </div>
-                </div>
-              </button>
-              <span className="conversation-item-actions" style={ROW_ACTIONS}>
                 <button
                   type="button"
-                  className="conversation-more"
-                  aria-label={`「${conversation.title || nameOf(conversation.memberAgentIds[0] ?? '')}」的操作`}
-                  aria-expanded={actionFor === conversation.id}
-                  title="置顶 / 静音 / 删除"
+                  className="conversation-item-main"
+                  style={ROW_MAIN}
+                  aria-current={conversation.id === activeId}
                   onClick={() => {
-                    setActionFor((prev) => {
-                      return prev === conversation.id ? undefined : conversation.id
-                    })
+                    onSelect(conversation.id)
                   }}
                 >
-                  ⋯
+                  {avatarOf(conversation)}
+                  <div className="conversation-item-body">
+                    <div className="conversation-item-top">
+                      <strong>
+                        {(conversation.pinned ?? false) && <span className="badge conversation-item-flag">置顶</span>}
+                        {conversation.title || nameOf(conversation.memberAgentIds[0] ?? '')}
+                      </strong>
+                      <time>{formatTime(conversation.updatedAt)}</time>
+                    </div>
+                    <div className="conversation-item-bottom">
+                      <span className="preview">{conversation.lastMessagePreview ?? ''}</span>
+                      {conversation.muted === true ? (
+                        <span className="conversation-item-flag is-muted">已静音</span>
+                      ) : (
+                        (conversation.unreadCount ?? 0) > 0 && (
+                          <span className="unread-badge">
+                            {(conversation.unreadCount ?? 0) > 99 ? '99+' : conversation.unreadCount}
+                          </span>
+                        )
+                      )}
+                    </div>
+                  </div>
                 </button>
-              </span>
-              {actionFor === conversation.id && (
-                <div className="conversation-item-menu">
+                <span className="conversation-item-actions" style={ROW_ACTIONS}>
                   <button
                     type="button"
-                    className="btn btn-mini"
+                    className="conversation-more"
+                    aria-label={`「${conversation.title || nameOf(conversation.memberAgentIds[0] ?? '')}」的操作`}
+                    aria-expanded={actionFor === conversation.id}
+                    title="置顶 / 静音 / 删除"
                     onClick={() => {
-                      void patchConversation(conversation, { pinned: !(conversation.pinned ?? false) })
+                      setActionFor((prev) => {
+                        return prev === conversation.id ? undefined : conversation.id
+                      })
                     }}
                   >
-                    {conversation.pinned === true ? '取消置顶' : '置顶'}
+                    ⋯
                   </button>
-                  <button
-                    type="button"
-                    className="btn btn-mini"
-                    onClick={() => {
-                      void patchConversation(conversation, { muted: !(conversation.muted ?? false) })
-                    }}
-                  >
-                    {conversation.muted === true ? '取消静音' : '静音'}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-mini btn-danger"
-                    onClick={() => {
-                      setDeleting(conversation)
-                    }}
-                  >
-                    删除
-                  </button>
-                </div>
-              )}
-            </div>
-          ))
+                </span>
+                {actionFor === conversation.id && (
+                  <div className="conversation-item-menu">
+                    <button
+                      type="button"
+                      className="btn btn-mini"
+                      onClick={() => {
+                        void patchConversation(conversation, { pinned: !(conversation.pinned ?? false) })
+                      }}
+                    >
+                      {conversation.pinned === true ? '取消置顶' : '置顶'}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-mini"
+                      onClick={() => {
+                        void patchConversation(conversation, { muted: !(conversation.muted ?? false) })
+                      }}
+                    >
+                      {conversation.muted === true ? '取消静音' : '静音'}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-mini btn-danger"
+                      onClick={() => {
+                        setDeleting(conversation)
+                      }}
+                    >
+                      删除
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+            <div data-window-pad="bottom" aria-hidden="true" style={{ height: windowed.padBottom }} />
+          </>
         )}
       </div>
       {deleting !== undefined && (

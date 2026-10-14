@@ -2,9 +2,14 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ToolContext } from '@ryagent/agent'
-import { fsRead, fsWrite, shellExec } from '@ryagent/tools'
-// 安全闸的策略接口还没从包入口转出，先直引源码模块（等价于 server 侧接线后的形态）。
-import { findSensitiveInCommand, setShellGuardPolicy, shellGuardPolicy } from '@ryagent/tools/src/shell.ts'
+import {
+  findSensitiveInCommand,
+  fsRead,
+  fsWrite,
+  setShellGuardPolicy,
+  shellExec,
+  shellGuardPolicy,
+} from '@ryagent/tools'
 import { afterEach, describe, expect, it } from 'vitest'
 
 const roots: string[] = []
