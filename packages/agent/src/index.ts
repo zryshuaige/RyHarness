@@ -16,7 +16,12 @@ export type {
   AgentRunOptions,
   EvolutionTurnData,
 } from './loop.ts'
-export { AgentLoop, DEFAULT_HISTORY_BUDGET_CHARS, trimHistoryToBudget } from './loop.ts'
+export {
+  AgentLoop,
+  DEFAULT_HISTORY_BUDGET_CHARS,
+  MAX_LOOP_CONTEXT_CHARS,
+  trimHistoryToBudget,
+} from './loop.ts'
 export type {
   AgentDefinition,
   AgentLoopEvent,

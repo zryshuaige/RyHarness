@@ -32,6 +32,35 @@ export interface ProviderInfo {
   displayName: string
   apiKeyConfigured: boolean
   models: { id: string; name?: string; contextWindow?: number }[]
+  /**
+   * 以下三项在服务端补齐前是可选的（apps/server 的 GET /api/providers 目前只回
+   * 上面四个字段），渲染层按「有才展示」处理，不猜协议、不猜归属。
+   */
+  /** 用户手动添加的供应商（可删除）；缺省视为内置。 */
+  custom?: boolean
+  /** 接入协议（openai / anthropic / ollama …），徽标展示用。 */
+  protocol?: string
+  baseUrl?: string
+}
+
+/** 供应商预设（/api/provider-presets）：添加供应商向导的可选项。 */
+export interface ProviderPreset {
+  id: string
+  displayName: string
+  protocol: string
+  baseUrl: string
+  models: string[]
+  docsUrl?: string
+}
+
+/** 新增自定义供应商（POST /api/providers）。 */
+export interface CreateProviderInput {
+  displayName: string
+  protocol: string
+  baseUrl: string
+  models: string[]
+  apiKey?: string
+  presetId?: string
 }
 
 export interface Conversation {
@@ -58,6 +87,39 @@ export interface MessageRow {
   toolCallId?: string
   turnIndex: number
   createdAt: number
+}
+
+/** 单轮（或单条发言）的 token 用量，供应商回报后由服务端原样落库/下发。 */
+export interface TurnUsage {
+  inputTokens: number
+  outputTokens: number
+  totalTokens?: number
+  cacheReadTokens?: number
+  cacheWriteTokens?: number
+  reasoningTokens?: number
+}
+
+/** 会话级累计用量（服务端对各条消息求和）。 */
+export interface UsageTotals {
+  inputTokens: number
+  outputTokens: number
+  totalTokens: number
+  /** 计入用量的消息条数。 */
+  messages: number
+}
+
+/** 记忆系统统计（/api/memory/stats）。 */
+export interface MemoryStats {
+  enabled: boolean
+  embeddings?: { label: string }
+  /** 近 24 小时新增的 active 记忆数。 */
+  recentLearned: number
+  /** 巩固调度：intervalMs = 0 表示没开；lastRunAt 缺省表示本次运行还没巩固过。 */
+  consolidation: { intervalMs: number; lastRunAt?: number }
+  total?: number
+  bySpace?: Record<string, number>
+  byKind?: Record<string, number>
+  byStatus?: Record<string, number>
 }
 
 /** 长期记忆行。 */
@@ -124,7 +186,14 @@ export type WsEvent =
       card: { path: string; name: string; size: number; mime: string }
     }
   | { type: 'dispatch'; conversationId: string; fromAgent?: string; toAgent: string; reason: string; turnIndex: number }
-  | { type: 'message-done'; conversationId: string; senderId: string; turnIndex: number }
+  | {
+      type: 'message-done'
+      conversationId: string
+      senderId: string
+      turnIndex: number
+      /** 本轮累计 token 用量；供应商未回报时缺省。 */
+      usage?: TurnUsage
+    }
   | { type: 'error'; conversationId: string; message: string; code: string }
   | { type: 'queued'; conversationId: string; senderId: 'user'; turnIndex: number }
 
@@ -141,6 +210,12 @@ export interface SubscribeOptions {
   onGap?: () => void
   /** 重连退避序列（ms），超过末尾值后循环使用末值；默认 1s/2s/5s/10s 封顶。 */
   reconnectDelays?: number[]
+  /**
+   * 缺口检测基线：握手前已确认收到的最后一个事件 seq。缺省时退化为
+   * 「本次发送消息的回执 seq」（见 postMessage），再缺省才是完全失明——
+   * 那正是欢迎页首条消息丢在订阅建立之前的形态。
+   */
+  fromSeq?: number
 }
 
 // ---- 客户端 ----
@@ -161,6 +236,12 @@ export function resolveApiBase(): string {
 
 export class ApiClient {
   constructor(readonly base: string) {}
+
+  /**
+   * 已发出消息的会话基线：POST 回执里的 streamSeq（见 postMessage）。
+   * 只被下一次 subscribe 取用一次就丢弃，避免过期基线在下次进会话时误报缺口。
+   */
+  private readonly pendingBaselines = new Map<string, number>()
 
   private async request<T>(path: string, init?: RequestInit): Promise<T> {
     const response = await fetch(`${this.base}${path}`, {
@@ -215,8 +296,42 @@ export class ApiClient {
     return this.request('/api/providers')
   }
 
+  /**
+   * 供应商预设（添加供应商向导的可选项）。
+   * 服务端未实现该路由时回 404 + { error: 'not found: GET /api/provider-presets' }，
+   * 调用方据此降级（向导只剩「自定义」一格）。
+   */
+  providerPresets(): Promise<{ presets: ProviderPreset[] }> {
+    return this.request('/api/provider-presets')
+  }
+
+  /** 新增自定义供应商；服务端未实现时同 providerPresets 走 404 分支。 */
+  createProvider(input: CreateProviderInput): Promise<{ provider: ProviderInfo }> {
+    return this.request('/api/providers', { method: 'POST', body: JSON.stringify(input) })
+  }
+
+  /** 删除自定义供应商（内置供应商后端会拒绝）；未实现时 404。 */
+  deleteProvider(id: string): Promise<{ deleted: string }> {
+    return this.request(`/api/providers/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  }
+
   conversations(): Promise<{ conversations: Conversation[] }> {
     return this.request('/api/conversations')
+  }
+
+  /** 会话详情：会话元信息 + 该会话累计 token 用量。 */
+  conversationDetail(conversationId: string): Promise<{ conversation: Conversation; usage: UsageTotals }> {
+    return this.request(`/api/conversations/${conversationId}`)
+  }
+
+  /** 记忆系统统计（最近学到多少、巩固节奏）。 */
+  memoryStats(): Promise<MemoryStats> {
+    return this.request('/api/memory/stats')
+  }
+
+  /** 该会话当前的事件序号（握手前读一次当缺口检测基线）。 */
+  streamSeq(conversationId: string): Promise<{ seq: number }> {
+    return this.request(`/api/conversations/${conversationId}/stream-seq`)
   }
 
   createConversation(
@@ -237,10 +352,18 @@ export class ApiClient {
     return this.request(`/api/conversations/${conversationId}/messages?${params.toString()}`)
   }
 
-  postMessage(conversationId: string, text: string): Promise<{ accepted: boolean }> {
-    return this.request(`/api/conversations/${conversationId}/messages`, {
+  /**
+   * 发一条消息。202 回执里的 streamSeq 存成缺口检测基线：欢迎页是「先切会话、
+   * 后建 WS 订阅」，而服务端在 202 之前就把这一轮的事件发出去了——没有这个
+   * 基线，订阅建立之前丢掉的事件对客户端完全隐形。
+   */
+  postMessage(conversationId: string, text: string): Promise<{ accepted: boolean; streamSeq?: number }> {
+    return this.request<{ accepted: boolean; streamSeq?: number }>(`/api/conversations/${conversationId}/messages`, {
       method: 'POST',
       body: JSON.stringify({ text }),
+    }).then((body) => {
+      if (typeof body.streamSeq === 'number') this.pendingBaselines.set(conversationId, body.streamSeq)
+      return body
     })
   }
 
@@ -264,6 +387,21 @@ export class ApiClient {
   /** 软删一条记忆。 */
   deleteMemory(id: string): Promise<{ deleted: string }> {
     return this.request(`/api/memories/${id}`, { method: 'DELETE' })
+  }
+
+  /** 已归档的记忆（全量返回，调用方按 agent 过滤）。 */
+  listArchivedMemories(): Promise<{ items: MemoryRow[] }> {
+    return this.request('/api/memory/archived')
+  }
+
+  /** 把一条归档记忆恢复到活跃列表。 */
+  restoreMemory(id: string): Promise<{ restored: string }> {
+    return this.request('/api/memory/restore', { method: 'POST', body: JSON.stringify({ id }) })
+  }
+
+  /** 重建向量索引：embedding 模型变更后为存量记忆回填向量。 */
+  reembedMemories(): Promise<{ reembedded: number }> {
+    return this.request('/api/memory/reembed', { method: 'POST' })
   }
 
   /** 用户反馈：👎 即时反思；👍 归因 helpful。 */
@@ -300,13 +438,17 @@ export class ApiClient {
    * 订阅会话事件；返回退订函数。
    * 断线自动指数退避重连（默认 1s/2s/5s/10s 封顶）；事件 seq 出现缺口或
    * 重连成功时回调 onGap（调用方重拉历史补齐，断线期间的事件服务器不重放）。
+   * 缺口检测的基线见 SubscribeOptions.fromSeq。
    */
   subscribe(conversationId: string, onEvent: (event: StampedWsEvent) => void, opts: SubscribeOptions = {}): () => void {
     const delays = opts.reconnectDelays ?? [1000, 2000, 5000, 10000]
     const url = `${this.base.replace('http', 'ws')}/ws?conversationId=${conversationId}`
     let closed = false
     let attempts = 0
-    let lastSeq: number | undefined
+    // 基线：显式传入 > 本次发送的回执 seq > 未知（首条事件之前查不出缺口）。
+    const baseline = opts.fromSeq ?? this.pendingBaselines.get(conversationId)
+    this.pendingBaselines.delete(conversationId)
+    let lastSeq: number | undefined = baseline
     let reconnecting = false
     let socket: WebSocket | undefined
     let timer: ReturnType<typeof setTimeout> | undefined

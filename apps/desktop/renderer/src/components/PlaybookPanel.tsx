@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import type { ApiClient, PlaybookEntryRow, ReflectionRow } from '../api.ts'
 import { Icon } from './Icon.tsx'
 import { Modal } from './Modal.tsx'
+import { PanelSkeleton } from './Skeleton.tsx'
 
 const SECTION_LABELS: Record<PlaybookEntryRow['section'], string> = {
   strategy: '策略',
@@ -60,7 +61,7 @@ export function PlaybookPanel({
   return (
     <Modal title={`${agentName} 的经验手册`} onClose={onClose}>
       {data === undefined ? (
-        <p className="panel-empty">载入中…</p>
+        <PanelSkeleton rows={4} />
       ) : (
         <>
           {data.reflections.length > 0 && (

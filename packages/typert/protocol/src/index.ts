@@ -1,79 +1,26 @@
 /**
- * Remote decorators and explicit Gateway bindings backed by versioned
- * descriptors carried on decorated class prototypes. Strict reflection
- * remains a Typert compiler responsibility.
+ * Remote decorators and the Service base that binds them, backed by versioned
+ * descriptors carried on decorated class prototypes. Strict reflection and the
+ * RPC carrier remain a Typert compiler / Gateway responsibility this repo does
+ * not implement.
  * @module @ryagent/typert-protocol
  */
 
-import { Context, Service } from '@ryagent/cordis'
-import type { TypertContextMap } from './types.ts'
+import { type Context, Service } from '@ryagent/cordis'
 
-export { isRemoteJsonValue, isRemoteUplinkItem } from './json-value.ts'
-export type { TypertOwnedValue } from './owned-value.ts'
-export { isTypertOwnedValue, TYPERT_OWNED_VALUE, typertOwnedValue } from './owned-value.ts'
-export { RemoteError, remoteErrorOf } from './remote-error.ts'
+export { RemoteError } from './remote-error.ts'
+export type { RemoteErrorCode, RemoteErrorDetailsMap } from './types.ts'
 
 const TYPERT_REMOTE_SEGMENT_PATTERN = /^[A-Za-z0-9_$.-]+$/
 
 /**
  * Test one generated Remote name against the Connection endpoint grammar.
- * @param value - namespace, method, lookup, or Context segment.
+ * @param value - namespace, method, or service-key segment.
  * @returns whether the value can cross the shared RPC carrier unchanged.
  */
-export function isTypertRemoteSegment(value: string): boolean {
+function isTypertRemoteSegment(value: string): boolean {
   return value !== '.' && value !== '..' && TYPERT_REMOTE_SEGMENT_PATTERN.test(value)
 }
-
-export type {
-  InvocationDescriptor,
-  InvocationParameterDescriptor,
-  InvocationSourceLocation,
-  PeerId,
-  PeerScope,
-  RemoteErrorCode,
-  RemoteErrorDetailsMap,
-  RemoteFailure,
-  RemoteInvocation,
-  RemoteResult,
-  RemoteStream,
-  RemoteStreamHandle,
-  TypertClientContextAdapter,
-  TypertClientEventListener,
-  TypertClientRemote,
-  TypertCodec,
-  TypertContext,
-  TypertContextMap,
-  TypertContextRegistry,
-  TypertContextWire,
-  TypertDisposer,
-  TypertForwardableEvent,
-  TypertForwardableEventEntry,
-  TypertHostContextAdapter,
-  TypertHostContextResolver,
-  TypertLocalRegistry,
-  TypertLookup,
-  TypertLookupDefinition,
-  TypertLookupHost,
-  TypertLookupMap,
-  TypertLookupProvider,
-  TypertLookupRegistry,
-  TypertLookupResolver,
-  TypertLookupWire,
-  TypertRegistryChange,
-  TypertRegistryContract,
-  TypertRegistryListener,
-  TypertRemoteContribution,
-  TypertRemoteEvent,
-  TypertRemoteEventSelection,
-  TypertRemoteMap,
-  TypertRemoteNamespace,
-  TypertRemoteNamespaceMap,
-  TypertRemoteRegistry,
-  TypertRemoteScopeApi,
-  TypertRemoteScopeMap,
-  TypertRemoteScopeNamespace,
-  TypertSchema,
-} from './types.ts'
 
 /** Options for an explicit Service-to-Gateway binding. */
 export interface TypertGatewayBindingOptions {
@@ -88,28 +35,6 @@ export interface TypertGatewayBinding<Service extends object = object> {
   readonly namespace: string
 }
 
-/** Invocation mode recorded by a Remote method decorator. */
-export type RemoteInvocationMarker =
-  | { readonly kind: 'direct' }
-  | { readonly kind: 'context'; readonly context: string }
-
-/** One decorator marker discovered for a live Service instance. */
-export interface RemoteMethodMarker {
-  /** Public instance method carrying the implementation. */
-  readonly method: string
-  /** Endpoint method when it differs from the implementation member. */
-  readonly exportName?: string
-  /** Stream methods yield many independently validated result items. */
-  readonly mode?: 'stream'
-  readonly invocation: RemoteInvocationMarker
-}
-
-/** Options for a non-unary Remote method. */
-export interface RemoteMethodOptions {
-  /** `stream`: deliver each Iterable item over the shared logical-stream carrier. */
-  readonly mode: 'stream'
-}
-
 type RemoteMethodDecorator = <This extends object, Args extends unknown[], Result>(
   method: (this: This, ...args: Args) => Result,
   context: ClassMethodDecoratorContext<This, (this: This, ...args: Args) => Result>,
@@ -122,14 +47,9 @@ interface RemoteInitializerContext<This extends object> {
   addInitializer(initializer: (this: This) => void): void
 }
 
-interface StoredRemoteMethodMarker {
-  readonly exportName?: string
-  readonly mode?: 'stream'
-  readonly invocation: RemoteInvocationMarker
-}
-
-interface StoredRemoteMethod extends StoredRemoteMethodMarker {
+interface StoredRemoteMethod {
   readonly method: string
+  readonly exportName?: string
 }
 
 interface RemoteMethodDescriptorV1 {
@@ -140,16 +60,13 @@ interface RemoteMethodDescriptorV1 {
 const REMOTE_METHOD_DESCRIPTOR = '@ryagent/typert-protocol/remote-methods'
 
 /**
- * Bind one visible Service field to a Cordis key and Remote namespace. A
- * service that owns a Cordis Context also gives its tree `ctx.invocation`,
- * `undefined` outside a Remote call, so no `TypertRemoteService` is needed for
- * a Host composition to read it.
+ * Bind one visible Service field to a Cordis key and Remote namespace.
  * @param service - owning Service instance, normally `this`.
  * @param serviceKey - exact Cordis service key.
  * @param options - optional distinct wire namespace.
  * @returns a frozen, inspectable binding with no compiler-injected metadata.
  */
-export function bindTypertRemote<Service extends object>(
+function bindTypertRemote<Service extends object>(
   service: Service,
   serviceKey: string,
   options: TypertGatewayBindingOptions = {},
@@ -157,8 +74,6 @@ export function bindTypertRemote<Service extends object>(
   validateName('service key', serviceKey)
   const namespace = options.namespace ?? serviceKey
   validateName('namespace', namespace)
-  const ctx: unknown = Reflect.get(service, 'ctx')
-  if (ctx instanceof Context) provideInvocationAccessor(ctx)
   return Object.freeze({ service, serviceKey, namespace })
 }
 
@@ -180,17 +95,6 @@ export abstract class TypertRemoteService<out T = never> extends Service<T> {
 }
 
 /**
- * Make `ctx.invocation` read as `undefined` outside a Remote call instead of the
- * reflect service's "cannot get property" error; a call-derived Context shadows
- * the accessor with its own property. The first Remote Service constructed in a
- * tree registers it on the root, where it outlives any one Service.
- */
-function provideInvocationAccessor(ctx: Context): void {
-  if (Object.hasOwn(ctx.root.reflect.props, 'invocation')) return
-  ctx.root.accessor('invocation', { get: () => undefined })
-}
-
-/**
  * Mark one public instance method as a direct Remote invocation.
  * @param _method - decorated method; retained only by the class itself.
  * @param context - standard decorator context used to schedule private marking.
@@ -200,69 +104,67 @@ export function Remote<This extends object, Args extends unknown[], Result>(
   context: ClassMethodDecoratorContext<This, (this: This, ...args: Args) => Result>,
 ): void
 /**
- * Mark one public instance method under an exported name or as a logical stream.
- * @param option - endpoint method name or stream delivery mode.
+ * Mark one public instance method under an exported name.
+ * @param exportName - endpoint method name; defaults to the method name.
  * @returns a standard method decorator.
  */
-export function Remote(option: string | RemoteMethodOptions): RemoteMethodDecorator
+export function Remote(exportName: string): RemoteMethodDecorator
 export function Remote<This extends object, Args extends unknown[], Result>(
-  methodExportOrOptions: string | RemoteMethodOptions | ((this: This, ...args: Args) => Result),
+  methodOrExportName: string | ((this: This, ...args: Args) => Result),
   context?: ClassMethodDecoratorContext<This, (this: This, ...args: Args) => Result>,
   // biome-ignore lint/suspicious/noConfusingVoidType: 装饰器契约就是 void | decorator
 ): void | RemoteMethodDecorator {
-  if (typeof methodExportOrOptions === 'string') {
-    validateName('Remote export name', methodExportOrOptions)
-    return remoteDecorator({ kind: 'direct' }, undefined, methodExportOrOptions)
-  }
-  if (typeof methodExportOrOptions === 'object') {
-    if (remoteOptionMode(methodExportOrOptions) !== 'stream' || Reflect.ownKeys(methodExportOrOptions).length !== 1) {
-      throw new TypeError('typert-protocol: Remote options must contain exactly mode: "stream"')
+  if (typeof methodOrExportName === 'string') {
+    validateName('Remote export name', methodOrExportName)
+    const exportName = methodOrExportName
+    return <This extends object, Args extends unknown[], Result>(
+      _method: (this: This, ...args: Args) => Result,
+      decoratorContext: ClassMethodDecoratorContext<This, (this: This, ...args: Args) => Result>,
+    ): void => {
+      addMarkerInitializer(decoratorContext, exportName)
     }
-    return remoteDecorator({ kind: 'direct' }, 'stream')
   }
   if (context === undefined) throw new TypeError('typert-protocol: Remote decorator context is missing')
-  addMarkerInitializer(context, { kind: 'direct' })
+  addMarkerInitializer(context, undefined)
 }
 
-function remoteOptionMode(options: object): unknown {
-  return Reflect.get(options, 'mode') as unknown
-}
-
-function remoteDecorator(
-  invocation: RemoteInvocationMarker,
-  mode?: 'stream',
-  exportName?: string,
-): RemoteMethodDecorator {
-  return <This extends object, Args extends unknown[], Result>(
-    _method: (this: This, ...args: Args) => Result,
-    context: ClassMethodDecoratorContext<This, (this: This, ...args: Args) => Result>,
-  ): void => {
-    addMarkerInitializer(context, invocation, mode, exportName)
+function addMarkerInitializer<This extends object>(
+  context: RemoteInitializerContext<This>,
+  exportName: string | undefined,
+): void {
+  if (context.private || context.static || typeof context.name !== 'string') {
+    throw new TypeError('typert-protocol: Remote decorators require a public instance method with a string name')
   }
+  const method = context.name
+  context.addInitializer(function (this: This) {
+    const prototype = Object.getPrototypeOf(this) as object | null
+    if (prototype === null) {
+      throw new TypeError(`typert-protocol: cannot mark Remote method "${method}" on an object without a prototype`)
+    }
+    mark(prototype, method, exportName)
+  })
 }
 
-/**
- * Create a decorator for a method resolved from one Remote Scope.
- * @param key - scope key declared through the Context map.
- * @param exportName - optional Remote export name; defaults to the method name.
- * @returns a standard method decorator that records a versioned prototype descriptor.
- */
-export function RemoteScope(key: Extract<keyof TypertContextMap, string>, exportName?: string): RemoteMethodDecorator {
-  validateName('Scope key', key)
-  if (exportName !== undefined) validateName('Remote export name', exportName)
-  return remoteDecorator({ kind: 'context', context: key }, undefined, exportName)
-}
-
-/**
- * Read Remote markers attached to a live Service's class prototype.
- * The returned snapshot cannot mutate the stored descriptor.
- * @param service - live Service instance.
- * @returns markers in class declaration order.
- */
-export function remoteMethods(service: object): readonly RemoteMethodMarker[] {
-  const prototype = Object.getPrototypeOf(service) as object | null
-  if (prototype === null) return []
-  return (readRemoteMethodDescriptor(prototype)?.methods ?? []).map((marker) => ({ ...marker }))
+function mark(prototype: object, method: string, exportName: string | undefined): void {
+  const descriptor = readRemoteMethodDescriptor(prototype)
+  const marker: StoredRemoteMethod = Object.freeze({
+    method,
+    ...(exportName === undefined || exportName === method ? {} : { exportName }),
+  })
+  const current = descriptor?.methods.find((candidate) => candidate.method === method)
+  if (current !== undefined) {
+    // Re-decorating the same method with the same endpoint is a no-op; a
+    // different endpoint is a real conflict that must not silently win.
+    if (current.exportName === marker.exportName) return
+    throw new Error(`typert-protocol: Remote method "${method}" has conflicting invocation markers`)
+  }
+  Object.defineProperty(prototype, REMOTE_METHOD_DESCRIPTOR, {
+    configurable: true,
+    value: Object.freeze({
+      version: 1,
+      methods: Object.freeze([...(descriptor?.methods ?? []), marker]),
+    } satisfies RemoteMethodDescriptorV1),
+  })
 }
 
 function readRemoteMethodDescriptor(prototype: object): RemoteMethodDescriptorV1 | undefined {
@@ -281,64 +183,6 @@ function readRemoteMethodDescriptor(prototype: object): RemoteMethodDescriptorV1
     throw new TypeError('typert-protocol: Remote method descriptor methods must be an array')
   }
   return descriptor as RemoteMethodDescriptorV1
-}
-
-function addMarkerInitializer<This extends object>(
-  context: RemoteInitializerContext<This>,
-  invocation: RemoteInvocationMarker,
-  mode?: 'stream',
-  exportName?: string,
-): void {
-  if (context.private || context.static || typeof context.name !== 'string') {
-    throw new TypeError('typert-protocol: Remote decorators require a public instance method with a string name')
-  }
-  const method = context.name
-  context.addInitializer(function (this: This) {
-    const prototype = Object.getPrototypeOf(this) as object | null
-    if (prototype === null) {
-      throw new TypeError(`typert-protocol: cannot mark Remote method "${method}" on an object without a prototype`)
-    }
-    mark(prototype, method, invocation, mode, exportName)
-  })
-}
-
-function mark(
-  prototype: object,
-  method: string,
-  invocation: RemoteInvocationMarker,
-  mode?: 'stream',
-  exportName?: string,
-): void {
-  const descriptor = readRemoteMethodDescriptor(prototype)
-  const marker: StoredRemoteMethod = Object.freeze({
-    method,
-    ...(exportName === undefined || exportName === method ? {} : { exportName }),
-    ...(mode === undefined ? {} : { mode }),
-    invocation: Object.freeze(invocation),
-  })
-  const current = descriptor?.methods.find((candidate) => candidate.method === method)
-  if (current !== undefined) {
-    if (
-      current.exportName === marker.exportName &&
-      current.mode === marker.mode &&
-      sameInvocation(current.invocation, invocation)
-    )
-      return
-    throw new Error(`typert-protocol: Remote method "${method}" has conflicting invocation markers`)
-  }
-  Object.defineProperty(prototype, REMOTE_METHOD_DESCRIPTOR, {
-    configurable: true,
-    value: Object.freeze({
-      version: 1,
-      methods: Object.freeze([...(descriptor?.methods ?? []), marker]),
-    } satisfies RemoteMethodDescriptorV1),
-  })
-}
-
-function sameInvocation(left: RemoteInvocationMarker, right: RemoteInvocationMarker): boolean {
-  if (left.kind === 'direct') return right.kind === 'direct'
-  if (right.kind === 'direct') return false
-  return left.context === right.context
 }
 
 function validateName(subject: string, value: string): void {

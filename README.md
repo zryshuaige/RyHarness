@@ -117,10 +117,10 @@ packages/
   llm/openai/  @ryagent/llm-openai  OpenAI 兼容适配器
   agent/ group/ tools/ session/  自写运行时
   memory/ evolve/                长期记忆与自我进化闭环
-  typert/protocol/ attachment/types/ util/ runtime-diagnostics/  地基与 stub
+  typert/protocol/ attachment/types/ util/{brand,crypto,timeout,values,llm-json}/  地基与 stub
 vendor/        cordis / cosmokit / schemastery（dsh vendor 改名，各附上游 MIT LICENSE）
 scripts/       demo-*.ts 冒烟与集成脚本、e2e-driver.mjs（CDP 驱动）、capture-window.ps1（只截窗口矩形）
-.github/       CI（master 分支触发：lint → build → typecheck → test）
+.github/       CI（master 分支触发：lint → build → typecheck → test → coverage）
 docs（各包 README）· M0-dependency-audit.md · LICENSE · NOTICE.md
 CONTRIBUTING.md · CODE_OF_CONDUCT.md · SECURITY.md · CHANGELOG.md
 ```

@@ -17,6 +17,7 @@
     "build": "tsdown"
   },
   "dependencies": {
-    "@ryagent/llm": "workspace:*"
+    "@ryagent/llm": "workspace:*",
+    "@ryagent/util-llm-json": "workspace:*"
   }
 }

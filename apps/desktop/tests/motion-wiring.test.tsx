@@ -113,7 +113,6 @@ describe('列表 stagger 接线', () => {
             defaultTools: [],
           },
         ]}
-        providers={[]}
         onChat={() => {}}
         onCreateAgent={() => {}}
         onEditAgent={() => {}}

@@ -16,9 +16,6 @@
   "scripts": {
     "build": "tsdown"
   },
-  "dependencies": {
-    "@ryagent/brand": "workspace:*"
-  },
   "peerDependencies": {
     "@ryagent/cordis": "workspace:*"
   }

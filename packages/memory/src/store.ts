@@ -231,6 +231,67 @@ export class MemoryStore {
     return rows.map(rowToMemory)
   }
 
+  /**
+   * 已归档的记忆（status='inactive'），按归档时间倒序。
+   * 归档本身不物理删除行，所以这里能把它们原样还给 UI 展示并允许恢复。
+   */
+  listArchived(limit = 200): MemoryRow[] {
+    const rows = this.db
+      .prepare("SELECT * FROM memories WHERE status = 'inactive' ORDER BY updated_at DESC LIMIT ?")
+      .all(limit) as Record<string, unknown>[]
+    return rows.map(rowToMemory)
+  }
+
+  /**
+   * 恢复一条归档记忆：status → active，并把内容放回 FTS 索引。
+   *
+   * FTS 行先删后插：归档前的行可能还在索引里（巩固只改 status），而 FTS5 的
+   * rowid 唯一，重复插入会直接报错。
+   * @returns 是否恢复成功（不存在或本来就不是归档状态返回 false）。
+   */
+  restore(id: string): boolean {
+    const row = this.db.prepare('SELECT content, status FROM memories WHERE id = ?').get(id) as
+      | { content: string; status: string }
+      | undefined
+    if (row === undefined || row.status !== 'inactive') return false
+    this.db.prepare("UPDATE memories SET status = 'active', updated_at = ? WHERE id = ?").run(Date.now(), id)
+    const rowid = this.rowidOf(id)
+    this.db.prepare('DELETE FROM memories_fts WHERE rowid = ?').run(rowid)
+    this.db.prepare('INSERT INTO memories_fts (rowid, content) VALUES (?, ?)').run(rowid, bigrams(row.content))
+    return true
+  }
+
+  /**
+   * 需要重建向量的记忆：还没有向量，或向量的来源模型不是当前模型。
+   *
+   * 归档（inactive）也算：用户随时能把它恢复，恢复后应当立刻可被语义检索。
+   * 软删链（superseded/deleted）不重建——它们不参与检索，重建纯属浪费额度。
+   */
+  listMissingEmbeddings(embeddingModel: string, limit = 500): MemoryRow[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM memories
+          WHERE status IN ('active', 'inactive')
+            AND (embedding IS NULL OR embedding_model IS NULL OR embedding_model != ?)
+          ORDER BY updated_at DESC
+          LIMIT ?`,
+      )
+      .all(embeddingModel, limit) as Record<string, unknown>[]
+    return rows.map(rowToMemory)
+  }
+
+  /** 回填向量：写 embedding + 维度 + 来源模型（向量身份的一部分）。 */
+  setEmbedding(id: string, embedding: Float32Array, embeddingModel: string): void {
+    this.db
+      .prepare('UPDATE memories SET embedding = ?, dim = ?, embedding_model = ? WHERE id = ?')
+      .run(
+        Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength),
+        embedding.length,
+        embeddingModel,
+        id,
+      )
+  }
+
   // ---- embedding 缓存（按模型分桶，换模型不混库）----
 
   cachedEmbedding(text: string, embeddingModel: string): Float32Array | null {

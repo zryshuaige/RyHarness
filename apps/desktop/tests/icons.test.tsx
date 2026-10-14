@@ -7,11 +7,10 @@ import { ICON_SIZE_STEPS, ICONS, Icon, quantizeIconSize } from '../renderer/src/
 const ICON_NAMES = Object.keys(ICONS) as (keyof typeof ICONS)[]
 
 describe('Lucide 图标系统', () => {
-  it('注册表覆盖全部 24 个需求图标', () => {
+  it('注册表覆盖全部需求图标，且不留孤儿', () => {
     const required = [
       'chat-bubble',
       'users',
-      'cat-face',
       'sun',
       'moon',
       'gear',
@@ -43,6 +42,8 @@ describe('Lucide 图标系统', () => {
     }
     // 注册表不许留孤儿：每个图标都必须是被断言的需求清单之一。
     expect(Object.keys(ICONS).sort()).toEqual([...required].sort())
+    // 反向护栏：品牌猫由 Cat.tsx 的矢量母版独占，图标库里再出现第三只猫就是回归。
+    expect(Object.keys(ICONS)).not.toContain('cat-face')
   })
 
   it('统一 stroke 风格：24 viewBox、currentColor、圆角线帽、fill=none、默认尺寸 20', () => {

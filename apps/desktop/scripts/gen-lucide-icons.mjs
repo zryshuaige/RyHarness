@@ -10,11 +10,11 @@ const here = dirname(fileURLToPath(import.meta.url))
 const srcDir = join(here, '../node_modules/lucide-static/icons')
 const outDir = join(here, '../renderer/src/assets/lucide')
 
-// 与 Icon.tsx 注册表一一对应（手绘版 → Lucide 正式名）
+// 与 Icon.tsx 注册表一一对应（手绘版 → Lucide 正式名）。
+// 猫是品牌资产（Cat.tsx 矢量母版），不进本表——lucide 的 cat 是另一只几何不同的猫。
 const ICONS = {
   'chat-bubble': 'message-circle',
   users: 'users',
-  'cat-face': 'cat',
   sun: 'sun',
   moon: 'moon',
   gear: 'settings-2',
@@ -35,6 +35,10 @@ const ICONS = {
   group: 'users-round',
   pencil: 'pencil',
   alert: 'triangle-alert',
+  dices: 'dices',
+  'clipboard-list': 'clipboard-list',
+  mail: 'mail',
+  'calendar-days': 'calendar-days',
 }
 
 mkdirSync(outDir, { recursive: true })

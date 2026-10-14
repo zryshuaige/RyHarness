@@ -67,6 +67,9 @@ export interface ChatSnapshot {
 
 const EMPTY: ChatSnapshot = { messages: [], relays: [], typing: {}, queueing: false }
 
+/** 重绘节流窗口：连续流式事件在窗口内合并成一次重绘（≈25fps）。 */
+const NOTIFY_INTERVAL_MS = 40
+
 /** 一条消息内文本部件的累积写入辅助（纯函数：绝不改传入的数组）。 */
 function appendText(parts: readonly MessagePart[], text: string): MessagePart[] {
   const last = parts[parts.length - 1]
@@ -143,13 +146,32 @@ export class ChatStore {
 
   /** 通知节流：40ms 合并连续事件（流式 token 批量重绘，报告 §5）。 */
   private notifyTimer: ReturnType<typeof setTimeout> | undefined
+  private lastFlushAt: number | undefined
 
+  /**
+   * 通知节流：40ms 合并连续事件（流式 token 批量重绘，报告 §5）。
+   * 前沿立即刷：空闲后到达的第一个事件（用户按下回车、气泡起头）当场重绘，
+   * 不白等一个 40ms 窗口——否则每轮开头都有一个肉眼可见的"没反应"。
+   */
   private notify(): void {
+    const now = Date.now()
     if (this.notifyTimer !== undefined) return
-    this.notifyTimer = setTimeout(() => {
-      this.notifyTimer = undefined
-      for (const listener of this.listeners) listener()
-    }, 40)
+    if (this.lastFlushAt !== undefined && now - this.lastFlushAt < NOTIFY_INTERVAL_MS) {
+      this.notifyTimer = setTimeout(
+        () => {
+          this.notifyTimer = undefined
+          this.flush()
+        },
+        NOTIFY_INTERVAL_MS - (now - this.lastFlushAt),
+      )
+      return
+    }
+    this.flush()
+  }
+
+  private flush(): void {
+    this.lastFlushAt = Date.now()
+    for (const listener of this.listeners) listener()
   }
 
   private emit(patch: SnapshotPatch): void {
@@ -432,7 +454,6 @@ export class ChatStore {
 export function useChat(store: ChatStore): ChatSnapshot {
   return useSyncExternalStore(store.subscribe, store.getSnapshot)
 }
-
 // ---- @提及补全（纯逻辑，供测试）----
 
 /** 从输入文本与光标位置解析 @补全状态；无补全时返回 null。 */

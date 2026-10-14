@@ -16,6 +16,15 @@ export class EventHub {
   private readonly listeners = new Map<string, Set<Listener>>()
   private readonly seqs = new Map<string, number>()
 
+  /**
+   * 该会话已发布到的最后一个 seq（没有事件时为 0）。
+   * 客户端在握手前读一次当缺口检测的基线：没有基线时，订阅建立之前发布的
+   * 事件对客户端是隐形的（欢迎页「先发消息、后建订阅」就是丢在这一段）。
+   */
+  lastSeq(conversationId: string): number {
+    return this.seqs.get(conversationId) ?? 0
+  }
+
   /** 订阅一个会话的事件；返回退订函数。 */
   subscribe(conversationId: string, listener: Listener): () => void {
     let set = this.listeners.get(conversationId)

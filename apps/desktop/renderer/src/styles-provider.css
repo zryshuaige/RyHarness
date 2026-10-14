@@ -1,0 +1,301 @@
+/**
+ * 供应商设置区块样式（MePage 的 ProviderSettings）。类名统一 provider- 前缀，
+ * 全部吃既有设计 token（圆角 / 间距 / 字阶 / 阴影），与 MePage 其他区块同语言。
+ *
+ * 注意：styles-product.css 里还留着旧版可展开供应商行的样式（.provider-row /
+ * .provider-detail / .model-list）。已核对：这三个类在新版区块里全部无引用
+ * （新版用的是 .provider-item / .provider-model-list），删除归样式线，不在本次改动里动。
+ */
+
+/* ---- 区块头：标题 + 右上「添加供应商」 ---- */
+.provider-section-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+}
+
+.provider-section-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.provider-section-title .me-row-title {
+  font-size: var(--fs-base);
+  font-weight: 600;
+}
+
+.provider-section-title .me-row-sub {
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+
+.provider-add-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 6px var(--space-3);
+  font-size: var(--fs-sm);
+  border-radius: var(--radius-md);
+}
+
+/* ---- 分组 ---- */
+.provider-group-label {
+  margin: var(--space-3) 0 var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.provider-group:first-child .provider-group-label {
+  margin-top: 0;
+}
+
+/* ---- 供应商行：图标 + 名称徽标 + 状态 + 模型数 › ---- */
+.provider-item {
+  background: var(--bg-surface);
+  border-radius: var(--radius-lg);
+  margin-bottom: var(--space-2);
+  box-shadow: var(--shadow-1);
+}
+
+.provider-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-3) var(--space-4);
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  transition: background var(--dur-hover) var(--ease-out);
+}
+
+.provider-head:hover {
+  background: var(--hover-bg);
+}
+
+.provider-head:focus-visible {
+  outline: 2px solid var(--focus-outline);
+  outline-offset: -2px;
+}
+
+.provider-logo {
+  flex-shrink: 0;
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: var(--shadow-1);
+  /* 字母标是装饰：拖选整行时不能把 "D" 一起复制走。 */
+  user-select: none;
+}
+
+.provider-logo text {
+  font-family: var(--font-sans);
+}
+
+.provider-name-col {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.provider-name {
+  font-size: var(--fs-base);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-badges {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+/* 协议 / 免 key 徽标：中性 chip，与 amber 的「内置/自定义」徽标拉开层级。 */
+.provider-chip {
+  background: var(--bg-app);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-pill);
+  padding: 1px 8px;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.provider-meta {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-shrink: 0;
+}
+
+.provider-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.provider-models-count {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.provider-chevron {
+  transition: transform var(--dur-hover) var(--ease-out);
+}
+
+.provider-chevron.is-open {
+  transform: rotate(90deg);
+}
+
+/* ---- 展开区 ---- */
+.provider-body {
+  padding: 0 var(--space-4) var(--space-3) calc(var(--space-4) + 36px + var(--space-3));
+}
+
+.provider-endpoint {
+  margin: 0 0 var(--space-2);
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  word-break: break-all;
+  user-select: text;
+}
+
+.provider-model-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--fs-sm);
+}
+
+.provider-model-list small {
+  display: block;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+.provider-item-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--space-3);
+}
+
+.provider-note a {
+  color: var(--amber-text);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+/* ---- 添加向导：预设网格 ---- */
+.provider-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.provider-preset-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: var(--space-3) var(--space-2);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-md);
+  background: var(--bg-app);
+  font: inherit;
+  cursor: pointer;
+  transition: border-color var(--dur-hover) var(--ease-out), background var(--dur-hover) var(--ease-out),
+    box-shadow var(--dur-hover) var(--ease-out);
+}
+
+.provider-preset-tile:hover {
+  background: var(--hover-bg);
+  border-color: var(--edge-strong);
+  box-shadow: var(--shadow-1);
+}
+
+.provider-preset-tile:focus-visible {
+  outline: 2px solid var(--focus-outline);
+  outline-offset: -2px;
+}
+
+.provider-preset-name {
+  font-size: var(--fs-xs);
+  color: var(--text-primary);
+  font-weight: 600;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 副标题：协议 / 模型数那一层。名字是决策依据，这行只是让人少点一次。 */
+.provider-preset-sub {
+  font-size: var(--fs-xs);
+  color: var(--text-tertiary);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- 添加向导：表单 ---- */
+.provider-back {
+  border: none;
+  background: none;
+  padding: 0;
+  margin-bottom: var(--space-1);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: color var(--dur-hover) var(--ease-out);
+}
+
+.provider-back:hover {
+  color: var(--text-primary);
+}
+
+.provider-back:focus-visible {
+  outline: 2px solid var(--focus-outline);
+  outline-offset: 2px;
+}
+
+/* 一个供应商都没读到时：说清是「服务端没起来 / 配置是空的」，别留一块空白。 */
+.provider-empty {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-1);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+@media (max-width: 560px) {
+  .provider-preset-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .provider-models-count {
+    display: none;
+  }
+}

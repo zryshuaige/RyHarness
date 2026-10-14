@@ -11,7 +11,7 @@
  * **并行**启动：资源服务可以立刻就绪，窗口先渲染骨架，后端就绪后把 API 地址
  * 推给渲染层（见 main.ts）。
  */
-import { createReadStream, statSync } from 'node:fs'
+import { createReadStream, type Stats, statSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import { join, resolve, sep } from 'node:path'
 
@@ -102,7 +102,7 @@ export class RendererAssets {
       res.writeHead(403).end()
       return
     }
-    let stat
+    let stat: Stats
     try {
       stat = statSync(target)
     } catch {

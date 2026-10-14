@@ -2,13 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AgentDef, ApiClient, Conversation, MessageRow } from '../api.ts'
 import { messageText } from '../api.ts'
 import { toast } from '../lib/toast.ts'
-import { LEAVE_MS, useLeaving } from '../lib/useLeaving.ts'
+import { LEAVE_MS, prefersReducedMotion, useLeaving } from '../lib/useLeaving.ts'
 import type { ChatStore, UiMessage } from '../store.ts'
 import { useChat } from '../store.ts'
 import { Cat } from './Cat.tsx'
 import { ChatInput } from './ChatInput.tsx'
 import { Icon } from './Icon.tsx'
 import { MessageBubble, RelayChain } from './MessageBubble.tsx'
+import { PanelSkeleton } from './Skeleton.tsx'
 import { ToastHost } from './ToastHost.tsx'
 import { TypingDots } from './TypingDots.tsx'
 
@@ -68,11 +69,13 @@ const PAGE_SIZE = 50
 /** 渲染上限：超长会话只渲染最近若干条，「加载更早」时同步放宽。 */
 const RENDER_CAP = 150
 
-/** 程序化滚动到底；smooth 仅用于「跳至最新」，流式跟随必须即时。 */
+/** 程序化滚动到底；smooth 仅用于「跳至最新」，流式跟随必须即时。
+ *  前庭障碍用户关掉动效时 smooth 仍是平滑滚动——同样的位移，同样的动效。 */
 function scrollToBottom(node: HTMLDivElement, smooth: boolean): void {
   if (smooth && typeof node.scrollTo === 'function') {
     try {
-      node.scrollTo({ top: node.scrollHeight, behavior: 'smooth' })
+      const behavior = prefersReducedMotion() ? 'auto' : 'smooth'
+      node.scrollTo({ top: node.scrollHeight, behavior })
       return
     } catch {
       // jsdom 等环境无 scrollTo 实现，回退直接赋值。
@@ -88,12 +91,21 @@ export function ChatView({
   agents,
   store,
   onRead,
+  pendingSend,
+  onPendingSendDone,
 }: {
   api: ApiClient
   conversation: Conversation
   agents: AgentDef[]
   store: ChatStore
   onRead?: () => void
+  /**
+   * 待发送的首条消息（欢迎页：先把会话切过来、WS 订阅建好，再发出去）。
+   * 见挂载 effect 里的发送时机——顺序反了这条消息就落在订阅之前。
+   */
+  pendingSend?: { conversationId: string; text: string }
+  /** 待发消息已发出（App 清掉它，避免下次进会话重发一遍）。 */
+  onPendingSendDone?: () => void
 }) {
   const snapshot = useChat(store)
   const [history, setHistory] = useState<UiMessage[]>([])
@@ -164,6 +176,32 @@ export function ChatView({
   const reloadRef = useRef(reloadLatest)
   reloadRef.current = reloadLatest
 
+  /**
+   * 发一轮：先把用户消息落到 store（本地即刻可见），再发给服务端。
+   * turnIndex 由调用方给定——挂载 effect 里发欢迎页那条时，历史刚拿到手里，
+   * 闭包里的 history / snapshot 还是挂载前的那一帧。
+   */
+  const dispatch = useCallback(
+    (text: string, turnIndex: number): void => {
+      store.addUserMessage(text, turnIndex)
+      stickToBottom.current = true
+      setStopped(false)
+      void api.postMessage(conversation.id, text).catch((error: unknown) => {
+        store.apply({
+          type: 'error',
+          conversationId: conversation.id,
+          message: error instanceof Error ? error.message : String(error),
+          code: 'HTTP',
+        })
+      })
+    },
+    [api, conversation.id, store],
+  )
+
+  /** 欢迎页那条待发消息（见 props）。发完立刻置空，重渲染/重挂载都不会发第二遍。 */
+  const pendingSendRef = useRef(pendingSend)
+  pendingSendRef.current = pendingSend
+
   // 载入历史 + 订阅 WS + 标记已读。
   useEffect(() => {
     let cancelled = false
@@ -175,16 +213,35 @@ export function ChatView({
     setConnDismissed(false)
     setStopped(false)
     stickToBottom.current = true
+    /**
+     * 订阅建好、历史就位之后才发欢迎页那条消息。
+     * 反过来（先 postMessage 再建订阅）的话，这一轮的事件全部落在订阅建立之前：
+     * message-start / text-delta 一个都收不到，首屏那句话看上去就是"发了没反应"。
+     * rows 只用来算 turnIndex；历史拉失败时传空数组，照发不误——宁可 turnIndex
+     * 猜错一格，也不能把用户刚敲的字吞掉。
+     */
+    const flushPending = (rows: UiMessage[]): void => {
+      const pending = pendingSendRef.current
+      if (cancelled || pending === undefined || pending.conversationId !== conversation.id) return
+      pendingSendRef.current = undefined
+      dispatch(pending.text, nextTurnIndex(rows))
+      onPendingSendDone?.()
+    }
     api
       .messages(conversation.id, { limit: PAGE_SIZE })
       .then(({ messages }) => {
         if (cancelled) return
-        setHistory(fromHistory(messages, nameOf))
+        const rows = fromHistory(messages, nameOf)
+        setHistory(rows)
         setHasMore(messages.length === PAGE_SIZE)
         setHistoryLoaded(true)
+        flushPending(rows)
       })
       .catch(() => {
-        if (!cancelled) setHistoryLoaded(true)
+        if (!cancelled) {
+          setHistoryLoaded(true)
+          flushPending([])
+        }
       })
     api
       .markRead(conversation.id)
@@ -317,21 +374,9 @@ export function ChatView({
       })
   }, [conversation.memberAgentIds, agents])
 
-  const send = async (text: string): Promise<void> => {
+  const send = (text: string): void => {
     // turnIndex 基于全量消息（历史 + 流式快照），与服务端口径一致。
-    store.addUserMessage(text, nextTurnIndex([...history, ...snapshot.messages]))
-    stickToBottom.current = true
-    setStopped(false)
-    try {
-      await api.postMessage(conversation.id, text)
-    } catch (error) {
-      store.apply({
-        type: 'error',
-        conversationId: conversation.id,
-        message: error instanceof Error ? error.message : String(error),
-        code: 'HTTP',
-      })
-    }
+    dispatch(text, nextTurnIndex([...history, ...snapshot.messages]))
   }
 
   // 中止后 store 里的流式消息永远停在 done=false（没有 message-done），光标会一直闪。
@@ -426,6 +471,7 @@ export function ChatView({
   const stoppedHint = useLeaving(LEAVE_MS, stopped ? '已停止生成' : undefined)
   const errorBanner = useLeaving(LEAVE_MS, snapshot.error)
   const jumpButton = useLeaving(LEAVE_MS, showJump ? true : undefined)
+  const queueHint = useLeaving(LEAVE_MS, snapshot.queueing ? true : undefined)
 
   return (
     <section className="chat-view">
@@ -455,7 +501,7 @@ export function ChatView({
 
       <div className="chat-scroll" ref={scrollRef} onScroll={handleScroll} style={{ position: 'relative' }}>
         <div className="chat-col">
-          {!historyLoaded && <p className="chat-hint">载入历史中…</p>}
+          {!historyLoaded && <PanelSkeleton rows={4} />}
           {historyLoaded && hasMore && (
             <button
               type="button"
@@ -548,8 +594,8 @@ export function ChatView({
             没有会话在看的页面由 App 壳挂同一个宿主。 */}
         <ToastHost />
         <div className="chat-input-col">
-          {snapshot.queueing && (
-            <p className="queue-hint">
+          {queueHint.shown !== undefined && (
+            <p ref={queueHint.ref} className={queueHint.leaving ? 'queue-hint is-leaving' : 'queue-hint'}>
               <span className="queue-pulse" />
               上一条还在处理，你的消息已排队…
             </p>
@@ -557,17 +603,18 @@ export function ChatView({
           <div className="chat-input-row">
             <ChatInput
               members={conversation.kind === 'group' ? members : []}
-              onSend={(text) => {
-                void send(text)
-              }}
+              onSend={send}
               disabled={snapshot.queueing}
               streaming={!stopped && Object.keys(snapshot.typing).length > 0}
               onStop={() => {
                 // 先复位再发请求：中止确认要等服务端回 ABORTED 才到，那之前界面不能
                 // 还停在"生成中"——这正是此前"点了停止像卡死"的观感来源。
                 setStopped(true)
-                void api.cancelTurn(conversation.id).catch(() => {
-                  // 停止失败不该打扰用户：服务端本来就会在 turn 结束时清理。
+                void api.cancelTurn(conversation.id).catch((error: unknown) => {
+                  // 停不掉就如实回滚：这一轮还在跑，界面必须回到"生成中"，
+                  // 否则用户以为已经停了、模型其实还在烧 token。静默吞掉就成了假死。
+                  setStopped(false)
+                  toast.error(`没能停止生成：${error instanceof Error ? error.message : String(error)}`)
                 })
               }}
             />

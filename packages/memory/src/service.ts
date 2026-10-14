@@ -232,6 +232,65 @@ export class MemoryService implements AgentMemory {
     return vector
   }
 
+  // ---- 向量索引重建 ----
+
+  /**
+   * 为存量记忆回填向量（换了 embedding 模型，或历史数据当初没配上向量）。
+   *
+   * 只处理"当前模型下缺向量"的记忆；embedding 不可用（无凭据、纯 FTS5）时返回
+   * 0，不假装重建过——静默的 0 会让用户以为旧记忆已经可被语义检索。
+   * @returns 实际写入向量的条数。
+   */
+  async reembedAll(limit = 500): Promise<number> {
+    if (!this.embeddings.available) return 0
+    const pending = this.store.listMissingEmbeddings(this.embeddingModel, limit)
+    if (pending.length === 0) return 0
+    const vectors = await this.embedBatch(
+      pending.map((memory) => {
+        return memory.content
+      }),
+    )
+    let written = 0
+    for (const [index, memory] of pending.entries()) {
+      const vector = vectors[index]
+      if (vector === undefined || vector === null) continue
+      this.store.setEmbedding(memory.id, vector, this.embeddingModel)
+      written += 1
+    }
+    return written
+  }
+
+  /**
+   * 批量嵌入：逐条查（hash, model）缓存，未命中的合并成一次请求。
+   * 重建动辄几百条，逐条发请求既慢又容易撞上单次超时。
+   */
+  private async embedBatch(texts: readonly string[]): Promise<Array<Float32Array | null>> {
+    const model = this.embeddingModel
+    const out: Array<Float32Array | null> = texts.map((text) => {
+      return this.store.cachedEmbedding(text, model)
+    })
+    const misses = texts.filter((_text, index) => {
+      return out[index] === null
+    })
+    if (misses.length === 0) return out
+    const fetched = await withTimeout(this.embeddings.embed(misses), this.embedTimeoutMs)
+    if (fetched === null) {
+      this.log(`@ryagent/memory: embedding batch timed out after ${this.embedTimeoutMs}ms`)
+      return out
+    }
+    const byText = new Map<string, Float32Array | null>(
+      misses.map((text, index) => {
+        return [text, fetched[index] ?? null]
+      }),
+    )
+    return texts.map((text, index) => {
+      if (out[index] !== null) return out[index] as Float32Array
+      const vector = byText.get(text) ?? null
+      if (vector !== null) this.store.cacheEmbedding(text, vector, model)
+      return vector
+    })
+  }
+
   // ---- 抽取管线（异步） ----
 
   /**

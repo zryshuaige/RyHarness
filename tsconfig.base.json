@@ -22,7 +22,7 @@
       "@ryagent/util-values": ["./packages/util/values/src/index.ts"],
       "@ryagent/util-crypto": ["./packages/util/crypto/src/index.ts"],
       "@ryagent/timeout": ["./packages/util/timeout/src/index.ts"],
-      "@ryagent/invariants": ["./packages/runtime-diagnostics/invariants/src/index.ts"],
+      "@ryagent/util-llm-json": ["./packages/util/llm-json/src/index.ts"],
       "@ryagent/attachment": ["./packages/attachment/types/src/index.ts"],
       "@ryagent/llm": ["./packages/llm/llm/src/index.ts"],
       "@ryagent/llm/*": ["./packages/llm/llm/src/*"],

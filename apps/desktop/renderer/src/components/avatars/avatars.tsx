@@ -10,8 +10,8 @@
  * 数据），而是动态 import styles-avatar.ts（独立 chunk，摇树后约 50KB），
  * 头像真正出现时才下载加载。
  *
- * agent.avatar 字段编码：`db:{styleKey}:{seed}`；'cat' 保留 Ryen 品牌橘猫；
- * 未知值回退首字符饱和色块（旧库数据平滑降级）。
+ * agent.avatar 字段编码：`db:{styleKey}:{seed}`；{@link BRAND_AVATAR} 保留 Ryen
+ * 品牌橘猫；未知值回退首字符饱和色块（旧库数据平滑降级）。
  */
 
 import type { AvatarRenderer } from './styles-avatar.ts'
@@ -21,6 +21,13 @@ export interface AvatarStyleDef {
   name: string
   license: 'CC0-1.0' | 'CC-BY-4.0'
 }
+
+/**
+ * 品牌橘猫在 agent.avatar 里的取值（不是 DiceBear 风格，故不进 AVATAR_STYLES）。
+ * 它由 Avatar 组件转成 Cat.tsx 的矢量母版，头像位与选择器共用这一个常量，
+ * 免得「'cat' 这个字面量」在多处各写一遍。
+ */
+export const BRAND_AVATAR = 'cat'
 
 export const AVATAR_STYLES: readonly AvatarStyleDef[] = [
   { key: 'dylan', name: '人物', license: 'CC-BY-4.0' },
@@ -68,12 +75,19 @@ export function parseAvatarSpec(avatar: string | undefined): { styleKey: string;
   return { styleKey: match[1], seed: match[2] }
 }
 
+/**
+ * 品牌橘猫在「换一批」里的命中概率。取 1/8 而不是更大的值：橘猫是品牌露出，
+ * 但每次随机都发猫会让通讯录变成一片猫。
+ */
+const BRAND_AVATAR_CHANCE = 1 / 8
+
 /** 生成随机 avatar 字段值。 */
 export function randomAvatarSpec(
   random: () => string = () => {
     return Math.random().toString(36).slice(2, 10)
   },
 ): string {
+  if (Math.random() < BRAND_AVATAR_CHANCE) return BRAND_AVATAR
   const style = AVATAR_STYLES[Math.floor(Math.random() * AVATAR_STYLES.length)]!
   return `db:${style.key}:${random()}`
 }

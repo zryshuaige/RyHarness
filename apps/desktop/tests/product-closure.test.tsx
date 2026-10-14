@@ -208,7 +208,17 @@ describe('群聊右栏：看得见的进化', () => {
       root = createRoot(container)
       root.render(
         <RightPanel
-          api={{} as ApiClient}
+          api={
+            {
+              // 右栏末尾会拉一次会话 token 用量（GET /api/conversations/:id）。
+              conversationDetail: () => {
+                return Promise.resolve({
+                  conversation,
+                  usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15, messages: 1 },
+                })
+              },
+            } as unknown as ApiClient
+          }
           store={store}
           conversation={{ ...conversation, kind: 'group', memberAgentIds: ['ryen', 'coder'] }}
           agents={[agent, coder]}
@@ -294,7 +304,9 @@ describe('ChatView：点「停止」后不复死在生成中', () => {
       vi.advanceTimersByTime(50)
     })
     expect(cancelled).toBe(1)
-    expect(container.querySelector('.stop-btn')).toBeNull()
+    // 停止按钮与打字指示器同属统一退场体系：点完即刻失效（.is-leaving 带走
+    // pointer-events），150ms 淡出后卸载——不再是一帧消失的硬切换。
+    expect(container.querySelector('.stop-btn.is-leaving')).not.toBeNull()
     expect(container.querySelector('.stopped-hint')?.textContent).toContain('已停止')
     // 流式气泡冻结成完结态，光标不会一直闪。
     expect(container.querySelector('.bubble-cursor')).toBeNull()
@@ -303,6 +315,7 @@ describe('ChatView：点「停止」后不复死在生成中', () => {
       vi.advanceTimersByTime(LEAVE_MS)
     })
     expect(container.querySelector('.typing-indicator')).toBeNull()
+    expect(container.querySelector('.stop-btn')).toBeNull()
 
     // 服务端随后补的 ABORTED：不是故障，不该出现红条。
     emit({ type: 'error', conversationId: 'c1', message: '已停止生成', code: 'ABORTED' })

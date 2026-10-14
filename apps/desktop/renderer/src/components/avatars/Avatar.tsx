@@ -1,10 +1,17 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Cat } from '../Cat.tsx'
-import { dicebearSvg, fallbackColor, isAvatarStyleLoaded, loadAvatarStyle, parseAvatarSpec } from './avatars.tsx'
+import {
+  BRAND_AVATAR,
+  dicebearSvg,
+  fallbackColor,
+  isAvatarStyleLoaded,
+  loadAvatarStyle,
+  parseAvatarSpec,
+} from './avatars.tsx'
 
 /**
  * 统一头像组件：
- * - 'cat' → Ryen 品牌橘猫（Cat.tsx，与应用图标同一只）
+ * - BRAND_AVATAR → Ryen 品牌橘猫（Cat.tsx，与应用图标同一只）
  * - `db:{style}:{seed}` → DiceBear 本地生成 SVG（dylan 人物 / mascot 吉祥物，
  *   按 styleKey 懒加载；未就绪时渲染等尺寸骨架，不产生布局抖动）
  * - 未知/旧值 → 首字符饱和色块兜底
@@ -62,7 +69,7 @@ export function Avatar({
     return dicebearSvg(spec.styleKey, spec.seed)
   }, [spec, ready])
 
-  if (avatarKey === 'cat') {
+  if (avatarKey === BRAND_AVATAR) {
     return (
       <span
         className={`avatar avatar-cat ${className}`}

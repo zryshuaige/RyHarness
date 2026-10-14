@@ -187,6 +187,83 @@ describe('MemoryStore', () => {
     s.close()
   })
 
+  it('listArchived / restore：归档记忆可列出、可拉回活跃面，FTS 索引同步恢复', () => {
+    const s = store()
+    const archived = s.insert({ agentId: 'a1', kind: 'fact', content: '住在北京' })
+    const alive = s.insert({ agentId: 'a1', kind: 'preference', content: '偏好川菜' })
+    s.backdate(archived.id, Date.now() - 200 * 86_400_000)
+    expect(s.archiveDormant(90 * 86_400_000)).toBe(1)
+
+    expect(s.listArchived().map((row) => row.id)).toEqual([archived.id])
+    expect(s.listArchived().map((row) => row.content)).toEqual(['住在北京'])
+    expect(s.restore(archived.id)).toBe(true)
+    expect(s.get(archived.id)!.status).toBe('active')
+    expect(s.listArchived()).toEqual([])
+    expect(
+      s
+        .listActiveForAgent('a1')
+        .map((row) => row.id)
+        .sort(),
+    ).toEqual([alive.id, archived.id].sort())
+    // 恢复后重新进检索面（含 FTS 通道：索引行先删后插，不撞 rowid 唯一约束）。
+    expect(s.searchFts('a1', '住在北京').map((row) => row.id)).toEqual([archived.id])
+    s.close()
+  })
+
+  it('restore 只救归档：不存在或非 inactive 一律 false（软删不能被 id 复活）', () => {
+    const s = store()
+    const active = s.insert({ agentId: 'a1', kind: 'fact', content: '还在活跃' })
+    const softDeleted = s.insert({ agentId: 'a1', kind: 'fact', content: '软删掉的' })
+    s.supersede(softDeleted.id, 'deleted')
+    expect(s.restore('no-such-id')).toBe(false)
+    expect(s.restore(active.id)).toBe(false)
+    expect(s.restore(softDeleted.id)).toBe(false)
+    expect(s.get(softDeleted.id)!.status).toBe('deleted')
+    s.close()
+  })
+
+  it('listMissingEmbeddings / setEmbedding：换模型后旧向量可被识别并回填', () => {
+    const s = store()
+    const legacy = s.insert({
+      agentId: 'a1',
+      kind: 'fact',
+      content: '旧模型写的',
+      embedding: Float32Array.from([0.5, 0.5]),
+      embeddingModel: 'model-a',
+    })
+    const noVector = s.insert({ agentId: 'a1', kind: 'fact', content: '一直没有向量' })
+    const current = s.insert({
+      agentId: 'a1',
+      kind: 'fact',
+      content: '当前模型的',
+      embedding: Float32Array.from([1, 0]),
+      embeddingModel: 'model-b',
+    })
+    const archived = s.insert({ agentId: 'a1', kind: 'event', content: '归档的也该能恢复即用' })
+    const softDeleted = s.insert({ agentId: 'a1', kind: 'fact', content: '软删的不用重建' })
+    s.backdate(archived.id, Date.now() - 200 * 86_400_000)
+    s.archiveDormant(90 * 86_400_000)
+    s.supersede(softDeleted.id, 'deleted')
+
+    expect(
+      s
+        .listMissingEmbeddings('model-b')
+        .map((row) => row.id)
+        .sort(),
+    ).toEqual([legacy.id, noVector.id, archived.id].sort())
+    s.setEmbedding(legacy.id, Float32Array.from([0, 1, 0]), 'model-b')
+    const row = s.get(legacy.id)!
+    expect(row.embeddingModel).toBe('model-b')
+    expect(row.dim).toBe(3)
+    expect(Array.from(row.embedding as Float32Array)).toEqual([0, 1, 0])
+    expect(
+      s.listMissingEmbeddings('model-b').map((entry) => {
+        return entry.id
+      }),
+    ).not.toContain(current.id)
+    s.close()
+  })
+
   it('stats 按空间/种类/状态分桶', () => {
     const s = store()
     s.insert({ agentId: 'a1', kind: 'fact', content: '一' })

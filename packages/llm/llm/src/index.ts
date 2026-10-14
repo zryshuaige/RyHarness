@@ -3,11 +3,11 @@
  * API. Exports the `LlmRuntime` default, the abstract `LlmAdapter` for
  * provider backends, and `BlockAssembler` for chunk assembly.
  *
- * 注：本包公开面是 dsh-llm 上游契约的超集——为保持与未来上层特性
- * （图片附件、上下文快照、模型发现、重试策略配置等）的契约对齐而全量导出。
- * 当前仓内实际有消费方的仅约 30 个符号（LlmRuntime/LlmAdapter/StreamChunk/
- * Message/GenerateOptions/LlmError 等核心缝）；其余导出视为 @internal 保留面，
- * 删除或收窄前请先确认无下游契约依赖。
+ * 注：barrel 只再导出仓内（含各包测试）有真实消费方的符号；入口文件
+ * 自身导出核心服务 API（LlmRuntime/LlmAdapter/LlmError/assertUsableApiKey）
+ * 及其公开签名的伴生类型。纯内部实现（api-key 的凭据谓词、content 的投影
+ * 助手、retry-stream 的分类器、freezeMessage、call-config 等）不进 barrel。
+ * 新增导出前先确认有消费方。
  *
  * @module @ryagent/llm
  */
@@ -53,19 +53,40 @@ import type {
   ToolUpdate,
 } from './types.ts'
 
-export * from './api-key.ts'
 export { BlockAssembler } from './assembler.ts'
-export * from './assistant-stream.ts'
-export * from './attribution.ts'
-export * from './brand.ts'
-export type { LlmCallConfig, LlmCallConfigAdapterDefaults } from './call-config.ts'
-export { callConfigEquals, isAgentLoopRequest, markAgentLoopRequest } from './call-config.ts'
-export * from './content.ts'
-export * from './error.ts'
-export * from './message.ts'
-export * from './retry-policy.ts'
-export { isRetryableFailure, retryDelayMs, streamWithRetry } from './retry-stream.ts'
-export * from './types.ts'
+export { attributionHeaders } from './attribution.ts'
+export type { MessageId, ToolCallId } from './brand.ts'
+export {
+  EMPTY_RESPONSE_CODE,
+  errorChain,
+  HarnessError,
+  isContextWindowExceededError,
+  isHarnessError,
+  isQuotaExceededError,
+  QUOTA_EXCEEDED_CODE,
+} from './error.ts'
+export type { AssistantMessage, Message } from './message.ts'
+export {
+  createAssistantMessage,
+  createDeveloperMessage,
+  createToolResultMessage,
+  createUserMessage,
+} from './message.ts'
+export type { ResolvedRetryPolicy } from './retry-policy.ts'
+export { resolveRetryPolicy } from './retry-policy.ts'
+export { streamWithRetry } from './retry-stream.ts'
+export type {
+  ContentBlock,
+  FinishReason,
+  GenerateOptions,
+  LlmModelInfo,
+  LlmResolvedModelInfo,
+  RequestMessage,
+  StreamChunk,
+  TokenUsage,
+  ToolCallBlock,
+  ToolSchema,
+} from './types.ts'
 
 declare module '@ryagent/cordis' {
   interface Context {
@@ -77,12 +98,12 @@ declare module '@ryagent/cordis' {
      * Waterfall around every streaming model call (retry, replay, routing).
      * Bound to the {@link LlmRuntime}; call `next()` to reach the resolved
      * adapter's stream, or yield your own chunks to short-circuit.
-     * @param options - the full request. A LOOP-built request carries the
-     *   process-local {@link markAgentLoopRequest} identity and arrives deep-frozen
-     *   (mutation throws): its content is a pure function of the session log (the
-     *   reconstructability Agent Note), so listeners read it, never rewrite it.
-     *   Hand-built calls do not carry that marker; callers own their request
-     *   inputs and must keep them unchanged until the stream settles.
+     * @param options - the full request. A request assembled by the agent loop
+     *   arrives deep-frozen (mutation throws): its content is a pure function
+     *   of the session log (the reconstructability Agent Note), so listeners
+     *   read it, never rewrite it. Hand-built calls are not frozen; their
+     *   callers own the inputs and must keep them unchanged until the stream
+     *   settles.
      * @mode waterfall
      */
     'llm/stream'(
@@ -101,8 +122,6 @@ export interface LlmErrorOptions extends ErrorOptions {
   providerRetryAfterMs?: number
   /** Non-empty opaque provider request id. */
   requestId?: ProviderRequestId
-  /** Positive count of additional oldest retained image occurrences to offload; only with `IMAGE_OFFLOAD_REQUIRED`. */
-  offloadImages?: number
 }
 
 /**
@@ -145,7 +164,6 @@ export class LlmError extends HarnessError {
       ...(options?.status === undefined ? {} : { status: options.status }),
       ...(options?.providerRetryAfterMs === undefined ? {} : { providerRetryAfterMs: options.providerRetryAfterMs }),
       ...(options?.requestId === undefined ? {} : { requestId: options.requestId }),
-      ...(options?.offloadImages === undefined ? {} : { offloadImages: options.offloadImages }),
     })
   }
 }
@@ -369,30 +387,24 @@ export class LlmRuntime extends TypertRemoteService {
 
   /** Notify topology observers without letting one broken listener veto the commit. */
   private emitAdaptersUpdated(): void {
-    // Cordis emit uses Array.map: one synchronous throw starves later
-    // listeners. Registry notifications are non-vetoing, so contain each
-    // callback independently; INVARIANT-coded failures still surface.
-    let invariantFailure: unknown
+    // Cordis emit uses Array.map: one synchronous throw starves later listeners,
+    // and registry notifications are non-vetoing, so contain each callback
+    // independently instead of letting the first failure abandon the rest.
     for (const listener of this.ctx.events.dispatch('emit', ['llm/adapters-updated']) as Array<() => unknown>) {
       try {
         const returned = listener()
         if (returned != null && typeof (returned as PromiseLike<unknown>).then === 'function') {
           // An emit listener may still be an async function; its rejection
-          // cannot reach the synchronous INVARIANT rethrow below, so it is
-          // contained here instead of becoming an unhandled rejection.
+          // cannot reach a synchronous catch, so it is contained here instead
+          // of becoming an unhandled rejection.
           void Promise.resolve(returned as PromiseLike<unknown>).then(undefined, (error: unknown) => {
             this.warnAdaptersListenerFailure(error)
           })
         }
       } catch (error) {
-        if ((error as { code?: unknown } | null)?.code === 'INVARIANT') {
-          invariantFailure ??= error
-          continue
-        }
         this.warnAdaptersListenerFailure(error)
       }
     }
-    if (invariantFailure !== undefined) throw invariantFailure as Error
   }
 
   /** Contained-listener diagnostic shared by the sync and async failure paths. */

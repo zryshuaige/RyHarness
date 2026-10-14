@@ -49,13 +49,6 @@ export interface LlmFailure {
   readonly providerRetryAfterMs?: number
   /** Opaque provider-issued request identifier for diagnostics. */
   readonly requestId?: ProviderRequestId
-  /**
-   * With code `IMAGE_OFFLOAD_REQUIRED`: how many more of the oldest retained
-   * image occurrences the route needs offloaded before the same request fits
-   * its exact byte accounting. `dsh-compaction-image-offload` records the
-   * selected occurrences in an `image/offload` event and retries the step.
-   */
-  readonly offloadImages?: number
 }
 
 /** Plain text visible to the end user. */
@@ -80,12 +73,6 @@ export interface ImageBlock {
   type: 'image'
   /** Immutable bytes and intrinsic display metadata owned by the attachment service. */
   attachment: ImageAttachmentRef
-  /**
-   * Derived from a durable image-offload decision or preserved by a message
-   * rewrite. Every route sends placeholder text naming the image and its
-   * available read-only path instead of image bytes.
-   */
-  offloaded?: true
 }
 
 /**
@@ -192,9 +179,9 @@ export interface TokenUsage {
  * Request price of one ordered image occurrence under one exact model route's
  * request projection. Every occurrence resolves to the pair the wire actually
  * carries: provider visual tokens for a retained image, plus the model-visible
- * text sent with or instead of it (request-preview handle, offload placeholder,
- * or text-only substitution). The caller prices `text` with its own text
- * estimator so provider pricing never fixes a text tokenization.
+ * text sent with or instead of it (the text-only substitution). The caller
+ * prices `text` with its own text estimator so provider pricing never fixes a
+ * text tokenization.
  */
 export interface LlmImageRequestPrice {
   /** Provider visual tokens for the retained request image; 0 when only text represents this occurrence. */
@@ -212,8 +199,7 @@ export interface LlmImageRequestPrice {
 export interface LlmImageRequestPricing {
   /**
    * Price every image occurrence of one request projection.
-   * @param images - surface image blocks in request order, one entry per occurrence; an `offloaded` block
-   *   is priced as its placeholder text.
+   * @param images - surface image blocks in request order, one entry per occurrence, as they will be sent.
    * @returns one price per occurrence, aligned by index with `images`.
    */
   priceImages(images: readonly ImageBlock[]): readonly LlmImageRequestPrice[]
@@ -292,12 +278,6 @@ export interface LlmModelDiscoveryRequest {
   apiKey?: string
 }
 
-/** Provider-side discovery request with operation-local cancellation attached. */
-export interface LlmModelDiscoveryOperation extends LlmModelDiscoveryRequest {
-  /** Caller cancellation; implementations must settle promptly after it aborts. */
-  signal?: AbortSignal
-}
-
 declare module '@ryagent/typert-protocol' {
   interface RemoteErrorDetailsMap {
     /** A draft provider interrogation refused or failed. */
@@ -344,26 +324,6 @@ export interface LlmModelInfo {
 export interface LlmModelContext {
   /** Maximum combined request and response context in tokens. */
   contextWindow: number
-}
-
-/**
- * Request-image budget one exact image-capable route enforces over the
- * retained occurrences' exact request-version bytes; for the `base64`
- * representation each byte count expands to its encoded length. A route whose
- * retained occurrences exceed the budget fails the request with
- * `IMAGE_OFFLOAD_REQUIRED` naming the additional occurrences to offload.
- */
-export interface LlmImageRequestBudget {
-  /** Whether the route accounts raw file bytes or inline base64 length. */
-  representation: 'raw' | 'base64'
-  /** Accumulated represented image bytes the route accepts; absent leaves bytes unbounded. */
-  maxBytes?: number
-  /** Image occurrences the route accepts; absent leaves the count unbounded. */
-  maxImages?: number
-  /** Represented bytes removed as one deterministic advance step; absent removes the minimum. */
-  byteQuantum?: number
-  /** Occurrences removed as one deterministic advance step; absent removes the minimum. */
-  countQuantum?: number
 }
 
 /** Display metadata for one adapter-owned reasoning effort. */

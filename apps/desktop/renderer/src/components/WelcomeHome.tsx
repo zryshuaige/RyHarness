@@ -164,7 +164,6 @@ export function WelcomeHome({
             }}
           />
         </div>
-        <p className="welcome-compose-hint">Enter 发送 · Shift+Enter 换行</p>
       </div>
       {recent.length > 0 && (
         <div className="welcome-recent">

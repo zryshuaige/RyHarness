@@ -14,6 +14,10 @@
  * 工具：已推给前端的半截回复先以 done 收尾并落库（否则刷新即消失），随后
  * 以 {@link AbortedError} 结束。
  *
+ * 上下文：入口历史按 historyBudgetChars 裁剪；本轮工具结果按
+ * {@link MAX_LOOP_CONTEXT_CHARS} 累计，超预算截断并标注——多步工具循环的回填
+ * 量不受入口预算约束，不设上限必然把请求顶到几十万字符。
+ *
  * 与上游 dsh-agent-loop 的关系：只保留"循环 + 工具调度"内核，不带
  * session 发布、sandbox 执行器与审批生态（M0 决策：agent 循环自写精简版）。
  * @module @ryagent/agent/loop
@@ -112,6 +116,58 @@ const DEFAULT_MAX_STEPS = 16
 
 /** 起始历史的字符预算默认值（token 的字符数近似，对齐群聊侧的 30k）。 */
 export const DEFAULT_HISTORY_BUDGET_CHARS = 30_000
+
+/**
+ * 本轮循环内工具结果的累计字符上限。
+ *
+ * {@link trimHistoryToBudget} 只作用于入口历史，本轮每一步的工具结果却是原样
+ * 回填：`shell_exec` 单条就给到 32k 字符，16 步 × 2–3 个调用足以把请求顶到
+ * 几十万字符，供应商一律 400。120k 字符 ≈ 30k token，与入口历史预算同量级，
+ * 够跑完一整轮工具链又撑不爆上下文窗口。
+ */
+export const MAX_LOOP_CONTEXT_CHARS = 120_000
+
+/** 截断标注预留的字符数（标注里带数字，长度有浮动）。 */
+const TRUNCATION_NOTE_RESERVE = 96
+
+/** 预算耗尽后每条工具结果只剩这条标注：tool_call 与 tool_result 必须配对。 */
+const CONTEXT_EXHAUSTED_NOTE = '…[已截断：本轮工具输出已用满上下文预算]'
+
+/**
+ * 循环内上下文的字符预算（只管工具结果）。
+ *
+ * assistant 侧不必计入：它受供应商 max_tokens 约束，量级固定；工具输出才是
+ * 唯一由工作区文件大小决定、模型与调用方都控制不住的部分。
+ *
+ * 上界：预算耗尽后每条结果只贡献一条约 24 字符的标注，所以进历史的工具结果
+ * 合计不会超过 {@link MAX_LOOP_CONTEXT_CHARS} + 24 ×（耗尽后的结果条数）；条数
+ * 又被 maxSteps 与每条消息的调用数封顶。
+ */
+class LoopContextBudget {
+  private used = 0
+
+  constructor(private readonly limit: number) {}
+
+  /**
+   * 回填前的裁剪：超预算只留前段并追加「已截断」标注，让模型知道自己看到的
+   * 是不完整输出（否则它会基于残缺内容给出自信的错误结论）。
+   */
+  admit(text: string): string {
+    const room = this.limit - this.used
+    if (text.length <= room) {
+      this.used += text.length
+      return text
+    }
+    const kept = Math.max(0, room - TRUNCATION_NOTE_RESERVE)
+    if (kept === 0) {
+      this.used += CONTEXT_EXHAUSTED_NOTE.length
+      return CONTEXT_EXHAUSTED_NOTE
+    }
+    const note = `\n…[已截断：工具输出超出本轮 ${this.limit} 字符上下文预算，省略 ${text.length - kept} 字符]`
+    this.used += kept + note.length
+    return text.slice(0, kept) + note
+  }
+}
 
 /** 把任意 thrown value 归一为事件用的 { message, code }。 */
 function failureOf(error: unknown): { message: string; code: string } {
@@ -237,6 +293,7 @@ export class AgentLoop {
     let assistantText = ''
     let llmError = false
     const toolResults: { name: string; isError: boolean }[] = []
+    const contextBudget = new LoopContextBudget(MAX_LOOP_CONTEXT_CHARS)
     try {
       while (steps < maxSteps) {
         steps++
@@ -326,10 +383,12 @@ export class AgentLoop {
             isError: result.isError === true,
             result,
           }
+          // 事件给 UI 的是完整结果（落库、展开都靠它），进历史的是受预算约束
+          // 的副本：模型看不到的那部分留在这里只会挤爆下一轮请求。
           history.push(
             createToolResultMessage({
               callId: call.id as ToolCallId,
-              content: [{ type: 'text', text: result.content }],
+              content: [{ type: 'text', text: contextBudget.admit(result.content) }],
               isError: result.isError === true,
             }),
           )

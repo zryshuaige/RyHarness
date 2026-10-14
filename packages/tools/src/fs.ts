@@ -74,6 +74,9 @@ export const fsRead: Tool = {
 export const fsWrite: Tool = {
   name: 'fs_write',
   description: '把内容写入工作区内文件（自动创建父目录），返回写入结果摘要。',
+  // 模型同一批里常同时写同一路径的多个片段（拆分写入）：并发会让后写的片段
+  // 随机先落盘，文件内容变成片段的随机排列。
+  executionMode: 'sequential',
   parameters: {
     type: 'object',
     properties: {

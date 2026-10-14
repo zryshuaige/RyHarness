@@ -6,6 +6,7 @@ import { Avatar } from '../renderer/src/components/avatars/Avatar.tsx'
 import {
   AVATAR_STYLE_BY_KEY,
   AVATAR_STYLES,
+  BRAND_AVATAR,
   dicebearSvg,
   fallbackColor,
   isAvatarStyleLoaded,
@@ -91,16 +92,38 @@ describe('DiceBear 头像体系', () => {
     expect(parseAvatarSpec(undefined)).toBeNull()
   })
 
-  it('randomAvatarSpec 只生成白名单内的风格', () => {
+  it('randomAvatarSpec 只生成白名单内的风格或品牌橘猫', () => {
     for (let i = 0; i < 20; i++) {
       const raw = randomAvatarSpec(() => {
         return 'fixedseed'
       })
+      if (raw === BRAND_AVATAR) continue
       const spec = parseAvatarSpec(raw)
       expect(spec, raw).not.toBeNull()
       expect(AVATAR_STYLE_BY_KEY[spec!.styleKey], raw).toBeDefined()
       expect(spec!.seed).toBe('fixedseed')
     }
+  })
+
+  it('randomAvatarSpec 有一定概率落到品牌橘猫（品牌必须可达，不能只在数据库里）', () => {
+    expect(BRAND_AVATAR).toBe('cat')
+    const cat = vi.spyOn(Math, 'random').mockReturnValue(0)
+    expect(randomAvatarSpec()).toBe(BRAND_AVATAR)
+    cat.mockRestore()
+    // 不中猫时仍然只从白名单风格里取
+    const style = vi.spyOn(Math, 'random').mockReturnValue(0.99)
+    expect(
+      randomAvatarSpec(() => {
+        return 'fixedseed'
+      }),
+    ).toBe('db:mascot:fixedseed')
+    style.mockRestore()
+    // 概率不是 0：默认取 200 次，必有一次以上命中
+    let hits = 0
+    for (let i = 0; i < 200; i++) {
+      if (randomAvatarSpec() === BRAND_AVATAR) hits++
+    }
+    expect(hits).toBeGreaterThan(0)
   })
 
   it('兜底色稳定', () => {

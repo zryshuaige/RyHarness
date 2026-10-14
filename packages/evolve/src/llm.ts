@@ -7,6 +7,7 @@
  */
 
 import { HarnessError } from '@ryagent/llm'
+import { ChatJsonClient } from '@ryagent/util-llm-json'
 import type { PlaybookSection } from './schema.ts'
 
 /** 一轮对话的轨迹摘要（进化管线的输入）。 */
@@ -78,78 +79,27 @@ const REFLECT_PROMPT = `你是反思者。这轮对话出现了失败信号（�
 
 /** OpenAI 兼容 chat/completions 默认实现（配置驱动）。 */
 export class ChatEvolveLlm implements EvolveLlm {
-  private readonly baseURL: string
-  private readonly model: string
+  private readonly client: ChatJsonClient
 
-  constructor(
-    private readonly config: {
-      apiKey: string
-      baseURL: string
-      model: string
-      fetchImpl?: typeof fetch
-      /** 单次请求超时毫秒（默认 30s）。 */
-      timeoutMs?: number
-    },
-  ) {
-    if (config.apiKey.length === 0) {
-      throw new HarnessError('@ryagent/evolve: evolve llm requires an api key', EVOLVE_LLM_CODES.config)
-    }
-    if (typeof config.baseURL !== 'string' || config.baseURL.length === 0) {
-      throw new HarnessError('@ryagent/evolve: evolve llm requires a baseURL', EVOLVE_LLM_CODES.config)
-    }
-    if (typeof config.model !== 'string' || config.model.length === 0) {
-      throw new HarnessError('@ryagent/evolve: evolve llm requires a model id', EVOLVE_LLM_CODES.config)
-    }
-    this.baseURL = config.baseURL.replace(/\/+$/, '')
-    this.model = config.model
-  }
-
-  private async chatJson(system: string, user: string): Promise<unknown> {
-    const fetchImpl = this.config.fetchImpl ?? fetch
-    let response: Response
+  constructor(config: {
+    apiKey: string
+    baseURL: string
+    model: string
+    fetchImpl?: typeof fetch
+    /** 单次请求超时毫秒（默认 30s）。 */
+    timeoutMs?: number
+  }) {
     try {
-      response = await fetchImpl(`${this.baseURL}/chat/completions`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${this.config.apiKey}` },
-        body: JSON.stringify({
-          model: this.model,
-          messages: [
-            { role: 'system', content: system },
-            { role: 'user', content: user },
-          ],
-          temperature: 0,
-          response_format: { type: 'json_object' },
-        }),
-        ...(this.config.timeoutMs === undefined ? {} : { signal: AbortSignal.timeout(this.config.timeoutMs) }),
+      this.client = new ChatJsonClient({
+        apiKey: config.apiKey,
+        baseURL: config.baseURL,
+        model: config.model,
+        ...(config.fetchImpl === undefined ? {} : { fetchImpl: config.fetchImpl }),
+        ...(config.timeoutMs === undefined ? {} : { timeoutMs: config.timeoutMs }),
+        codeNamespace: 'EVOLVE_LLM',
       })
     } catch (error) {
-      throw new HarnessError(`@ryagent/evolve: evolve llm request failed: ${String(error)}`, EVOLVE_LLM_CODES.http, {
-        cause: error,
-      })
-    }
-    if (!response.ok) {
-      const detail = await response.text().catch(() => '')
-      throw new HarnessError(
-        `@ryagent/evolve: evolve llm HTTP ${response.status} ${detail.slice(0, 400)}`.trimEnd(),
-        EVOLVE_LLM_CODES.http,
-      )
-    }
-    const body = (await response.json().catch(() => {
-      return undefined
-    })) as { choices?: { message?: { content?: unknown } }[] } | undefined
-    const raw = body?.choices?.[0]?.message?.content
-    const content = normalizeContent(raw)
-    if (content === undefined || content.trim().length === 0) {
-      throw new HarnessError('@ryagent/evolve: evolve llm returned an empty response', EVOLVE_LLM_CODES.empty)
-    }
-    try {
-      return JSON.parse(stripCodeFence(content)) as unknown
-    } catch (error) {
-      throw new HarnessError(
-        `@ryagent/evolve: evolve llm returned non-JSON content: ${content.slice(0, 200)}`,
-        EVOLVE_LLM_CODES.json,
-        { cause: error },
-      )
+      throw new HarnessError((error as Error).message, EVOLVE_LLM_CODES.config, { cause: error })
     }
   }
 
@@ -181,10 +131,10 @@ export class ChatEvolveLlm implements EvolveLlm {
         return entry.id
       }),
     )
-    const parsed = (await this.chatJson(
-      '你只输出合法 JSON。',
-      `${CURATOR_PROMPT}${entryBlock}\n\n（agent：${input.agentName}）\n\n用户：${input.trajectory.userText}\n${input.agentName}：${input.trajectory.assistantText.slice(0, 800)}\n工具：${tools}\n流错误：${input.trajectory.llmError ? '是' : '否'}`,
-    )) as { deltas?: Record<string, unknown>[] }
+    const parsed = (await this.client.chatJson({
+      system: '你只输出合法 JSON。',
+      user: `${CURATOR_PROMPT}${entryBlock}\n\n（agent：${input.agentName}）\n\n用户：${input.trajectory.userText}\n${input.agentName}：${input.trajectory.assistantText.slice(0, 800)}\n工具：${tools}\n流错误：${input.trajectory.llmError ? '是' : '否'}`,
+    })) as { deltas?: Record<string, unknown>[] }
     if (!Array.isArray(parsed.deltas)) return []
     const sections: PlaybookSection[] = ['strategy', 'pitfall', 'preference', 'tooling']
     return parsed.deltas
@@ -209,36 +159,12 @@ export class ChatEvolveLlm implements EvolveLlm {
   }
 
   async reflect(input: { agentName: string; trajectory: TurnTrajectory; reason: string }): Promise<string> {
-    const parsed = (await this.chatJson(
-      '你只输出合法 JSON。',
-      `${REFLECT_PROMPT}用户：${input.trajectory.userText}\n${input.agentName}：${input.trajectory.assistantText.slice(0, 800)}\n\n失败原因：${input.reason}`,
-    )) as { lesson?: unknown }
+    const parsed = (await this.client.chatJson({
+      system: '你只输出合法 JSON。',
+      user: `${REFLECT_PROMPT}用户：${input.trajectory.userText}\n${input.agentName}：${input.trajectory.assistantText.slice(0, 800)}\n\n失败原因：${input.reason}`,
+    })) as { lesson?: unknown }
     return typeof parsed.lesson === 'string' && parsed.lesson.trim().length > 0
       ? parsed.lesson.trim().slice(0, 300)
       : '本轮出现问题，下次先检查再行动。'
   }
-}
-
-/** 供应商可能返回字符串或分段数组；统一取文本。 */
-function normalizeContent(content: unknown): string | undefined {
-  if (typeof content === 'string') return content
-  if (!Array.isArray(content)) return undefined
-  const text = content
-    .map((part) => {
-      if (typeof part === 'string') return part
-      const text = (part as { text?: unknown })?.text
-      return typeof text === 'string' ? text : ''
-    })
-    .join('')
-  return text.length === 0 ? undefined : text
-}
-
-/** 部分供应商即使被要求 JSON 也会裹 ```json 围栏。 */
-function stripCodeFence(content: string): string {
-  const trimmed = content.trim()
-  if (!trimmed.startsWith('```')) return trimmed
-  return trimmed
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/\s*```$/, '')
-    .trim()
 }

@@ -139,6 +139,9 @@ importers:
       '@ryagent/llm':
         specifier: workspace:*
         version: link:../llm/llm
+      '@ryagent/util-llm-json':
+        specifier: workspace:*
+        version: link:../util/llm-json
 
   packages/group:
     dependencies:
@@ -160,12 +163,6 @@ importers:
       '@ryagent/cordis':
         specifier: workspace:*
         version: link:../../../vendor/cordis
-      '@ryagent/invariants':
-        specifier: workspace:*
-        version: link:../../runtime-diagnostics/invariants
-      '@ryagent/schemastery':
-        specifier: workspace:*
-        version: link:../../../vendor/schemastery
       '@ryagent/timeout':
         specifier: workspace:*
         version: link:../../util/timeout
@@ -178,9 +175,6 @@ importers:
       '@ryagent/util-values':
         specifier: workspace:*
         version: link:../../util/values
-      zod:
-        specifier: ^4.4.3
-        version: 4.6.5
 
   packages/llm/openai:
     dependencies:
@@ -202,15 +196,9 @@ importers:
       '@ryagent/llm':
         specifier: workspace:*
         version: link:../llm/llm
-
-  packages/runtime-diagnostics/invariants:
-    dependencies:
-      '@ryagent/cordis':
+      '@ryagent/util-llm-json':
         specifier: workspace:*
-        version: link:../../../vendor/cordis
-      '@ryagent/schemastery':
-        specifier: workspace:*
-        version: link:../../../vendor/schemastery
+        version: link:../util/llm-json
 
   packages/session:
     dependencies:
@@ -235,9 +223,6 @@ importers:
 
   packages/typert/protocol:
     dependencies:
-      '@ryagent/brand':
-        specifier: workspace:*
-        version: link:../../util/brand
       '@ryagent/cordis':
         specifier: workspace:*
         version: link:../../../vendor/cordis
@@ -245,6 +230,12 @@ importers:
   packages/util/brand: {}
 
   packages/util/crypto: {}
+
+  packages/util/llm-json:
+    dependencies:
+      '@ryagent/llm':
+        specifier: workspace:*
+        version: link:../../llm/llm
 
   packages/util/timeout: {}
 
@@ -3328,9 +3319,6 @@ packages:
   yuku-parser@0.8.7:
     resolution: {integrity: sha512-vRD9nwt4L3aYpxNqeSC4WqLv58xrXef0Ong1Mc45CTXTIpvLafx7JO05sczmQZwdLEZvywrLOGdNC5+Rp5N1BQ==}
 
-  zod@4.6.5:
-    resolution: {integrity: sha512-v5l/aFXZQeai4awLbOpSoHecE9UiMrnfx75tEXLjNonXVARxQ5mOeipTjROUchszUNCqnE+hqAMujRsRHsut2Q==}
-
 snapshots:
 
   '@asamuzakjp/css-color@3.2.0':
@@ -6092,5 +6080,3 @@ snapshots:
       '@yuku-parser/binding-linux-x64-musl': 0.8.7
       '@yuku-parser/binding-win32-arm64': 0.8.7
       '@yuku-parser/binding-win32-x64': 0.8.7
-
-  zod@4.6.5: {}

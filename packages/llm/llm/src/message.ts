@@ -37,97 +37,17 @@ export interface SystemPromptMessageSource {
 }
 
 /**
- * The kind of information in producer-supplied context, declared by the
- * producer in the same `MessageSource`.
- *
- * `MessageSource.kind` answers *who produced this*; `form` answers *what kind
- * of thing it is*, and the two axes are deliberately independent — several
- * producers share one form, and one producer may emit more than one form over
- * a session.
- *
- * The vocabulary is SEMANTIC, never visual: a value states that the content is
- * a file's instructions or a catalog of available items, and a consumer decides
- * what that looks like. Colors, icons, ordering, and collapse defaults are the
- * consumer's business and must not enter this union. It grows one value at a
- * time as producers gain the structured fields their form needs; an absent or
- * unknown value is the documented default, presented as opaque content.
- */
-export type ContextForm =
-  /** Instructions read out of workspace files the model is expected to follow. */
-  | 'instructions'
-  /** A catalog of items available in this session, republished as it changes. */
-  | 'catalog'
-  /** Current state, where a later snapshot from the same producer supersedes an earlier one. */
-  | 'snapshot'
-  /** A one-off account of something that just happened; it supersedes nothing. */
-  | 'notice'
-  /** A message another agent addressed to this one. */
-  | 'relay'
-  /** Material lifted out of another session's log, possibly reduced on the way in. */
-  | 'recall'
-
-/** One named contribution to a `snapshot`-form context, in assembly order. */
-export interface ContextSnapshotSection {
-  /** The contributing subsystem's name. */
-  readonly name: string
-  /** That contribution's model-facing text, exactly as assembled. */
-  readonly text: string
-}
-
-/**
- * Producer-declared {@link ContextForm} and the fields that form requires,
- * mixed into the source types that carry one.
- *
- * Discriminated by `form` so a producer cannot select a form without the
- * fields needed to present it: a `notice` must record its one-line
- * account, a `snapshot` its sections. Omitting `form` stays valid — an
- * undeclared context is the documented default.
- */
-export type ContextFormed =
-  | { readonly form?: never }
-  | { readonly form: 'instructions' }
-  | { readonly form: 'catalog' }
-  | {
-      readonly form: 'snapshot'
-      /** The named contributions this snapshot assembled, in order. */
-      readonly sections: readonly ContextSnapshotSection[]
-    }
-  | {
-      readonly form: 'notice'
-      /** One-line account of what happened, shown without expanding the row. */
-      readonly summary: string
-    }
-  | { readonly form: 'relay' }
-  | { readonly form: 'recall' }
-
-/**
- * Where a message (or injected content) came from, in the harness's own
- * vocabulary. Merge-extensible sum type — each producer declares its own
- * `kind` in its own module; there is no shared catch-all `plugin` kind.
- * Model and tool sources answer their role messages; user messages carry any
- * producer's kind, and consumers fall through unknown kinds.
+ * Where a message came from, in the harness's own vocabulary. Merge-extensible
+ * sum type — each producer declares its own `kind` in its own module; there is
+ * no shared catch-all `plugin` kind. Model and tool sources answer their role
+ * messages; user messages carry any producer's kind, and consumers fall
+ * through unknown kinds.
  */
 export interface MessageSourceMap {
   user: { kind: 'user' }
   model: ModelMessageSource
   tool: ToolMessageSource
   'system-prompt': SystemPromptMessageSource
-}
-
-/**
- * Bound for a `notice` summary. Producers commit the one-line account to the
- * durable log; its inputs — task labels, goal objectives, tool arguments —
- * are caller text with no length of their own.
- */
-export const CONTEXT_SUMMARY_MAX_CHARS = 120
-
-/**
- * Bound one `notice` summary to {@link CONTEXT_SUMMARY_MAX_CHARS}.
- * @param summary - the producer's one-line account, of any length.
- * @returns the account, ellipsized when it exceeds the bound.
- */
-export function boundContextSummary(summary: string): string {
-  return summary.length <= CONTEXT_SUMMARY_MAX_CHARS ? summary : `${summary.slice(0, CONTEXT_SUMMARY_MAX_CHARS - 1)}…`
 }
 
 /** Any known message source, derived from {@link MessageSourceMap}; switch on `kind` and fall through unknowns (merge-extensible). */
@@ -265,20 +185,6 @@ export function createAssistantMessage(
       kind: 'model',
       ...input.source,
     },
-  })
-}
-
-/**
- * Create and freeze one identified system-role message holding a rendered
- * system prompt.
- * @param text - the complete rendered prompt; `''` records "no system prompt".
- * @returns an immutable system message with a fresh stable identity.
- */
-export function createSystemMessage(text: string): SystemMessage {
-  return createMessage({
-    role: 'system',
-    content: text.length === 0 ? [] : [{ type: 'text', text }],
-    source: { kind: 'system-prompt' },
   })
 }
 

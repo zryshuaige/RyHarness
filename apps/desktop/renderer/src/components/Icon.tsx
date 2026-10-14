@@ -3,6 +3,11 @@
  * 从 node_modules 拷入 src/assets/lucide/ 并入库）。stroke 风格 2px 线宽、
  * 圆角线帽、24 viewBox、currentColor —— 替换此前的手绘图标（用户反馈：
  * 手绘图标与专业前端产品差距明显）。
+ *
+ * 这里只登记通用 UI 图标。猫是品牌资产，由 Cat.tsx 的矢量母版独占——Lucide 的
+ * `cat-face` 曾被注册进来又从不被渲染，等于第三只几何不同的猫，随时可能被人
+ * "顺手用上"。
+ *
  * 用法：<Icon name="send" size={18} />
  */
 
@@ -10,7 +15,6 @@ import rawAlert from '../assets/lucide/alert.svg?raw'
 import rawAtSign from '../assets/lucide/at-sign.svg?raw'
 import rawBrain from '../assets/lucide/brain.svg?raw'
 import rawCalendarDays from '../assets/lucide/calendar-days.svg?raw'
-import rawCatFace from '../assets/lucide/cat-face.svg?raw'
 import rawChatBubble from '../assets/lucide/chat-bubble.svg?raw'
 import rawCheck from '../assets/lucide/check.svg?raw'
 import rawChevronLeft from '../assets/lucide/chevron-left.svg?raw'
@@ -44,7 +48,6 @@ function bodyOf(raw: string): string {
 export const ICONS = {
   'chat-bubble': bodyOf(rawChatBubble),
   users: bodyOf(rawUsers),
-  'cat-face': bodyOf(rawCatFace),
   sun: bodyOf(rawSun),
   moon: bodyOf(rawMoon),
   gear: bodyOf(rawGear),

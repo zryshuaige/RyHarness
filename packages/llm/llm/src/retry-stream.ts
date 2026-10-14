@@ -39,7 +39,7 @@ function isContentChunk(chunk: StreamChunk): boolean {
  * quota failures that carry a provider-requested delay (a quota window that
  * resets is transient; one without `Retry-After` is terminal).
  */
-export function isRetryableFailure(policy: ResolvedRetryPolicy, failure: LlmFailure): boolean {
+function isRetryableFailure(policy: ResolvedRetryPolicy, failure: LlmFailure): boolean {
   if (policy.mode === 'always') return true
   if (policy.retryableCodes.includes(failure.code)) return true
   return failure.code === QUOTA_EXCEEDED_CODE && failure.providerRetryAfterMs !== undefined
@@ -50,7 +50,7 @@ export function isRetryableFailure(policy: ResolvedRetryPolicy, failure: LlmFail
  * delay when offered (capped), otherwise exponential backoff with symmetric
  * jitter around `initialDelayMs * 2^(attempt-1)`, bounded by `maxDelayMs`.
  */
-export function retryDelayMs(policy: ResolvedRetryPolicy, failure: LlmFailure, attempt: number): number {
+function retryDelayMs(policy: ResolvedRetryPolicy, failure: LlmFailure, attempt: number): number {
   if (failure.providerRetryAfterMs !== undefined) {
     return Math.min(failure.providerRetryAfterMs, MAX_PROVIDER_DELAY_MS)
   }

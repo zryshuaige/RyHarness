@@ -8,8 +8,8 @@
  * - **选路即生成**：不做结构化路由 LLM 调用——调度员正常生成回复，
  *   解析其输出中的 @提及作为路由信号；输出无 @ 视为"自己回答"，一轮结束。
  * - **扇出**：入口一次 @ 多个成员时并发起跑（上限 fanoutConcurrency，
- *   默认 3），B 的首 token 不必等 A 跑完整轮；每个成员的事件先缓冲，
- *   再按 @ 出现顺序提交，消息顺序确定。
+ *   默认 3），B 的首 token 不必等 A 跑完整轮；事件按 @ 出现顺序增量转发
+ *   （排在前面的成员生成一块就推一块，不必等整批扇出跑完），消息顺序确定。
  * - **接力**：任何 agent 输出含 @Y → Y 接力。护栏：
  *   - 单条用户消息触发的总接力轮次 ≤ maxTurns（默认 8）；
  *   - 连续两次路由同一 agent（自己 @ 自己 / 冷却不足）→ 停止；
@@ -166,14 +166,59 @@ function isAborted(signal: AbortSignal | undefined): boolean {
   return signal?.aborted === true
 }
 
-/** 一个成员一轮发言的完整结果（并行扇出时先缓冲，再按加入顺序提交）。 */
+/** 一个成员一轮发言的收尾信息（事件已在生成过程中增量转发）。 */
 interface MemberTurnOutcome {
-  /** 该成员产出的事件，按产生顺序。 */
-  events: GroupEvent[]
   /** 完成发言时为该成员的完整 assistant 消息。 */
   assistant?: AssistantMessage
   /** 该成员是否以失败/取消收尾（不再接力）。 */
   halted: boolean
+}
+
+/** 扇出增量项：事件边生成边转发，outcome 在该成员收尾时给出。 */
+type FanoutItem =
+  | { kind: 'event'; index: number; event: GroupEvent }
+  | { kind: 'outcome'; index: number; outcome: MemberTurnOutcome | undefined }
+
+/**
+ * 单个成员的事件队列：生成一块推一块，close 之后 drain 结束。
+ * 增量转发靠它把「成员还在跑」和「消费方正在读」解耦。
+ */
+class EventQueue {
+  private readonly items: GroupEvent[] = []
+  private readonly waiters: (() => void)[] = []
+  private closed = false
+
+  push(event: GroupEvent): void {
+    this.items.push(event)
+    this.wake()
+  }
+
+  close(): void {
+    this.closed = true
+    this.wake()
+  }
+
+  private wake(): void {
+    while (this.waiters.length > 0) {
+      const resolve = this.waiters.shift()
+      if (resolve === undefined) return
+      resolve()
+    }
+  }
+
+  /** 按产生顺序取完本队列；中途到达的事件实时 yield，不必等整批扇出结束。 */
+  async *drain(): AsyncGenerator<GroupEvent> {
+    for (;;) {
+      while (this.items.length > 0) {
+        yield this.items.shift() as GroupEvent
+      }
+      // 下面三步之间没有 await，push() 不可能插进来丢唤醒。
+      if (this.closed) return
+      await new Promise<void>((resolve) => {
+        this.waiters.push(resolve)
+      })
+    }
+  }
 }
 
 /** 群聊调度器。无状态：每个 turn 调 runTurn。 */
@@ -272,9 +317,14 @@ export class GroupDispatcher {
         }
         stopped = true
       } else {
-        const outcomes = await this.runFanout(targets, this.promptText(context, input.text), toolContext, signal)
         const relayed: string[] = []
-        for (const [index, outcome] of outcomes.entries()) {
+        for await (const item of this.runFanout(targets, this.promptText(context, input.text), toolContext, signal)) {
+          // 成员还在跑就先把已产出的事件推出去，不等整批扇出结束。
+          if (item.kind === 'event') {
+            yield item.event
+            continue
+          }
+          const { index, outcome } = item
           if (outcome === undefined) {
             // 未起跑就取消：后续目标不再发言，以 ABORTED 收尾。
             if (isAborted(signal)) yield abortedEvent()
@@ -282,9 +332,8 @@ export class GroupDispatcher {
             break
           }
           const member = targets[index] as AgentDefinition
-          for (const event of outcome.events) yield event
           if (outcome.halted || outcome.assistant === undefined) {
-            // error 事件已随缓冲发出：不再由该成员接力（其他成员的结果仍提交）。
+            // error 事件已随事件流发出：不再由该成员接力（其他成员的结果仍提交）。
             stopped = true
             continue
           }
@@ -435,45 +484,84 @@ export class GroupDispatcher {
   }
 
   /**
-   * 并发跑一批成员（工作池，上限 fanoutConcurrency），结果按下标对齐，
-   * 与 @ 出现顺序一致——提交顺序不随谁先跑完变化。
+   * 并发跑一批成员（工作池，上限 fanoutConcurrency），按 @ 出现顺序增量产出。
+   *
+   * 事件边生成边 yield：排在第 i 位的成员不必等第 i+1..n 位跑完，它的
+   * 首 token 一到就转发（这才是流式，不是等整批缓冲完再一次性倒出来）。
+   * 消费顺序仍严格按 @ 出现顺序，所以消息顺序不随谁先跑完变化。
    */
-  private async runFanout(
+  private async *runFanout(
     targets: readonly AgentDefinition[],
     promptText: string,
     toolContext: ToolContext,
     signal: AbortSignal | undefined,
-  ): Promise<(MemberTurnOutcome | undefined)[]> {
+  ): AsyncGenerator<FanoutItem> {
+    const queues = targets.map(() => {
+      return new EventQueue()
+    })
     const outcomes: (MemberTurnOutcome | undefined)[] = new Array(targets.length)
+    let failure: unknown
     let next = 0
     const worker = async (): Promise<void> => {
       while (next < targets.length) {
         if (isAborted(signal)) return
         const index = next++
-        outcomes[index] = await this.runBuffered(targets[index] as AgentDefinition, promptText, toolContext, signal)
+        const queue = queues[index] as EventQueue
+        try {
+          outcomes[index] = await this.runMember(
+            targets[index] as AgentDefinition,
+            promptText,
+            toolContext,
+            signal,
+            queue,
+          )
+        } finally {
+          queue.close()
+        }
       }
     }
     const lanes = Math.min(this.fanoutConcurrency, targets.length)
-    await Promise.all(
+    const running = Promise.all(
       Array.from({ length: lanes }, () => {
         return worker()
       }),
     )
-    return outcomes
+    // 所有 lane 收工后把没跑到的成员的队列也关上（含取消导致的提前返回），
+    // 否则 drain 会一直等下去。
+    const settle = (error?: unknown): void => {
+      failure = error
+      for (const queue of queues) queue.close()
+    }
+    void running.then(
+      () => {
+        settle()
+      },
+      (error: unknown) => {
+        settle(error)
+      },
+    )
+    for (const [index, queue] of queues.entries()) {
+      for await (const event of queue.drain()) {
+        yield { kind: 'event', index, event }
+      }
+      if (failure !== undefined) throw failure
+      // outcome 为 undefined = 该成员因取消压根没起跑。
+      yield { kind: 'outcome', index, outcome: outcomes[index] }
+    }
   }
 
-  /** 跑一个成员并把事件缓冲起来（并行扇出时不在中途交错输出）。 */
-  private async runBuffered(
+  /** 跑一个成员，事件生成一块往队列推一块（并行扇出时增量转发）。 */
+  private async runMember(
     member: AgentDefinition,
     promptText: string,
     toolContext: ToolContext,
     signal: AbortSignal | undefined,
+    queue: EventQueue,
   ): Promise<MemberTurnOutcome> {
     let assistant: AssistantMessage | undefined
     const loop = this.createLoop(this.definitionOf(member), (message) => {
       assistant = message
     })
-    const events: GroupEvent[] = []
     let failed = false
     try {
       for await (const event of memberEvents(
@@ -482,15 +570,14 @@ export class GroupDispatcher {
         loop.run({ text: promptText }, toolContext, { signal }),
       )) {
         if (event.type === 'error') failed = true
-        events.push(event)
+        queue.push(event)
       }
     } catch (error) {
       if (!isAbortedError(error)) throw error
-      events.push({ type: 'error', message: errorChain(error), code: ABORTED_CODE })
-      return { events, halted: true }
+      queue.push({ type: 'error', message: errorChain(error), code: ABORTED_CODE })
+      return { halted: true }
     }
     return {
-      events,
       halted: failed || assistant === undefined,
       ...(assistant === undefined ? {} : { assistant }),
     }

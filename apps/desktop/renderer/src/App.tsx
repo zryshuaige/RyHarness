@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AgentDef, AgentTemplate, Conversation, ProviderInfo } from './api.ts'
 import { ApiClient } from './api.ts'
-import { AppIcon } from './components/AppIcon.tsx'
+import { Cat } from './components/Cat.tsx'
 import { ChatView } from './components/ChatView.tsx'
 import { ConfirmDialog } from './components/ConfirmDialog.tsx'
 import { ContactsPage, CreateAgentModal, CreateGroupModal } from './components/ContactsPage.tsx'
@@ -12,6 +12,7 @@ import { MePage } from './components/MePage.tsx'
 import { RightPanel } from './components/RightPanel.tsx'
 import { ToastHost } from './components/ToastHost.tsx'
 import { WelcomeHome } from './components/WelcomeHome.tsx'
+import { agentById } from './lib/agents.ts'
 import { useApiBase } from './lib/boot.ts'
 import { toast } from './lib/toast.ts'
 import { ChatStore } from './store.ts'
@@ -40,10 +41,12 @@ export function applyTheme(theme: Theme): void {
   document.documentElement.dataset.theme = theme
 }
 
-const RAIL_TABS: { key: Tab; icon: IconName; label: string }[] = [
+const RAIL_TABS: { key: Tab; icon?: IconName; label: string }[] = [
   { key: 'chats', icon: 'chat-bubble', label: '聊天' },
   { key: 'contacts', icon: 'users', label: '通讯录' },
-  { key: 'me', icon: 'cat-face', label: '我的' },
+  // 「我的」不用线性图标：品牌猫（Cat）才是 RyAgent 的脸，图标库里再挂一只
+  // 第三方猫会变成第三只几何不同的猫。
+  { key: 'me', label: '我的' },
 ]
 
 /** 后端就绪前的骨架屏（复用既有样式类，不新增 CSS）。 */
@@ -54,7 +57,7 @@ function BootSkeleton() {
         <div className="chat-scroll">
           <div className="chat-col">
             <p className="chat-hint">正在启动本地服务…</p>
-            {[72, 56, 88, 64].map((width, index) => (
+            {[72, 56, 88, 64].map((width, _index) => (
               <div className="skeleton-item" key={width}>
                 <span className="skeleton" style={{ width, height: 16, borderRadius: 8 }} />
               </div>
@@ -87,6 +90,12 @@ export function App() {
   const [editingAgent, setEditingAgent] = useState<AgentDef | undefined>(undefined)
   const [panelCollapsed, setPanelCollapsed] = useState(false)
   const [loadError, setLoadError] = useState<string | undefined>(undefined)
+  /**
+   * 欢迎页发出的首条消息，交给 ChatView 在「订阅已建立」之后发出去。
+   * 这里直接 postMessage 的话，202 之前服务端就已经开始推这一轮的事件，而 ChatView
+   * 此刻还没挂载——首屏那句话的事件全落在订阅建立之前，用户看到的是"发了没反应"。
+   */
+  const [pendingSend, setPendingSend] = useState<{ conversationId: string; text: string } | undefined>(undefined)
   const [store] = useState(() => {
     return new ChatStore()
   })
@@ -206,9 +215,7 @@ export function App() {
   const active = conversations.find((c) => {
     return c.id === activeId
   })
-  const ryen = agents.find((a) => {
-    return a.id === 'ryen'
-  })
+  const ryen = agentById(agents, 'ryen')
 
   /** 会话已读：本地把未读数归零（markRead 响应已带 lastReadSeq），不再发 4 个 HTTP。 */
   const markConversationRead = useCallback((conversationId: string): void => {
@@ -231,6 +238,7 @@ export function App() {
     const existing = conversations.find((c) => {
       return c.kind === 'direct' && c.memberAgentIds.length === 1 && c.memberAgentIds[0] === agentId
     })
+    setPendingSend(undefined)
     if (existing !== undefined) {
       setActiveId(existing.id)
       setTab('chats')
@@ -248,7 +256,7 @@ export function App() {
     }
   }
 
-  /** 欢迎页输入框/建议 chip 的回车：打开（或创建）与 Ryen 的单聊并发送这句话。 */
+  /** 欢迎页输入框/建议 chip 的回车：打开（或创建）与 Ryen 的单聊，并把这句交给它发。 */
   const startChatWithRyen = async (text: string): Promise<void> => {
     if (api === undefined || ryen === undefined) return
     try {
@@ -260,9 +268,11 @@ export function App() {
           ? existing.id
           : (await api.createConversation({ kind: 'direct', agentId: ryen.id })).conversation.id
       if (existing === undefined) await refresh()
+      // 三件事必须同批落地：会话切过去（ChatView 挂载并建立 WS 订阅）、切到聊天页、
+      // 把这句话挂上。缺一个，ChatView 挂载时看到的就不是这条待发消息。
       setActiveId(conversationId)
       setTab('chats')
-      await api.postMessage(conversationId, text)
+      setPendingSend({ conversationId, text })
     } catch (error) {
       toast.error(`没能发出这句话：${error instanceof Error ? error.message : String(error)}`)
     }
@@ -298,7 +308,7 @@ export function App() {
       {/* 栏 1：72px icon rail */}
       <nav className="rail" aria-label="主导航">
         <span className="rail-logo">
-          <AppIcon size={40} />
+          <Cat mood="idle" size={40} />
         </span>
         {RAIL_TABS.map((item) => (
           <button
@@ -311,7 +321,7 @@ export function App() {
           >
             <span className="rail-icon" aria-hidden="true">
               {/* 「我的」用品牌橘猫，其余用线性图标——全局只保留一套图形语言。 */}
-              {item.key === 'me' ? <AppIcon size={22} /> : <Icon name={item.icon} size={22} />}
+              {item.icon === undefined ? <Cat mood="idle" size={22} /> : <Icon name={item.icon} size={22} />}
             </span>
             {item.label}
           </button>
@@ -349,6 +359,8 @@ export function App() {
             loading={listLoading}
             onSelect={(id) => {
               setActiveId(id)
+              // 用户改主意去别的会话：欢迎页那条待发消息就此作废，不在别处冒出来。
+              setPendingSend(undefined)
             }}
             onGoContacts={() => {
               setTab('contacts')
@@ -369,6 +381,12 @@ export function App() {
             onRead={() => {
               markConversationRead(active.id)
               // 列表里的预览/时间戳仍可能过期，用尾随合并刷新兜底（切会话再快也只发一次）。
+              scheduleRefresh()
+            }}
+            {...(pendingSend === undefined ? {} : { pendingSend })}
+            onPendingSendDone={() => {
+              setPendingSend(undefined)
+              // 列表里的预览/未读此刻已经过期（消息刚出去），尾随合并刷新一次。
               scheduleRefresh()
             }}
           />
@@ -398,7 +416,6 @@ export function App() {
         <ContactsPage
           agents={agents}
           templates={templates}
-          providers={providers}
           onCreateAgent={(templateKey) => {
             setAgentTemplateKey(templateKey)
             setEditingAgent(undefined)

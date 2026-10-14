@@ -6,5 +6,8 @@ packages:
 
 allowBuilds:
   electron: true
-  electron-winstaller: set this to true or false
+  # electron-winstaller 只服务于 Squirrel 安装包；我们走 NSIS（见 apps/desktop
+  # 的 build 配置），不跑它的 postinstall。留成字面占位串会让干净 clone 的
+  # frozen-lockfile install 直接失败，所以这里必须是能解析的布尔值。
+  electron-winstaller: false
   esbuild: true

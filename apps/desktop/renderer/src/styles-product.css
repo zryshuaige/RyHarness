@@ -31,20 +31,16 @@
 }
 
 .btn-danger {
-  color: var(--danger, #b42318);
+  color: var(--danger);
 }
 
 .btn-danger:hover {
-  background: color-mix(in srgb, var(--danger, #b42318) 10%, transparent);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
 }
 
-/* ---- 建群成员：副信息区分重名 ---- */
-.member-checks label {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
+/* ---- 建群成员：副信息区分重名 ----
+   label 的排版只在 styles.css 的 `.tool-checks label, .member-checks label`
+   里定义一处；这里补副信息需要的两行，不再重复一份 gap 与 display。 */
 .member-label {
   display: flex;
   flex-direction: column;
@@ -57,8 +53,8 @@
 }
 
 .member-sub {
-  color: var(--text-tertiary, var(--text-secondary));
-  font-size: var(--fs-xs, 11px);
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -71,7 +67,7 @@
   align-items: center;
   gap: var(--space-2);
   flex-shrink: 0;
-  animation: stop-btn-in 220ms var(--ease-spring, cubic-bezier(0.34, 1.4, 0.64, 1));
+  animation: stop-btn-in 220ms var(--ease-spring);
 }
 
 .stop-dot {
@@ -83,9 +79,9 @@
 }
 
 .stop-elapsed {
-  color: var(--text-tertiary, var(--text-secondary));
+  color: var(--text-tertiary);
   font-variant-numeric: tabular-nums;
-  font-size: var(--fs-xs, 11px);
+  font-size: var(--fs-xs);
 }
 
 @keyframes stop-btn-in {
@@ -97,6 +93,22 @@
     opacity: 1;
     transform: none;
   }
+}
+
+/* 退场与进场互为镜像：停止按钮是被流式状态挤掉的，收回原处而不是凭空消失。 */
+@keyframes stop-btn-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateX(6px) scale(0.96);
+  }
+}
+
+.stop-btn.is-leaving {
+  animation: stop-btn-out var(--dur-leave) var(--ease-in) forwards;
 }
 
 @keyframes stop-pulse {
@@ -126,7 +138,7 @@
   padding: var(--space-4);
   border-radius: var(--radius-lg);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-1, 0 1px 2px rgb(0 0 0 / 0.06));
+  box-shadow: var(--shadow-1);
   text-align: left;
 }
 
@@ -154,7 +166,7 @@
 
 .apikey-error {
   margin: var(--space-2) 0 0;
-  color: var(--danger, #b42318);
+  color: var(--danger);
   font-size: var(--fs-sm);
 }
 
@@ -172,14 +184,17 @@
    输入框，底部居中迟早会压住可点的东西。 */
 .toast-host {
   position: fixed;
-  top: var(--space-4);
+  /* 落在自绘标题栏（--titlebar-h）下方，否则提示会压在窗口按钮那一带上。 */
+  top: calc(var(--titlebar-h) + var(--space-4));
   left: 50%;
   transform: translateX(-50%);
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  /* 低于弹窗遮罩（.modal-mask: 20）：弹窗打开时提示不该浮在遮罩上吃点击。 */
-  z-index: 10;
+  /* 高于弹窗遮罩（--z-modal）：新建/删除 agent 失败恰恰发生在弹窗还开着的时候，
+     提示被遮罩吃掉就只剩一个不动的弹窗。宿主本身 pointer-events: none，只有提示
+     本体与关闭键可点，不会挡住下面的弹窗。 */
+  z-index: var(--z-toast);
   pointer-events: none;
 }
 
@@ -200,23 +215,24 @@
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-3, 0 8px 24px rgb(0 0 0 / 0.14));
+  box-shadow: var(--shadow-3);
   color: var(--text-primary);
   font-size: var(--fs-sm);
-  animation: toast-in 200ms var(--ease-out, cubic-bezier(0.22, 0.8, 0.36, 1));
+  animation: toast-in 200ms var(--ease-out);
 }
 
 .toast.is-leaving {
-  animation: toast-out 150ms var(--ease-out, cubic-bezier(0.22, 0.8, 0.36, 1)) forwards;
+  animation: toast-out 150ms var(--ease-out) forwards;
 }
 
+/* 成功提示只多一圈琥珀描边：面色仍是中性白，靠边而不是靠底色喊「成功」。 */
 .toast-success {
-  box-shadow: var(--shadow-3, 0 8px 24px rgb(0 0 0 / 0.14)), 0 0 0 1px
-    color-mix(in srgb, var(--accent, #b45309) 26%, transparent);
+  box-shadow: var(--shadow-3), 0 0 0 1px
+    color-mix(in srgb, var(--amber-text) 26%, transparent);
 }
 
 .toast-error {
-  color: var(--danger, #b42318);
+  color: var(--danger);
 }
 
 .toast-text {
@@ -227,7 +243,7 @@
 .toast-close {
   border: none;
   background: none;
-  color: var(--text-tertiary, var(--text-secondary));
+  color: var(--text-tertiary);
   padding: 2px;
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -301,14 +317,14 @@
 
 .model-list small {
   display: block;
-  color: var(--text-tertiary, var(--text-secondary));
-  font-size: var(--fs-xs, 11px);
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
 }
 
 .provider-note {
   margin: var(--space-2) 0 0;
-  color: var(--text-tertiary, var(--text-secondary));
-  font-size: var(--fs-xs, 11px);
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
 }
 
 /* ---- 聊天：可展开的"更早消息"提示 ---- */
@@ -316,17 +332,20 @@
   display: block;
   width: 100%;
   padding: var(--space-2);
-  border: 1px dashed var(--hair, var(--edge));
+  border: 1px solid var(--edge);
   border-radius: var(--radius-md);
   background: none;
   color: var(--text-secondary);
   font: inherit;
   cursor: pointer;
+  transition: background var(--dur-hover) var(--ease-out), color var(--dur-hover) var(--ease-out),
+    border-color var(--dur-hover) var(--ease-out);
 }
 
 .chat-hint-btn:hover {
   color: var(--text-primary);
   background: var(--bg-elevated);
+  border-color: var(--edge-strong);
 }
 
 /* ---- 欢迎页：首屏直接能开口 ----
@@ -337,20 +356,18 @@
   padding: var(--space-3);
   border-radius: var(--radius-xl);
   background: var(--bg-surface);
-  border: 1px solid var(--edge);
-  box-shadow: var(--shadow-2), var(--hair);
-  transition: border-color var(--dur-hover) var(--ease-out), box-shadow var(--dur-hover) var(--ease-out);
+  /* 与会话页 .chat-input-col 同一个长相：卡片档阴影一根，焦点环叠在上面，
+     不再有「描边 + 阴影 + 发丝线」三件套把两处 composer 画成两种控件。
+     text-align: left 是必需的——.welcome 整体居中，漏进来会让输入的文字也居中。 */
+  border: none;
+  box-shadow: var(--shadow-2);
+  text-align: left;
+  transition: box-shadow var(--dur-hover) var(--ease-out), background var(--dur-hover) var(--ease-out);
 }
 
 .welcome-compose:focus-within {
-  border-color: var(--amber-primary);
-  box-shadow: var(--shadow-2), 0 0 0 4px color-mix(in srgb, var(--amber-500) 18%, transparent);
-}
-
-.welcome-compose-hint {
-  margin: var(--space-2) 0 0;
-  color: var(--text-tertiary, var(--text-secondary));
-  font-size: var(--fs-xs);
+  box-shadow: var(--shadow-2), 0 0 0 4px color-mix(in srgb, var(--amber-500) 18%, transparent),
+    0 0 28px color-mix(in srgb, var(--amber-500) 12%, transparent);
 }
 
 /* ---- 停止生成：不是故障，是用户自己的选择 ----

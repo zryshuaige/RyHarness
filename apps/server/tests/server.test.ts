@@ -306,6 +306,100 @@ describe('RyAgentServer', () => {
     }
   }, 20_000)
 
+  it('建群校验：dispatcher 必须在 memberAgentIds 里，否则 400 且不建群', async () => {
+    const { server, base } = await startServer([])
+    try {
+      const created = await postJson(base, '/api/agents', { templateKey: 'coding', name: 'Coder' })
+      const coderId = (created.body as { agent: { id: string } }).agent.id
+
+      // 调度员不在名单里：400，且不留下半个群（前端勾选成员与选调度员是两处独立状态）。
+      const rejected = await postJson(base, '/api/conversations', {
+        kind: 'group',
+        memberAgentIds: [coderId],
+        dispatcherAgentId: 'ryen',
+        title: '调度员缺席的群',
+      })
+      expect(rejected.status).toBe(400)
+      expect(String(rejected.body.error)).toContain('dispatcher')
+      const listed = await getJson(base, '/api/conversations')
+      expect(
+        (listed.body.conversations as { title: string }[]).map((c) => {
+          return c.title
+        }),
+      ).not.toContain('调度员缺席的群')
+
+      // 合法组合：调度员在名单里才建得出来。
+      const ok = await postJson(base, '/api/conversations', {
+        kind: 'group',
+        memberAgentIds: ['ryen', coderId],
+        dispatcherAgentId: coderId,
+        title: '合法群',
+      })
+      expect(ok.status).toBe(201)
+      expect((ok.body as { conversation: { dispatcherAgentId: string } }).conversation.dispatcherAgentId).toBe(coderId)
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('?since= 增量补齐断线缺口：只回 seq 更大的消息，非法游标 400', async () => {
+    const { server, base } = await startServer([])
+    try {
+      const direct = await postJson(base, '/api/conversations', { kind: 'direct', agentId: 'ryen' })
+      const conversationId = (direct.body as { conversation: { id: string } }).conversation.id
+      // 直接落 5 条消息（不经过 LLM，测的只是端点的游标语义）。
+      for (let i = 1; i <= 5; i++) {
+        server.store.appendMessage({
+          conversationId,
+          senderType: 'user',
+          senderId: 'user',
+          contentBlocks: [{ type: 'text', text: `第 ${i} 条` }],
+        })
+      }
+      const all = (await getJson(base, `/api/conversations/${conversationId}/messages`)).body as {
+        messages: { seq: number; contentBlocks: { text?: string }[] }[]
+      }
+      expect(all.messages).toHaveLength(5)
+      const thirdSeq = all.messages[2]?.seq as number
+
+      // 客户端拿到的基线 seq 之后的消息（升序）。
+      const incremental = (await getJson(base, `/api/conversations/${conversationId}/messages?since=${thirdSeq}`))
+        .body as { messages: { seq: number; contentBlocks: { text?: string }[] }[] }
+      expect(
+        incremental.messages.map((m) => {
+          return m.contentBlocks[0]?.text
+        }),
+      ).toEqual(['第 4 条', '第 5 条'])
+      expect(
+        incremental.messages.every((m) => {
+          return m.seq > thirdSeq
+        }),
+      ).toBe(true)
+
+      // limit 与 since 同时给：取"最新的 limit 条"而不是最早的。
+      const capped = (await getJson(base, `/api/conversations/${conversationId}/messages?since=0&limit=2`)).body as {
+        messages: { contentBlocks: { text?: string }[] }[]
+      }
+      expect(
+        capped.messages.map((m) => {
+          return m.contentBlocks[0]?.text
+        }),
+      ).toEqual(['第 4 条', '第 5 条'])
+
+      // 没有更新时不返回任何东西（不必与全量对比）。
+      const latestSeq = all.messages[4]?.seq as number
+      const none = (await getJson(base, `/api/conversations/${conversationId}/messages?since=${latestSeq}`)).body as {
+        messages: unknown[]
+      }
+      expect(none.messages).toEqual([])
+
+      // 非法游标 400：悄悄当成 0 会把整段历史当增量发过去。
+      expect((await getJson(base, `/api/conversations/${conversationId}/messages?since=abc`)).status).toBe(400)
+    } finally {
+      await server.close()
+    }
+  })
+
   it('memory endpoints: agent memories + shared profile + soft delete + stats', async () => {
     const { MemoryService, HashEmbeddings } = await import('@ryagent/memory')
     const { mkdtempSync } = await import('node:fs')

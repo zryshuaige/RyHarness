@@ -162,6 +162,62 @@ const MIN_WIDTH = 1024
 const MIN_HEIGHT = 680
 
 /**
+ * 自绘标题栏。原生标题栏是中性冷灰的一条带，和下方暖奶油的内容之间是一道硬缝
+ * （截图上就是顶部 45px 的灰）；`titleBarStyle: 'hidden' + titleBarOverlay` 把它换成
+ * 页面自己的底色，窗口按钮浮在渲染层让出的顶条上。
+ *
+ * 高度与配色必须与 renderer 的 styles.css 同源（--titlebar-h / --bg-app /
+ * --text-secondary）：两边各写一份，迟早对不上一次。
+ */
+const TITLEBAR_H = 40
+const TITLEBAR_OVERLAY = {
+  light: { color: '#FAF7F2', symbolColor: '#736B65' },
+  dark: { color: '#14110E', symbolColor: '#EDE8E2' },
+} as const
+const IS_MAC = process.platform === 'darwin'
+
+/**
+ * 标题栏配色跟随渲染层的主题。
+ *
+ * 标题栏由原生绘制，只有主进程能改；而渲染层翻转主题只改 documentElement 的
+ * data-theme，preload 目前也没有回传通道（DesktopBridge 只有 appName/openPath），
+ * 所以这里在窗口**获得焦点期间**低频读一次：切主题必然先跟窗口交互，窗口一失焦
+ * 就停表，不在后台空转。等 preload 暴露 setTitleBarColor 之后，本函数即可整体删除。
+ */
+function followRendererTheme(window: BrowserWindow): void {
+  if (IS_MAC) return
+  let timer: ReturnType<typeof setInterval> | undefined
+  const sync = (): void => {
+    if (window.isDestroyed()) return
+    void window.webContents
+      .executeJavaScript("document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'")
+      .then((theme: unknown) => {
+        window.setTitleBarOverlay({
+          ...TITLEBAR_OVERLAY[theme === 'dark' ? 'dark' : 'light'],
+          height: TITLEBAR_H,
+        })
+      })
+      .catch(() => {
+        // 文档还没就绪时 executeJavaScript 会抛；下一轮再试。
+      })
+  }
+  window.webContents.on('did-finish-load', sync)
+  window.on('focus', () => {
+    sync()
+    timer ??= setInterval(sync, 400)
+  })
+  window.on('blur', () => {
+    if (timer === undefined) return
+    clearInterval(timer)
+    timer = undefined
+  })
+  window.once('closed', () => {
+    if (timer === undefined) return
+    clearInterval(timer)
+  })
+}
+
+/**
  * 「打开工作区目录」的唯一通道：渲染层拿不到 Node 权限，只能经 preload 调到这里。
  * 目录来自本机后端（GET /api/workspace），不是网页传来的任意 URL，但仍做形状校验，
  * 免得渲染层被注入了非字符串就把 shell 叫歪。shell.openPath 成功返回空串。
@@ -218,6 +274,10 @@ function createWindow(pageUrl: string): BrowserWindow {
     icon: join(here, '../assets/icon-256.png'),
     // 首帧画完再显示，避免加载期的白/空窗口闪烁（加载期的骨架由渲染层自己画）。
     show: false,
+    // macOS 的交通灯留在系统内嵌位置（渲染层同样让出 40px 顶条，两端布局一致）；
+    // Windows/Linux 用 Window Controls Overlay，窗口按钮浮在页面之上。
+    titleBarStyle: IS_MAC ? 'hiddenInset' : 'hidden',
+    ...(IS_MAC ? {} : { titleBarOverlay: { ...TITLEBAR_OVERLAY.light, height: TITLEBAR_H } }),
     // Windows/Linux 默认收起菜单（Alt 唤出），macOS 保留常驻应用菜单。
     autoHideMenuBar: true,
     webPreferences: {
@@ -229,6 +289,7 @@ function createWindow(pageUrl: string): BrowserWindow {
   window.once('ready-to-show', () => {
     window.show()
   })
+  followRendererTheme(window)
   window.webContents.on('did-fail-load', (_event, code, description) => {
     console.error(`[renderer] load failed: ${description} (${code})`)
   })

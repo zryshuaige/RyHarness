@@ -60,6 +60,10 @@ export function ChatInput({
   /** 补全菜单走统一退场体系：关掉时先播 .is-leaving 再卸载。 */
   const menu = useLeaving(LEAVE_MS, candidates.length > 0 ? candidates : undefined)
   const [busyElapsed, setBusyElapsed] = useState<number | undefined>(undefined)
+  // 停止按钮同理：流式结束时不直接消失，先播 .stop-btn.is-leaving。
+  // value 传秒数而不是布尔：退场期间秒表已停，shown 会一直拿着最后一个数字，
+  // 按钮不会在淡出时把 "12s" 渲染成空的。
+  const stopButton = useLeaving(LEAVE_MS, streaming === true && onStop !== undefined ? (busyElapsed ?? 0) : undefined)
 
   // Esc = 停止生成（按钮上的承诺）：补全菜单在屏上（含退场中）时 Esc 仍然只关菜单。
   const menuOpenRef = useRef(false)
@@ -219,11 +223,18 @@ export function ChatInput({
         <Icon name="send" size={16} />
         <span>发送</span>
       </button>
-      {busyElapsed !== undefined && onStop !== undefined && (
-        <button type="button" className="btn stop-btn" onClick={onStop} title="停止生成（Esc）" aria-label="停止生成">
+      {stopButton.shown !== undefined && (
+        <button
+          type="button"
+          ref={stopButton.ref}
+          className={stopButton.leaving ? 'btn stop-btn is-leaving' : 'btn stop-btn'}
+          onClick={onStop}
+          title="停止生成（Esc）"
+          aria-label="停止生成"
+        >
           <span className="stop-dot" aria-hidden="true" />
           停止
-          <span className="stop-elapsed">{busyElapsed}s</span>
+          <span className="stop-elapsed">{stopButton.shown}s</span>
         </button>
       )}
     </>

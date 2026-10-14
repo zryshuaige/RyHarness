@@ -130,10 +130,12 @@ export class EvolveService implements AgentEvolutionHooks {
    * @param inputText - 本轮用户输入；教训按与它的词面相关性选取。
    */
   async compile(agentId: string, inputText: string): Promise<CompiledEvolution | undefined> {
+    // 按 net = helpful - harmful 降序。ties 交给 Array#sort 的稳定性：底层查询
+    // 已按 (section, net desc, updated_at desc) 排好，平分条目的先后确定。
     const entries = this.store
       .listActiveForCompile(agentId)
       .sort((a, b) => {
-        return b.helpful - b.harmful - (a.helpful - a.helpful)
+        return b.helpful - b.harmful - (a.helpful - a.harmful)
       })
       .slice(0, COMPILE_TOP_N)
     const reflections = this.store.searchPendingReflections(agentId, inputText, REFLECTION_INJECT_MAX)

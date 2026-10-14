@@ -102,6 +102,78 @@ describe('GroupDispatcher 并行扇出', () => {
     expect(events.at(-1)).toEqual({ type: 'turn-done', turns: 2 })
   })
 
+  it('扇出增量流式转发：排在前面的成员出块即推，不等后面的慢成员跑完', async () => {
+    const timeline: string[] = []
+    const sleep = (ms: number): Promise<void> => {
+      return new Promise((resolve) => {
+        setTimeout(resolve, ms)
+      })
+    }
+    // CodeBot 快、分 3 块；Reviewer 慢，首块前先卡 120ms、块间再卡 40ms。
+    const llm = {
+      stream(options: GenerateOptions) {
+        const head = (options.system ?? '').split('\n')[0] ?? ''
+        const name = Object.keys(replies).find((key) => {
+          return head.includes(key)
+        })
+        const reply = replies[name as string]
+        const tag = name ?? 'unknown'
+        return (async function* (): AsyncGenerator<StreamChunk> {
+          timeline.push(`${tag}:start`)
+          await sleep(reply.firstDelayMs)
+          const chunks = reply.chunks as string[]
+          for (const [i, text] of chunks.entries()) {
+            if (i === 0) yield { type: 'block-start', index: 0, blockType: 'text' }
+            yield { type: 'text-delta', index: 0, text }
+            await sleep(reply.chunkDelayMs)
+          }
+          timeline.push(`${tag}:done`)
+          yield { type: 'block-end', index: 0, block: { type: 'text', text: chunks.join('') } }
+          yield { type: 'finish', reason: { kind: 'stop' } }
+        })()
+      },
+    } as unknown as LlmRuntime
+    const replies: Record<string, { chunks: string[]; firstDelayMs: number; chunkDelayMs: number }> = {
+      CodeBot: { chunks: ['我来', '写代码', '。'], firstDelayMs: 0, chunkDelayMs: 0 },
+      Reviewer: { chunks: ['我看', '过了。'], firstDelayMs: 120, chunkDelayMs: 40 },
+    }
+
+    const dispatcher = new GroupDispatcher({
+      llm,
+      members: [RYEN, CODEBOT, REVIEWER],
+      dispatcherId: 'ryen',
+      tools: [],
+    })
+    const events: GroupEvent[] = []
+    for await (const event of dispatcher.runTurn({
+      text: '@CodeBot @Reviewer 一起看下',
+      history: [],
+      workspaceRoot: process.cwd(),
+      turnIndex: 0,
+    })) {
+      // 从消费侧记录到达时刻：缓冲实现下这些 recv 全部晚于 Reviewer:done。
+      if (event.type === 'text-delta') timeline.push(`recv:${event.agentId}#${event.text}`)
+      events.push(event)
+    }
+
+    expect(timeline.indexOf('recv:codebot#我来')).toBeGreaterThanOrEqual(0)
+    // CodeBot 的首块在 Reviewer 还在生成时就已转发出去。
+    expect(timeline.indexOf('recv:codebot#我来')).toBeLessThan(timeline.indexOf('Reviewer:done'))
+    // 同一个成员内部也是逐块推：首块早于该成员收尾。
+    expect(timeline.indexOf('recv:reviewer#我看')).toBeLessThan(timeline.indexOf('Reviewer:done'))
+    // 增量转发不破坏 @ 顺序：提交顺序仍与出现顺序一致。
+    expect(
+      events
+        .filter((event) => {
+          return event.type === 'text-delta'
+        })
+        .map((event) => {
+          return event.type === 'text-delta' ? `${event.agentId}:${event.text}` : ''
+        }),
+    ).toEqual(['codebot:我来', 'codebot:写代码', 'codebot:。', 'reviewer:我看', 'reviewer:过了。'])
+    expect(speakersOf(events)).toEqual(['codebot', 'reviewer'])
+  })
+
   it('并发不超过 fanoutConcurrency（默认 3）', async () => {
     let inFlight = 0
     let peak = 0

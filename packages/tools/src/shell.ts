@@ -77,6 +77,9 @@ function argNumber(args: unknown, key: string, fallback: number): number {
 export const shellExec: Tool = {
   name: 'shell_exec',
   description: '在工作区根目录执行 shell 命令（有超时与输出长度限制），返回 stdout/stderr。',
+  // 命令会改工作区（rm / npm install / 构建脚本都可能动同一批路径），并发执行
+  // 互相踩踏且输出交错；声明 sequential 让 AgentLoop 把整批工具调用退回串行。
+  executionMode: 'sequential',
   parameters: {
     type: 'object',
     properties: {

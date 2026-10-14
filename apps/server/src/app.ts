@@ -13,8 +13,11 @@ import { join } from 'node:path'
 import type { AgentDefinition, AgentEvolutionHooks, AgentMemoryHooks } from '@ryagent/agent'
 import { Context } from '@ryagent/cordis'
 import { ChatEvolveLlm, EvolveService, seedIfEmpty } from '@ryagent/evolve'
+import type { AdapterRegistrationHandle } from '@ryagent/llm'
 import LlmRuntime from '@ryagent/llm'
-import { apply as applyOpenAi } from '@ryagent/llm-openai'
+import type { OpenAiAdapterConfig } from '@ryagent/llm-openai'
+import { OpenAiAdapter } from '@ryagent/llm-openai'
+import type { MemoryRow } from '@ryagent/memory'
 import {
   ChatMemoryLlm,
   DEFAULT_EMBEDDING_MODEL,
@@ -22,21 +25,25 @@ import {
   NullEmbeddings,
   OpenAiCompatibleEmbeddings,
 } from '@ryagent/memory'
-import type { RunContext, StoredUsage } from '@ryagent/session'
+import type { RunContext, StoredMessage, StoredUsage } from '@ryagent/session'
 import { SessionCoordinator, SessionStore } from '@ryagent/session'
 import { ARTIFACTS_DIR, fileProduce, fsRead, fsWrite, guessMime, shellExec } from '@ryagent/tools'
 import type { WebSocket as WsSocket } from 'ws'
 import { WebSocketServer } from 'ws'
 import { EventHub } from './bus.ts'
-import type { ProvidersConfigFile } from './config.ts'
+import type { ProviderConfig, ProviderProtocol, ProvidersConfigFile } from './config.ts'
 import {
   DEFAULT_PROVIDER_BASE_URL,
+  deleteApiKey,
   loadApiKeys,
   loadProvidersConfig,
   mergeApiKeys,
+  PROVIDER_PRESETS,
   providerKeyConfigured,
+  providerPreset,
   saveApiKey,
   toAdapterConfig,
+  writeProvidersConfig,
 } from './config.ts'
 import type { WsEvent } from './events.ts'
 import { HttpRequestError, json, Router, strField } from './router.ts'
@@ -51,8 +58,14 @@ const DEFAULT_HOST = '127.0.0.1'
 const DEFAULT_WS_HEARTBEAT_MS = 30_000
 /** WS 发送缓冲上限：超过说明是慢消费者，断开防止内存堆积。 */
 const MAX_WS_BUFFERED_BYTES = 1_048_576
+/** 消息列表单页条数上限（?limit 的上限，也用作 ?since= 的翻页步长）。 */
+const MAX_MESSAGE_PAGE = 200
 /** 优雅停机等待在途 turn 的上限。 */
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10_000
+/** 巩固（合并/归档/教训过期）默认周期：6 小时。 */
+const DEFAULT_CONSOLIDATION_INTERVAL_MS = 6 * 3_600_000
+/** 「最近学到」统计窗口：近 24 小时新增的长期记忆。 */
+const RECENT_LEARNED_WINDOW_MS = 86_400_000
 
 /**
  * Origin 白名单：空 Origin（curl/Node 客户端）、file://（Electron 渲染层）
@@ -98,6 +111,126 @@ function agentFieldOverrides(body: unknown): Partial<Omit<AgentDefinition, 'id' 
     overrides.tools = record.tools as string[]
   }
   return overrides
+}
+
+/** POST /api/providers 的入参（校验后）。 */
+interface NewProviderInput {
+  displayName: string
+  protocol: ProviderProtocol
+  baseUrl: string
+  models: string[]
+  /** 免 key 协议（Ollama）允许不填；其余也允许留空——用户可以稍后在设置里补。 */
+  apiKey?: string
+  /** 从哪个预设建起（图标/文档链接回溯）。 */
+  presetId?: string
+}
+
+/** 接入协议白名单：目前适配器只有 OpenAI 兼容一路，Ollama 走同一套协议只是免 key。 */
+const PROVIDER_PROTOCOLS: readonly ProviderProtocol[] = ['openai', 'ollama']
+
+/** POST /api/providers 的白名单校验：类型/取值不合法抛错（调用方回 400）。 */
+function parseNewProviderInput(body: unknown): NewProviderInput {
+  const record = (typeof body === 'object' && body !== null ? body : {}) as Record<string, unknown>
+  const displayName = typeof record.displayName === 'string' ? record.displayName.trim() : ''
+  if (displayName.length === 0) throw new HttpRequestError(400, 'displayName is required')
+  const protocol = record.protocol === undefined ? 'openai' : String(record.protocol).trim().toLowerCase()
+  if (!PROVIDER_PROTOCOLS.includes(protocol as ProviderProtocol)) {
+    throw new HttpRequestError(400, `protocol must be one of ${PROVIDER_PROTOCOLS.join('|')}`)
+  }
+  const baseUrl = typeof record.baseUrl === 'string' ? record.baseUrl.trim() : ''
+  let parsedUrl: URL
+  try {
+    parsedUrl = new URL(baseUrl)
+  } catch {
+    throw new HttpRequestError(400, 'baseUrl must be an absolute http(s) URL')
+  }
+  if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+    throw new HttpRequestError(400, 'baseUrl must be an absolute http(s) URL')
+  }
+  if (!Array.isArray(record.models) || record.models.length === 0) {
+    throw new HttpRequestError(400, 'models must be a non-empty array of model ids')
+  }
+  const models: string[] = []
+  for (const model of record.models) {
+    if (typeof model !== 'string' || model.trim().length === 0) {
+      throw new HttpRequestError(400, 'models must be a non-empty array of model ids')
+    }
+    const id = model.trim()
+    if (!models.includes(id)) models.push(id)
+  }
+  const apiKey = typeof record.apiKey === 'string' ? record.apiKey.trim() : ''
+  const presetId =
+    typeof record.presetId === 'string' && record.presetId.trim().length > 0 ? record.presetId.trim() : undefined
+  return {
+    displayName,
+    protocol: protocol as ProviderProtocol,
+    baseUrl: parsedUrl.toString().replace(/\/+$/, ''),
+    models,
+    ...(apiKey.length === 0 ? {} : { apiKey }),
+    ...(presetId === undefined ? {} : { presetId }),
+  }
+}
+
+/**
+ * GET /api/providers 的对外形状。
+ *
+ * protocol/baseUrl/custom 是 UI 分组与徽标（内置 / 自定义 / 免 key）与展开后
+ * 显示端点的依据；凭据只回答"配没配"，绝不回显值。
+ */
+function providerInfo(
+  id: string,
+  provider: ProviderConfig,
+): {
+  id: string
+  displayName: string
+  protocol: string
+  baseUrl: string
+  custom: boolean
+  apiKeyConfigured: boolean
+  models: { id: string; name?: string; contextWindow?: number }[]
+} {
+  return {
+    id,
+    displayName: provider.displayName ?? id,
+    protocol: provider.protocol ?? 'openai',
+    baseUrl: provider.baseURL,
+    custom: provider.custom === true,
+    apiKeyConfigured: providerKeyConfigured(provider),
+    models: provider.models.map((model) => ({
+      id: model.id,
+      ...(model.name === undefined ? {} : { name: model.name }),
+      ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
+    })),
+  }
+}
+
+/**
+ * 记忆的对外形状（渲染层 MemoryRow）。
+ *
+ * 只挑展示与恢复需要的字段：MemoryRow 上的 `embedding` 是 Float32Array，
+ * 直接序列化会变成 `{"0":…,"1":…}` 的一坨数字——归档列表是全量返回的，带着
+ * 向量既把响应撑大，又把检索内部状态泄给前端。
+ */
+function publicMemoryRow(row: MemoryRow): {
+  id: string
+  agentId: string
+  kind: MemoryRow['kind']
+  content: string
+  createdAt: number
+  updatedAt: number
+  accessCount: number
+  sourceConversationId?: string
+} {
+  return {
+    id: row.id,
+    agentId: row.agentId,
+    kind: row.kind,
+    content: row.content,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    accessCount: row.accessCount,
+    ...(row.sourceConversationId === undefined ? {} : { sourceConversationId: row.sourceConversationId }),
+  }
 }
 
 /** 服务构造选项。 */
@@ -207,7 +340,7 @@ export class RyAgentServer {
     readonly dataDir: string,
     readonly workspaceRoot: string,
     private readonly providers: ProvidersConfigFile,
-    private readonly llmContext: Context,
+    readonly llm: LlmRuntime,
     private readonly wsHeartbeatMs: number,
     private readonly shutdownTimeoutMs: number,
   ) {}
@@ -217,11 +350,54 @@ export class RyAgentServer {
   private heartbeat: ReturnType<typeof setInterval> | undefined
   /** 每个 WS 客户端的 pong 存活标记（心跳两轮未响应即断开）。 */
   private readonly wsAlive = new Map<WsSocket, boolean>()
+  /**
+   * OpenAI 兼容适配器的配置对象：整个进程共用这一份，供应商增删时原地换掉它的
+   * providers 内容（适配器每次调用现读），用户不用重启就能用上新供应商。
+   */
+  private adapterConfig: OpenAiAdapterConfig | undefined
+  /** 上面那份适配器的路由注册句柄：replace 可原子换掉它持有的路由集合。 */
+  private adapterRegistration: AdapterRegistrationHandle | undefined
+  /** 巩固调度由 server 自己持有：/api/memory/stats 要如实回答"上次巩固"，
+   *  调度权与时间戳得在同一处，交给 EvolveService 的定时器就无从回答了。 */
+  private consolidationTimer: ReturnType<typeof setInterval> | undefined
+  private consolidationIntervalMs = DEFAULT_CONSOLIDATION_INTERVAL_MS
+  private lastConsolidatedAt: number | undefined
 
   /** 实际监听地址（端口 0 时取系统分配值）。 */
   get url(): string {
     const address = this.http.address() as { port: number; address: string }
     return `http://${address.address}:${address.port}`
+  }
+
+  /**
+   * 挂载 OpenAI 兼容适配器（providers.json 的每条路由）。
+   *
+   * 自己注册而不是用插件的 apply，是为了拿到路由注册句柄：供应商增删要能在
+   * 不重启进程的前提下换掉路由集合，而重复调用 registerAdapter 会撞
+   * DUPLICATE_ADAPTER。零条路由时保持 dormant（与插件行为一致），等用户加了
+   * 第一个供应商再补挂。
+   */
+  private mountOpenAiAdapters(config: OpenAiAdapterConfig): void {
+    this.adapterConfig = config
+    const routes = Object.keys(config.providers)
+    if (routes.length === 0) return
+    this.adapterRegistration = this.llm.registerAdapter(routes, new OpenAiAdapter(config))
+  }
+
+  /**
+   * 换一份供应商配置并热注册：路由集合与适配器看到的配置同时更新，
+   * 正在进行的 turn 不受影响（每个请求在发请求那一刻现读配置）。
+   */
+  private refreshProviders(next: ProvidersConfigFile): void {
+    this.providers.providers = next.providers
+    if (next.embedding !== undefined) this.providers.embedding = next.embedding
+    const config = toAdapterConfig(next)
+    if (this.adapterRegistration === undefined) {
+      this.mountOpenAiAdapters(config)
+      return
+    }
+    if (this.adapterConfig !== undefined) this.adapterConfig.providers = config.providers
+    this.adapterRegistration.replace(Object.keys(config.providers))
   }
 
   /** 组装并启动服务。 */
@@ -247,8 +423,6 @@ export class RyAgentServer {
     await ctx.plugin(LlmRuntime)
     if (options.mountLlm !== undefined) {
       options.mountLlm(ctx)
-    } else {
-      applyOpenAi(ctx, toAdapterConfig(providers))
     }
 
     const memoryOption =
@@ -299,9 +473,6 @@ export class RyAgentServer {
       ...(evolutionOption === undefined ? {} : { evolution: evolutionOption }),
     })
     const hub = new EventHub()
-    if (evolutionService !== undefined && options.consolidationIntervalMs !== 0) {
-      evolutionService.startConsolidation(options.consolidationIntervalMs ?? 6 * 3_600_000)
-    }
     const server = new RyAgentServer(
       store,
       coordinator,
@@ -315,10 +486,16 @@ export class RyAgentServer {
       dataDir,
       workspaceRoot,
       providers,
-      ctx,
+      ctx.llm,
       options.wsHeartbeatMs ?? DEFAULT_WS_HEARTBEAT_MS,
       options.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS,
     )
+    if (options.mountLlm === undefined) {
+      server.mountOpenAiAdapters(toAdapterConfig(providers))
+    }
+    if (evolutionService !== undefined && options.consolidationIntervalMs !== 0) {
+      server.startConsolidation(options.consolidationIntervalMs ?? DEFAULT_CONSOLIDATION_INTERVAL_MS)
+    }
     server.http.on('request', (req, res) => {
       server.onRequest(req, res).catch((error: unknown) => {
         if (!res.headersSent) json(res, 500, { error: error instanceof Error ? error.message : String(error) })
@@ -342,8 +519,100 @@ export class RyAgentServer {
     return this.closing
   }
 
+  /** 启动周期巩固（默认 6 小时）。定时器不拖住进程退出，与 WS 心跳一致。 */
+  private startConsolidation(intervalMs: number): void {
+    this.consolidationIntervalMs = intervalMs
+    this.consolidationTimer = setInterval(() => {
+      this.runConsolidation()
+    }, intervalMs)
+    this.consolidationTimer.unref()
+  }
+
+  /**
+   * 跑一轮巩固并记账时间。失败只记日志：巩固是后台 housekeeping，
+   * 不该把整个服务带下去，下次周期还会再试。
+   */
+  private runConsolidation(): { ok: boolean; result?: ReturnType<EvolveService['runOnce']> } {
+    if (this.evolutionService === undefined) return { ok: false }
+    try {
+      const result = this.evolutionService.runOnce()
+      this.lastConsolidatedAt = Date.now()
+      return { ok: true, result }
+    } catch (error) {
+      console.warn(`@ryagent/server: consolidation failed: ${error instanceof Error ? error.message : String(error)}`)
+      return { ok: false }
+    }
+  }
+
+  /** 巩固状态（/api/memory/stats 用）：上次巩固时间 + 周期。 */
+  private consolidationSnapshot(): { intervalMs: number; lastRunAt?: number } {
+    return this.consolidationIntervalMs === 0 || this.evolutionService === undefined
+      ? { intervalMs: 0 }
+      : {
+          intervalMs: this.consolidationIntervalMs,
+          ...(this.lastConsolidatedAt === undefined ? {} : { lastRunAt: this.lastConsolidatedAt }),
+        }
+  }
+
+  /**
+   * 「最近学到 N 条」：近 24 小时内新增的 active 记忆数（各 agent 私有空间 +
+   * 共享画像）。口径写在这里而不是散在 UI 上，免得用户看到的数字无从对账。
+   */
+  private countRecentLearned(now = Date.now()): number {
+    const memoryStore = this.memoryService?.store
+    if (memoryStore === undefined) return 0
+    const since = now - RECENT_LEARNED_WINDOW_MS
+    let count = 0
+    const fresh = (createdAt: number): boolean => {
+      return createdAt >= since
+    }
+    for (const row of memoryStore.listSharedProfile()) {
+      if (fresh(row.createdAt)) count += 1
+    }
+    for (const agent of this.store.listAgents()) {
+      for (const row of memoryStore.listActiveForAgent(agent.id)) {
+        if (fresh(row.createdAt)) count += 1
+      }
+    }
+    return count
+  }
+
+  /**
+   * `?since=` 增量拉取：只要 seq 比游标大的消息，按 seq 升序、取最新 limit 条。
+   *
+   * store.listMessages 只有 beforeSeq（向过去翻页）这一个游标，没有"取某 seq
+   * 之后"的语义，所以从最新一页往回走，攒够 limit 条或越过 since 为止。正常
+   * 情况（一页 200 条之内）就是一次查询；断线很久也只多走几页。
+   */
+  private listMessagesSince(conversationId: string, sinceSeq: number, limit: number): StoredMessage[] {
+    const pageSize = MAX_MESSAGE_PAGE
+    const collected: StoredMessage[] = []
+    let beforeSeq: number | undefined
+    for (;;) {
+      const page = this.store.listMessages(conversationId, {
+        limit: pageSize,
+        ...(beforeSeq === undefined ? {} : { beforeSeq }),
+      })
+      if (page.length === 0) break
+      for (const message of page) {
+        if (message.seq > sinceSeq) collected.push(message)
+      }
+      // 页内按 seq 升序：首条是本页最旧的一条，越过游标（或取空）就说明扫完了。
+      const oldest = page[0]
+      if (oldest === undefined || oldest.seq <= sinceSeq) break
+      beforeSeq = oldest.seq
+    }
+    // 页是从新往旧取的，跨页拼回来的顺序是乱的：统一排成 seq 升序后取末尾
+    // limit 条（末尾即最新）。
+    collected.sort((a, b) => {
+      return a.seq - b.seq
+    })
+    return collected.slice(-limit)
+  }
+
   private async doClose(): Promise<void> {
     if (this.heartbeat !== undefined) clearInterval(this.heartbeat)
+    if (this.consolidationTimer !== undefined) clearInterval(this.consolidationTimer)
     const pending = [...this.turnChains.values()]
     if (pending.length > 0) {
       let timer: ReturnType<typeof setTimeout> | undefined
@@ -584,7 +853,7 @@ export class RyAgentServer {
     /** 记忆统计。 */
     router.get('/api/memory/stats', async (_req, res) => {
       if (this.memoryService === undefined) {
-        json(res, 200, { enabled: false })
+        json(res, 200, { enabled: false, recentLearned: 0, consolidation: this.consolidationSnapshot() })
         return
       }
       json(res, 200, {
@@ -592,8 +861,74 @@ export class RyAgentServer {
         embeddings: {
           label: this.memoryService.embeddingsAvailable ? 'configured' : 'none:fts-only',
         },
+        recentLearned: this.countRecentLearned(),
+        consolidation: this.consolidationSnapshot(),
         ...this.memoryService.store.stats(),
       })
+    })
+
+    /**
+     * 已归档的记忆（巩固任务判定长期零访问而移出检索面的那些）。
+     *
+     * 全量返回、由调用方按 agent 过滤：归档分区在每个 agent 的记忆面板里都要能
+     * 看到"这个 agent 有什么被归档了"，按 agent 分组查询反而更贵。记忆系统关闭
+     * 时回空列表而不是报错——面板每次打开都会拉一次，不该因此弹红条。
+     */
+    router.get('/api/memory/archived', async (_req, res) => {
+      if (this.memoryService === undefined) {
+        json(res, 200, { items: [] })
+        return
+      }
+      json(res, 200, { items: this.memoryService.store.listArchived().map(publicMemoryRow) })
+    })
+
+    /** 恢复一条归档记忆：回到 active，重新参与检索与注入。 */
+    router.post('/api/memory/restore', async (req, res) => {
+      if (this.memoryService === undefined) {
+        json(res, 409, { error: 'memory system disabled' })
+        return
+      }
+      const id = strField(await req.body(), 'id')
+      if (id === undefined) {
+        json(res, 400, { error: 'id is required' })
+        return
+      }
+      const memoryStore = this.memoryService.store
+      const existing = memoryStore.get(id)
+      if (existing === undefined) {
+        json(res, 404, { error: 'memory not found' })
+        return
+      }
+      // 只救归档：deleted / superseded 是用户或记忆管理器的软删决定，
+      // 拿到 id 就能复活它们等于绕过软删语义。
+      if (existing.status !== 'inactive') {
+        json(res, 409, { error: `memory is not archived (status=${existing.status})` })
+        return
+      }
+      if (!memoryStore.restore(id)) {
+        json(res, 500, { error: 'restore failed' })
+        return
+      }
+      json(res, 200, { restored: id })
+    })
+
+    /**
+     * 重建向量索引：换 embedding 模型后为存量记忆回填向量（换模型时旧向量会被
+     * 检索侧排除，不回填等于旧记忆静默退化成只走 BM25）。
+     *
+     * 没有 embedding 凭据（纯 FTS5）时回 409 而不是"重建成功 0 条"：那个按钮
+     * 在这种安装下按下去没有意义，UI 需要如实看到它不可用。
+     */
+    router.post('/api/memory/reembed', async (_req, res) => {
+      if (this.memoryService === undefined) {
+        json(res, 409, { error: 'memory system disabled' })
+        return
+      }
+      if (!this.memoryService.embeddingsAvailable) {
+        json(res, 409, { error: 'embeddings are not configured; nothing to rebuild' })
+        return
+      }
+      json(res, 200, { reembedded: await this.memoryService.reembedAll() })
     })
 
     // ---- 自我进化（playbook / reflections / 反馈闭环）----
@@ -664,7 +999,12 @@ export class RyAgentServer {
         json(res, 409, { error: 'evolution system disabled' })
         return
       }
-      json(res, 200, this.evolutionService.runOnce())
+      const run = this.runConsolidation()
+      if (!run.ok) {
+        json(res, 500, { error: 'consolidation failed' })
+        return
+      }
+      json(res, 200, run.result)
     })
 
     // ---- conversations ----
@@ -695,14 +1035,29 @@ export class RyAgentServer {
           if (!Array.isArray(memberIds) || memberIds.length === 0) {
             throw new Error('group conversation requires non-empty memberAgentIds')
           }
-          for (const id of memberIds as string[]) {
+          if (
+            memberIds.some((id) => {
+              return typeof id !== 'string'
+            })
+          ) {
+            throw new Error('memberAgentIds must be an array of agent ids')
+          }
+          const members = memberIds as string[]
+          for (const id of members) {
             if (store.getAgent(id) === undefined) throw new Error(`unknown agent "${id}"`)
+          }
+          const dispatcherAgentId = strField(body, 'dispatcherAgentId') ?? 'ryen'
+          // 调度员必须在成员名单里：群聊第一轮就是由它派工，不在名单里的话每条
+          // 消息都会以 UNKNOWN_AGENT 报错（"群一进去就哑"）。前端勾选成员与选
+          // 调度员是两处独立状态，这里是最后一道闸——不合法直接 400，不建群。
+          if (!members.includes(dispatcherAgentId)) {
+            throw new Error(`dispatcher "${dispatcherAgentId}" must be one of memberAgentIds`)
           }
           const conversation = store.createConversation({
             kind: 'group',
             title: strField(body, 'title') ?? '群聊',
-            memberAgentIds: memberIds as string[],
-            dispatcherAgentId: strField(body, 'dispatcherAgentId') ?? 'ryen',
+            memberAgentIds: members,
+            dispatcherAgentId,
           })
           json(res, 201, { conversation })
           return
@@ -761,9 +1116,7 @@ export class RyAgentServer {
         return
       }
       // 热更新：把新 key 合并进配置并重新注册适配器，用户不用重启。
-      const next = mergeApiKeys(this.providers, loadApiKeys(this.dataDir))
-      this.providers.providers = next.providers
-      applyOpenAi(this.llmContext, toAdapterConfig(next))
+      this.refreshProviders(mergeApiKeys(this.providers, loadApiKeys(this.dataDir)))
       json(res, 200, { providerId, configured: true })
     })
 
@@ -794,10 +1147,23 @@ export class RyAgentServer {
         json(res, 404, { error: 'conversation not found' })
         return
       }
-      const limit = Number(req.query.get('limit') ?? '50')
+      const rawLimit = Number(req.query.get('limit') ?? '50')
+      const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, MAX_MESSAGE_PAGE) : 50
       const before = req.query.get('before')
+      const since = req.query.get('since')
+      if (since !== null && since.length > 0) {
+        // since 是 seq 游标（客户端断线重连后补齐缺口用），非法数字直接 400：
+        // 悄悄当成 0 会把整段历史当增量发过去。
+        const sinceSeq = Number(since)
+        if (!Number.isFinite(sinceSeq)) {
+          json(res, 400, { error: 'since must be a seq number' })
+          return
+        }
+        json(res, 200, { messages: this.listMessagesSince(conversationId, sinceSeq, limit) })
+        return
+      }
       const rows = store.listMessages(conversationId, {
-        limit: Number.isFinite(limit) && limit > 0 ? Math.min(limit, 200) : 50,
+        limit,
         ...(before === null || before.length === 0 ? {} : { beforeSeq: Number(before) }),
       })
       json(res, 200, { messages: rows })
@@ -824,7 +1190,22 @@ export class RyAgentServer {
       })
       // 202：处理异步进行，过程经 WS 推送；同会话消息串行排队。
       this.enqueueTurn(conversation, text)
-      json(res, 202, { accepted: true, conversationId })
+      // 回执带上此刻的事件 seq：客户端的订阅可能晚于这次发送建立（欢迎页就是
+      // 先 setActiveId 再 postMessage），拿着这个基线才能算出订阅期间漏了几条。
+      json(res, 202, { accepted: true, conversationId, streamSeq: this.hub.lastSeq(conversationId) })
+    })
+
+    /**
+     * 该会话当前的事件序号：客户端握手前读一次当缺口检测基线。
+     * 与 POST /messages 回执里的 streamSeq 同源，区别只是这里可以随时单独读。
+     */
+    router.get('/api/conversations/:id/stream-seq', async (req, res) => {
+      const conversationId = req.params.id as string
+      if (store.getConversation(conversationId) === undefined) {
+        json(res, 404, { error: 'conversation not found' })
+        return
+      }
+      json(res, 200, { seq: this.hub.lastSeq(conversationId) })
     })
 
     // ---- providers ----
@@ -837,17 +1218,78 @@ export class RyAgentServer {
 
     router.get('/api/providers', async (_req, res) => {
       json(res, 200, {
-        providers: Object.entries(this.providers.providers).map(([id, provider]) => ({
-          id,
-          displayName: provider.displayName ?? id,
-          apiKeyConfigured: providerKeyConfigured(provider),
-          models: provider.models.map((model) => ({
-            id: model.id,
-            ...(model.name === undefined ? {} : { name: model.name }),
-            ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
-          })),
-        })),
+        providers: Object.entries(this.providers.providers).map(([id, provider]) => {
+          return providerInfo(id, provider)
+        }),
       })
+    })
+
+    /** 添加供应商向导的预设目录（协议 / baseURL / 推荐模型 / 文档链接）。 */
+    router.get('/api/provider-presets', async (_req, res) => {
+      json(res, 200, { presets: PROVIDER_PRESETS })
+    })
+
+    /**
+     * 新增供应商：写 providers.json（路由）+ api-keys.json（明文 key，0600），
+     * 再热注册适配器——加完立刻能选，不重启。
+     */
+    router.post('/api/providers', async (req, res) => {
+      // 白名单校验失败抛 HttpRequestError，由 dispatch 统一回 400。
+      const input = parseNewProviderInput(await req.body())
+      const preset = input.presetId === undefined ? undefined : providerPreset(input.presetId)
+      if (input.presetId !== undefined && preset === undefined) {
+        json(res, 400, { error: `unknown preset: ${input.presetId}` })
+        return
+      }
+      const next: ProvidersConfigFile = {
+        ...this.providers,
+        providers: { ...this.providers.providers },
+      }
+      // 预设 id 优先（图标/文档链接能对上品牌），已占用则退化成随机 id。
+      const preferredId = input.presetId ?? `custom-${crypto.randomUUID().slice(0, 8)}`
+      const providerId =
+        next.providers[preferredId] === undefined ? preferredId : `custom-${crypto.randomUUID().slice(0, 8)}`
+      const provider: ProviderConfig = {
+        // baseUrl 已在校验里归一（绝对 URL + 去尾部斜杠）。
+        baseURL: input.baseUrl,
+        protocol: input.protocol,
+        displayName: input.displayName,
+        models: input.models.map((modelId) => {
+          return { id: modelId }
+        }),
+        custom: true,
+        ...(input.presetId === undefined ? {} : { presetId: input.presetId }),
+      }
+      next.providers[providerId] = provider
+      writeProvidersConfig(this.dataDir, next)
+      // key 先落盘再热注册：热注册读的是合并后的内存配置。
+      if (input.apiKey !== undefined) saveApiKey(this.dataDir, providerId, input.apiKey)
+      this.refreshProviders(mergeApiKeys(next, loadApiKeys(this.dataDir)))
+      json(res, 201, { provider: providerInfo(providerId, this.providers.providers[providerId] as ProviderConfig) })
+    })
+
+    /** 删除供应商：仅限用户自己加的（内置条目是应用的一部分，删了没法恢复）。 */
+    router.delete('/api/providers/:id', async (req, res) => {
+      const providerId = req.params.id as string
+      const provider = this.providers.providers[providerId]
+      if (provider === undefined) {
+        json(res, 404, { error: `provider not found: ${providerId}` })
+        return
+      }
+      if (provider.custom !== true) {
+        json(res, 409, { error: `builtin provider "${providerId}" cannot be deleted` })
+        return
+      }
+      const next: ProvidersConfigFile = {
+        ...this.providers,
+        providers: { ...this.providers.providers },
+      }
+      delete next.providers[providerId]
+      // key 先清（不留孤儿 key 在 0600 文件里），再落盘路由。
+      deleteApiKey(this.dataDir, providerId)
+      writeProvidersConfig(this.dataDir, next)
+      this.refreshProviders(mergeApiKeys(next, loadApiKeys(this.dataDir)))
+      json(res, 200, { deleted: providerId })
     })
 
     // ---- files（产物下载，白名单=工作区产物目录）----
@@ -871,7 +1313,10 @@ export class RyAgentServer {
   }
 
   /** 把一轮对话排进该会话的串行链；上一 turn 未结束时先发 queued 事件。 */
-  private enqueueTurn(conversation: { id: string; kind: string; memberAgentIds: string[] }, text: string): void {
+  private enqueueTurn(
+    conversation: { id: string; kind: string; memberAgentIds: string[]; dispatcherAgentId?: string },
+    text: string,
+  ): void {
     const tail = this.turnChains.get(conversation.id)
     if (tail !== undefined) {
       this.publish({
@@ -899,7 +1344,7 @@ export class RyAgentServer {
 
   /** 执行一轮对话（异步）：消费协调器事件流并发布 WS 事件。 */
   private async runTurn(
-    conversation: { id: string; kind: string; memberAgentIds: string[] },
+    conversation: { id: string; kind: string; memberAgentIds: string[]; dispatcherAgentId?: string },
     text: string,
   ): Promise<void> {
     const { coordinator, store } = this
@@ -975,6 +1420,20 @@ export class RyAgentServer {
               break
           }
         }
+        return
+      }
+
+      // 群聊第一轮由调度员派工。老数据里可能有「调度员已被移出成员」的群（建群
+      // 时前端只校验成员存在、不校验调度员是否在名单内）：与其让每条消息都以
+      // UNKNOWN_AGENT 报错，不如在第一轮就说明白要怎么修。
+      const dispatcherId = conversation.dispatcherAgentId
+      if (dispatcherId !== undefined && !conversation.memberAgentIds.includes(dispatcherId)) {
+        this.publish({
+          type: 'error',
+          conversationId: conversation.id,
+          message: `这个群的调度员「${dispatcherId}」不在成员名单里，没法派工。请把它加回成员，或在通讯录里重建一个群。`,
+          code: 'DISPATCHER_NOT_MEMBER',
+        })
         return
       }
 

@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { EvolveLlm, TurnTrajectory } from '@ryagent/evolve'
+import type { EvolveLlm, PlaybookSection, TurnTrajectory } from '@ryagent/evolve'
 import { AUTO_DEPRECATE_HARMFUL, EvolveService, NEGATIVE_FEEDBACK_RE, seedIfEmpty } from '@ryagent/evolve'
 import { afterEach, describe, expect, it } from 'vitest'
 
@@ -64,11 +64,101 @@ describe('注入编译（compile）', () => {
     expect(compiled!.text).toContain('[经验手册]')
     expect(compiled!.text).toContain('策略：先读后写')
     expect(compiled!.text).toContain('坑：别删错文件')
-    expect(compiled!.text.indexOf('先读后写')).toBeLessThan(compiled!.text.indexOf('别删错文件')) // net 排序
+    expect(compiled!.text.indexOf('先读后写')).toBeLessThan(compiled!.text.indexOf('别删错文件')) // 分组按 SECTION_ORDER，组内才是 net 序
     expect(compiled!.text).toContain('上次教训：')
     expect(compiled!.text).toContain('上次忘了检查路径')
     expect(compiled!.playbookEntryIds).toEqual([a.id, b.id])
     expect(compiled!.reflectionIds).toEqual([reflection.id])
+  })
+
+  it('top-N 按 net=helpful-harmful 排序：30 条目下 high-harmful 的高 helpful 条目被挡在手册外', async () => {
+    const s = service()
+    // 12 条真策略（net 48..59，harmful 恒为 3）
+    const gold = Array.from({ length: 12 }, (_, i) => {
+      const net = 48 + i
+      const entry = s.store.insertEntry({ agentId: 'a1', section: 'strategy', content: `策略 ${i}`, source: 'seed' })
+      s.store.addCounts(entry.id, { helpful: net + 3, harmful: 3 })
+      return entry.id
+    })
+    // 18 条诱饵：helpful 高达 200+，但 harmful 更高（net 只有 2/8/10/…/40）
+    const decoyNets = [2, 8, 10, 15, 20, 25, 30, 35, 40]
+    for (let i = 0; i < 18; i++) {
+      const net = decoyNets[i % decoyNets.length] as number
+      const entry = s.store.insertEntry({ agentId: 'a1', section: 'strategy', content: `诱饵 ${i}`, source: 'seed' })
+      s.store.addCounts(entry.id, { helpful: 200 + net, harmful: 200 })
+    }
+    const compiled = await s.compile('a1', '随便聊聊')
+    // 注入集合 = net 最高的 12 条，按 net 降序（与 harmful 计数无关）。
+    expect(compiled!.playbookEntryIds).toEqual([...gold].reverse())
+    expect(compiled!.text).not.toContain('诱饵')
+  })
+
+  it('26 条跨 section 条目下 top-N 严格按净分降序（比较器回归防护）', async () => {
+    const s = service()
+    const sections = ['strategy', 'pitfall', 'tooling'] as const
+    // 26 条互异净分（25..1 加一条负分）。存储层按 (section, net desc) 返回，
+    // section 分块序与全局净分序互相冲突——compile() 必须自己把全部条目重排
+    // 成全局净分降序再取 top-12，只依赖底层分块序会排出「整块 strategy 排在
+    // 整块 pitfall 前面」而非真正的最优条目。
+    const seeds = [
+      ...Array.from({ length: 25 }, (_, i) => {
+        return i + 1
+      }),
+      -2,
+    ].map((net, index) => {
+      const entry = s.store.insertEntry({
+        agentId: 'a1',
+        section: sections[index % sections.length] as PlaybookSection,
+        content: `条目 ${index}`,
+        source: 'seed',
+      })
+      // 负分条目 harmful=2 < AUTO_DEPRECATE_HARMFUL，仍是合法的 active 条目。
+      s.store.addCounts(entry.id, net >= 0 ? { helpful: net + 2, harmful: 2 } : { harmful: 2 })
+      return { id: entry.id, net }
+    })
+    const expectedNets = [...seeds]
+      .sort((a, b) => {
+        return b.net - a.net
+      })
+      .slice(0, 12)
+      .map((seed) => {
+        return seed.net
+      })
+
+    const compiled = await s.compile('a1', '随便聊聊')
+    // 注入内容按 section 分组（SECTION_ORDER），比较器管的是「哪 12 条进
+    // top-N」：选中集合必须正好是净分最高的 12 条。
+    const injected = compiled!.playbookEntryIds.map((id) => {
+      return s.store.getEntry(id)!
+    })
+    expect(
+      injected
+        .map((entry) => {
+          return entry.helpful - entry.harmful
+        })
+        .sort((a, b) => {
+          return b - a
+        }),
+    ).toEqual(expectedNets)
+    expect(new Set(compiled!.playbookEntryIds)).toEqual(
+      new Set(
+        seeds
+          .filter((seed) => {
+            return expectedNets.includes(seed.net)
+          })
+          .map((seed) => {
+            return seed.id
+          }),
+      ),
+    )
+    // 组内（同一 section 的连续块）严格按净分降序。
+    for (let i = 1; i < injected.length; i++) {
+      if (injected[i]!.section === injected[i - 1]!.section) {
+        expect(injected[i]!.helpful - injected[i]!.harmful).toBeLessThan(
+          injected[i - 1]!.helpful - injected[i - 1]!.harmful,
+        )
+      }
+    }
   })
 
   it('deprecated 条目不参与编译；空手册返回 undefined', async () => {

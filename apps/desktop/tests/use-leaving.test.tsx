@@ -201,4 +201,41 @@ describe('useLeaving', () => {
       advance(LEAVE_MS * 2)
     }).not.toThrow()
   })
+
+  it('className(base) 助手：进场态是 base，退场态是 base + is-leaving', () => {
+    vi.useFakeTimers()
+    /** 照搬调用点写法：九个调用点统一走这个助手，不再手写三元表达式。 */
+    function Banner({ visible }: { visible: boolean }) {
+      const { shown, className, ref } = useLeaving(LEAVE_MS, visible ? '内容' : undefined)
+      if (shown === undefined) return null
+      return (
+        <div ref={ref} className={className('banner')}>
+          {shown}
+        </div>
+      )
+    }
+    function Harness() {
+      const [visible, setVisible] = useState(true)
+      return (
+        <>
+          <button
+            type="button"
+            id="toggle"
+            onClick={() => {
+              setVisible(!visible)
+            }}
+          >
+            切换
+          </button>
+          <Banner visible={visible} />
+        </>
+      )
+    }
+    render(<Harness />)
+    expect(container.querySelector('.banner')!.className).toBe('banner')
+    toggle()
+    expect(container.querySelector('.banner')!.className).toBe('banner is-leaving')
+    advance(LEAVE_MS)
+    expect(container.querySelector('.banner')).toBeNull()
+  })
 })

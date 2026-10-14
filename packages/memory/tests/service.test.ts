@@ -427,3 +427,75 @@ describe('记忆闭环集成', () => {
     service.close()
   })
 })
+
+describe('向量索引重建', () => {
+  it('reembedAll 为存量记忆回填向量，第二次不再重复请求嵌入器', async () => {
+    let embedded = 0
+    const counting: EmbeddingProvider = {
+      label: 'counting-model',
+      available: true,
+      async embed(texts) {
+        embedded += texts.length
+        return texts.map((_text, index) => {
+          return Float32Array.from([1, 0, 0, index])
+        })
+      },
+    }
+    const service = new MemoryService({ dbPath: dbPath(), embeddings: counting })
+    service.store.insert({ agentId: 'ryen', kind: 'fact', content: '用户住在北京' })
+    service.store.insert({ agentId: 'ryen', kind: 'preference', content: '用户偏好川菜' })
+    expect(service.store.embeddingModelStats()['counting-model'] ?? 0).toBe(0)
+
+    expect(await service.reembedAll()).toBe(2)
+    expect(embedded).toBe(2)
+    expect(service.store.embeddingModelStats()['counting-model']).toBe(2)
+    // 回填后语义通道可用（此前只能靠 BM25 命中）。
+    const recalled = await service.hybridRecall('ryen', '北京')
+    expect(
+      recalled.map((memory) => {
+        return memory.content
+      }),
+    ).toContain('用户住在北京')
+
+    // 幂等：当前模型下已有向量就整条跳过，且不再打网络（查询向量那次请求不算）。
+    const beforeSecond = embedded
+    expect(await service.reembedAll()).toBe(0)
+    expect(embedded).toBe(beforeSecond)
+    service.close()
+  })
+
+  it('reembedAll 在 embedding 不可用（纯 FTS5）时返回 0，不假装重建过', async () => {
+    const service = new MemoryService({ dbPath: dbPath(), embeddings: new NullEmbeddings() })
+    service.store.insert({ agentId: 'ryen', kind: 'fact', content: '用户住在北京' })
+    expect(await service.reembedAll()).toBe(0)
+    expect(service.store.get(service.store.listActiveForAgent('ryen')[0]!.id)?.embedding).toBeNull()
+    service.close()
+  })
+
+  it('换 embedding 模型后重建：旧模型向量被新模型接管，语义通道恢复', async () => {
+    const path = dbPath()
+    const old = new MemoryService({ dbPath: path, embeddings: new HashEmbeddings(4) })
+    old.store.insert({ agentId: 'ryen', kind: 'fact', content: '用户养了一只橘猫叫布丁' })
+    expect(await old.reembedAll()).toBe(1)
+    expect(old.store.embeddingModelStats()['hash:test']).toBe(1)
+    old.close()
+
+    const fresh = new MemoryService({
+      dbPath: path,
+      embeddings: {
+        label: 'next-model',
+        available: true,
+        async embed(texts) {
+          return texts.map(() => {
+            return Float32Array.from([1, 0, 0, 0])
+          })
+        },
+      },
+    })
+    // 新模型下旧向量不可用：语义通道空，召回只能靠 BM25。
+    expect(fresh.store.listActiveEmbeddings('ryen', fresh.embeddingModel)).toHaveLength(0)
+    expect(await fresh.reembedAll()).toBe(1)
+    expect(fresh.store.listActiveEmbeddings('ryen', fresh.embeddingModel)).toHaveLength(1)
+    fresh.close()
+  })
+})

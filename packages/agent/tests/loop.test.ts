@@ -1,20 +1,23 @@
 import type { AgentDefinition, AgentLoopEvent, Tool, ToolResult } from '@ryagent/agent'
-import { AgentLoop, BUILTIN_TEMPLATES, forkTemplate, RYEN_TEMPLATE } from '@ryagent/agent'
+import { AgentLoop, BUILTIN_TEMPLATES, forkTemplate, MAX_LOOP_CONTEXT_CHARS, RYEN_TEMPLATE } from '@ryagent/agent'
 import { brandString } from '@ryagent/brand'
-import type { LlmRuntime, StreamChunk, ToolCallId } from '@ryagent/llm'
+import type { GenerateOptions, LlmRuntime, Message, StreamChunk, ToolCallId } from '@ryagent/llm'
 import { describe, expect, it } from 'vitest'
 
-/** 脚本化的假 LlmRuntime：每次 stream() 消耗一段录制 chunk。 */
-function mockLlm(scripted: StreamChunk[][]): LlmRuntime {
+/** 脚本化的假 LlmRuntime：每次 stream() 消耗一段录制 chunk，并记录每次请求。 */
+function mockLlm(scripted: StreamChunk[][]): { llm: LlmRuntime; requests: GenerateOptions[] } {
+  const requests: GenerateOptions[] = []
   let call = 0
-  return {
-    stream(_options: unknown) {
+  const llm = {
+    stream(options: GenerateOptions) {
+      requests.push(options)
       const chunks = scripted[call++] ?? []
       return (async function* (): AsyncGenerator<StreamChunk> {
         yield* chunks
       })()
     },
   } as unknown as LlmRuntime
+  return { llm, requests }
 }
 
 const DEFINITION: AgentDefinition = {
@@ -66,7 +69,7 @@ describe('builtin templates', () => {
 
 describe('AgentLoop', () => {
   it('streams text and finishes on a plain reply', async () => {
-    const llm = mockLlm([
+    const { llm } = mockLlm([
       [
         { type: 'block-start', index: 0, blockType: 'text' },
         { type: 'text-delta', index: 0, text: '你好' },
@@ -84,7 +87,7 @@ describe('AgentLoop', () => {
 
   it('executes tool calls in a second step and reports results', async () => {
     const callId = brandString<ToolCallId>('call-1')
-    const llm = mockLlm([
+    const { llm } = mockLlm([
       [
         { type: 'block-start', index: 0, blockType: 'tool-call' },
         { type: 'tool-call-delta', index: 0, id: callId, name: 'echo', argumentsDelta: '{"text":"喵"}' },
@@ -112,7 +115,7 @@ describe('AgentLoop', () => {
   })
 
   it('never calls tools outside the definition whitelist', async () => {
-    const llm = mockLlm([
+    const { llm } = mockLlm([
       [
         { type: 'block-start', index: 0, blockType: 'tool-call' },
         { type: 'tool-call-delta', index: 0, id: brandString<ToolCallId>('c9'), name: 'echo', argumentsDelta: '{}' },
@@ -137,7 +140,7 @@ describe('AgentLoop', () => {
   })
 
   it('reports unknown tools and bad JSON as error results instead of throwing', async () => {
-    const llm = mockLlm([
+    const { llm } = mockLlm([
       [
         {
           type: 'block-end',
@@ -181,7 +184,7 @@ describe('AgentLoop', () => {
   })
 
   it('终态 error finish 传播为 error 事件而不是 done（半截回复不算完成）', async () => {
-    const llm = mockLlm([
+    const { llm } = mockLlm([
       [
         { type: 'text-delta', index: 0, text: '半截' },
         { type: 'block-end', index: 0, block: { type: 'text', text: '半截' } },
@@ -199,7 +202,7 @@ describe('AgentLoop', () => {
   })
 
   it('终态 aborted finish 同样传播为 error 事件', async () => {
-    const llm = mockLlm([
+    const { llm } = mockLlm([
       [{ type: 'finish', reason: { kind: 'aborted', failure: { message: 'client went away', code: 'ABORTED' } } }],
     ])
     const loop = new AgentLoop({ definition: DEFINITION, llm, tools: [echoTool] })
@@ -216,7 +219,7 @@ describe('AgentLoop', () => {
       },
       { type: 'finish', reason: { kind: 'tool-calls' } },
     ])
-    const llm = mockLlm(scripted)
+    const { llm } = mockLlm(scripted)
     const loop = new AgentLoop({ definition: DEFINITION, llm, tools: [echoTool], maxSteps: 3 })
     const events = await collect(loop.run({ text: 'hi' }, { workspaceRoot: process.cwd() }))
     expect(events.at(-1)).toMatchObject({ type: 'error', code: 'MAX_STEPS' })
@@ -224,5 +227,83 @@ describe('AgentLoop', () => {
       return e.type === 'tool-result'
     })
     expect(toolResults).toHaveLength(3)
+  })
+})
+
+describe('AgentLoop 循环内上下文上限', () => {
+  /** 单条工具结果就能顶满预算的假工具。 */
+  function hugeTool(chars: number): Tool {
+    return {
+      name: 'huge',
+      description: '返回超大文本',
+      parameters: { type: 'object', properties: {} },
+      async execute(): Promise<ToolResult> {
+        return { content: 'x'.repeat(chars) }
+      },
+    }
+  }
+
+  function toolCall(id: string): StreamChunk[] {
+    return [
+      {
+        type: 'block-end',
+        index: 0,
+        block: { type: 'tool-call', id: brandString<ToolCallId>(id), name: 'huge', arguments: '{}' },
+      },
+      { type: 'finish', reason: { kind: 'tool-calls' } },
+    ]
+  }
+
+  it('超长工具输出进历史时被截断并标注；事件仍带完整内容', async () => {
+    const definition: AgentDefinition = { ...DEFINITION, tools: ['huge'] }
+    const { llm, requests } = mockLlm([toolCall('c1'), [{ type: 'text-delta', index: 0, text: 'done' }, finishStop()]])
+    const loop = new AgentLoop({ definition, llm, tools: [hugeTool(200_000)] })
+    const events = await collect(loop.run({ text: 'hi' }, { workspaceRoot: process.cwd() }))
+    const toolMessage = (requests[1]?.messages ?? []).find((message) => {
+      return message.role === 'tool'
+    }) as Message | undefined
+    const text = (toolMessage?.content ?? [])
+      .map((block) => {
+        return block.type === 'text' ? block.text : ''
+      })
+      .join('')
+    expect(text.length).toBeLessThanOrEqual(MAX_LOOP_CONTEXT_CHARS)
+    expect(text).toContain('已截断')
+    expect(text.startsWith('x')).toBe(true)
+    // UI 侧拿到的是未裁剪的原始结果：落库与展开依赖它。
+    const resultEvent = events.find((event) => {
+      return event.type === 'tool-result'
+    })
+    expect((resultEvent as { result: ToolResult }).result.content).toHaveLength(200_000)
+  })
+
+  it('多步工具调用累计受同一预算约束，预算耗尽后仍回填配对的 tool 消息', async () => {
+    const definition: AgentDefinition = { ...DEFINITION, tools: ['huge'] }
+    const steps = 8
+    const { llm, requests } = mockLlm(
+      Array.from({ length: steps }, (_, i) => {
+        return toolCall(`c${i}`)
+      }).concat([[{ type: 'text-delta', index: 0, text: 'done' }, finishStop()]]),
+    )
+    // 每步 40k 字符：8 步共 320k，必然超过 120k 预算。
+    const loop = new AgentLoop({ definition, llm, tools: [hugeTool(40_000)] })
+    await collect(loop.run({ text: 'hi' }, { workspaceRoot: process.cwd() }))
+    const toolMessages = (requests[requests.length - 1]?.messages ?? []).filter((message) => {
+      return message.role === 'tool'
+    })
+    expect(toolMessages).toHaveLength(steps)
+    const total = toolMessages.reduce((sum, message) => {
+      return (
+        sum +
+        message.content.reduce((inner, block) => {
+          return inner + (block.type === 'text' ? block.text.length : 0)
+        }, 0)
+      )
+    }, 0)
+    expect(total).toBeLessThanOrEqual(MAX_LOOP_CONTEXT_CHARS + steps * 64) // 耗尽后每条只留一条约 24 字符的标注
+    expect(total).toBeGreaterThan(MAX_LOOP_CONTEXT_CHARS - 200) // 预算基本用满，没有提前放弃
+    // 预算耗尽后退化为一条标注，tool_call/tool_result 配对不破。
+    const last = toolMessages.at(-1) as Message
+    expect(last.content[0]).toEqual({ type: 'text', text: '…[已截断：本轮工具输出已用满上下文预算]' })
   })
 })

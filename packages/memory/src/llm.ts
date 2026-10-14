@@ -7,6 +7,7 @@
  */
 
 import { HarnessError } from '@ryagent/llm'
+import { ChatJsonClient } from '@ryagent/util-llm-json'
 
 /** 候选事实（抽取阶段输出）：scope 决定写入共享画像还是 agent 私有空间。 */
 export interface CandidateFact {
@@ -81,89 +82,36 @@ const DECIDE_PROMPT = `你是记忆管理员。给定一条候选事实和若干
 
 /** OpenAI 兼容 chat/completions 的默认实现（配置驱动，无供应商默认值）。 */
 export class ChatMemoryLlm implements MemoryLlm {
-  private readonly baseURL: string
-  private readonly model: string
+  private readonly client: ChatJsonClient
 
-  constructor(
-    private readonly config: {
-      apiKey: string
-      baseURL: string
-      model: string
-      fetchImpl?: typeof fetch
-      /** 单次请求超时毫秒（默认 30s）。 */
-      timeoutMs?: number
-    },
-  ) {
-    if (config.apiKey.length === 0) {
-      throw new HarnessError('@ryagent/memory: memory llm requires an api key', MEMORY_LLM_CODES.config)
-    }
-    if (typeof config.baseURL !== 'string' || config.baseURL.length === 0) {
-      throw new HarnessError('@ryagent/memory: memory llm requires a baseURL', MEMORY_LLM_CODES.config)
-    }
-    if (typeof config.model !== 'string' || config.model.length === 0) {
-      throw new HarnessError('@ryagent/memory: memory llm requires a model id', MEMORY_LLM_CODES.config)
-    }
-    this.baseURL = config.baseURL.replace(/\/+$/, '')
-    this.model = config.model
-  }
-
-  private async chatJson(system: string, user: string): Promise<unknown> {
-    const fetchImpl = this.config.fetchImpl ?? fetch
-    let response: Response
+  constructor(config: {
+    apiKey: string
+    baseURL: string
+    model: string
+    fetchImpl?: typeof fetch
+    /** 单次请求超时毫秒（默认 30s）。 */
+    timeoutMs?: number
+  }) {
     try {
-      response = await fetchImpl(`${this.baseURL}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          authorization: `Bearer ${this.config.apiKey}`,
-        },
-        body: JSON.stringify({
-          model: this.model,
-          messages: [
-            { role: 'system', content: system },
-            { role: 'user', content: user },
-          ],
-          temperature: 0,
-          response_format: { type: 'json_object' },
-        }),
-        ...(this.config.timeoutMs === undefined ? {} : { signal: AbortSignal.timeout(this.config.timeoutMs) }),
+      this.client = new ChatJsonClient({
+        apiKey: config.apiKey,
+        baseURL: config.baseURL,
+        model: config.model,
+        ...(config.fetchImpl === undefined ? {} : { fetchImpl: config.fetchImpl }),
+        ...(config.timeoutMs === undefined ? {} : { timeoutMs: config.timeoutMs }),
+        codeNamespace: 'MEMORY_LLM',
       })
     } catch (error) {
-      throw new HarnessError(`@ryagent/memory: memory llm request failed: ${String(error)}`, MEMORY_LLM_CODES.http, {
-        cause: error,
-      })
-    }
-    if (!response.ok) {
-      // 带上供应商原文：401/404/429 的处置方式完全不同，只报状态码没法排障。
-      const detail = await response.text().catch(() => '')
-      throw new HarnessError(
-        `@ryagent/memory: memory llm HTTP ${response.status} ${detail.slice(0, 400)}`.trimEnd(),
-        MEMORY_LLM_CODES.http,
-      )
-    }
-    const body = (await response.json().catch(() => {
-      return undefined
-    })) as { choices?: { message?: { content?: unknown } }[] } | undefined
-    const content = normalizeContent(body?.choices?.[0]?.message?.content)
-    if (content === undefined || content.trim().length === 0) {
-      throw new HarnessError('@ryagent/memory: memory llm returned an empty response', MEMORY_LLM_CODES.empty)
-    }
-    try {
-      return JSON.parse(stripCodeFence(content)) as unknown
-    } catch (error) {
-      throw new HarnessError(
-        `@ryagent/memory: memory llm returned non-JSON content: ${content.slice(0, 200)}`,
-        MEMORY_LLM_CODES.json,
-        { cause: error },
-      )
+      // 命名空间不合法之类的问题与缺配置同义：都还没到网络就注定失败。
+      throw new HarnessError((error as Error).message, MEMORY_LLM_CODES.config, { cause: error })
     }
   }
 
   async extractFacts(input: { agentName: string; conversationText: string }): Promise<CandidateFact[]> {
-    const parsed = (await this.chatJson(
-      '你只输出合法 JSON。',
-      `${EXTRACT_PROMPT}${input.conversationText}\n\n（agent：${input.agentName}）`,
-    )) as { facts?: unknown }
+    const parsed = (await this.client.chatJson({
+      system: '你只输出合法 JSON。',
+      user: `${EXTRACT_PROMPT}${input.conversationText}\n\n（agent：${input.agentName}）`,
+    })) as { facts?: unknown }
     if (!Array.isArray(parsed.facts)) return []
     const out: CandidateFact[] = []
     for (const item of parsed.facts as Record<string, unknown>[]) {
@@ -189,10 +137,10 @@ export class ChatMemoryLlm implements MemoryLlm {
               return `${index + 1}. [${memory.id}] ${memory.content}`
             })
             .join('\n')
-    const parsed = (await this.chatJson(
-      '你只输出合法 JSON。',
-      `${DECIDE_PROMPT}${input.candidate.text}\n\n（scope=${input.candidate.scope}）\n\n相似旧记忆：\n${similarText}`,
-    )) as { operations?: Record<string, unknown>[] }
+    const parsed = (await this.client.chatJson({
+      system: '你只输出合法 JSON。',
+      user: `${DECIDE_PROMPT}${input.candidate.text}\n\n（scope=${input.candidate.scope}）\n\n相似旧记忆：\n${similarText}`,
+    })) as { operations?: Record<string, unknown>[] }
     if (!Array.isArray(parsed.operations)) return [{ action: 'NOOP' }]
     return parsed.operations
       .map((op): MemoryOperation | undefined => {
@@ -209,28 +157,4 @@ export class ChatMemoryLlm implements MemoryLlm {
         return op !== undefined
       })
   }
-}
-
-/** 供应商可能返回字符串或分段数组；统一取文本。 */
-function normalizeContent(content: unknown): string | undefined {
-  if (typeof content === 'string') return content
-  if (!Array.isArray(content)) return undefined
-  const text = content
-    .map((part) => {
-      if (typeof part === 'string') return part
-      const text = (part as { text?: unknown })?.text
-      return typeof text === 'string' ? text : ''
-    })
-    .join('')
-  return text.length === 0 ? undefined : text
-}
-
-/** 部分供应商即使被要求 JSON 也会裹 ```json 围栏。 */
-function stripCodeFence(content: string): string {
-  const trimmed = content.trim()
-  if (!trimmed.startsWith('```')) return trimmed
-  return trimmed
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/\s*```$/, '')
-    .trim()
 }

@@ -14,7 +14,9 @@
    维护约定：
      · 每个选择器只允许一处主规则，杜绝「后者覆盖前者」。
      · 边缘语言：抬起面只用阴影，贴面/输入类只用描边。二选一，不叠加
-       （描边 + 内高光 + 阴影三件套会让所有面等重、层级归零）。
+       （描边 + 内高光 + 阴影三件套会让所有面等重、层级归零）。唯一例外是
+       白底控件（.btn / .welcome-chip）：纯白面压在纯白底上时阴影等于没有，
+       那 1px --edge 才是它唯一的边缘信号。
      · 抬升层级只有三档：--shadow-1 控件 / --shadow-2 卡片 / --shadow-3 浮层。
      · 琥珀只做填充与指示；一旦当文字用就走 --amber-text（AA 档），语义色
        同理走 --success / --danger / --info，页面上不出现 token 之外的裸色值。
@@ -69,6 +71,17 @@
   --chat-col: 768px;
   --action-gutter: 118px;   /* 气泡操作条外置通道宽度 */
   --panel-banner-h: 96px;   /* 右栏顶部柔光带高度；内容区顶部留白必须同源，否则分隔线与内容错位 */
+  /* 自绘标题栏高度：必须与 electron/main.ts 的 TITLEBAR_H 一致，否则窗口按钮会压住顶栏。
+     背景色同样同源——主进程把 titleBarOverlay.color 设成 --bg-app，这里留出的顶条也是它。 */
+  --titlebar-h: 40px;
+
+  /* 层级：贴层控件 < 弹窗遮罩 < 轻提示。--z-toast 必须高于 --z-modal——新建/删除
+     agent 的失败提示恰恰发生在弹窗还开着的时候，写成两个互不相干的裸数字时
+     迟早有人把遮罩调高，提示就又被整块吃掉了。 */
+  --z-sticky: 2;    /* 右栏顶部的悬浮按钮 */
+  --z-popover: 5;   /* 输入框上方的 @ 提及菜单 */
+  --z-modal: 20;    /* .modal-mask */
+  --z-toast: 21;    /* .toast-host；宿主 pointer-events: none，不挡弹窗点击 */
 
   color-scheme: light;
 }
@@ -105,14 +118,12 @@
   --divider: rgba(69, 42, 6, .10);
   --edge: rgba(69, 42, 6, .11);
   --edge-strong: rgba(69, 42, 6, .18);
-  /* 仅供产品层（styles-product.css）跨文件引用：那边有抬起面仍写着
-     box-shadow: …, var(--hair)。本文件的抬起面一律只用 --shadow-*，
-     不再叠加这根发丝线——两个文件不要互相引用同一根「假描边」。 */
-  --hair: inset 0 0 0 1px rgba(69, 42, 6, .05);
 
-  /* 阴影 3 级 = 抬升层级 3 级；暗色主题在每级里自带一根发丝内描边 */
-  --shadow-1: 0 1px 2px rgba(69, 42, 6, .05), 0 1px 3px rgba(69, 42, 6, .07);
-  --shadow-2: 0 4px 10px rgba(69, 42, 6, .07), 0 1px 3px rgba(69, 42, 6, .05);
+  /* 阴影 3 级 = 抬升层级 3 级；暗色主题在每级里自带一根发丝内描边。
+     抬升色阶按「控件在白面上要看得见」定标：.05/.07 的棕在纯白上只有 1.07:1，
+     白底控件（.btn/.welcome-chip）等于没有边。 */
+  --shadow-1: 0 1px 2px rgba(69, 42, 6, .10), 0 1px 3px rgba(69, 42, 6, .14);
+  --shadow-2: 0 4px 12px rgba(69, 42, 6, .12), 0 1px 3px rgba(69, 42, 6, .10);
   --shadow-3: 0 18px 44px rgba(69, 42, 6, .14), 0 4px 12px rgba(69, 42, 6, .06);
 
   --danger: #DC2626;
@@ -165,7 +176,6 @@
   --divider: rgba(255, 245, 230, .08);
   --edge: rgba(255, 245, 230, .11);
   --edge-strong: rgba(255, 245, 230, .20);
-  --hair: inset 0 0 0 1px rgba(255, 245, 230, .05);   /* 同上：产品层在用，本文件不用 */
 
   /* 抬升层级里的内描边就是暗色的「边缘信号」，与阴影合成同一档 token */
   --shadow-1: 0 1px 2px rgba(0, 0, 0, .32), inset 0 0 0 1px rgba(255, 245, 230, .06);
@@ -202,7 +212,9 @@ body {
   color: var(--text-primary);
   font-family: var(--font-sans);
   font-size: var(--fs-base);
-  line-height: 20px;
+  /* 无单位：写死 20px 会压掉 CJK 字面（--fs-title 20px、--fs-display 24px 的标题
+     行盒都比字面矮），下级字号再各自按倍数走。 */
+  line-height: 1.45;
   -webkit-font-smoothing: antialiased;
   font-feature-settings: 'cv02', 'cv03', 'cv04', 'ss01';
   text-rendering: optimizeLegibility;
@@ -245,8 +257,16 @@ body.theme-animating *::after {
 /* 通用按压反馈 */
 button:active:not(:disabled) { transform: scale(var(--press-scale)); }
 
-/* ---- 4. 布局骨架：72px rail + 300px 列表 + 内容区 ---- */
-.app-shell { display: flex; height: 100vh; overflow: hidden; }
+/* ---- 4. 布局骨架：自绘标题栏 + 72px rail + 300px 列表 + 内容区 ---- */
+/* 顶条是「让出来的」：主进程用 titleBarStyle:'hidden' + titleBarOverlay 去掉了
+   Windows 原生标题栏（中性冷灰，与暖奶油内容之间是一道硬缝），窗口按钮画在这
+   40px 上。::before 只是这片空白的拖拽把手——不占 DOM，也不必在每个子元素上
+   反向声明 no-drag。 */
+.app-shell { display: flex; height: 100vh; overflow: hidden; padding-top: var(--titlebar-h); position: relative; }
+.app-shell::before {
+  content: ''; position: absolute; top: 0; left: 0; right: 0; height: var(--titlebar-h);
+  -webkit-app-region: drag;
+}
 
 .rail {
   width: 72px; flex-shrink: 0; background: var(--bg-surface);
@@ -326,7 +346,7 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
   cursor: pointer;
   transition: background var(--dur-hover) var(--ease-out);
   animation: item-in 260ms var(--ease-out) backwards;
-  animation-delay: calc(var(--i, 0) * 30ms);
+  animation-delay: calc(min(var(--i, 0), 8) * 30ms);
 }
 .conversation-item::before {
   content: ''; position: absolute; left: 1px; top: 50%; margin-top: -14px;
@@ -545,7 +565,7 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
 .chat-input-box { position: relative; flex: 1; border: none; background: transparent; }
 .chat-input-box textarea {
   width: 100%; resize: none; border: none; background: transparent;
-  padding: 8px var(--space-3); font-size: var(--fs-base); line-height: 20px;
+  padding: 8px var(--space-3); font-size: var(--fs-base); line-height: 1.43; /* ≈20px/14px */
   display: block; max-height: 148px; /* 6 行 */
 }
 .chat-input-box textarea:focus { outline: none; }
@@ -569,7 +589,7 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
   padding: var(--space-1); background: var(--bg-elevated); border: none;
   border-radius: var(--radius-lg); box-shadow: var(--shadow-3);
   backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
-  min-width: 200px; z-index: 5;
+  min-width: 200px; z-index: var(--z-popover);
   animation: menu-in var(--dur-in) var(--ease-spring);
 }
 .mention-menu li {
@@ -605,7 +625,7 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
 }
 .right-panel-toggle,
 .panel-expand-btn {
-  position: absolute; top: 12px; z-index: 2;
+  position: absolute; top: 12px; z-index: var(--z-sticky);
   width: 30px; height: 30px; border: none; border-radius: var(--radius-sm);
   background: transparent; cursor: pointer; color: var(--text-tertiary);
   display: inline-flex; align-items: center; justify-content: center;
@@ -679,16 +699,17 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
 .page-scroll-col { max-width: 960px; margin: 0 auto; }
 .section-title { color: var(--text-secondary); font-size: var(--fs-sm); font-weight: 600; margin: var(--space-2) 0 var(--space-3); }
 
-/* 按钮：控件档阴影（--shadow-1），hover 才升到卡片档 */
+/* 按钮：控件档阴影（--shadow-1），hover 才升到卡片档。
+   边框是白底控件唯一的边缘信号（--bg-elevated 与弹窗底同为纯白，抬升光影看不见）。 */
 .btn {
-  border: none; background: var(--bg-elevated);
+  border: 1px solid var(--edge); background: var(--bg-elevated);
   border-radius: var(--radius-md); padding: 8px var(--space-4); cursor: pointer;
   font-size: var(--fs-base); font-weight: 600; color: var(--text-primary);
   box-shadow: var(--shadow-1);
   transition: background var(--dur-hover) var(--ease-out), transform var(--dur-press) var(--ease-out),
-    box-shadow var(--dur-hover) var(--ease-out);
+    box-shadow var(--dur-hover) var(--ease-out), border-color var(--dur-hover) var(--ease-out);
 }
-.btn:hover { background: var(--hover-bg); box-shadow: var(--shadow-2); }
+.btn:hover { background: var(--hover-bg); border-color: var(--edge-strong); box-shadow: var(--shadow-2); }
 .btn-primary {
   background: var(--bubble-self); color: var(--amber-on-primary);
   box-shadow: var(--shadow-1);
@@ -705,7 +726,7 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
   text-align: center; box-shadow: var(--shadow-1);
   transition: transform var(--dur-hover) var(--ease-out), box-shadow var(--dur-hover) var(--ease-out);
   animation: item-in var(--dur-in) var(--ease-out) backwards;
-  animation-delay: calc(var(--i, 0) * 30ms);
+  animation-delay: calc(min(var(--i, 0), 8) * 30ms);
 }
 .contact-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-2); }
 .contact-card h3 { margin: 0; font-size: var(--fs-md); }
@@ -823,18 +844,21 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
   display: flex; justify-content: center; margin-bottom: var(--space-4);
   animation: welcome-rise 720ms var(--ease-spring) backwards;
 }
-.welcome-greeting { margin: 0; font-size: var(--fs-display); line-height: 32px; letter-spacing: -0.01em; }
+.welcome-greeting { margin: 0; font-size: var(--fs-display); line-height: 1.33; letter-spacing: -0.01em; }
 .welcome-sub { margin: var(--space-2) 0 var(--space-5); color: var(--text-secondary); font-size: var(--fs-body); }
 .welcome-chips { display: flex; flex-wrap: wrap; gap: var(--space-2); justify-content: center; margin-bottom: var(--space-8); }
 .welcome-chip {
   display: inline-flex; align-items: center; gap: 8px;
-  border: none; background: var(--bg-surface); border-radius: var(--radius-pill);
+  border: 1px solid var(--edge); background: var(--bg-surface); border-radius: var(--radius-pill);
   padding: 8px 18px; font-size: var(--fs-base); cursor: pointer; color: var(--text-primary);
   box-shadow: var(--shadow-1);
   transition: transform var(--dur-hover) var(--ease-spring), box-shadow var(--dur-hover) var(--ease-out),
-    background var(--dur-hover) var(--ease-out);
+    background var(--dur-hover) var(--ease-out), border-color var(--dur-hover) var(--ease-out);
 }
-.welcome-chip:hover { transform: translateY(-1px); box-shadow: var(--shadow-2); background: var(--bg-elevated); }
+.welcome-chip:hover {
+  transform: translateY(-1px); box-shadow: var(--shadow-2);
+  background: var(--bg-elevated); border-color: var(--edge-strong);
+}
 .welcome-chip:active { transform: scale(var(--press-scale)); }
 .welcome-recent { text-align: left; }
 .welcome-recent .section-title { text-align: center; }
@@ -887,7 +911,7 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
   display: flex; gap: var(--space-3); align-items: center;
   padding: var(--space-2) var(--space-3); min-height: 64px;
   animation: item-in var(--dur-in) var(--ease-out) backwards;
-  animation-delay: calc(var(--i, 0) * 40ms);
+  animation-delay: calc(min(var(--i, 0), 6) * 40ms);
 }
 .skeleton {
   position: relative; overflow: hidden; display: block;
@@ -899,12 +923,22 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
   transform: translateX(-100%); animation: shimmer 1.8s var(--ease-out) infinite;
 }
 
+/* 面板骨架（Skeleton.tsx 的 PanelSkeleton）：记忆/手册是「徽章 + 正文」的列表形状 */
+.panel-skeleton { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-1) 0; }
+.panel-skeleton-row {
+  display: flex; align-items: center; gap: var(--space-2);
+  animation: item-in var(--dur-in) var(--ease-out) backwards;
+  animation-delay: calc(min(var(--i, 0), 8) * 30ms);
+}
+.panel-skeleton-kind { width: 54px; height: 14px; border-radius: var(--radius-pill); flex-shrink: 0; }
+.panel-skeleton-line { height: 14px; }
+
 /* 弹窗 */
 .modal-mask {
   position: fixed; inset: 0;
   background: color-mix(in srgb, var(--bg-app) 62%, rgba(20, 12, 4, .5));
   backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
-  display: flex; align-items: center; justify-content: center; z-index: 20;
+  display: flex; align-items: center; justify-content: center; z-index: var(--z-modal);
   animation: fade-in 160ms var(--ease-out);
 }
 .modal {
@@ -987,7 +1021,7 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
   box-shadow: var(--shadow-1);
   transition: transform var(--dur-hover) var(--ease-out), box-shadow var(--dur-hover) var(--ease-out);
   animation: item-in var(--dur-in) var(--ease-out) backwards;
-  animation-delay: calc(var(--i, 0) * 30ms);
+  animation-delay: calc(min(var(--i, 0), 8) * 30ms);
 }
 .template-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-2); }
 .template-card strong { font-size: var(--fs-base); }
@@ -1041,7 +1075,10 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
 
 /* ---- 6. 动效体系 ---- */
 
-/* 6.1 进场 */
+/* 6.1 进场
+   列表 stagger 一律封顶（calc(min(var(--i, 0), N) * step)）：backwards 填充下第 N 项在
+   自己的延迟结束前是全透明的，不封顶时长就随列表长度线性涨——60 条会话的末项要等
+   1.8s 才出现。封顶 8 × 30ms / 6 × 40ms，总时长恒为 240ms。 */
 @keyframes msg-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes fade-rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
@@ -1118,7 +1155,7 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
   animation: fade-out var(--dur-leave) var(--ease-in) forwards;
   pointer-events: none;
 }
-/* 5 个已接线组件的退场态（useLeaving.ts 统一驱动，勿再手写计时器） */
+/* 形状各异的退场态（useLeaving.ts 统一驱动，勿再手写计时器）；其余走上面的通用淡出 */
 .mention-menu.is-leaving { animation: menu-out var(--dur-leave) var(--ease-in) forwards; }
 .jump-latest.is-leaving { animation: menu-out var(--dur-leave) var(--ease-in) forwards; }
 .conn-banner.is-leaving { animation: banner-out var(--dur-leave) var(--ease-in) forwards; }
@@ -1165,6 +1202,8 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
 .welcome-chip:focus-visible,
 .welcome-recent-item:focus-visible,
 .avatar-picker button:focus-visible,
+.chat-hint-btn:focus-visible,
+.toast-close:focus-visible,
 .modal-header button:focus-visible {
   outline: 2px solid var(--focus-outline);
   outline-offset: 2px;

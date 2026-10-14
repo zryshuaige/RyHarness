@@ -1,5 +1,5 @@
-import { memo, useMemo, useState } from 'react'
-import type { AgentDef, ApiClient, Conversation } from '../api.ts'
+import { memo, useEffect, useMemo, useState } from 'react'
+import type { AgentDef, ApiClient, Conversation, UsageTotals } from '../api.ts'
 import { toolLabel } from '../lib/tool-labels.ts'
 import type { ChatStore, RelayItem } from '../store.ts'
 import { useChat } from '../store.ts'
@@ -87,6 +87,12 @@ export function RightPanel({
             onShowPlaybook={setPlaybookFor}
           />
         )}
+        {/* 用量一行带过：GET /api/conversations/:id 早就把 usage 算好送回来了，
+            此前整个界面没有任何地方消费它——聊了多久、花了多少只有服务端知道。
+            刻意排在最后、只占一行，统计不该盖过内容本身。 */}
+        {conversation !== undefined && (
+          <ConversationUsage api={api} conversationId={conversation.id} updatedAt={conversation.updatedAt} />
+        )}
       </div>
       {playbookFor !== undefined && (
         <PlaybookPanel
@@ -112,6 +118,55 @@ export function RightPanel({
     </aside>
   )
 }
+
+/** token 缩写：千位一位小数，1k 以下原样。 */
+function formatTokens(value: number): string {
+  if (!Number.isFinite(value) || value < 1000) return String(Math.max(0, Math.round(value)))
+  if (value < 1_000_000) return `${(value / 1000).toFixed(1)}k`
+  return `${(value / 1_000_000).toFixed(1)}M`
+}
+
+/**
+ * 本会话累计 token 用量。数据来自 GET /api/conversations/:id 的 usage（服务端对
+ * 各条消息求和），随会话 updatedAt 变化重取；还没有任何一轮用量时不占那一行。
+ */
+const ConversationUsage = memo(function ConversationUsage({
+  api,
+  conversationId,
+  updatedAt,
+}: {
+  api: ApiClient
+  conversationId: string
+  /** 会话更新时间：每有新消息就重取一次，统计不滞后。 */
+  updatedAt: number
+}) {
+  const [usage, setUsage] = useState<UsageTotals | undefined>(undefined)
+  useEffect(() => {
+    let alive = true
+    api
+      .conversationDetail(conversationId)
+      .then(({ usage: totals }) => {
+        if (alive) setUsage(totals)
+      })
+      .catch(() => {
+        // 读不到就当没有：统计缺失不该在右栏报错，更不该挡住其它信息。
+        if (alive) setUsage(undefined)
+      })
+    return () => {
+      alive = false
+    }
+  }, [api, conversationId, updatedAt])
+  if (usage === undefined || usage.messages === 0) return null
+  return (
+    <dl className="profile-fields">
+      <dt>本会话用量</dt>
+      <dd>
+        累计 {formatTokens(usage.totalTokens)} tokens（输入 {formatTokens(usage.inputTokens)} · 输出{' '}
+        {formatTokens(usage.outputTokens)}）
+      </dd>
+    </dl>
+  )
+})
 
 const ArtifactList = memo(function ArtifactList({
   artifacts,

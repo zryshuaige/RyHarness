@@ -51,3 +51,9 @@ jobs:
         # 根 vitest.config.ts 是唯一 runner：包级 test 脚本并不存在，
         # 在这里写 `pnpm test` 会依赖根脚本转发，等于绕一圈。
         run: npx vitest run
+
+      - name: Coverage
+        # 根 vitest.config.ts 刻意不设 thresholds，这一轮只统计不拦截，
+        # 因此它永远不会让 CI 变红。单独一轮而不是复用上面的 Test：
+        # coverage 需要重新统计执行数据。
+        run: npx vitest run --coverage
