@@ -15,7 +15,14 @@ import { Context } from '@ryagent/cordis'
 import { ChatEvolveLlm, EvolveService, seedIfEmpty } from '@ryagent/evolve'
 import LlmRuntime from '@ryagent/llm'
 import { apply as applyOpenAi } from '@ryagent/llm-openai'
-import { ChatMemoryLlm, MemoryService, NullEmbeddings, SiliconFlowEmbeddings } from '@ryagent/memory'
+import {
+  ChatMemoryLlm,
+  DEFAULT_EMBEDDING_MODEL,
+  MemoryService,
+  NullEmbeddings,
+  OpenAiCompatibleEmbeddings,
+} from '@ryagent/memory'
+import type { RunContext, StoredUsage } from '@ryagent/session'
 import { SessionCoordinator, SessionStore } from '@ryagent/session'
 import { ARTIFACTS_DIR, fileProduce, fsRead, fsWrite, guessMime, shellExec } from '@ryagent/tools'
 import type { WebSocket as WsSocket } from 'ws'
@@ -23,6 +30,7 @@ import { WebSocketServer } from 'ws'
 import { EventHub } from './bus.ts'
 import type { ProvidersConfigFile } from './config.ts'
 import {
+  DEFAULT_PROVIDER_BASE_URL,
   loadApiKeys,
   loadProvidersConfig,
   mergeApiKeys,
@@ -132,15 +140,37 @@ export interface ServerOptions {
  */
 function resolveSidecarLlm(
   providers: ProvidersConfigFile,
-): { apiKey: string; baseURL: string; model: string } | undefined {
-  for (const provider of Object.values(providers.providers)) {
+): { providerId: string; apiKey: string; baseURL: string; model: string } | undefined {
+  for (const [providerId, provider] of Object.entries(providers.providers)) {
     const apiKey = provider.apiKey ?? (provider.apiKeyEnv === undefined ? undefined : process.env[provider.apiKeyEnv])
     if (apiKey === undefined || apiKey.length === 0) continue
     const model = provider.models[0]?.id
     if (model === undefined) continue
-    return { apiKey, baseURL: provider.baseURL, model }
+    return { providerId, apiKey, baseURL: provider.baseURL, model }
   }
   return undefined
+}
+
+/**
+ * 解析长期记忆的向量模型：baseURL/凭据与生成侧同一个供应商（用户换服务商时
+ * 记忆跟着换），模型 id 必须显式——向量模型不通用，猜一个错的会让余弦在
+ * 跨模型空间里静默塌成 -1，检索质量无声下降。只有命中的供应商就是
+ * SiliconFlow 时才套用它的默认向量模型，其余情况退回纯 FTS5。
+ */
+function resolveSidecarEmbedding(
+  providers: ProvidersConfigFile,
+): { apiKey: string; baseURL: string; model: string } | undefined {
+  const configured = providers.embedding
+  if (configured !== undefined) {
+    const provider = providers.providers[configured.providerId]
+    const apiKey =
+      provider?.apiKey ?? (provider?.apiKeyEnv === undefined ? undefined : process.env[provider.apiKeyEnv])
+    if (provider === undefined || apiKey === undefined || apiKey.length === 0) return undefined
+    return { apiKey, baseURL: provider.baseURL, model: configured.model }
+  }
+  const sidecar = resolveSidecarLlm(providers)
+  if (sidecar === undefined || !sidecar.baseURL.startsWith(DEFAULT_PROVIDER_BASE_URL)) return undefined
+  return { apiKey: sidecar.apiKey, baseURL: sidecar.baseURL, model: DEFAULT_EMBEDDING_MODEL }
 }
 
 /** 按环境构建默认进化服务。 */
@@ -155,9 +185,11 @@ function createDefaultEvolve(dataDir: string, providers: ProvidersConfigFile): E
 /** 按环境构建默认记忆服务。 */
 function createDefaultMemory(dataDir: string, providers: ProvidersConfigFile): MemoryService {
   const llmConfig = resolveSidecarLlm(providers)
+  const embeddingConfig = resolveSidecarEmbedding(providers)
   return new MemoryService({
     dbPath: join(dataDir, 'ryagent.db'),
-    embeddings: new SiliconFlowEmbeddings({ apiKey: process.env.SILICONFLOW_API_KEY ?? '' }),
+    embeddings:
+      embeddingConfig === undefined ? new NullEmbeddings() : new OpenAiCompatibleEmbeddings(embeddingConfig),
     llm: llmConfig === undefined ? undefined : new ChatMemoryLlm(llmConfig),
   })
 }
@@ -238,7 +270,9 @@ export class RyAgentServer {
           return [...spaces]
         },
         listActiveEmbeddings: (spaceId) => {
-          return memoryService.store.listActiveEmbeddings(spaceId).map((row) => {
+          // 按当前 embedding 模型过滤：跨模型的向量同维也能算出 >0.95，
+          // 混在一起判重会把毫不相干的记忆当成重复软删。
+          return memoryService.store.listActiveEmbeddings(spaceId, memoryService.embeddingModel).map((row) => {
             return {
               id: row.id,
               content: row.content,
@@ -457,6 +491,10 @@ export class RyAgentServer {
       // 白名单校验失败抛 HttpRequestError，由 dispatch 统一回 400。
       const overrides = agentFieldOverrides(body)
       try {
+        // 不写死供应商与模型：新建 agent 默认跟随配置里第一个已配凭据的
+        // 供应商，写死 SiliconFlow + DeepSeek 会让"配置了别家服务商"的
+        // 用户建出来的 agent 直接不可用。
+        const fallback = resolveSidecarLlm(this.providers)
         const definition: AgentDefinition =
           templateKey !== undefined
             ? instantiateTemplate(templateKey, overrides)
@@ -464,8 +502,8 @@ export class RyAgentServer {
                 id: strField(body, 'id') ?? crypto.randomUUID(),
                 name: overrides.name ?? '未命名 Agent',
                 systemPrompt: overrides.systemPrompt ?? '你是一个乐于助人的助手。',
-                provider: overrides.provider ?? 'siliconflow',
-                model: overrides.model ?? 'deepseek-ai/DeepSeek-V3',
+                provider: overrides.provider ?? fallback?.providerId ?? '',
+                model: overrides.model ?? fallback?.model ?? '',
                 tools: overrides.tools ?? [],
               }
         const stored = store.upsertAgent({ ...definition, isBuiltin: false })
@@ -502,8 +540,9 @@ export class RyAgentServer {
         json(res, 409, { error: `builtin agent "${existing.id}" cannot be deleted` })
         return
       }
-      store.deleteAgent(existing.id)
-      json(res, 200, { deleted: existing.id })
+      // 级联（记忆、playbook、教训、反馈、会话成员）由 store 在一次事务里完成，
+      // 回执带上各处的清理条数，便于确认没有留下孤儿行。
+      json(res, 200, { deleted: existing.id, removed: store.deleteAgent(existing.id) })
     })
 
     router.get('/api/agent-templates', async (_req, res) => {
@@ -677,9 +716,11 @@ export class RyAgentServer {
     })
 
     router.get('/api/conversations/:id', async (req, res) => {
-      const conversation = store.getConversation(req.params.id as string)
+      const conversationId = req.params.id as string
+      const conversation = store.getConversation(conversationId)
+      // 会话级累计 token：从各条消息的 usage 求和，成本随历史一起可查。
       if (conversation === undefined) json(res, 404, { error: 'conversation not found' })
-      else json(res, 200, { conversation })
+      else json(res, 200, { conversation, usage: store.conversationUsage(conversationId) })
     })
 
     router.delete('/api/conversations/:id', async (req, res) => {
@@ -861,7 +902,15 @@ export class RyAgentServer {
     // 每轮一个 AbortController：取消端点通过它中止 LLM 流与工具执行。
     const controller = new AbortController()
     this.activeTurns.set(conversation.id, controller)
-    const runContext = { workspaceRoot: this.workspaceRoot, signal: controller.signal }
+    // 协调器在每次模型调用出账后回调；记下本轮累计，done 事件带给渲染层。
+    let turnUsage: StoredUsage | undefined
+    const runContext: RunContext = {
+      workspaceRoot: this.workspaceRoot,
+      signal: controller.signal,
+      onUsage: (report) => {
+        turnUsage = report.turnTotal
+      },
+    }
     try {
       if (conversation.kind === 'direct') {
         const agentId = conversation.memberAgentIds[0] as string
@@ -914,6 +963,7 @@ export class RyAgentServer {
                 conversationId: conversation.id,
                 senderId: agentId,
                 turnIndex: store.nextTurnIndex(conversation.id) - 1,
+                ...(turnUsage === undefined ? {} : { usage: turnUsage }),
               })
               break
             case 'error':
@@ -996,6 +1046,7 @@ export class RyAgentServer {
               conversationId: conversation.id,
               senderId: event.agentId,
               turnIndex: store.nextTurnIndex(conversation.id) - 1,
+              ...(turnUsage === undefined ? {} : { usage: turnUsage }),
             })
             break
           case 'error':

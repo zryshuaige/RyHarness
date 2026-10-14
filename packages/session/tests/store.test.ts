@@ -204,6 +204,55 @@ describe('SessionStore', () => {
     db.close()
   })
 
+  it('deleteAgent 级联清理记忆、playbook、教训与反馈，并摘出会话成员身份', async () => {
+    const { MemoryStore, SHARED_SPACE } = await import('@ryagent/memory')
+    const { EvolveStore } = await import('@ryagent/evolve')
+    const path = `${process.env.TEMP ?? '/tmp'}/ryagent-cascade-${Date.now()}.db`
+    const store = new SessionStore(path)
+    // 记忆/进化与 session 共用同一个 SQLite 文件，各自持有一个连接。
+    const memories = new MemoryStore(path)
+    const evolve = new EvolveStore(path)
+    try {
+      store.upsertAgent(sampleAgent('a1'))
+      store.upsertAgent(sampleAgent('a2'))
+      const group = store.createConversation({
+        kind: 'group',
+        memberAgentIds: ['a1', 'a2'],
+        dispatcherAgentId: 'a1',
+      })
+      memories.insert({ agentId: 'a1', kind: 'fact', content: 'a1 的私有记忆' })
+      memories.insert({ agentId: SHARED_SPACE, kind: 'profile', content: '用户是产品经理' })
+      memories.insert({ agentId: 'a2', kind: 'fact', content: 'a2 的私有记忆' })
+      evolve.insertEntry({ agentId: 'a1', section: 'strategy', content: '先读后写', source: 'seed' })
+      evolve.insertReflection({ agentId: 'a1', lesson: '写文件前先确认目录' })
+      evolve.recordFeedback({ agentId: 'a1', conversationId: group.id, turnIndex: 0, signal: 'thumb_up' })
+
+      const removed = store.deleteAgent('a1')
+      expect(store.getAgent('a1')).toBeUndefined()
+      expect(memories.listActiveForAgent('a1')).toHaveLength(0)
+      expect(memories.listActiveForAgent('a2')).toHaveLength(1)
+      expect(memories.listSharedProfile()).toHaveLength(1) // 共享画像属于用户，不随 agent 删除
+      expect(evolve.listActiveForCompile('a1')).toHaveLength(0)
+      expect(evolve.listPendingReflections('a1')).toHaveLength(0)
+      const conversation = store.getConversation(group.id)!
+      expect(conversation.memberAgentIds).toEqual(['a2'])
+      expect(conversation.dispatcherAgentId).toBeUndefined()
+      expect(removed).toMatchObject({ conversationsUpdated: 1, memories: 1, playbookEntries: 1, reflections: 1 })
+    } finally {
+      memories.close()
+      evolve.close()
+      store.close()
+      for (const suffix of ['', '-wal', '-shm']) rmSync(`${path}${suffix}`, { force: true })
+    }
+  })
+
+  it('deleteAgent 在记忆/进化子系统未启用时不报错（表还不存在）', () => {
+    const store = new SessionStore(':memory:')
+    store.upsertAgent(sampleAgent('lonely'))
+    expect(store.deleteAgent('lonely')).toMatchObject({ conversationsUpdated: 0, memories: 0 })
+    store.close()
+  })
+
   it('persists to a file and reloads (file-backed databases)', () => {
     const path = `${process.env.TEMP ?? '/tmp'}/ryagent-session-test-${Date.now()}.db`
     const store = new SessionStore(path)

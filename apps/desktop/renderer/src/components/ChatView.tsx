@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AgentDef, ApiClient, Conversation, MessageRow } from '../api.ts'
 import { messageText } from '../api.ts'
 import { toast } from '../lib/toast.ts'
+import { LEAVE_MS, useLeaving } from '../lib/useLeaving.ts'
 import type { ChatStore, UiMessage } from '../store.ts'
 import { useChat } from '../store.ts'
 import { Cat } from './Cat.tsx'
@@ -107,6 +108,12 @@ export function ChatView({
   const stickToBottom = useRef(true)
   const restoreScroll = useRef<{ prevHeight: number; prevTop: number } | null>(null)
   const [catMood, setCatMood] = useState<'idle' | 'thinking' | 'happy'>('idle')
+  /**
+   * 用户中止过当前这轮。store 只在 message-done 里清 typing，而中止路径不再有
+   * message-done，所以"生成中"的收尾只能在 UI 侧做：点停止即刻复位，ABORTED 事件
+   * 到达时兜底确认，新一轮开始时清掉。
+   */
+  const [stopped, setStopped] = useState(false)
 
   const nameOf = useCallback(
     (id: string): string => {
@@ -118,11 +125,22 @@ export function ChatView({
     },
     [agents],
   )
-  const agentById = (id: string): AgentDef | undefined => {
-    return agents.find((a) => {
-      return a.id === id
-    })
-  }
+  const agentById = useCallback(
+    (id: string): AgentDef | undefined => {
+      return agents.find((a) => {
+        return a.id === id
+      })
+    },
+    [agents],
+  )
+  /** 稳定引用：RelayChain 是 memo 组件，每次新建闭包会让它每帧重渲染。 */
+  const avatarOf = useCallback(
+    (id: string): { avatarKey?: string; name: string } => {
+      const agent = agentById(id)
+      return { avatarKey: agent?.avatar, name: agent?.name ?? id }
+    },
+    [agentById],
+  )
 
   /** 断线缺口/重连后重拉最新一页历史 + 调度事件，重置流式状态。 */
   const reloadLatest = useCallback((): void => {
@@ -155,6 +173,7 @@ export function ChatView({
     setRenderCap(RENDER_CAP)
     setConn('open')
     setConnDismissed(false)
+    setStopped(false)
     stickToBottom.current = true
     api
       .messages(conversation.id, { limit: PAGE_SIZE })
@@ -182,6 +201,15 @@ export function ChatView({
     const unsubscribe = api.subscribe(
       conversation.id,
       (event) => {
+        if (event.type === 'message-start' || event.type === 'queued') setStopped(false)
+        if (event.type === 'error' && event.code === 'ABORTED') {
+          // 取消不是故障：中止后服务端只补一条 ABORTED 错误、不再发 message-done，
+          // 若照常交给 store，输入区会永远停在"生成中"、光标一直闪，而且红条
+          // 会把用户的主动停止说成系统出错。这里就地收口：复位 + 提示"已停止"。
+          store.clearError()
+          setStopped(true)
+          return
+        }
         store.apply(event)
       },
       {
@@ -293,6 +321,7 @@ export function ChatView({
     // turnIndex 基于全量消息（历史 + 流式快照），与服务端口径一致。
     store.addUserMessage(text, nextTurnIndex([...history, ...snapshot.messages]))
     stickToBottom.current = true
+    setStopped(false)
     try {
       await api.postMessage(conversation.id, text)
     } catch (error) {
@@ -305,7 +334,14 @@ export function ChatView({
     }
   }
 
-  const allMessages = [...history, ...snapshot.messages]
+  // 中止后 store 里的流式消息永远停在 done=false（没有 message-done），光标会一直闪。
+  // 冻结成"已完结"再渲染：只在中止那一次分配数组，正常的流式路径零开销。
+  const streamed = stopped
+    ? snapshot.messages.map((message) => {
+        return message.done ? message : { ...message, done: true }
+      })
+    : snapshot.messages
+  const allMessages = [...history, ...streamed]
   // 渲染上限随「加载更早」同步放宽（renderCap 初始 RENDER_CAP，每次翻页 +PAGE_SIZE）。
   const visibleMessages = allMessages.length > renderCap ? allMessages.slice(-renderCap) : allMessages
   const allMessagesRef = useRef<UiMessage[]>([])
@@ -360,7 +396,7 @@ export function ChatView({
           toast.error(`反馈没送出去：${error instanceof Error ? error.message : String(error)}`)
         })
     },
-    [api, conversation.id],
+    [api, conversation.id, agentById],
   )
 
   // 按 turn 分组；turn 间插时间分隔；同 sender 相邻收紧。
@@ -381,6 +417,16 @@ export function ChatView({
     return id !== 'user'
   })
 
+  // 退场接线：提示条/浮层消失时先播 styles.css 的退场动画再卸载。
+  // 中止后 typing 归零（输入区已经复位），这里随之退场；同时补一条"已停止"说明，
+  // 让用户知道是自己点的停止，而不是系统出错。
+  const typingNames = stopped ? [] : typingAgents.map(nameOf)
+  const connBanner = useLeaving(LEAVE_MS, conn === 'reconnecting' && !connDismissed ? true : undefined)
+  const typingLine = useLeaving(LEAVE_MS, typingNames.length > 0 ? typingNames : undefined)
+  const stoppedHint = useLeaving(LEAVE_MS, stopped ? '已停止生成' : undefined)
+  const errorBanner = useLeaving(LEAVE_MS, snapshot.error)
+  const jumpButton = useLeaving(LEAVE_MS, showJump ? true : undefined)
+
   return (
     <section className="chat-view">
       <header className="chat-header">
@@ -391,8 +437,8 @@ export function ChatView({
         </div>
       </header>
 
-      {conn === 'reconnecting' && !connDismissed && (
-        <p className="conn-banner" role="status">
+      {connBanner.shown !== undefined && (
+        <p ref={connBanner.ref} className={connBanner.leaving ? 'conn-banner is-leaving' : 'conn-banner'} role="status">
           <Icon name="alert" size={14} /> 连接已断开，正在重连…
           <button
             type="button"
@@ -439,15 +485,7 @@ export function ChatView({
           {turns.map((turn) => (
             <div key={turn.turnIndex} className="turn-block">
               {turn.time !== undefined && <div className="turn-time">{formatTime(turn.time)}</div>}
-              <RelayChain
-                relays={snapshot.relays}
-                turnIndex={turn.turnIndex}
-                nameOf={nameOf}
-                avatarOf={(id) => {
-                  const agent = agentById(id)
-                  return { avatarKey: agent?.avatar, name: agent?.name ?? id }
-                }}
-              />
+              <RelayChain relays={snapshot.relays} turnIndex={turn.turnIndex} nameOf={nameOf} avatarOf={avatarOf} />
               {turn.messages.map((message, index) => (
                 <MessageBubble
                   key={message.key}
@@ -456,20 +494,31 @@ export function ChatView({
                   agent={agentById(message.senderId)}
                   tight={index > 0 && turn.messages[index - 1]?.senderId === message.senderId}
                   firstOfGroup={index === 0 || turn.messages[index - 1]?.senderId !== message.senderId}
+                  // 历史消息一次性 150 条同时淡入像掉帧，只有本次会话新到的才播进场。
+                  animated={!message.key.startsWith('hist:')}
                   onFeedback={onFeedback}
                 />
               ))}
             </div>
           ))}
-          {snapshot.error !== undefined && (
-            <p className="error-banner">
-              <Icon name="alert" size={14} /> [{snapshot.error.code}] {snapshot.error.message}
+          {errorBanner.shown !== undefined && (
+            <p ref={errorBanner.ref} className={errorBanner.leaving ? 'error-banner is-leaving' : 'error-banner'}>
+              <Icon name="alert" size={14} /> [{errorBanner.shown.code}] {errorBanner.shown.message}
             </p>
           )}
-          {typingAgents.length > 0 && (
-            <p className="typing-indicator">
-              {typingAgents.map(nameOf).join('、')}
+          {typingLine.shown !== undefined && (
+            <p ref={typingLine.ref} className={typingLine.leaving ? 'typing-indicator is-leaving' : 'typing-indicator'}>
+              {typingLine.shown.join('、')}
               <TypingDots />
+            </p>
+          )}
+          {stoppedHint.shown !== undefined && (
+            <p
+              ref={stoppedHint.ref}
+              className={stoppedHint.leaving ? 'stopped-hint is-leaving' : 'stopped-hint'}
+              role="status"
+            >
+              <Icon name="x" size={12} /> {stoppedHint.shown}
             </p>
           )}
           {historyLoaded && allMessages.length === 0 && (
@@ -482,14 +531,22 @@ export function ChatView({
             </div>
           )}
         </div>
-        {showJump && (
-          <button type="button" className="jump-latest" onClick={jumpToLatest}>
+        {jumpButton.shown !== undefined && (
+          <button
+            type="button"
+            ref={jumpButton.ref}
+            className={jumpButton.leaving ? 'jump-latest is-leaving' : 'jump-latest'}
+            onClick={jumpToLatest}
+          >
             <Icon name="chevron-right" size={12} className="jump-icon" /> 跳至最新
           </button>
         )}
       </div>
 
       <div className="chat-input-wrap">
+        {/* toast 挂在输入区上沿（绝对定位），composer 变高时不会被压住。
+            没有会话在看的页面由 App 壳挂同一个宿主。 */}
+        <ToastHost />
         <div className="chat-input-col">
           {snapshot.queueing && (
             <p className="queue-hint">
@@ -504,8 +561,11 @@ export function ChatView({
                 void send(text)
               }}
               disabled={snapshot.queueing}
-              streaming={Object.keys(snapshot.typing).length > 0}
+              streaming={!stopped && Object.keys(snapshot.typing).length > 0}
               onStop={() => {
+                // 先复位再发请求：中止确认要等服务端回 ABORTED 才到，那之前界面不能
+                // 还停在"生成中"——这正是此前"点了停止像卡死"的观感来源。
+                setStopped(true)
                 void api.cancelTurn(conversation.id).catch(() => {
                   // 停止失败不该打扰用户：服务端本来就会在 turn 结束时清理。
                 })
@@ -514,7 +574,6 @@ export function ChatView({
           </div>
         </div>
       </div>
-      <ToastHost />
     </section>
   )
 }

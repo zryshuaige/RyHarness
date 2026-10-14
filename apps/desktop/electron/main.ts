@@ -6,13 +6,16 @@
  * 启动顺序：**窗口先行**——whenReady 立刻建窗并开始加载渲染层（先显示骨架），
  * @ryagent/server（WAL 恢复/迁移，慢盘 50–200ms+）并行启动，就绪后把 API 地址
  * 推给渲染层。菜单栏 autoHide（macOS 保留应用菜单）。
+ *
+ * 产品名与版本不在代码里写死：一律经 readAppMeta() 从应用自己的 package.json 读，
+ * 因此开发运行（`electron .`）与安装版显示的是同一个名字和版本号。
  */
 
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { RyAgentServer } from '@ryagent/server'
-import { app, BrowserWindow, dialog, Menu, screen } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, type MenuItemConstructorOptions, screen, shell } from 'electron'
 import { runCapture } from './capture.ts'
 import { RENDERER_MOUNT, RendererAssets } from './renderer-assets.ts'
 
@@ -48,10 +51,106 @@ function loadDotEnvIntoProcess(): void {
 
 loadDotEnvIntoProcess()
 
-/** 平台菜单：macOS 保留系统约定的应用菜单；其他平台整条隐藏（autoHideMenuBar）。 */
-function applyPlatformMenu(): void {
-  if (process.platform !== 'darwin') return
-  Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }]))
+/**
+ * 产品名与版本：运行时从**应用自己的** package.json 读，不在代码里写死。
+ * app.getAppPath() 打包后指向 resources/app.asar（Electron 的 fs 能透明读 asar），
+ * 开发态指向 apps/desktop——两边是同一份文件，版本号因此只有一个来源，
+ * 改版本只需要改 package.json，不必同步改菜单文案与关于框。
+ */
+function readAppMeta(): { name: string; version: string } {
+  try {
+    const raw = readFileSync(join(app.getAppPath(), 'package.json'), 'utf8')
+    const pkg = JSON.parse(raw) as { productName?: string; name?: string; version?: string }
+    return {
+      name: pkg.productName ?? pkg.name ?? 'RyAgent',
+      version: pkg.version ?? app.getVersion(),
+    }
+  } catch {
+    // 读不到就退回 Electron 自己的取值：关于框只是信息展示，不该把启动带崩。
+    return { name: 'RyAgent', version: app.getVersion() }
+  }
+}
+
+/** 「关于」对话框。开发运行额外标注，避免有人拿开发构建当成发布版报障。 */
+function showAbout(): void {
+  const meta = readAppMeta()
+  dialog.showMessageBox({
+    type: 'info',
+    title: `关于 ${meta.name}`,
+    message: `${meta.name} ${meta.version}`,
+    detail: [
+      app.isPackaged ? '' : '开发模式运行（非发布构建）。',
+      '单机多 Agent 即时通讯桌面应用。',
+      'MIT License；第三方资产署名见安装目录 resources/NOTICE.md。',
+    ]
+      .filter((line) => line.length > 0)
+      .join('\n'),
+    buttons: ['好'],
+  })
+}
+
+/**
+ * 应用菜单：macOS 走系统约定的「应用 / 编辑 / 视图 / 窗口」；Windows 与 Linux
+ * 同样建菜单，但 BrowserWindow 的 autoHideMenuBar 让它默认收起（Alt 唤出）——
+ * 保留「关于 / 重新加载 / 开发者工具 / 退出」四个入口，退出走 app.quit()
+ * 触发 before-quit 的后端 flush，不给「数据没落盘就关窗」留口子。
+ */
+function applyAppMenu(): void {
+  const isMac = process.platform === 'darwin'
+  const meta = readAppMeta()
+  const aboutItem: MenuItemConstructorOptions = { label: `关于 ${meta.name}`, click: showAbout }
+  const quitItem: MenuItemConstructorOptions = { role: 'quit', label: `退出 ${meta.name}` }
+  const windowItems: MenuItemConstructorOptions[] = [
+    { role: 'minimize', label: '最小化' },
+    { role: 'zoom', label: '缩放' },
+    { role: 'close', label: '关闭窗口' },
+  ]
+  if (isMac) windowItems.push({ role: 'front', label: '前置全部窗口' })
+
+  const template: MenuItemConstructorOptions[] = isMac
+    ? [
+        {
+          label: meta.name,
+          submenu: [
+            aboutItem,
+            { type: 'separator' },
+            { role: 'services', label: '服务' },
+            { type: 'separator' },
+            { role: 'hide', label: `隐藏 ${meta.name}` },
+            { role: 'hideOthers', label: '隐藏其他' },
+            { role: 'unhide', label: '全部显示' },
+            { type: 'separator' },
+            quitItem,
+          ],
+        },
+      ]
+    : [{ label: '文件', submenu: [aboutItem, { type: 'separator' }, quitItem] }]
+  template.push(
+    {
+      label: '编辑',
+      submenu: [
+        { role: 'undo', label: '撤销' },
+        { role: 'redo', label: '重做' },
+        { type: 'separator' },
+        { role: 'cut', label: '剪切' },
+        { role: 'copy', label: '复制' },
+        { role: 'paste', label: '粘贴' },
+        { role: 'selectAll', label: '全选' },
+      ],
+    },
+    {
+      label: '视图',
+      submenu: [
+        { role: 'reload', label: '重新加载' },
+        { role: 'forceReload', label: '强制重新加载' },
+        { type: 'separator' },
+        { role: 'toggleDevTools', label: '开发者工具' },
+        { role: 'togglefullscreen', label: '全屏' },
+      ],
+    },
+    { label: '窗口', submenu: windowItems },
+  )
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }
 
 /**
@@ -61,6 +160,16 @@ function applyPlatformMenu(): void {
 /** 窗口最小尺寸（DIP）；与设计规范的窄屏下限一致。 */
 const MIN_WIDTH = 1024
 const MIN_HEIGHT = 680
+
+/**
+ * 「打开工作区目录」的唯一通道：渲染层拿不到 Node 权限，只能经 preload 调到这里。
+ * 目录来自本机后端（GET /api/workspace），不是网页传来的任意 URL，但仍做形状校验，
+ * 免得渲染层被注入了非字符串就把 shell 叫歪。shell.openPath 成功返回空串。
+ */
+ipcMain.handle('ryagent:open-path', (_event, targetPath: unknown) => {
+  if (typeof targetPath !== 'string' || targetPath.length === 0) return 'invalid path'
+  return shell.openPath(targetPath)
+})
 
 /**
  * 开窗尺寸与位置：设计稿按 1320×840，但 150% 缩放的小屏工作区可能只有 1100 DIP 宽，
@@ -109,7 +218,7 @@ function createWindow(pageUrl: string): BrowserWindow {
     icon: join(here, '../assets/icon-256.png'),
     // 首帧画完再显示，避免加载期的白/空窗口闪烁（加载期的骨架由渲染层自己画）。
     show: false,
-    // 隐藏 File/Edit/View/Window/Help 原生菜单栏（macOS 由 applyPlatformMenu 保留）。
+    // Windows/Linux 默认收起菜单（Alt 唤出），macOS 保留常驻应用菜单。
     autoHideMenuBar: true,
     webPreferences: {
       preload: join(here, 'preload.mjs'),
@@ -171,7 +280,7 @@ async function main(): Promise<void> {
   }
 
   await app.whenReady()
-  applyPlatformMenu()
+  applyAppMenu()
 
   const devServerUrl = process.env.RYAGENT_DEV_SERVER_URL
   // 渲染层资源服务：与后端无关，先就绪，窗口才能立刻开始加载。

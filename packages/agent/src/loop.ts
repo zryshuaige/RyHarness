@@ -11,7 +11,8 @@
  * 二者较大值而非之和）；同一条 assistant 消息里的多个工具调用并行执行，
  * 但事件与 tool 消息一律按模型给出的 call 顺序提交，保证历史确定。传入
  * `signal` 后，循环在每个边界检查取消，不再发起新的模型调用、不再执行后续
- * 工具，并以 {@link AbortedError} 结束。
+ * 工具：已推给前端的半截回复先以 done 收尾并落库（否则刷新即消失），随后
+ * 以 {@link AbortedError} 结束。
  *
  * 与上游 dsh-agent-loop 的关系：只保留"循环 + 工具调度"内核，不带
  * session 发布、sandbox 执行器与审批生态（M0 决策：agent 循环自写精简版）。
@@ -20,16 +21,25 @@
 
 import type {
   AssistantMessage,
+  ContentBlock,
   FinishReason,
   GenerateOptions,
   LlmRuntime,
   Message,
+  TokenUsage,
   ToolCallBlock,
   ToolCallId,
   ToolSchema,
 } from '@ryagent/llm'
-import { BlockAssembler, createToolResultMessage, createUserMessage, errorChain, isHarnessError } from '@ryagent/llm'
-import { abortedErrorOf, throwIfAborted } from './aborted.ts'
+import {
+  BlockAssembler,
+  createAssistantMessage,
+  createToolResultMessage,
+  createUserMessage,
+  errorChain,
+  isHarnessError,
+} from '@ryagent/llm'
+import { ABORTED_CODE, abortedErrorOf, throwIfAborted } from './aborted.ts'
 import type { AgentDefinition, AgentLoopEvent, Tool, ToolContext, ToolResult } from './types.ts'
 
 /** AgentLoop 构造参数。 */
@@ -49,8 +59,12 @@ export interface AgentLoopOptions {
    * 历史会打断 tool_call/tool_result 的配对。
    */
   historyBudgetChars?: number
-  /** 每步组装出完整 assistant 消息时回调（群聊调度器据此持久化/解析 @提及）。 */
-  onAssistantMessage?: (message: AssistantMessage) => void
+  /**
+   * 每步组装出完整 assistant 消息时回调（群聊调度器据此持久化/解析 @提及）。
+   * `usage` 是产出该消息的那次模型调用的用量（供应商未回报时为 undefined）：
+   * 调用方在同一步把它落到该条消息上，成本才按消息可查。
+   */
+  onAssistantMessage?: (message: AssistantMessage, usage?: TokenUsage) => void
   /**
    * 长期记忆钩子（可选）：组装 prompt 前 recall 注入；每轮结束异步
    * enqueueExtraction（绝不阻塞回复）。记忆故障不得影响对话。
@@ -83,7 +97,14 @@ export interface EvolutionTurnData {
 
 /** 自我进化对运行时的最小接口（由 @ryagent/evolve 的 EvolveService 实现）。 */
 export interface AgentEvolutionHooks {
-  compile(agentId: string): Promise<{ text: string; playbookEntryIds: string[]; reflectionIds: string[] } | undefined>
+  /**
+   * 编译该 agent 的进化上下文。`inputText` 是本轮用户输入：教训注入靠它做
+   * 相关性筛选，不传就只剩 playbook 条目（教训相关性形同虚设）。
+   */
+  compile(
+    agentId: string,
+    inputText: string,
+  ): Promise<{ text: string; playbookEntryIds: string[]; reflectionIds: string[] } | undefined>
   enqueueTurn(agentId: string, agentName: string, conversationId: string, turn: EvolutionTurnData): void
 }
 
@@ -98,6 +119,18 @@ function failureOf(error: unknown): { message: string; code: string } {
     message: errorChain(error),
     code: isHarnessError(error) ? error.code : 'UNKNOWN',
   }
+}
+
+/** 内容块里的纯文本（tool_call 的参数 JSON 不计入回复文本）。 */
+function textOf(content: readonly ContentBlock[]): string {
+  return content
+    .filter((block) => {
+      return block.type === 'text'
+    })
+    .map((block) => {
+      return block.type === 'text' ? block.text : ''
+    })
+    .join('\n')
 }
 
 /** 一轮运行的调用方选项。 */
@@ -188,7 +221,7 @@ export class AgentLoop {
     // （各自最坏 ~800ms embedding / playbook 编译）。两者都静默降级。
     const [memoryBlock, compiled] = await Promise.all([
       this.recallMemory(definition.id, input.text),
-      this.compileEvolution(definition.id),
+      this.compileEvolution(definition.id, input.text),
     ])
     throwIfAborted(signal)
     const evolutionBlock = compiled.text
@@ -219,6 +252,7 @@ export class AgentLoop {
         }
 
         const assembler = new BlockAssembler()
+        let failure: { message: string; code: string } | undefined
         try {
           for await (const chunk of llm.stream(request)) {
             assembler.push(chunk)
@@ -234,38 +268,37 @@ export class AgentLoop {
             }
           }
         } catch (error) {
-          if (signal?.aborted === true) throw abortedErrorOf(signal)
+          // 取消不按失败处理：留给下面的统一中断收尾（先固化半截回复）。
+          if (signal?.aborted !== true) failure = failureOf(error)
+        }
+
+        const finish: FinishReason = assembler.finish
+        if (signal?.aborted === true || failure !== undefined || finish.kind === 'error' || finish.kind === 'aborted') {
+          const partial = this.commitInterrupted(assembler, definition)
+          assistantText += partial.text
+          if (signal?.aborted === true) {
+            // 半截回复已经推给前端：先以 done 收尾（协调器落库、服务器推
+            // message-done），再抛 AbortedError。否则这段内容刷新后就消失。
+            if (partial.blocks.length > 0) yield { type: 'done', finish, steps }
+            throw abortedErrorOf(signal)
+          }
           llmError = true
-          const failure = failureOf(error)
-          yield { type: 'error', message: failure.message, code: failure.code }
+          const terminal = finish.kind === 'error' || finish.kind === 'aborted' ? finish.failure : undefined
+          yield {
+            type: 'error',
+            message: terminal?.message ?? failure?.message ?? 'llm stream failed',
+            code: terminal?.code ?? failure?.code ?? 'UNKNOWN',
+          }
           return
         }
 
         const message = assembler.message({ provider: definition.provider, model: definition.model })
-        this.options.onAssistantMessage?.(message)
+        this.options.onAssistantMessage?.(message, assembler.usage)
         history.push(message)
-        assistantText += message.content
-          .filter((block) => {
-            return block.type === 'text'
-          })
-          .map((block) => {
-            return block.type === 'text' ? block.text : ''
-          })
-          .join('\n')
+        assistantText += textOf(message.content)
         const calls = message.content.filter((block): block is ToolCallBlock => {
           return block.type === 'tool-call'
         })
-        const finish: FinishReason = assembler.finish
-
-        // 终态 error/aborted 不是正常收尾：传播为 error 事件，让协调器落
-        // system 错误消息、服务器推 error 事件，而不是把半截回复当完整回复。
-        // 调用方主动取消时改为抛 AbortedError，让上层区分"被取消"与"模型报错"。
-        if (finish.kind === 'error' || finish.kind === 'aborted') {
-          if (signal?.aborted === true) throw abortedErrorOf(signal)
-          llmError = true
-          yield { type: 'error', message: finish.failure.message, code: finish.failure.code }
-          return
-        }
 
         if (calls.length === 0) {
           yield { type: 'done', finish, steps }
@@ -374,8 +407,30 @@ ${definition.name}：${assistantText.trim()}`,
     }
   }
 
-  /** 自我进化编译（playbook + 上次教训；故障静默降级）。 */
-  private async compileEvolution(agentId: string): Promise<{
+  /**
+   * 固化被中断的一步（取消 / 流异常 / 终态 error）：只保留已经收到的文本与
+   * 思考块——未执行的 tool_call 落库后，下一轮重建历史会缺少配对的 tool
+   * 结果消息，供应商会直接拒绝整个请求。
+   * @returns 固化的内容块与其中的文本；空数组表示没有可保留的内容。
+   */
+  private commitInterrupted(
+    assembler: BlockAssembler,
+    definition: AgentDefinition,
+  ): { blocks: ContentBlock[]; text: string } {
+    const blocks = assembler.interruptedBlocks()
+    if (blocks.length === 0) return { blocks, text: '' }
+    this.options.onAssistantMessage?.(
+      createAssistantMessage({
+        content: blocks,
+        source: { provider: definition.provider, model: definition.model },
+      }),
+      assembler.usage,
+    )
+    return { blocks, text: textOf(blocks) }
+  }
+
+  /** 自我进化编译（playbook + 相关教训；故障静默降级）。 */
+  private async compileEvolution(agentId: string, inputText: string): Promise<{
     text?: string
     playbookEntryIds: string[]
     reflectionIds: string[]
@@ -384,7 +439,7 @@ ${definition.name}：${assistantText.trim()}`,
       return { playbookEntryIds: [], reflectionIds: [] }
     }
     try {
-      const compiled = await this.options.evolution.compile(agentId)
+      const compiled = await this.options.evolution.compile(agentId, inputText)
       return {
         ...(compiled?.text === undefined ? {} : { text: compiled.text }),
         playbookEntryIds: compiled?.playbookEntryIds ?? [],

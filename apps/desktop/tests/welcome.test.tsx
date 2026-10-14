@@ -50,7 +50,7 @@ describe('欢迎主页', () => {
         onSaveApiKey={() => {
           return Promise.resolve()
         }}
-        onSuggest={() => {}}
+        onSend={() => {}}
         onOpenConversation={() => {}}
       />,
     )
@@ -60,6 +60,9 @@ describe('欢迎主页', () => {
     expect(html).toContain('最近会话')
     expect(html).toContain('周报写好了')
     expect(html).toContain('<svg') // 猫管家 SVG
+    // 首屏必须真的有输入框：文案让用户"直接跟我说"，页面上就得有地方说。
+    expect(html).toContain('welcome-compose')
+    expect(html).toContain('<textarea')
     // 凭据齐全时不出现配置卡。
     expect(html).not.toContain('先填一个 API Key')
   })
@@ -74,7 +77,7 @@ describe('欢迎主页', () => {
         onSaveApiKey={() => {
           return Promise.resolve()
         }}
-        onSuggest={() => {}}
+        onSend={() => {}}
         onOpenConversation={() => {}}
       />,
     )

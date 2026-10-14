@@ -45,5 +45,22 @@ export default defineConfig({
   },
   test: {
     include: ['apps/*/tests/**/*.test.{ts,tsx}', 'packages/*/tests/**/*.test.ts', 'packages/*/*/tests/**/*.test.ts'],
+    coverage: {
+      provider: 'v8',
+      // v8 提供器按「实际执行的语句」统计；显式列出源码目录，报告里出现的
+      // 就只有业务代码，不会混入构建产物与测试自身。
+      include: [
+        'apps/server/src/**/*.ts',
+        'apps/desktop/electron/**/*.ts',
+        'apps/desktop/renderer/src/**/*.{ts,tsx}',
+        'packages/*/src/**/*.ts',
+        'packages/*/*/src/**/*.ts',
+      ],
+      exclude: ['**/tests/**', '**/*.d.ts', '**/main/**', '**/dist/**', '**/lib/**', '**/vendor/**'],
+      reporter: ['text-summary', 'html'],
+      reportsDirectory: 'coverage',
+      // 刻意不设 thresholds：覆盖率先只报告、不拦截，避免「补测试」变成合并的
+      // 行政成本；基线稳定后再按实测值收紧。
+    },
   },
 })

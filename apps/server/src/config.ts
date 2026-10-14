@@ -13,12 +13,24 @@ import type { OpenAiAdapterConfig, OpenAiProviderConfig } from '@ryagent/llm-ope
 /** providers.json 的形状。 */
 export interface ProvidersConfigFile {
   providers: Record<string, OpenAiProviderConfig>
+  /**
+   * 记忆向量模型的显式配置：走哪个 provider、用哪个 embedding 模型 id。
+   * 缺省时跟随第一个已配 key 的供应商，且只有该供应商就是 SiliconFlow 时才
+   * 套用它的默认向量模型——向量模型不通用，猜错会让整库检索静默塌陷。
+   */
+  embedding?: {
+    providerId: string
+    model: string
+  }
 }
+
+/** 内置默认供应商的 baseURL：向量模型默认值只在它是当前供应商时才成立。 */
+export const DEFAULT_PROVIDER_BASE_URL = 'https://api.siliconflow.cn/v1'
 
 /** 内置默认供应商（SiliconFlow，key 经 SILICONFLOW_API_KEY 环境变量）。 */
 export const DEFAULT_PROVIDERS: Record<string, OpenAiProviderConfig> = {
   siliconflow: {
-    baseURL: 'https://api.siliconflow.cn/v1',
+    baseURL: DEFAULT_PROVIDER_BASE_URL,
     apiKeyEnv: 'SILICONFLOW_API_KEY',
     displayName: 'SiliconFlow',
     models: [

@@ -119,6 +119,14 @@ export class MemoryService implements AgentMemory {
           })
           .join('\n')}`,
       )
+      // 注入即访问：画像每轮都被读进 prompt，却从不计入访问统计，access_count
+      // 恒为 0，巩固任务会把整批画像判成"长期零访问"直接归档——用户画像因此
+      // 悄无声息地整体消失。
+      this.store.touchAccess(
+        profile.map((m) => {
+          return m.id
+        }),
+      )
     }
 
     // 预算守卫：画像已超预算时直接返回（profile 量小，正常不会发生）。

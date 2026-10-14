@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { memo, useMemo, useState } from 'react'
 import type { AgentDef, ApiClient, Conversation } from '../api.ts'
 import type { ChatStore, RelayItem } from '../store.ts'
 import { useChat } from '../store.ts'
@@ -19,6 +19,9 @@ const TOOL_LABELS: Record<string, string> = {
  *
  * 自己订阅 chat store（不再由 App 根组件转发 props）：App 每 40ms 的 store 通知
  * 不再带动整棵树重渲染，且直接用 snapshot.messages 引用、不做数组拷贝。
+ *
+ * 三个内容组件全部 memo：它们展示的资料/产物/轨迹在流式期间一个 token 都不会变，
+ * 没有理由跟着 25Hz 的通知重绘。
  */
 export function RightPanel({
   api,
@@ -42,6 +45,15 @@ export function RightPanel({
   const [memoryFor, setMemoryFor] = useState<AgentDef | undefined>(undefined)
   const [playbookFor, setPlaybookFor] = useState<AgentDef | undefined>(undefined)
   const snapshot = useChat(store)
+  // 产物走 store 的单一 selector：内容没变时返回同一数组身份，避免每 token 重扫 parts。
+  const artifacts = store.artifacts()
+  const conversationTitles = useMemo(() => {
+    return new Map(
+      conversations.map((c) => {
+        return [c.id, c.title]
+      }),
+    )
+  }, [conversations])
   if (collapsed) {
     return (
       <aside className="right-panel is-collapsed">
@@ -51,8 +63,6 @@ export function RightPanel({
       </aside>
     )
   }
-  // 产物走 store 的单一 selector：内容没变时返回同一数组身份，避免每 token 重扫 parts。
-  const artifacts = store.artifacts()
   return (
     <aside className="right-panel">
       <span className="panel-banner" aria-hidden="true" />
@@ -96,13 +106,7 @@ export function RightPanel({
           api={api}
           agentId={memoryFor.id}
           agentName={memoryFor.name}
-          conversationTitles={
-            new Map(
-              conversations.map((c) => {
-                return [c.id, c.title]
-              }),
-            )
-          }
+          conversationTitles={conversationTitles}
           onClose={() => {
             setMemoryFor(undefined)
           }}
@@ -112,7 +116,7 @@ export function RightPanel({
   )
 }
 
-function ArtifactList({
+const ArtifactList = memo(function ArtifactList({
   artifacts,
   fileUrl,
 }: {
@@ -139,9 +143,9 @@ function ArtifactList({
       ))}
     </ul>
   )
-}
+})
 
-function DirectProfile({
+const DirectProfile = memo(function DirectProfile({
   agentId,
   agents,
   artifacts,
@@ -217,9 +221,9 @@ function DirectProfile({
       <ArtifactList artifacts={artifacts} fileUrl={fileUrl} />
     </>
   )
-}
+})
 
-function GroupInfo({
+const GroupInfo = memo(function GroupInfo({
   conversation,
   agents,
   relays,
@@ -280,4 +284,4 @@ function GroupInfo({
       <ArtifactList artifacts={artifacts} fileUrl={fileUrl} />
     </>
   )
-}
+})

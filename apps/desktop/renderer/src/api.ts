@@ -291,6 +291,11 @@ export class ApiClient {
     return `${this.base}/api/files/${encodeURIComponent(name)}`
   }
 
+  /** 工作区目录（agent 读写文件的默认位置；由服务端解析，渲染层不猜路径）。 */
+  workspace(): Promise<{ path: string }> {
+    return this.request('/api/workspace')
+  }
+
   /**
    * 订阅会话事件；返回退订函数。
    * 断线自动指数退避重连（默认 1s/2s/5s/10s 封顶）；事件 seq 出现缺口或

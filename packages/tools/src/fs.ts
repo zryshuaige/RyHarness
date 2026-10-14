@@ -5,7 +5,7 @@
 
 import { closeSync, mkdirSync, openSync, readSync, statSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import type { Tool, ToolResult } from '@ryagent/agent'
+import { type Tool, type ToolResult, throwIfAborted } from '@ryagent/agent'
 import { resolveInWorkspace, truncateOutput } from './workspace.ts'
 
 const MAX_READ_CHARS = 64_000
@@ -41,6 +41,8 @@ export const fsRead: Tool = {
     required: ['path'],
   },
   execute(args, ctx) {
+    // 取消优先于任何副作用：已取消的轮次不再读写工作区。
+    throwIfAborted(ctx.signal)
     return guard(() => {
       const target = resolveInWorkspace(ctx.workspaceRoot, argString(args, 'path'))
       const stat = statSync(target, { throwIfNoEntry: false })
@@ -79,6 +81,7 @@ export const fsWrite: Tool = {
     required: ['path', 'content'],
   },
   execute(args, ctx) {
+    throwIfAborted(ctx.signal)
     return guard(() => {
       const target = resolveInWorkspace(ctx.workspaceRoot, argString(args, 'path'))
       const content = argString(args, 'content')

@@ -53,6 +53,20 @@ export interface MessagePage {
   beforeSeq?: number
 }
 
+/** 删除一个 Agent 时各处的级联清理条数（供 API 回执与测试断言）。 */
+export interface DeleteAgentResult {
+  /** 被摘掉该成员的会话数。 */
+  conversationsUpdated: number
+  /** 删除的长期记忆行数。 */
+  memories: number
+  /** 删除的经验手册条目数。 */
+  playbookEntries: number
+  /** 删除的反思（教训）数。 */
+  reflections: number
+  /** 删除的反馈事件数。 */
+  feedback: number
+}
+
 /**
  * SQL 片段：消息 content_blocks 里存在 type=text 块。
  * 纯 tool_call 的 assistant 消息（无文本块）不计未读、不作会话预览。
@@ -171,23 +185,57 @@ export class SessionStore {
 
   // ---- conversations ----
 
-  /** 删除一个 Agent；同时把它从所有会话的成员/调度员列表中摘除。 */
-  deleteAgent(id: string): void {
-    this.db.prepare('DELETE FROM agents WHERE id = ?').run(id)
-    for (const conversation of this.listConversations(10_000)) {
-      const members = conversation.memberAgentIds.filter((member) => {
-        return member !== id
-      })
-      const dispatcherRemoved = conversation.dispatcherAgentId === id
-      if (members.length === conversation.memberAgentIds.length && !dispatcherRemoved) continue
-      this.db
-        .prepare('UPDATE conversations SET member_agent_ids = ?, dispatcher_agent_id = ? WHERE id = ?')
-        .run(
-          JSON.stringify(members),
-          dispatcherRemoved ? null : (conversation.dispatcherAgentId ?? null),
-          conversation.id,
-        )
+  /** 删除一个 Agent：摘出会话成员身份，并级联清掉它的长期记忆与经验手册。 */
+  deleteAgent(id: string): DeleteAgentResult {
+    this.db.exec('BEGIN')
+    let result: DeleteAgentResult = { conversationsUpdated: 0, memories: 0, playbookEntries: 0, reflections: 0, feedback: 0 }
+    try {
+      this.db.prepare('DELETE FROM agents WHERE id = ?').run(id)
+      for (const conversation of this.listConversations(10_000)) {
+        const members = conversation.memberAgentIds.filter((member) => {
+          return member !== id
+        })
+        const dispatcherRemoved = conversation.dispatcherAgentId === id
+        if (members.length === conversation.memberAgentIds.length && !dispatcherRemoved) continue
+        this.db
+          .prepare('UPDATE conversations SET member_agent_ids = ?, dispatcher_agent_id = ? WHERE id = ?')
+          .run(
+            JSON.stringify(members),
+            dispatcherRemoved ? null : (conversation.dispatcherAgentId ?? null),
+            conversation.id,
+          )
+        result.conversationsUpdated++
+      }
+      // 记忆与进化共用同一个 SQLite 文件（各自的表没有指向 agents 的外键，
+      // 跨包没法靠 ON DELETE CASCADE）。这里显式清一次：留着就是孤儿行——
+      // agent 没了，画像/教训/反馈却还在被检索与统计。
+      if (this.tableExists('memories_fts') && this.tableExists('memories')) {
+        this.db.prepare('DELETE FROM memories_fts WHERE rowid IN (SELECT rowid FROM memories WHERE agent_id = ?)').run(id)
+      }
+      result.memories = this.deleteAgentRows('memories', id)
+      result.playbookEntries = this.deleteAgentRows('playbook_entries', id)
+      result.reflections = this.deleteAgentRows('reflections', id)
+      result.feedback = this.deleteAgentRows('feedback_events', id)
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
     }
+    return result
+  }
+
+  /** 表是否存在（记忆/进化子系统被关闭时它们的迁移还没跑过）。 */
+  private tableExists(table: string): boolean {
+    const row = this.db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) as {
+      count: number
+    }
+    return Number(row.count) > 0
+  }
+
+  /** 按 agent_id 清理一张附属表的行；表不存在（子系统未启用）返回 0。 */
+  private deleteAgentRows(table: string, id: string): number {
+    if (!this.tableExists(table)) return 0
+    return Number(this.db.prepare(`DELETE FROM ${table} WHERE agent_id = ?`).run(id).changes)
   }
 
   /** 创建会话。 */

@@ -7,7 +7,7 @@
  * @module @ryagent/agent
  */
 
-export { ABORTED_CODE, AbortedError, isAbortedError } from './aborted.ts'
+export { ABORTED_CODE, AbortedError, abortedErrorOf, isAbortedError, throwIfAborted } from './aborted.ts'
 export { BUILTIN_TEMPLATES, forkTemplate, RYEN_TEMPLATE } from './builtin.ts'
 export type {
   AgentEvolutionHooks,

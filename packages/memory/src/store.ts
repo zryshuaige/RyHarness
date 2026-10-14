@@ -287,6 +287,9 @@ export class MemoryStore {
    * 归档长期零访问的 active 记忆 → status='inactive'。
    * 判定基准用 last_accessed_at（没被召回过的记忆回落到 updated_at），命中即
    * 续命，因此"稳定但被反复召回"的偏好不会被归档。
+   *
+   * 共享画像（SHARED_SPACE）排除在外：它记录的是用户是谁，一旦归档就没有任何
+   * 恢复入口（界面上看不到 inactive 行），等于静默抹掉用户画像。
    * @returns 归档条数。
    */
   archiveDormant(dormantAfterMs: number, now = Date.now()): number {
@@ -294,10 +297,11 @@ export class MemoryStore {
       .prepare(
         `UPDATE memories SET status = 'inactive', updated_at = ?
        WHERE status = 'active'
+         AND agent_id != ?
          AND access_count = 0
          AND COALESCE(NULLIF(last_accessed_at, 0), updated_at) < ?`,
       )
-      .run(now, now - dormantAfterMs)
+      .run(now, SHARED_SPACE, now - dormantAfterMs)
     return Number(result.changes)
   }
 

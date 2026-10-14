@@ -12,7 +12,9 @@
     "dev": "node scripts/dev.mjs",
     "start": "electron .",
     "capture": "node scripts/capture.mjs",
-    "gen:icon": "node scripts/gen-icon.mjs"
+    "gen:icon": "node scripts/gen-icon.mjs",
+    "package": "pnpm run build && electron-builder --win",
+    "package:dir": "pnpm run build && electron-builder --win --dir"
   },
   "dependencies": {
     "@dicebear/collection": "^9.4.2",
@@ -27,10 +29,48 @@
     "@types/react-dom": "^19.1.0",
     "@vitejs/plugin-react": "^5.0.0",
     "electron": "37.10.2",
+    "electron-builder": "^26.17.0",
     "jsdom": "^26.0.0",
     "lucide-static": "^1.55.0",
     "png-to-ico": "^3.0.2",
     "sharp": "^0.35.5",
     "vite": "^6.0.0"
+  },
+  "build": {
+    "appId": "com.ryagent.desktop",
+    "productName": "RyAgent",
+    "copyright": "Copyright (c) 2026 RyAgent contributors",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main/**/*",
+      "renderer/dist/**/*",
+      "assets/**/*",
+      "package.json",
+      "!**/*.map"
+    ],
+    "extraResources": [
+      {
+        "from": "../../LICENSE",
+        "to": "LICENSE"
+      },
+      {
+        "from": "../../NOTICE.md",
+        "to": "NOTICE.md"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "license": "../../LICENSE"
+    }
   }
 }

@@ -51,7 +51,7 @@ pnpm build
 启动桌面应用（内嵌后端，数据在 `%APPDATA%/ryagent-data`）：
 
 ```sh
-pnpm --filter @ryagent/desktop start        # 生产模式（file:// 单文件渲染层）
+pnpm --filter @ryagent/desktop start        # 生产模式（主进程回环 HTTP 伺服渲染层）
 pnpm --filter @ryagent/desktop dev          # 开发模式（Vite HMR + Electron）
 ```
 
@@ -67,11 +67,13 @@ pnpm --filter @ryagent/desktop dev          # 开发模式（Vite HMR + Electron
 - **持久化**：SQLite（WAL），agents/conversations/messages/dispatch_events 等表单调迁移；未读徽标（seq 比较，本人消息不计）；per-conversation 消息串行队列（排队有 WS 提示）。
 - **LLM 层**：`chat/completions` + SSE；流式 tool-call 组装；usage 提取（含 reasoning/cache token）；统一错误码（RATE_LIMIT/QUOTA/CONTEXT_WINDOW_EXCEEDED/…）；配置驱动多供应商路由。
 
-## 测试
+## 测试与构建
 
 ```sh
-pnpm test          # 194 个测试：内核单测 + mock SSE 适配器 + 真实 HTTP/WS 集成 + jsdom 组件测试
+pnpm test          # 内核单测 + mock SSE 适配器 + 真实 HTTP/WS 集成 + jsdom 组件测试（根 vitest 是唯一 runner）
+npx vitest run --coverage   # 同上 + v8 覆盖率报告（阈值只报告不拦截）
 pnpm typecheck     # 严格模式（先构建 vendor 产物再跑根 tsc，干净 clone 可直接跑）
+pnpm lint          # biome check .（格式 + 静态检查）
 pnpm -r build      # 全量构建（vendor 用 tsc，packages 用 tsdown，desktop = tsdown + vite）
 pnpm demo:agent    # M2 集成：mock 适配器跑 AgentLoop + 落库断言
 pnpm demo:group    # M3 三场景：接力链 / @直路由 / loop-guard
@@ -79,12 +81,25 @@ pnpm demo:server   # M4a 只读端点冒烟（真实配置）
 pnpm smoke:siliconflow  # 真实 API 冒烟（无 key 时打印提示并 exit 0 跳过）
 ```
 
+### 打包与许可交付
+
+```sh
+pnpm --filter @ryagent/desktop package:dir   # 解包目录，先跑这个验证
+pnpm --filter @ryagent/desktop package       # Windows NSIS 安装包
+```
+
+打包配置见 `apps/desktop/package.json#build`（appId / productName / NSIS 非一键安装）。
+**分发物必须自带许可**：`build.extraResources` 已把 `LICENSE` 与 `NOTICE.md`
+复制进安装目录的 `resources/`——MIT 法条全文与 DiceBear 的 CC BY 4.0 署名
+（Dylan! by Natalia Spivak、Fun Emoji by Davis Uche）因此随包交付。
+新增或替换任何第三方资产、依赖时，同步更新 [NOTICE.md](./NOTICE.md) 是发布前的硬性步骤。
+
 ## 目录结构
 
 ```
 apps/
   server/      @ryagent/server   本地后端（HTTP + WS；API/事件契约见其 README）
-  desktop/     @ryagent/desktop  Electron + React 桌面（启动方式见其 README）
+  desktop/     @ryagent/desktop  Electron + React 桌面（启动与打包见其 README）
 packages/
   llm/llm/     @ryagent/llm      LLM 服务缝（dsh-llm 裁剪）
   llm/openai/  @ryagent/llm-openai  OpenAI 兼容适配器
@@ -92,10 +107,20 @@ packages/
   memory/ evolve/                长期记忆与自我进化闭环
   typert/protocol/ attachment/types/ util/ runtime-diagnostics/  地基与 stub
 vendor/        cordis / cosmokit / schemastery（dsh vendor 改名，各附上游 MIT LICENSE）
-scripts/       demo-*.ts 冒烟与集成脚本、e2e-driver.mjs（CDP 驱动，用法见文件头）
+scripts/       demo-*.ts 冒烟与集成脚本、e2e-driver.mjs（CDP 驱动）、capture-window.ps1（只截窗口矩形）
+.github/       CI（master 分支触发：lint → build → typecheck → test）
 docs（各包 README）· M0-dependency-audit.md · LICENSE · NOTICE.md
+CONTRIBUTING.md · CODE_OF_CONDUCT.md · SECURITY.md · CHANGELOG.md
 ```
+
+## 参与与治理
+
+- [CONTRIBUTING.md](./CONTRIBUTING.md)：Windows-first 的环境、复现步骤、代码风格与提交前检查。
+- [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md)：Contributor Covenant 2.1。
+- [SECURITY.md](./SECURITY.md)：漏洞与依赖问题怎么报告。
+- [CHANGELOG.md](./CHANGELOG.md)：Keep a Changelog 格式的变更记录。
 
 ## 许可
 
-MIT（见 [LICENSE](./LICENSE)）。第三方资产署名与许可明细见 [NOTICE.md](./NOTICE.md)。
+MIT（见 [LICENSE](./LICENSE)）。第三方资产署名与许可明细见 [NOTICE.md](./NOTICE.md)；
+分发二进制时必须随包附上这两份文件（打包配置已自动处理，见「打包与许可交付」）。

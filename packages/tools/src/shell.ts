@@ -4,14 +4,15 @@
  * Windows 上优先使用 Git Bash（本开发/部署环境的 shell），找不到时退回
  * cmd.exe；POSIX 上使用 /bin/sh。用 execFile 直接.spawn 解释器（不经
  * cmd 字符串拼接），避免 Windows 路径空格引号问题；输出按字符数截断，
- * 超时强杀进程。
+ * 超时强杀进程。取消时把 `ToolContext.signal` 交给 spawn：子进程被杀掉、
+ * promise 立刻以 AbortError 失败，循环随即在下一个边界抛出 AbortedError。
  * @module @ryagent/tools/shell
  */
 
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { promisify } from 'node:util'
-import type { Tool } from '@ryagent/agent'
+import { type Tool, throwIfAborted } from '@ryagent/agent'
 import { truncateOutput } from './workspace.ts'
 
 const execFileAsync = promisify(execFile)
@@ -84,6 +85,7 @@ export const shellExec: Tool = {
     required: ['command'],
   },
   async execute(args, ctx) {
+    throwIfAborted(ctx.signal)
     const command = argString(args, 'command')
     const timeoutMs = argNumber(args, 'timeoutMs', DEFAULT_TIMEOUT_MS)
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
@@ -97,10 +99,13 @@ export const shellExec: Tool = {
         killSignal: 'SIGKILL',
         maxBuffer: 4 * 1024 * 1024,
         windowsHide: true,
+        ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
       })
       const combined = stderr.length > 0 ? `${stdout}\n[stderr]\n${stderr}` : stdout
       return { content: truncateOutput(combined.trimEnd(), MAX_OUTPUT_CHARS) }
     } catch (error) {
+      // 取消不是命令失败：结果无意义，由循环在边界抛 AbortedError 收尾。
+      if (ctx.signal?.aborted === true) return { content: 'command aborted', isError: true }
       const failed = error as { stdout?: string; stderr?: string; message?: string; killed?: boolean }
       const output = [failed.stdout, failed.stderr]
         .filter((part): part is string => {

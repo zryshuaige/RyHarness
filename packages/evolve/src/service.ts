@@ -38,7 +38,11 @@ export interface CompiledEvolution {
 
 /** 供 AgentLoop 接入的薄接口。 */
 export interface AgentEvolutionHooks {
-  compile(agentId: string, inputText?: string): Promise<CompiledEvolution | undefined>
+  /**
+   * 编译注入内容。`inputText` 是本轮用户输入且必须给出：教训注入靠它做相关性
+   * 筛选，缺省成"最近几条"只会把别的任务的教训糊到当前问题上。
+   */
+  compile(agentId: string, inputText: string): Promise<CompiledEvolution | undefined>
   enqueueTurn(agentId: string, agentName: string, conversationId: string, turn: EvolutionTurn): void
 }
 
@@ -123,20 +127,16 @@ export class EvolveService implements AgentEvolutionHooks {
    * section 分组）+ 与本轮输入相关的 pending 教训（top-N）。无内容返回
    * undefined。
    * @param agentId - agent id。
-   * @param inputText - 本轮用户输入；缺省时退回"最近 N 条教训"。AgentLoop
-   *   只传 agentId，由 SessionCoordinator 的绑定钩子把当前输入文本注入进来。
+   * @param inputText - 本轮用户输入；教训按与它的词面相关性选取。
    */
-  async compile(agentId: string, inputText?: string): Promise<CompiledEvolution | undefined> {
+  async compile(agentId: string, inputText: string): Promise<CompiledEvolution | undefined> {
     const entries = this.store
       .listActiveForCompile(agentId)
       .sort((a, b) => {
-        return b.helpful - b.harmful - (a.helpful - a.harmful)
+        return b.helpful - b.harmful - (a.helpful - a.helpful)
       })
       .slice(0, COMPILE_TOP_N)
-    const reflections =
-      inputText === undefined
-        ? this.store.listPendingReflections(agentId, REFLECTION_INJECT_MAX)
-        : this.store.searchPendingReflections(agentId, inputText, REFLECTION_INJECT_MAX)
+    const reflections = this.store.searchPendingReflections(agentId, inputText, REFLECTION_INJECT_MAX)
 
     const sections: string[] = []
     const playbookEntryIds: string[] = []

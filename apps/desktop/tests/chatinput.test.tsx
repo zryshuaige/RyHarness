@@ -71,12 +71,14 @@ describe('ChatInput @补全菜单', () => {
     typeText('@R')
     expect(container.querySelector('.mention-menu')).not.toBeNull()
     keyDown('Escape')
-    expect(container.querySelector('.mention-menu')).toBeNull()
+    // 退场体系：菜单先挂 .is-leaving 播退场动画，LEAVE_MS 后才真正卸载（见 use-leaving.test.tsx）
+    expect(container.querySelector('.mention-menu.is-leaving')).not.toBeNull()
+    expect(container.querySelector('.mention-menu:not(.is-leaving)')).toBeNull()
     // 文本原样保留，没有混入 U+200B 等魔法字符
     expect(textarea().value).toBe('@R')
-    // Esc 关闭后继续输入（同一 @ 查询）应重新弹出
+    // 退场途中继续输入（同一 @ 查询）应立刻打断退场并恢复菜单
     typeText('@Ry')
-    expect(container.querySelector('.mention-menu')).not.toBeNull()
+    expect(container.querySelector('.mention-menu:not(.is-leaving)')).not.toBeNull()
   })
 
   it('Esc 关闭后 Enter 直接发送原文', () => {

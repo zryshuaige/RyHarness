@@ -1,5 +1,6 @@
 import { memo, useState } from 'react'
 import type { AgentDef } from '../api.ts'
+import { isGuardRelay, relayChainLabel } from '../lib/relay-labels.ts'
 import type { MessagePart, UiMessage } from '../store.ts'
 import { Avatar } from './avatars/Avatar.tsx'
 import { Icon } from './Icon.tsx'
@@ -82,6 +83,7 @@ function MessageBubbleInner({
   agent,
   tight = false,
   firstOfGroup = true,
+  animated = false,
   onFeedback,
 }: {
   message: UiMessage
@@ -92,6 +94,8 @@ function MessageBubbleInner({
   tight?: boolean
   /** 同 sender 组首条（显示头像与名字）。 */
   firstOfGroup?: boolean
+  /** 播进场动画：只给本次会话新到的消息，历史消息整屏淡入像掉帧。 */
+  animated?: boolean
   /** 👍/👎 反馈（仅 agent 消息）。 */
   onFeedback?: (message: UiMessage, signal: 'thumb_up' | 'thumb_down') => void
 }) {
@@ -116,6 +120,7 @@ function MessageBubbleInner({
     isUser ? 'from-user' : 'from-agent',
     tight ? 'tight' : '',
     firstOfGroup ? 'first-of-group' : '',
+    animated ? 'is-new' : '',
   ]
     .filter(Boolean)
     .join(' ')
@@ -193,6 +198,7 @@ function MessageBubbleInner({
 export const MessageBubble = memo(MessageBubbleInner, (prev, next) => {
   if (prev.tight !== next.tight) return false
   if (prev.firstOfGroup !== next.firstOfGroup) return false
+  if (prev.animated !== next.animated) return false
   if (prev.onFeedback !== next.onFeedback || prev.fileUrl !== next.fileUrl) return false
   if (prev.agent !== next.agent) return false
   const a = prev.message
@@ -202,7 +208,7 @@ export const MessageBubble = memo(MessageBubbleInner, (prev, next) => {
 })
 
 /** 群聊接力链：头像 A → 箭头 → 头像 B 的流转提示，错峰滑入。 */
-export function RelayChain({
+function RelayChainInner({
   relays,
   turnIndex,
   nameOf,
@@ -217,21 +223,13 @@ export function RelayChain({
     return relay.turnIndex === turnIndex
   })
   if (items.length === 0) return null
-  const label = (reason: string): string => {
-    if (reason === 'user-mention') return '点名'
-    if (reason === 'default-dispatcher') return '调度'
-    if (reason === 'loop-guard') return '循环保护'
-    if (reason === 'max-turns') return '达到轮次上限'
-    if (reason.startsWith('relay @')) return '转交'
-    return reason
-  }
   return (
     // biome-ignore lint/a11y/useAriaPropsSupportedByRole: 纯展示容器，aria-label 供读屏器命名
     <div className="relay-chain" aria-label="调度轨迹">
       {items.map((relay, index) => (
         <span
           key={`${relay.reason}-${index}`}
-          className={`relay-flow ${relay.reason === 'loop-guard' || relay.reason === 'max-turns' ? 'is-guard' : ''}`}
+          className={`relay-flow ${isGuardRelay(relay.reason) ? 'is-guard' : ''}`}
           style={{ animationDelay: `${index * 90}ms` }}
         >
           {relay.fromAgent !== undefined && (
@@ -257,9 +255,15 @@ export function RelayChain({
               size={20}
             />
           </span>
-          <span className="relay-label">{label(relay.reason)}</span>
+          <span className="relay-label">{relayChainLabel(relay.reason)}</span>
         </span>
       ))}
     </div>
   )
 }
+
+/**
+ * memo：props 全是稳定引用（relays 数组只在调度事件时换新、nameOf/avatarOf 已 useCallback），
+ * 聊天流式期间没有理由每个 token 都重跑一遍 filter。
+ */
+export const RelayChain = memo(RelayChainInner)

@@ -1,11 +1,15 @@
 /**
- * Preload：当前实现把 API 地址放在窗口 URL query 里，渲染层直接读取，
- * preload 只保留接口形状（后续加敏感能力时从这里暴露）。
+ * Preload：API 地址走窗口 URL query / executeJavaScript 注入，preload 只暴露
+ * 渲染层确实需要的主进程能力（contextIsolation 下唯一的安全通道）。
  */
-import { contextBridge } from 'electron'
+import { contextBridge, ipcRenderer } from 'electron'
 
 const bridge = {
   appName: 'RyAgent',
+  /** 用系统文件管理器打开目录；resolve 空串表示成功（shell.openPath 约定）。 */
+  openPath: (targetPath: string): Promise<string> => {
+    return ipcRenderer.invoke('ryagent:open-path', targetPath)
+  },
 }
 
 contextBridge.exposeInMainWorld('ryagentDesktop', bridge)

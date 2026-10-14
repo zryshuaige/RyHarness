@@ -59,7 +59,7 @@ describe('注入编译（compile）', () => {
     s.store.addCounts(b.id, { helpful: 1 })
     const reflection = s.store.insertReflection({ agentId: 'a1', lesson: '上次忘了检查路径' })
 
-    const compiled = await s.compile('a1')
+    const compiled = await s.compile('a1', '帮我检查一下文件路径')
     expect(compiled).toBeDefined()
     expect(compiled!.text).toContain('[经验手册]')
     expect(compiled!.text).toContain('策略：先读后写')
@@ -75,7 +75,7 @@ describe('注入编译（compile）', () => {
     const s = service()
     const entry = s.store.insertEntry({ agentId: 'a1', section: 'strategy', content: 'x', source: 'seed' })
     s.store.setEntryStatus(entry.id, 'deprecated')
-    expect(await s.compile('a1')).toBeUndefined()
+    expect(await s.compile('a1', '随便聊聊')).toBeUndefined()
   })
 })
 
@@ -205,7 +205,7 @@ describe('教训验证与转正闭环', () => {
     expect(reflection.lesson).toBe('先检查路径再写文件')
 
     // 第二轮：注入教训且成功 → hit 1（不转正）
-    const compiled = await s.compile('a1')
+    const compiled = await s.compile('a1', '帮我检查下路径再写文件')
     expect(compiled!.reflectionIds).toEqual([reflection.id])
     s.enqueueTurn('a1', 'A', 'c1', turn({ injectedReflectionIds: compiled!.reflectionIds }))
     await s.flush()
@@ -396,7 +396,7 @@ describe('全链路集成：失败 → 反思 → 注入 → 成功 → 转正',
     expect(reflection.lesson).toBe('写文件前先确认目录存在')
 
     // T2：教训注入，本轮成功 → hit 1
-    let compiled = await s.compile('a1')
+    let compiled = await s.compile('a1', '写文件前先确认目录存在')
     expect(compiled!.text).toContain('写文件前先确认目录存在')
     s.enqueueTurn('a1', 'A', 'c1', turn({ injectedReflectionIds: compiled!.reflectionIds }))
     await s.flush()
@@ -407,7 +407,7 @@ describe('全链路集成：失败 → 反思 → 注入 → 成功 → 转正',
     await s.flush()
     reflection = s.store.getReflection(reflection.id)!
     expect(reflection.status).toBe('converted')
-    const playbook = await s.compile('a1')
+    const playbook = await s.compile('a1', '写文件前先确认目录存在')
     expect(playbook!.text.includes('上次教训')).toBe(false) // 已清理
     expect(
       s.store.listActiveForCompile('a1').some((e) => {
@@ -466,12 +466,5 @@ describe('教训注入的相关性选择', () => {
 
     const related = await s.compile('a1', '写文件的时候记得目录')
     expect(related?.text).toContain('写文件前先确认目录存在')
-  })
-
-  it('缺省输入时退回最近 N 条（AgentLoop 不传文本也不会丢教训）', async () => {
-    const s = service()
-    s.store.insertReflection({ agentId: 'a1', lesson: '某条教训' })
-    const compiled = await s.compile('a1')
-    expect(compiled?.text).toContain('某条教训')
   })
 })

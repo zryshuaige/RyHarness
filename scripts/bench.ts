@@ -119,7 +119,7 @@ await benchAsync('recall（纯 FTS5 降级）', 100, () => {
 // ---- playbook 编译 ----
 const evolve = new EvolveService({ dbPath, logger: () => {} })
 await benchAsync('playbook compile', 500, () => {
-  return evolve.compile('ryen')
+  return evolve.compile('ryen', '帮我查一下最近的资料')
 })
 
 // ---- server 冷启动 ----

@@ -2,12 +2,26 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # 仓库主线分支是 master，不是 main（GitHub 新仓库默认名会误导人）。
+    branches: [master]
   pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+# 只读令牌：CI 不需要写权限，PR 来自 fork 时也不会拿到任何写能力。
+permissions:
+  contents: read
+
+# 同一分支连续推送只保留最新一次运行，避免旧提交排队拖慢 CI。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-test:
     runs-on: windows-latest
+    # 硬性上限：依赖安装 + 构建 + 测试不应超过 20 分钟，超了就是卡死。
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -34,4 +48,6 @@ jobs:
         run: pnpm typecheck
 
       - name: Test
-        run: pnpm test
+        # 根 vitest.config.ts 是唯一 runner：包级 test 脚本并不存在，
+        # 在这里写 `pnpm test` 会依赖根脚本转发，等于绕一圈。
+        run: npx vitest run

@@ -1,18 +1,13 @@
 import { useState } from 'react'
 import type { AgentDef, AgentTemplate, ProviderInfo } from '../api.ts'
+import { stagger } from '../lib/stagger.ts'
+import { toast } from '../lib/toast.ts'
+import { ALL_TOOLS, toolLabel } from '../lib/tool-labels.ts'
 import { Avatar } from './avatars/Avatar.tsx'
 import { AVATAR_STYLES, dicebearSvg, randomAvatarSpec } from './avatars/avatars.tsx'
 import { Cat } from './Cat.tsx'
 import { Icon } from './Icon.tsx'
 import { Modal } from './Modal.tsx'
-
-const TOOL_LABELS: Record<string, string> = {
-  fs_read: '读文件',
-  fs_write: '写文件',
-  shell_exec: '执行命令',
-  file_produce: '产出文件',
-}
-const ALL_TOOLS = Object.keys(TOOL_LABELS)
 
 /** 头像选择器：预置 SVG 库网格预览。 */
 /** 头像选择器：DiceBear 风格画廊 + 随机换一批。 */
@@ -158,8 +153,8 @@ export function ContactsPage({
                   <h3>新建 Agent</h3>
                   <p className="contact-prompt">从模板开始，挑头像、定人设</p>
                 </button>
-                {sorted.map((agent) => (
-                  <article key={agent.id} className="contact-card">
+                {sorted.map((agent, index) => (
+                  <article key={agent.id} className="contact-card" style={stagger(index + 1)}>
                     <Avatar avatarKey={agent.avatar} name={agent.name} seed={agent.id} size={56} />
                     <h3>
                       {agent.name}
@@ -209,11 +204,12 @@ export function ContactsPage({
                 可用模板（{templates.length}）
               </p>
               <div className="template-rail">
-                {templates.map((template) => (
+                {templates.map((template, index) => (
                   <button
                     type="button"
                     key={template.key}
                     className="template-card"
+                    style={stagger(index)}
                     onClick={() => {
                       onCreateAgent(template.key)
                     }}
@@ -292,6 +288,11 @@ export function CreateAgentModal({
         tools,
       })
       onClose()
+    } catch (error) {
+      // 保存失败不能悄悄关窗：用户会以为已经建好。留在原地并说清原因。
+      toast.error(
+        `${editing === undefined ? '创建' : '保存'}失败：${error instanceof Error ? error.message : String(error)}`,
+      )
     } finally {
       setBusy(false)
     }
@@ -400,7 +401,7 @@ export function CreateAgentModal({
                     )
                   }}
                 />
-                {TOOL_LABELS[tool]}
+                {toolLabel(tool)}
               </label>
             ))}
           </div>
@@ -464,6 +465,8 @@ export function CreateGroupModal({
     try {
       await onSubmit({ memberAgentIds: selected, dispatcherAgentId: dispatcher, title: title || '群聊' })
       onClose()
+    } catch (error) {
+      toast.error(`建群失败：${error instanceof Error ? error.message : String(error)}`)
     } finally {
       setBusy(false)
     }

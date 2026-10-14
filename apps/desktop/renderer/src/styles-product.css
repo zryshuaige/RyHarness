@@ -166,17 +166,26 @@
   justify-content: center;
 }
 /* ---- Toast：轻提示 ----
-   反馈/复制/停止等瞬时反馈的统一出口；退场走 .is-leaving（全局退场体系）。 */
+   反馈/复制/停止等瞬时反馈的统一出口；退场走 .is-leaving（全局退场体系）。
+   两个挂载点：聊天页挂在 .chat-input-wrap 上沿（composer 变高也不会压住发送键），
+   其余页面由 App 兜底挂在窗口底部。定位上下文由挂载点提供，别再写死 bottom。 */
 .toast-host {
-  position: absolute;
+  position: fixed;
   bottom: var(--space-5);
   left: 50%;
   transform: translateX(-50%);
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  z-index: 40;
+  /* 低于弹窗遮罩（.modal-mask: 20）：弹窗打开时提示不该浮在遮罩上吃点击。 */
+  z-index: 10;
   pointer-events: none;
+}
+
+/* 聊天页：贴着输入区上沿，输入框多高都不会被盖住 */
+.chat-input-wrap .toast-host {
+  position: absolute;
+  bottom: calc(100% + 6px);
 }
 
 .toast {
@@ -314,4 +323,160 @@
 .chat-hint-btn:hover {
   color: var(--text-primary);
   background: var(--bg-elevated);
+}
+
+/* ---- 欢迎页：首屏直接能开口 ----
+   此前文案让用户「直接跟我说」却没有任何输入框，chip 一点还替用户把话发了出去。 */
+.welcome-compose {
+  max-width: 560px;
+  margin: 0 auto var(--space-6);
+  padding: var(--space-3);
+  border-radius: var(--radius-xl);
+  background: var(--bg-surface);
+  border: 1px solid var(--edge);
+  box-shadow: var(--shadow-2), var(--hair);
+  transition: border-color var(--dur-hover) var(--ease-out), box-shadow var(--dur-hover) var(--ease-out);
+}
+
+.welcome-compose:focus-within {
+  border-color: var(--amber-primary);
+  box-shadow: var(--shadow-2), 0 0 0 4px color-mix(in srgb, var(--amber-500) 18%, transparent);
+}
+
+.welcome-compose-hint {
+  margin: var(--space-2) 0 0;
+  color: var(--text-tertiary, var(--text-secondary));
+  font-size: var(--fs-xs);
+}
+
+/* ---- 停止生成：不是故障，是用户自己的选择 ----
+   与 .error-banner（红条）区分开：停止走中性色，不制造"出错了"的错觉。 */
+.stopped-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: var(--space-3) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+/* ---- 「我的」页：用户卡与猫管家卡分开 ---- */
+.me-name.is-static {
+  margin: var(--space-3) 0 2px;
+  font-size: var(--fs-display);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  cursor: default;
+}
+
+.me-butler {
+  align-items: center;
+}
+
+.me-inline-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: none;
+  padding: 2px 6px;
+  margin: -2px -6px;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background var(--dur-hover) var(--ease-out);
+}
+
+.me-inline-edit:hover {
+  background: var(--hover-bg);
+}
+
+.me-name-inline {
+  width: 100%;
+  font-size: var(--fs-base);
+  font-weight: 600;
+  border: 1px solid var(--amber-primary);
+  border-radius: var(--radius-sm);
+  background: var(--bg-app);
+  color: var(--text-primary);
+  padding: 2px 8px;
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* ---- 工作区区块：路径要能看清、能复制、能一键打开 ---- */
+.workspace-row {
+  align-items: flex-start;
+}
+
+.workspace-path {
+  display: block;
+  margin-top: var(--space-2);
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+  word-break: break-all;
+  user-select: text;
+}
+
+.workspace-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+/* ---- 群聊右栏：成员进化入口 ---- */
+.evolution-list {
+  list-style: none;
+  margin: 0 0 var(--space-3);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.evolution-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.evolution-name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.evolution-actions {
+  display: flex;
+  gap: var(--space-1);
+  flex-shrink: 0;
+}
+
+/* 面板内的次级按钮：比 .btn 更矮更窄，一行放得下两个。 */
+.btn-mini {
+  height: 26px;
+  padding: 0 var(--space-2);
+  font-size: var(--fs-xs);
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+}
+
+/* ---- 危险操作确认 ---- */
+.confirm-body {
+  margin: 0 0 var(--space-2);
+  padding: 0 var(--space-4);
+  color: var(--text-secondary);
+  line-height: 1.6;
 }

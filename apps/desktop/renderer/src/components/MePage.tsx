@@ -3,11 +3,13 @@ import type { AgentDef, MemoryRow, ProviderInfo } from '../api.ts'
 import { Avatar } from './avatars/Avatar.tsx'
 import { Icon } from './Icon.tsx'
 import { Modal } from './Modal.tsx'
+import { WorkspaceSection } from './WorkspaceSection.tsx'
 
 interface MeApi {
   listAgentMemories(agentId: string): Promise<{ agent: MemoryRow[]; shared: MemoryRow[] }>
   patchAgent(id: string, patch: Record<string, unknown>): Promise<{ agent: AgentDef }>
   setApiKey(providerId: string, apiKey: string): Promise<{ providerId: string; configured: boolean }>
+  workspace(): Promise<{ path: string }>
 }
 
 /**
@@ -101,7 +103,12 @@ function ProviderRow({ provider, api, onSaved }: { provider: ProviderInfo; api: 
   )
 }
 
-/** 「我的」页：用户卡（昵称可编辑）、设置分组、供应商状态灯、共享画像、关于。 */
+/**
+ * 「我的」页：用户卡（你）、猫管家卡（Ryen，昵称可改）、工作区、供应商、共享画像、关于。
+ *
+ * 此前这一页只有一张卡，画的是 Ryen 的猫、写的是它的名字——页面叫「我的」，
+ * 用户却找不到自己，编辑的还总是内置 agent 的名字。用户与 agent 是两件事，分开说。
+ */
 export function MePage({
   api,
   ryen,
@@ -149,44 +156,61 @@ export function MePage({
       </header>
       <div className="page-scroll">
         <div className="page-scroll-col me-page">
+          <div className="me-usercard">
+            <span className="me-avatar">
+              <Avatar name="你" seed="you" size={96} />
+            </span>
+            <p className="me-name is-static">你</p>
+            <p className="me-sub">这台电脑上的使用者 · 数据都在本机，不上传</p>
+          </div>
+
           {ryen !== undefined && (
-            <div className="me-usercard">
-              <span className="me-avatar">
-                <Avatar avatarKey={ryen.avatar} name={ryen.name} seed={ryen.id} size={96} />
-              </span>
-              {editingName ? (
-                <input
-                  className="me-name-input"
-                  value={nameDraft}
-                  // biome-ignore lint/a11y/noAutofocus: 点击昵称进入行内编辑，聚焦输入框是预期行为
-                  autoFocus
-                  onChange={(e) => {
-                    setNameDraft(e.target.value)
-                  }}
-                  onBlur={() => {
-                    void saveName()
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') void saveName()
-                    if (e.key === 'Escape') setEditingName(false)
-                  }}
-                />
-              ) : (
-                <button
-                  type="button"
-                  className="me-name"
-                  title="点击修改昵称"
-                  onClick={() => {
-                    setNameDraft(ryen.name)
-                    setEditingName(true)
-                  }}
-                >
-                  {ryen.name} <Icon name="pencil" size={14} className="me-pencil" />
-                </button>
-              )}
-              <p className="me-sub">你的猫管家总管 · 内置 Agent</p>
+            <div className="me-section">
+              <div className="me-row me-butler">
+                <Avatar avatarKey={ryen.avatar} name={ryen.name} seed={ryen.id} size={44} />
+                <div className="me-row-body">
+                  {editingName ? (
+                    <input
+                      className="me-name-inline"
+                      value={nameDraft}
+                      aria-label="猫管家昵称"
+                      // biome-ignore lint/a11y/noAutofocus: 点击昵称进入行内编辑，聚焦输入框是预期行为
+                      autoFocus
+                      onChange={(e) => {
+                        setNameDraft(e.target.value)
+                      }}
+                      onBlur={() => {
+                        void saveName()
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') void saveName()
+                        if (e.key === 'Escape') setEditingName(false)
+                      }}
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      className="me-row-title me-inline-edit"
+                      title="给它改个昵称"
+                      onClick={() => {
+                        setNameDraft(ryen.name)
+                        setEditingName(true)
+                      }}
+                    >
+                      {ryen.name} <Icon name="pencil" size={12} className="me-pencil" />
+                    </button>
+                  )}
+                  <div className="me-row-sub">猫管家总管 · 内置 Agent（改的是它的名字，不是你的）</div>
+                </div>
+                <span className="badge">内置</span>
+              </div>
             </div>
           )}
+
+          <div className="me-section">
+            <WorkspaceSection api={api} />
+          </div>
+
 
           <div className="me-section">
             <div className="me-row">
@@ -282,14 +306,14 @@ export function MePage({
                 界面图标：<strong>Lucide</strong>（ISC License）
               </li>
               <li>
-                应用图标与欢迎页图形：<strong>Microsoft Fluent Emoji</strong>（MIT License）
+                应用图标与猫管家形象：本仓库原创（随本项目 MIT）
               </li>
               <li>
-                Agent 头像：<strong>DiceBear</strong>（框架 MIT；lorelei / notionists / thumbs 为 CC0 1.0）
+                Agent 头像：<strong>DiceBear</strong>（框架 MIT；本地生成，不联网）
               </li>
               <li>
-                CC BY 4.0 署名：DiceBear <strong>Adventurer</strong> by Lisa Wischofsky；DiceBear{' '}
-                <strong>Big Ears</strong> by The Visual Team；DiceBear <strong>Fun Emoji</strong> by Davis Uche
+                CC BY 4.0 署名：DiceBear <strong>Dylan!</strong>（人物）by Natalia Spivak；DiceBear{' '}
+                <strong>Fun Emoji</strong>（吉祥物）by Davis Uche
               </li>
               <li>Agent 内核：cordis / cosmokit / schemastery（MIT，vendor 自上游）</li>
             </ul>

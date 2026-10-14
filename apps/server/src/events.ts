@@ -8,6 +8,7 @@
  */
 
 import type { ProduceCard } from '@ryagent/agent'
+import type { StoredUsage } from '@ryagent/session'
 
 /** WS 事件（/ws?conversationId= 订阅后推送）。 */
 export type WsEvent =
@@ -54,7 +55,14 @@ export type WsEvent =
       reason: string
       turnIndex: number
     }
-  | { type: 'message-done'; conversationId: string; senderId: string; turnIndex: number }
+  | {
+      type: 'message-done'
+      conversationId: string
+      senderId: string
+      turnIndex: number
+      /** 本轮（含本条发言）的累计 token 用量；供应商未回报时缺省。 */
+      usage?: StoredUsage
+    }
   | { type: 'error'; conversationId: string; message: string; code: string }
   | {
       type: 'queued'

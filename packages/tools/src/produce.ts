@@ -6,7 +6,7 @@
 
 import { mkdirSync, statSync, writeFileSync } from 'node:fs'
 import { extname, join } from 'node:path'
-import type { ProduceCard, Tool } from '@ryagent/agent'
+import { type ProduceCard, type Tool, throwIfAborted } from '@ryagent/agent'
 import { resolveInWorkspace } from './workspace.ts'
 
 /** 产物统一落进工作区下的这个子目录。 */
@@ -69,6 +69,7 @@ export const fileProduce: Tool = {
     required: ['name', 'content'],
   },
   async execute(args, ctx) {
+    throwIfAborted(ctx.signal)
     const name = sanitizeLeafName(argString(args, 'name'))
     const content = argString(args, 'content')
     const mime =

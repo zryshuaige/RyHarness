@@ -3,14 +3,17 @@ import type { AgentDef, AgentTemplate, Conversation, ProviderInfo } from './api.
 import { ApiClient } from './api.ts'
 import { AppIcon } from './components/AppIcon.tsx'
 import { ChatView } from './components/ChatView.tsx'
+import { ConfirmDialog } from './components/ConfirmDialog.tsx'
 import { ContactsPage, CreateAgentModal, CreateGroupModal } from './components/ContactsPage.tsx'
 import { ConversationList } from './components/ConversationList.tsx'
 import type { IconName } from './components/Icon.tsx'
 import { Icon } from './components/Icon.tsx'
 import { MePage } from './components/MePage.tsx'
 import { RightPanel } from './components/RightPanel.tsx'
+import { ToastHost } from './components/ToastHost.tsx'
 import { WelcomeHome } from './components/WelcomeHome.tsx'
 import { useApiBase } from './lib/boot.ts'
+import { toast } from './lib/toast.ts'
 import { ChatStore } from './store.ts'
 
 type Tab = 'chats' | 'contacts' | 'me'
@@ -76,6 +79,8 @@ export function App() {
   const [listLoading, setListLoading] = useState(true)
   const [activeId, setActiveId] = useState<string | undefined>(undefined)
   const [modal, setModal] = useState<'agent' | 'group' | undefined>(undefined)
+  /** 待确认删除的 agent（确认弹窗内完成，避免 window.confirm 割裂界面）。 */
+  const [deletingAgent, setDeletingAgent] = useState<AgentDef | undefined>(undefined)
   /** 新建 agent 时的初始模板（通讯录模板轨带入）。 */
   const [agentTemplateKey, setAgentTemplateKey] = useState<string | undefined>(undefined)
   /** 非空 = 编辑既有 agent。 */
@@ -243,8 +248,8 @@ export function App() {
     }
   }
 
-  /** 欢迎主页的建议 chip：打开（或创建）与 Ryen 的单聊并直接发送。 */
-  const suggestToRyen = async (text: string): Promise<void> => {
+  /** 欢迎页输入框/建议 chip 的回车：打开（或创建）与 Ryen 的单聊并发送这句话。 */
+  const startChatWithRyen = async (text: string): Promise<void> => {
     if (api === undefined || ryen === undefined) return
     try {
       const existing = conversations.find((c) => {
@@ -259,7 +264,7 @@ export function App() {
       setTab('chats')
       await api.postMessage(conversationId, text)
     } catch (error) {
-      setLoadError(error instanceof Error ? error.message : String(error))
+      toast.error(`没能发出这句话：${error instanceof Error ? error.message : String(error)}`)
     }
   }
 
@@ -379,8 +384,8 @@ export function App() {
                   await api.setApiKey(providerId, apiKey)
                   await refresh()
                 }}
-                onSuggest={(text) => {
-                  void suggestToRyen(text)
+                onSend={(text) => {
+                  void startChatWithRyen(text)
                 }}
                 onOpenConversation={(id) => {
                   setActiveId(id)
@@ -405,15 +410,7 @@ export function App() {
             setModal('agent')
           }}
           onDeleteAgent={(agent) => {
-            if (!window.confirm(`删除「${agent.name}」？相关记忆与经验也会一并移除，且不可恢复。`)) return
-            void api
-              .deleteAgent(agent.id)
-              .then(() => {
-                return refresh()
-              })
-              .catch((error: unknown) => {
-                window.alert(error instanceof Error ? error.message : String(error))
-              })
+            setDeletingAgent(agent)
           }}
           onCreateGroup={() => {
             setModal('group')
@@ -486,6 +483,25 @@ export function App() {
           }}
         />
       )}
+      {deletingAgent !== undefined && (
+        <ConfirmDialog
+          title={`删除「${deletingAgent.name}」？`}
+          body={`「${deletingAgent.name}」会从通讯录里消失，它此前的聊天记录仍留在历史会话中。删除后不可恢复：即使重新建一个同名 agent，那也是一个全新的它，记忆与经验都不会回来。`}
+          onCancel={() => {
+            setDeletingAgent(undefined)
+          }}
+          onConfirm={async () => {
+            await api.deleteAgent(deletingAgent.id)
+            await refresh()
+            setDeletingAgent(undefined)
+            toast.success(`「${deletingAgent.name}」已删除`)
+          }}
+        />
+      )}
+      {/* toast 宿主：会话打开时由 ChatView 挂在输入区上沿（composer 变高不会压住发送键），
+          其余页面（欢迎页 / 通讯录 / 我的）由这里兜底——保存、删除的反馈不能只有
+          聊天页看得见。任何时刻只有一个宿主在屏上。 */}
+      {!(tab === 'chats' && active !== undefined) && <ToastHost />}
     </div>
   )
 }

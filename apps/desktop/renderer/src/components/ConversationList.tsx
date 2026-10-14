@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { AgentDef, Conversation } from '../api.ts'
+import { stagger } from '../lib/stagger.ts'
 import { Avatar } from './avatars/Avatar.tsx'
 import { GroupAvatar } from './avatars/GroupAvatar.tsx'
 import { formatTime } from './ChatView.tsx'
@@ -97,11 +98,12 @@ export function ConversationList({
             )}
           </div>
         ) : (
-          filtered.map((conversation) => (
+          filtered.map((conversation, index) => (
             <button
               type="button"
               key={conversation.id}
               className={`conversation-item ${conversation.id === activeId ? 'is-active' : ''}`}
+              style={stagger(index)}
               onClick={() => {
                 onSelect(conversation.id)
               }}

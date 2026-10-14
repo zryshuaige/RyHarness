@@ -7,6 +7,13 @@
  * 事务；改为"每条完成的发言一个写入单元"——assistant 发言与其工具结果
  * 消息逐条落库（每条自身原子），错误以 system 消息收尾。半成品定义上
  * 不存在：assistant 消息只在流正常组装完成后写入。
+ *
+ * 取消：RunContext.signal 透传给 AgentLoop / GroupDispatcher / 工具；
+ * 已推给前端的半截回复由循环固化成一条正常消息落库，再抛 AbortedError。
+ *
+ * 用量：LlmRuntime 被 observeUsage 包一层拦截 usage chunk，逐次挂到产出
+ * 它的那条 assistant 消息上（messages.usage），并经 RunContext.onUsage
+ * 上报本轮累计；会话累计由 store.conversationUsage 求和得到。
  * @module @ryagent/session/coordinator
  */
 
@@ -127,10 +134,8 @@ class UsageMeter {
     this.reasoning += usage.reasoningTokens ?? 0
   }
 
-  /** 取走自上次取走以来的用量；没有新事件返回 undefined。 */
-  take(): StoredUsage | undefined {
-    if (this.calls === 0) return undefined
-    const usage: StoredUsage = {
+  private snapshot(): StoredUsage {
+    return {
       inputTokens: this.input,
       outputTokens: this.output,
       totalTokens: this.total,
@@ -138,6 +143,17 @@ class UsageMeter {
       ...(this.cacheWrite === 0 ? {} : { cacheWriteTokens: this.cacheWrite }),
       ...(this.reasoning === 0 ? {} : { reasoningTokens: this.reasoning }),
     }
+  }
+
+  /** 自建以来的累计快照（不清零）；没有 usage 事件时为 undefined。 */
+  get accumulated(): StoredUsage | undefined {
+    return this.calls === 0 ? undefined : this.snapshot()
+  }
+
+  /** 取走自上次取走以来的用量；没有新事件返回 undefined。 */
+  take(): StoredUsage | undefined {
+    if (this.calls === 0) return undefined
+    const usage = this.snapshot()
     this.input = 0
     this.output = 0
     this.total = 0
@@ -150,12 +166,14 @@ class UsageMeter {
 }
 
 /**
- * 包一层 LlmRuntime，只做一件事：截获 `usage` chunk 交给 meter。
+ * 包一层 LlmRuntime，只做一件事：截获 `usage` chunk 交给记账回调。
  *
  * 用 Proxy 而不是继承——LlmRuntime 是 Typert 服务类，构造与装饰器都不适合
  * 在这里复刻；AgentLoop / GroupDispatcher 也只用 `stream`，其余成员原样转发。
+ * 放在协调器而不是循环里，是因为群聊路径的循环由 GroupDispatcher 自己创建，
+ * 只有包住 runtime 才能让单聊与群聊共用同一套记账。
  */
-function observeUsage(base: LlmRuntime, meter: UsageMeter): LlmRuntime {
+function observeUsage(base: LlmRuntime, onUsage: (usage: TokenUsage) => void): LlmRuntime {
   return new Proxy(base, {
     get(target, prop, receiver) {
       if (prop !== 'stream') {
@@ -165,7 +183,7 @@ function observeUsage(base: LlmRuntime, meter: UsageMeter): LlmRuntime {
       return (options: GenerateOptions): AsyncIterable<StreamChunk> => {
         return (async function* (): AsyncGenerator<StreamChunk> {
           for await (const chunk of target.stream(options)) {
-            if (chunk.type === 'usage') meter.add(chunk.usage)
+            if (chunk.type === 'usage') onUsage(chunk.usage)
             yield chunk
           }
         })()
@@ -175,8 +193,37 @@ function observeUsage(base: LlmRuntime, meter: UsageMeter): LlmRuntime {
 }
 
 /** 把 TokenUsage 归一成落库形态。 */
-function toStoredUsage(usage: StoredUsage): StoredUsage {
-  return usage
+function toStoredUsage(usage: TokenUsage): StoredUsage {
+  return {
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    totalTokens: usage.totalTokens ?? usage.inputTokens + usage.outputTokens,
+    ...(usage.cacheReadTokens === undefined ? {} : { cacheReadTokens: usage.cacheReadTokens }),
+    ...(usage.cacheWriteTokens === undefined ? {} : { cacheWriteTokens: usage.cacheWriteTokens }),
+    ...(usage.reasoningTokens === undefined ? {} : { reasoningTokens: usage.reasoningTokens }),
+  }
+}
+
+/** 一轮对话的用量记账：逐次抽取（挂到具体消息）+ 本轮累计（上报与查询）。 */
+class TurnUsage {
+  private readonly calls = new UsageMeter()
+  private readonly turn = new UsageMeter()
+
+  /** 记一次模型调用。 */
+  add(usage: TokenUsage): void {
+    this.calls.add(usage)
+    this.turn.add(usage)
+  }
+
+  /** 取走上次取走以来累计的用量（挂到本步产出的那条消息）。 */
+  takeCall(): StoredUsage | undefined {
+    return this.calls.take()
+  }
+
+  /** 本轮累计用量。 */
+  total(): StoredUsage | undefined {
+    return this.turn.accumulated
+  }
 }
 
 /** Session 协调器：单聊 chatDirect + 群聊 chatGroup。 */
@@ -216,42 +263,56 @@ export class SessionCoordinator {
 
     const memory = this.bindMemory(conversationId)
     const evolution = this.bindEvolution(conversationId)
+    const usage = new TurnUsage()
+    let lastAssistant: StoredMessage | undefined
     const loop = new AgentLoop({
       definition: agent,
-      llm,
+      llm: observeUsage(llm, (call) => {
+        usage.add(call)
+      }),
       tools,
       history,
       // 每步组装出的 assistant 消息（含 tool_calls、可能无文本）即时落库：
       // 不持久化它们，重建历史里 tool 消息就没有前置的 assistant tool_calls
       // 消息，违反 OpenAI 消息序列契约（第二轮必 400）。
-      onAssistantMessage: (message) => {
+      onAssistantMessage: (message, callUsage) => {
         if (message.content.length === 0) return
-        store.appendMessage({
+        const row = store.appendMessage({
           conversationId,
           senderType: 'agent',
           senderId: agentId,
           contentBlocks: [...message.content],
           turnIndex,
         })
+        lastAssistant = row
+        // 一次模型调用恰好产出一条消息，取走的记账就是这条消息的用量；循环
+        // 直接递来的 usage 是同一个值，作为供应商漏报 usage chunk 时的兜底。
+        const drained = usage.takeCall()
+        this.settleUsage(row, callUsage === undefined ? drained : toStoredUsage(callUsage), usage, turnIndex, context)
       },
       ...(memory === undefined ? {} : { memory }),
       ...(evolution === undefined ? {} : { evolution }),
     })
 
     let failed: { message: string; code: string } | undefined
-    for await (const event of loop.run({ text }, context)) {
-      yield event
-      if (event.type === 'tool-result') {
-        store.appendMessage({
-          conversationId,
-          senderType: 'agent',
-          senderId: agentId,
-          contentBlocks: [{ type: 'text', text: `${TOOL_RESULT_PREFIX}${event.name}: ${event.result.content}` }],
-          toolCallId: event.callId,
-          turnIndex,
-        })
+    try {
+      for await (const event of loop.run({ text }, context)) {
+        yield event
+        if (event.type === 'tool-result') {
+          store.appendMessage({
+            conversationId,
+            senderType: 'agent',
+            senderId: agentId,
+            contentBlocks: [{ type: 'text', text: `${TOOL_RESULT_PREFIX}${event.name}: ${event.result.content}` }],
+            toolCallId: event.callId,
+            turnIndex,
+          })
+        }
+        if (event.type === 'error') failed = { message: event.message, code: event.code }
       }
-      if (event.type === 'error') failed = { message: event.message, code: event.code }
+    } finally {
+      // 取消时循环会抛 AbortedError：未挂到消息上的那次调用用量不能丢。
+      this.settleUsage(lastAssistant, usage.takeCall(), usage, turnIndex, context)
     }
 
     if (failed !== undefined) {
@@ -313,57 +374,98 @@ export class SessionCoordinator {
       if (entry !== undefined) history.push(entry)
     }
 
+    const usage = new TurnUsage()
+    let lastAssistant: StoredMessage | undefined
     const dispatcher = new GroupDispatcher({
-      llm,
+      llm: observeUsage(llm, (call) => {
+        usage.add(call)
+      }),
       members,
       dispatcherId,
       tools,
       ...(this.bindMemory(conversationId) === undefined ? {} : { memory: this.bindMemory(conversationId) }),
       ...(this.bindEvolution(conversationId) === undefined ? {} : { evolution: this.bindEvolution(conversationId) }),
     })
-    for await (const event of dispatcher.runTurn({ text, history, workspaceRoot: context.workspaceRoot, turnIndex })) {
-      yield event
-      switch (event.type) {
-        case 'dispatch':
-          store.recordDispatchEvent({
-            conversationId,
-            fromAgent: event.fromAgent,
-            toAgent: event.toAgent,
-            reason: event.reason,
-            turnIndex,
-          })
-          break
-        case 'agent-message':
-          store.appendMessage({
-            conversationId,
-            senderType: 'agent',
-            senderId: event.agentId,
-            contentBlocks: [...event.message.content],
-            turnIndex,
-          })
-          break
-        case 'tool-result':
-          store.appendMessage({
-            conversationId,
-            senderType: 'agent',
-            senderId: event.agentId,
-            contentBlocks: [{ type: 'text', text: `${TOOL_RESULT_PREFIX}${event.name}: ${event.result.content}` }],
-            toolCallId: event.callId,
-            turnIndex,
-          })
-          break
-        case 'error':
-          store.appendMessage({
-            conversationId,
-            senderType: 'system',
-            contentBlocks: [{ type: 'text', text: `[error:${event.code}] ${event.message}` }],
-            turnIndex,
-          })
-          break
-        default:
-          break
+    try {
+      for await (const event of dispatcher.runTurn({
+        text,
+        history,
+        workspaceRoot: context.workspaceRoot,
+        turnIndex,
+        ...(context.signal === undefined ? {} : { signal: context.signal }),
+      })) {
+        yield event
+        switch (event.type) {
+          case 'dispatch':
+            store.recordDispatchEvent({
+              conversationId,
+              fromAgent: event.fromAgent,
+              toAgent: event.toAgent,
+              reason: event.reason,
+              turnIndex,
+            })
+            break
+          case 'agent-message': {
+            const row = store.appendMessage({
+              conversationId,
+              senderType: 'agent',
+              senderId: event.agentId,
+              contentBlocks: [...event.message.content],
+              turnIndex,
+            })
+            lastAssistant = row
+            // 群聊的循环由调度器创建，usage 只能按"这条发言之前发生的调用"
+            // 归集；入口扇出并行时多名成员的用量会并到先提交的那条消息上，
+            // 总额仍与实际开销一致。
+            this.settleUsage(row, usage.takeCall(), usage, turnIndex, context)
+            break
+          }
+          case 'tool-result':
+            store.appendMessage({
+              conversationId,
+              senderType: 'agent',
+              senderId: event.agentId,
+              contentBlocks: [{ type: 'text', text: `${TOOL_RESULT_PREFIX}${event.name}: ${event.result.content}` }],
+              toolCallId: event.callId,
+              turnIndex,
+            })
+            break
+          case 'error':
+            store.appendMessage({
+              conversationId,
+              senderType: 'system',
+              contentBlocks: [{ type: 'text', text: `[error:${event.code}] ${event.message}` }],
+              turnIndex,
+            })
+            break
+          default:
+            break
+        }
       }
+    } finally {
+      // 失败或被取消的那次调用没有产出发言，其用量挂到本轮最后一条发言上，
+      // 保证会话累计口径完整。
+      this.settleUsage(lastAssistant, usage.takeCall(), usage, turnIndex, context)
     }
+  }
+
+  /**
+   * 一次模型调用的用量出账：写回产出它的那条消息，并回调上报本轮累计
+   * （server 据此推 WS done 事件）。没有用量（供应商漏报）或没有消息可挂时
+   * 静默跳过——成本口径宁可少一条，不可把用量算到别的消息上。
+   */
+  private settleUsage(
+    message: StoredMessage | undefined,
+    usage: StoredUsage | undefined,
+    turnUsage: TurnUsage,
+    turnIndex: number,
+    context: RunContext,
+  ): void {
+    if (message === undefined || usage === undefined) return
+    this.options.store.attachUsage(message.id, usage)
+    const turnTotal = turnUsage.total()
+    if (turnTotal === undefined) return
+    context.onUsage?.({ conversationId: message.conversationId, turnIndex, usage, turnTotal })
   }
 
   /** 绑定会话 id 的记忆钩子（AgentLoop 不关心 conversationId，由这里注入）。 */
@@ -385,8 +487,8 @@ export class SessionCoordinator {
     const evolution = this.options.evolution
     if (evolution === undefined) return undefined
     return {
-      compile: (agentId) => {
-        return evolution.compile(agentId)
+      compile: (agentId, inputText) => {
+        return evolution.compile(agentId, inputText)
       },
       enqueueTurn: (agentId, agentName, _conversationId, turn) => {
         evolution.enqueueTurn(agentId, agentName, conversationId, turn)
