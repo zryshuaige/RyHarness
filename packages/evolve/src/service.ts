@@ -190,7 +190,7 @@ export class EvolveService implements AgentEvolutionHooks {
   enqueueTurn(agentId: string, agentName: string, conversationId: string, turn: EvolutionTurn): void {
     // 归因只记与本轮有关的条目：噪声条目也 ±1 会把 harmful 排序与自动
     // deprecate 建在噪声上。反馈闭环复用同一份集合。
-    const relevant = this.relevantEntryIds(agentId, turn)
+    const relevant = this.relevantEntryIds(turn)
     this.attribution.set(`${conversationId}:${agentId}`, {
       playbookEntryIds: relevant,
       reflectionIds: [...turn.injectedReflectionIds],
@@ -202,7 +202,7 @@ export class EvolveService implements AgentEvolutionHooks {
   }
 
   /** 注入条目里与本轮输入真正相关的那些（无文本可判时全部保留）。 */
-  private relevantEntryIds(agentId: string, turn: EvolutionTurn): string[] {
+  private relevantEntryIds(turn: EvolutionTurn): string[] {
     const context = turnContextTexts(turn)
     if (context.length === 0) return [...turn.injectedPlaybookEntryIds]
     const relevant: string[] = []

@@ -211,7 +211,6 @@ export function MePage({
             <WorkspaceSection api={api} />
           </div>
 
-
           <div className="me-section">
             <div className="me-row">
               <div className="me-row-body">
@@ -293,34 +292,43 @@ export function MePage({
             setShowAbout(false)
           }}
         >
-          <div className="about-body">
-            <p>
-              <strong>RyAgent</strong> v0.1.0 · 单机多 Agent 即时通讯桌面应用
-            </p>
-            <p>
-              本体以 <strong>MIT License</strong> 发布（见仓库 LICENSE）。
-            </p>
-            <p className="about-heading">第三方资产与署名</p>
-            <ul className="about-list">
-              <li>
-                界面图标：<strong>Lucide</strong>（ISC License）
-              </li>
-              <li>
-                应用图标与猫管家形象：本仓库原创（随本项目 MIT）
-              </li>
-              <li>
-                Agent 头像：<strong>DiceBear</strong>（框架 MIT；本地生成，不联网）
-              </li>
-              <li>
-                CC BY 4.0 署名：DiceBear <strong>Dylan!</strong>（人物）by Natalia Spivak；DiceBear{' '}
-                <strong>Fun Emoji</strong>（吉祥物）by Davis Uche
-              </li>
-              <li>Agent 内核：cordis / cosmokit / schemastery（MIT，vendor 自上游）</li>
-            </ul>
-            <p className="about-note">完整许可文本见仓库 NOTICE.md 与 vendor/*/LICENSE。</p>
-          </div>
+          <AboutContent />
         </Modal>
       )}
     </section>
+  )
+}
+
+/**
+ * 关于弹窗正文。单独导出是为了能被测试直接断言——署名写错是最难靠肉眼复查、
+ * 又最容易在重构里悄悄漂移的一处（此前就署着早已不用的 Fluent Emoji 与四个
+ * DiceBear 家族）。只写**实际在用**的资产，数量以 renderer 的注册表为准。
+ */
+export function AboutContent() {
+  return (
+    <div className="about-body">
+      <p>
+        <strong>RyAgent</strong> v0.1.0 · 单机多 Agent 即时通讯桌面应用
+      </p>
+      <p>
+        本体以 <strong>MIT License</strong> 发布（见仓库 LICENSE）。
+      </p>
+      <p className="about-heading">第三方资产与署名</p>
+      <ul className="about-list">
+        <li>
+          界面图标：<strong>Lucide</strong>（ISC License）
+        </li>
+        <li>应用图标与猫管家形象：本仓库原创（随本项目 MIT）</li>
+        <li>
+          Agent 头像：<strong>DiceBear</strong>（框架 MIT；本地生成，不联网）
+        </li>
+        <li>
+          CC BY 4.0 署名：DiceBear <strong>Dylan!</strong>（人物）by Natalia Spivak；DiceBear <strong>Fun Emoji</strong>
+          （吉祥物）by Davis Uche
+        </li>
+        <li>Agent 内核：cordis / cosmokit / schemastery（MIT，vendor 自上游）</li>
+      </ul>
+      <p className="about-note">完整许可文本见仓库 NOTICE.md 与 vendor/*/LICENSE。</p>
+    </div>
   )
 }

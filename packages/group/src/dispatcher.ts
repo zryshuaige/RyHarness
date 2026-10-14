@@ -377,6 +377,11 @@ export class GroupDispatcher {
         }
       } catch (error) {
         if (!isAbortedError(error)) throw error
+        // 取消时 AgentLoop 已把收到的半截文本通过 onAssistantMessage 交回来；
+        // 不补发的话用户看得到半句话，刷新后消息却会消失。
+        if (assistant !== undefined) {
+          yield { type: 'agent-message', agentId: member.id, message: assistant }
+        }
         yield { type: 'error', message: errorChain(error), code: ABORTED_CODE }
         break
       }

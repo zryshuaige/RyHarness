@@ -9,5 +9,6 @@ dist/
 data/
 apps/desktop/main/
 apps/desktop/capture.png
+apps/desktop/release/
 coverage/
 *.tsbuildinfo

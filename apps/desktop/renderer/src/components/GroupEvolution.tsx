@@ -63,13 +63,7 @@ export function GroupEvolution({
 }
 
 /** 调度轨迹：原因一律走中文口径，护栏拦截用警示色标出。 */
-export function RelayTimeline({
-  relays,
-  nameOf,
-}: {
-  relays: readonly RelayItem[]
-  nameOf: (id: string) => string
-}) {
+export function RelayTimeline({ relays, nameOf }: { relays: readonly RelayItem[]; nameOf: (id: string) => string }) {
   if (relays.length === 0) return <p className="panel-empty">本轮还没有调度事件</p>
   return (
     <ul className="relay-list">

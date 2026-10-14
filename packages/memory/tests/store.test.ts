@@ -171,6 +171,22 @@ describe('MemoryStore', () => {
     s.close()
   })
 
+  it('巩固归档跳过共享画像：用户画像没有恢复入口，归档即等于静默抹掉', () => {
+    const s = store()
+    const profile = s.insert({ agentId: SHARED_SPACE, kind: 'profile', content: '用户是产品经理' })
+    const agentFact = s.insert({ agentId: 'a1', kind: 'fact', content: '很久以前的私有事实' })
+    const old = Date.now() - 200 * 86_400_000
+    s.backdate(profile.id, old)
+    s.backdate(agentFact.id, old)
+
+    expect(s.archiveDormant(90 * 86_400_000)).toBe(1)
+    expect(s.get(profile.id)!.status).toBe('active')
+    expect(s.get(agentFact.id)!.status).toBe('inactive')
+    // 画像仍在注入面上，agent 回来还认得用户。
+    expect(s.listSharedProfile().map((row) => row.id)).toEqual([profile.id])
+    s.close()
+  })
+
   it('stats 按空间/种类/状态分桶', () => {
     const s = store()
     s.insert({ agentId: 'a1', kind: 'fact', content: '一' })

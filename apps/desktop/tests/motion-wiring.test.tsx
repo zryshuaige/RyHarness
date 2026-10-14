@@ -122,6 +122,7 @@ describe('列表 stagger 接线', () => {
       />,
     )
     expect(html).toContain('template-card" style="--i:0')
+    expect(html).toMatch(/contact-card contact-create" style="--i:0/)
     expect(html).toMatch(/contact-card" style="--i:\d+/)
   })
 })

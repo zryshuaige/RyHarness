@@ -430,7 +430,10 @@ ${definition.name}：${assistantText.trim()}`,
   }
 
   /** 自我进化编译（playbook + 相关教训；故障静默降级）。 */
-  private async compileEvolution(agentId: string, inputText: string): Promise<{
+  private async compileEvolution(
+    agentId: string,
+    inputText: string,
+  ): Promise<{
     text?: string
     playbookEntryIds: string[]
     reflectionIds: string[]

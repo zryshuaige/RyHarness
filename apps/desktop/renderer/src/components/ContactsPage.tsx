@@ -143,6 +143,7 @@ export function ContactsPage({
                 <button
                   type="button"
                   className="contact-card contact-create"
+                  style={stagger(0)}
                   onClick={() => {
                     onCreateAgent()
                   }}

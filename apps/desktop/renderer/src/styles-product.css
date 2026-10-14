@@ -168,10 +168,11 @@
 /* ---- Toast：轻提示 ----
    反馈/复制/停止等瞬时反馈的统一出口；退场走 .is-leaving（全局退场体系）。
    两个挂载点：聊天页挂在 .chat-input-wrap 上沿（composer 变高也不会压住发送键），
-   其余页面由 App 兜底挂在窗口底部。定位上下文由挂载点提供，别再写死 bottom。 */
+   其余页面由 App 兜底——挂在窗口顶部而不是底部：欢迎页底部有输入框、聊天页底部有
+   输入框，底部居中迟早会压住可点的东西。 */
 .toast-host {
   position: fixed;
-  bottom: var(--space-5);
+  top: var(--space-4);
   left: 50%;
   transform: translateX(-50%);
   display: flex;
@@ -182,9 +183,11 @@
   pointer-events: none;
 }
 
-/* 聊天页：贴着输入区上沿，输入框多高都不会被盖住 */
+/* 聊天页：贴着输入区上沿，输入框多高都不会被盖住。
+   top 必须显式归零：绝对定位下 top+bottom 同时给会把宿主拉成整块高度的盒子。 */
 .chat-input-wrap .toast-host {
   position: absolute;
+  top: auto;
   bottom: calc(100% + 6px);
 }
 
@@ -234,10 +237,11 @@
   color: var(--text-primary);
 }
 
+/* 宿主锚在顶部，所以进场是从上方落下、退场向上飘走。 */
 @keyframes toast-in {
   from {
     opacity: 0;
-    transform: translateY(8px) scale(0.98);
+    transform: translateY(-8px) scale(0.98);
   }
   to {
     opacity: 1;
@@ -248,7 +252,7 @@
 @keyframes toast-out {
   to {
     opacity: 0;
-    transform: translateY(6px) scale(0.98);
+    transform: translateY(-6px) scale(0.98);
   }
 }
 

@@ -188,7 +188,13 @@ export class SessionStore {
   /** 删除一个 Agent：摘出会话成员身份，并级联清掉它的长期记忆与经验手册。 */
   deleteAgent(id: string): DeleteAgentResult {
     this.db.exec('BEGIN')
-    let result: DeleteAgentResult = { conversationsUpdated: 0, memories: 0, playbookEntries: 0, reflections: 0, feedback: 0 }
+    const result: DeleteAgentResult = {
+      conversationsUpdated: 0,
+      memories: 0,
+      playbookEntries: 0,
+      reflections: 0,
+      feedback: 0,
+    }
     try {
       this.db.prepare('DELETE FROM agents WHERE id = ?').run(id)
       for (const conversation of this.listConversations(10_000)) {
@@ -210,7 +216,9 @@ export class SessionStore {
       // 跨包没法靠 ON DELETE CASCADE）。这里显式清一次：留着就是孤儿行——
       // agent 没了，画像/教训/反馈却还在被检索与统计。
       if (this.tableExists('memories_fts') && this.tableExists('memories')) {
-        this.db.prepare('DELETE FROM memories_fts WHERE rowid IN (SELECT rowid FROM memories WHERE agent_id = ?)').run(id)
+        this.db
+          .prepare('DELETE FROM memories_fts WHERE rowid IN (SELECT rowid FROM memories WHERE agent_id = ?)')
+          .run(id)
       }
       result.memories = this.deleteAgentRows('memories', id)
       result.playbookEntries = this.deleteAgentRows('playbook_entries', id)
@@ -226,7 +234,9 @@ export class SessionStore {
 
   /** 表是否存在（记忆/进化子系统被关闭时它们的迁移还没跑过）。 */
   private tableExists(table: string): boolean {
-    const row = this.db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) as {
+    const row = this.db
+      .prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get(table) as {
       count: number
     }
     return Number(row.count) > 0

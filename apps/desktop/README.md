@@ -65,8 +65,13 @@ pnpm --filter @ryagent/desktop package       # NSIS 安装包（release/RyAgent 
 - **随分发物交付许可**：`build.extraResources` 已把仓库根的 `LICENSE` 与 `NOTICE.md`
   复制进安装目录的 `resources/`，MIT 法条与 DiceBear CC BY 4.0 署名因此随包交付，
   不需要打包者手工追加。改动资产或依赖后请同步更新根 `NOTICE.md`。
-- `release/` 是产物目录，不应入库（根 `.gitignore` 目前只忽略 `coverage/` 等，
-  若要避免误提交，请自行补一条 `apps/desktop/release/`）。
+- `release/` 是产物目录，已在根 `.gitignore` 里忽略，别提交进去。
+
+> 首次打包要下载 ~110MB 的 Electron 发行包（`@electron/get` 缓存目录
+> `%LOCALAPPDATA%/electron/Cache`，之后就不重复下载了）。网络不通或极慢时可以：
+> 设 `ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/`，或在 `build` 里临时加
+> `"electronDist": "<本地 electron 发行包 zip 或解包目录>"`（例如 `node_modules/electron/dist`）
+> 直接复用已装好的 Electron；后者是本机路径，用完记得从 package.json 里删掉再提交。
 
 ## 使用要点
 

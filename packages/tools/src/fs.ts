@@ -40,7 +40,9 @@ export const fsRead: Tool = {
     },
     required: ['path'],
   },
-  execute(args, ctx) {
+  // async：取消检查抛出的 AbortedError 必须以 rejection 兑现 Tool 的
+  // Promise 契约（同步 throw 会绕过调用方的 await 处理）。
+  async execute(args, ctx) {
     // 取消优先于任何副作用：已取消的轮次不再读写工作区。
     throwIfAborted(ctx.signal)
     return guard(() => {
@@ -80,7 +82,7 @@ export const fsWrite: Tool = {
     },
     required: ['path', 'content'],
   },
-  execute(args, ctx) {
+  async execute(args, ctx) {
     throwIfAborted(ctx.signal)
     return guard(() => {
       const target = resolveInWorkspace(ctx.workspaceRoot, argString(args, 'path'))

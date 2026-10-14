@@ -1,18 +1,13 @@
 import { memo, useMemo, useState } from 'react'
 import type { AgentDef, ApiClient, Conversation } from '../api.ts'
+import { toolLabel } from '../lib/tool-labels.ts'
 import type { ChatStore, RelayItem } from '../store.ts'
 import { useChat } from '../store.ts'
 import { Avatar } from './avatars/Avatar.tsx'
+import { GroupEvolution, RelayTimeline } from './GroupEvolution.tsx'
 import { Icon } from './Icon.tsx'
 import { MemoryPanel } from './MemoryPanel.tsx'
 import { PlaybookPanel } from './PlaybookPanel.tsx'
-
-const TOOL_LABELS: Record<string, string> = {
-  fs_read: '读文件',
-  fs_write: '写文件',
-  shell_exec: '执行命令',
-  file_produce: '产出文件',
-}
 
 /**
  * 右栏信息板：单聊 = 资料卡 + 产物；群聊 = 成员网格 + 调度时间线 + 产物。
@@ -88,6 +83,8 @@ export function RightPanel({
             relays={snapshot.relays}
             artifacts={artifacts}
             fileUrl={fileUrl}
+            onShowMemories={setMemoryFor}
+            onShowPlaybook={setPlaybookFor}
           />
         )}
       </div>
@@ -209,7 +206,7 @@ const DirectProfile = memo(function DirectProfile({
               {agent.tools.map((tool) => {
                 return (
                   <span key={tool} className="chip">
-                    {TOOL_LABELS[tool] ?? tool}
+                    {toolLabel(tool)}
                   </span>
                 )
               })}
@@ -229,12 +226,16 @@ const GroupInfo = memo(function GroupInfo({
   relays,
   artifacts,
   fileUrl,
+  onShowMemories,
+  onShowPlaybook,
 }: {
   conversation: Conversation
   agents: AgentDef[]
   relays: RelayItem[]
   artifacts: { callId: string; name: string; size: number; mime: string }[]
   fileUrl: (name: string) => string
+  onShowMemories: (agent: AgentDef) => void
+  onShowPlaybook: (agent: AgentDef) => void
 }) {
   const members = conversation.memberAgentIds
     .map((id) => {
@@ -266,20 +267,10 @@ const GroupInfo = memo(function GroupInfo({
           </div>
         ))}
       </div>
+      {/* 群聊此前完全没有记忆/经验手册入口，"群里的人也在进化"这件事看不见。 */}
+      <GroupEvolution members={members} onShowMemories={onShowMemories} onShowPlaybook={onShowPlaybook} />
       <h4>调度轨迹</h4>
-      {relays.length === 0 ? (
-        <p className="panel-empty">本轮还没有调度事件</p>
-      ) : (
-        <ul className="relay-list">
-          {relays.map((relay, index) => (
-            <li key={index} className={relay.reason === 'loop-guard' || relay.reason === 'max-turns' ? 'is-guard' : ''}>
-              {relay.fromAgent !== undefined ? `${nameOf(relay.fromAgent)} → ` : ''}@{nameOf(relay.toAgent)}
-              <em>{relay.reason}</em>
-              <small>第 {relay.turnIndex + 1} 轮</small>
-            </li>
-          ))}
-        </ul>
-      )}
+      <RelayTimeline relays={relays} nameOf={nameOf} />
       <h4>本会话产物</h4>
       <ArtifactList artifacts={artifacts} fileUrl={fileUrl} />
     </>

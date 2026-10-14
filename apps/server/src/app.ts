@@ -163,8 +163,7 @@ function resolveSidecarEmbedding(
   const configured = providers.embedding
   if (configured !== undefined) {
     const provider = providers.providers[configured.providerId]
-    const apiKey =
-      provider?.apiKey ?? (provider?.apiKeyEnv === undefined ? undefined : process.env[provider.apiKeyEnv])
+    const apiKey = provider?.apiKey ?? (provider?.apiKeyEnv === undefined ? undefined : process.env[provider.apiKeyEnv])
     if (provider === undefined || apiKey === undefined || apiKey.length === 0) return undefined
     return { apiKey, baseURL: provider.baseURL, model: configured.model }
   }
@@ -188,8 +187,7 @@ function createDefaultMemory(dataDir: string, providers: ProvidersConfigFile): M
   const embeddingConfig = resolveSidecarEmbedding(providers)
   return new MemoryService({
     dbPath: join(dataDir, 'ryagent.db'),
-    embeddings:
-      embeddingConfig === undefined ? new NullEmbeddings() : new OpenAiCompatibleEmbeddings(embeddingConfig),
+    embeddings: embeddingConfig === undefined ? new NullEmbeddings() : new OpenAiCompatibleEmbeddings(embeddingConfig),
     llm: llmConfig === undefined ? undefined : new ChatMemoryLlm(llmConfig),
   })
 }
@@ -830,6 +828,12 @@ export class RyAgentServer {
     })
 
     // ---- providers ----
+
+    // 工作区：助理读写文件的根目录。「我的」页要展示它、打开它，
+    // 欢迎页的「看看工作区里都有什么文件」也要落地到真实路径上。
+    router.get('/api/workspace', async (_req, res) => {
+      json(res, 200, { path: this.workspaceRoot })
+    })
 
     router.get('/api/providers', async (_req, res) => {
       json(res, 200, {

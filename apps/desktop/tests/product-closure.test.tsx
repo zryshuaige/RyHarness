@@ -8,12 +8,21 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AgentDef, AgentTemplate, ApiClient, Conversation, MessageRow, ProviderInfo, WsEvent } from '../renderer/src/api.ts'
+import type {
+  AgentDef,
+  AgentTemplate,
+  ApiClient,
+  Conversation,
+  MessageRow,
+  ProviderInfo,
+  WsEvent,
+} from '../renderer/src/api.ts'
 import { ChatView } from '../renderer/src/components/ChatView.tsx'
 import { ConfirmDialog } from '../renderer/src/components/ConfirmDialog.tsx'
 import { CreateAgentModal } from '../renderer/src/components/ContactsPage.tsx'
 import { GroupEvolution, RelayTimeline } from '../renderer/src/components/GroupEvolution.tsx'
-import { MePage } from '../renderer/src/components/MePage.tsx'
+import { AboutContent, MePage } from '../renderer/src/components/MePage.tsx'
+import { RightPanel } from '../renderer/src/components/RightPanel.tsx'
 import { WelcomeHome } from '../renderer/src/components/WelcomeHome.tsx'
 import { WorkspaceSection } from '../renderer/src/components/WorkspaceSection.tsx'
 import { isGuardRelay, relayChainLabel, relayLabel } from '../renderer/src/lib/relay-labels.ts'
@@ -190,6 +199,34 @@ describe('群聊右栏：看得见的进化', () => {
     )
     expect(html).toContain('本轮还没有调度事件')
   })
+
+  it('右栏群聊分支真的把两个组件接上了（组件建好但没人接线等于没做）', async () => {
+    const store = new ChatStore()
+    store.setDispatchHistory([{ fromAgent: 'ryen', toAgent: 'coder', reason: 'loop-guard', turnIndex: 1 }])
+    // RightPanel 自己订阅 store（useSyncExternalStore），必须在客户端渲染。
+    await act(async () => {
+      root = createRoot(container)
+      root.render(
+        <RightPanel
+          api={{} as ApiClient}
+          store={store}
+          conversation={{ ...conversation, kind: 'group', memberAgentIds: ['ryen', 'coder'] }}
+          agents={[agent, coder]}
+          conversations={[conversation]}
+          fileUrl={(name) => {
+            return `/api/files/${name}`
+          }}
+          collapsed={false}
+          onToggle={() => {}}
+        />,
+      )
+      await Promise.resolve()
+    })
+    const panel = container.textContent ?? ''
+    expect(panel).toContain('谁在进化')
+    expect(panel).toContain('互相推诿已拦下')
+    expect(panel).not.toContain('loop-guard')
+  })
 })
 
 describe('ChatView：点「停止」后不复死在生成中', () => {
@@ -362,9 +399,7 @@ describe('工作区：路径要看得见、点得开', () => {
       )
       await Promise.resolve()
     })
-    expect(container.querySelector('.workspace-path')?.textContent).toBe(
-      'C:/Users/zry/AppData/ryagent/workspace',
-    )
+    expect(container.querySelector('.workspace-path')?.textContent).toBe('C:/Users/zry/AppData/ryagent/workspace')
     const labels = [...container.querySelectorAll('.workspace-actions button')].map((node) => {
       return node.textContent
     })
@@ -435,50 +470,43 @@ describe('「我的」页：用户与 agent 分开说', () => {
   })
 
   it('About 的第三方署名只写实际在用的资产', () => {
-    const html = renderToStaticMarkup(
-      <MePage
-        api={{
-          listAgentMemories: () => {
-            return Promise.resolve({ agent: [], shared: [] })
-          },
-          patchAgent: () => {
-            return Promise.resolve({ agent })
-          },
-          setApiKey: () => {
-            return Promise.resolve({ providerId: 'siliconflow', configured: true })
-          },
-          workspace: () => {
-            return Promise.resolve({ path: 'C:/data/workspace' })
-          },
-        }}
-        ryen={agent}
-        providers={providers}
-        theme="light"
-        onThemeChange={() => {}}
-      />,
-    )
-    // 署名在 Modal 里，按钮点开才渲染，这里直接断言 About 文案源已不再提旧资产。
+    const html = renderToStaticMarkup(<AboutContent />)
+    // 实际在用的 DiceBear 只有 dylan（Dylan! by Natalia Spivak）与 mascot（Fun Emoji
+    // by Davis Uche）两族；Fluent Emoji 已随 emoji 退场整体移除。三条都要钉住。
+    expect(html).toContain('Natalia Spivak')
+    expect(html).toContain('Dylan!')
+    expect(html).toContain('Fun Emoji')
+    expect(html).toContain('Davis Uche')
     expect(html).not.toContain('Fluent Emoji')
     expect(html).not.toContain('Adventurer')
+    expect(html).not.toContain('Big Ears')
     expect(html).not.toContain('lorelei')
+    expect(html).not.toContain('notionists')
+  })
+
+  it('Lucide 只报名字不报数量：图标注册表随时会增删，写死数字必然过期', () => {
+    const html = renderToStaticMarkup(<AboutContent />)
+    expect(html).toContain('Lucide')
+    expect(html).not.toMatch(/Lucide[^<]*\d+\s*个/)
   })
 })
 
-describe('About 弹窗里的第三方署名', () => {
-  it('只署实际在用的 DiceBear 两族 + Natalia Spivak', () => {
+describe('危险操作确认弹窗', () => {
+  it('Modal 皮肤 + 取消/删除两个出口', () => {
     const html = renderToStaticMarkup(
       <ConfirmDialog
-        title="关于 RyAgent"
-        body="占位"
+        title="删除「小译」？"
+        body="删除后不可恢复"
         onConfirm={() => {
           return Promise.resolve()
         }}
         onCancel={() => {}}
       />,
     )
-    // ConfirmDialog 自身不含 About 文案，这里只保证它可用（Modal 皮肤 + 两个出口）。
     expect(html).toContain('modal-mask')
+    expect(html).toContain('删除后不可恢复')
     expect(html).toContain('取消')
+    expect(html).toContain('删除')
   })
 })
 

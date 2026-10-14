@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ToolContext } from '@ryagent/agent'
@@ -13,7 +13,14 @@ function workspace(): { root: string; ctx: ToolContext } {
 }
 
 afterEach(() => {
-  while (roots.length > 0) rmSync(roots.pop() as string, { recursive: true, force: true })
+  while (roots.length > 0) {
+    try {
+      rmSync(roots.pop() as string, { recursive: true, force: true, maxRetries: 5 })
+    } catch {
+      // 被取消杀掉的子进程退出后，Windows 释放目录句柄会滞后一拍；
+      // 残留目录落在系统临时区，不影响仓库。
+    }
+  }
 })
 
 describe('resolveInWorkspace', () => {
@@ -100,6 +107,37 @@ describe('shell_exec', () => {
     expect(result.isError).toBe(true)
     expect(result.content).toContain('timed out')
   }, 10_000)
+
+  it('取消时立刻结束，不等超时（等待被 signal 打断）', async () => {
+    const { ctx } = workspace()
+    const controller = new AbortController()
+    const started = Date.now()
+    const pending = shellExec.execute(
+      { command: 'while true; do :; done', timeoutMs: 20_000 },
+      { ...ctx, signal: controller.signal },
+    )
+    setTimeout(() => {
+      controller.abort()
+    }, 150)
+    const result = await pending
+    expect(result.isError).toBe(true)
+    expect(result.content).toContain('aborted')
+    // 这条命令没有出口：秒回即证明等待被取消打断，而不是等子进程跑完。
+    expect(Date.now() - started).toBeLessThan(5_000)
+  }, 15_000)
+
+  it('已取消时直接拒绝执行（四个工具都不产生副作用）', async () => {
+    const { root, ctx } = workspace()
+    const controller = new AbortController()
+    controller.abort()
+    const cancelled = { ...ctx, signal: controller.signal }
+    await expect(shellExec.execute({ command: 'ls' }, cancelled)).rejects.toThrow(/aborted/i)
+    await expect(fsWrite.execute({ path: 'nope.txt', content: 'x' }, cancelled)).rejects.toThrow(/aborted/i)
+    await expect(fsRead.execute({ path: 'nope.txt' }, cancelled)).rejects.toThrow(/aborted/i)
+    await expect(fileProduce.execute({ name: 'out.md', content: 'x' }, cancelled)).rejects.toThrow(/aborted/i)
+    expect(existsSync(join(root, 'nope.txt'))).toBe(false)
+    expect(existsSync(join(root, '.ryagent-artifacts', 'out.md'))).toBe(false)
+  })
 })
 
 describe('file_produce', () => {

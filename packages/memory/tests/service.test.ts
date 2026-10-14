@@ -374,6 +374,13 @@ describe('检索管线：混合召回', () => {
     expect(block).toContain('用户偏好简洁的周报')
     const hit = service.store.listActiveForAgent('a1')[0]!
     expect(hit.accessCount).toBe(1)
+    // 画像每轮都被注入 prompt，同样算一次访问：不计数它 access_count 恒为 0，
+    // 巩固任务会把整批画像判成"长期零访问"直接归档。
+    const profile = service.store.listSharedProfile()[0]!
+    expect(profile.accessCount).toBe(1)
+    expect(service.store.get(profile.id)!.lastAccessedAt).toBeGreaterThan(0)
+    await service.recall('a1', '周报')
+    expect(service.store.listSharedProfile()[0]!.accessCount).toBe(2)
     service.close()
   })
 

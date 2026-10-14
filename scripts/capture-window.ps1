@@ -33,12 +33,16 @@
 .PARAMETER WindowTitle
   目标窗口标题的匹配串，默认 RyAgent。
 
+.PARAMETER ProcessName
+  目标进程名。开发模式是 electron；打包后的安装包进程名是 RyAgent（-ProcessName RyAgent）。
+
 .EXAMPLE
   pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/capture-window.ps1 docs/shot.png
 #>
 param(
   [Parameter(Mandatory = $true)][string]$Out,
   [string]$WindowTitle = 'RyAgent',
+  [string]$ProcessName = 'electron',
   [double]$MinStdev = 1.5
 )
 
@@ -198,10 +202,10 @@ function Convert-ToBitmap([Frame]$Frame) {
 # （按矩形抓屏）用同一套坐标，否则会把窗口错位截取。
 [void][WinCapture]::MakeDpiAware()
 
-$proc = Get-Process electron -ErrorAction SilentlyContinue |
+$proc = Get-Process $ProcessName -ErrorAction SilentlyContinue |
   Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -like "*$WindowTitle*" } |
   Select-Object -First 1
-if ($null -eq $proc) { Fail "RyAgent window not found (is the app running? title like '*$WindowTitle*')" }
+if ($null -eq $proc) { Fail "window not found (process '$ProcessName', title like '*$WindowTitle*')" }
 
 $hwnd = ($proc.MainWindowHandle)   # 加括号：否则下一行的 [WinCapture]:: 会被解析成数组下标
 [WinCapture]::ShowWindow($hwnd, 9) | Out-Null   # SW_RESTORE：最小化状态下取不到有效矩形

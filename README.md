@@ -48,6 +48,18 @@ pnpm build
 # 或开发时放在仓库根 .env（已 gitignore），从仓库根启动的脚本会读取
 ```
 
+换用别的 OpenAI 兼容供应商时，向 `data/config/providers.json` 增加一条 `providers`
+条目即可。长期记忆的向量模型是**另一个模型 id**：默认供应商就是 SiliconFlow 时
+沿用它的默认向量模型；换成别家后需要显式指定 `embedding`，否则检索退化为纯
+FTS5——不猜模型，避免不同模型的向量被放在一起算相似度：
+
+```jsonc
+{
+  "providers": { "siliconflow": { "baseURL": "…", "apiKeyEnv": "…", "models": [{ "id": "…" }] } },
+  "embedding": { "providerId": "siliconflow", "model": "Qwen/Qwen3-Embedding-0.6B" }
+}
+```
+
 启动桌面应用（内嵌后端，数据在 `%APPDATA%/ryagent-data`）：
 
 ```sh

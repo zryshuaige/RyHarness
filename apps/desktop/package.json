@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "license": "MIT",
+  "description": "RyAgent 桌面应用：单机多 Agent 即时通讯（Electron + React）",
+  "author": "RyAgent contributors",
   "main": "./main/main.mjs",
   "scripts": {
     "build:main": "tsdown --config tsdown.config.mjs",
