@@ -253,6 +253,29 @@
   color: var(--text-primary);
 }
 
+/* 撤销等常驻操作：与文案同排，靠琥珀色和字重从正文里跳出来，但不做成主按钮——
+   它是补救入口，不是第二个「同意」。 */
+.toast-action {
+  flex-shrink: 0;
+  border: 1px solid color-mix(in srgb, var(--amber-text) 38%, transparent);
+  background: none;
+  color: var(--amber-text);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.toast-action:hover {
+  background: var(--amber-primary-soft);
+}
+
+.toast-action:focus-visible {
+  outline: 2px solid var(--amber-text);
+  outline-offset: 1px;
+}
+
 /* 宿主锚在顶部，所以进场是从上方落下、退场向上飘走。 */
 @keyframes toast-in {
   from {

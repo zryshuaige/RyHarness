@@ -1,16 +1,68 @@
 /**
  * fs_read / fs_write：工作区限定的文件读写。
+ *
+ * 边界是两层：`resolveInWorkspace` 做词法规范化（`..`、绝对路径），这里再做
+ * 一次真实路径校验——工作区里一个指向外部的符号链接/junction，词法层完全看不出来，
+ * 却能让模型读到（或写穿）工作区外的一切。写目标还不存在，所以 realpath 从最深
+ * 的**已存在**祖先开始解析，剩下的段按原样接回。
  * @module @ryagent/tools/fs
  */
 
-import { closeSync, mkdirSync, openSync, readSync, statSync, writeFileSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { closeSync, mkdirSync, openSync, readSync, realpathSync, statSync, writeFileSync } from 'node:fs'
+import { basename, dirname, join, sep } from 'node:path'
 import { type Tool, type ToolResult, throwIfAborted } from '@ryagent/agent'
-import { resolveInWorkspace, truncateOutput } from './workspace.ts'
+import { PathEscapeError, resolveInWorkspace, truncateOutput } from './workspace.ts'
 
 const MAX_READ_CHARS = 64_000
 /** 读窗口字节上限：UTF-8 每字符至多 4 字节，覆盖 MAX_READ_CHARS 个字符。 */
 const MAX_READ_BYTES = MAX_READ_CHARS * 4
+
+/** 真实路径的最深已存在祖先 + 其后各段（目标尚未创建时用）。 */
+function realpathWithTail(target: string): string {
+  const tail: string[] = []
+  let current = target
+  for (;;) {
+    try {
+      const real = realpathSync(current)
+      return tail.length === 0 ? real : join(real, ...tail)
+    } catch {
+      const parent = dirname(current)
+      // 一路到盘符/根都没解析出任何已存在段：只能按原样返回，交给调用方比较。
+      if (parent === current) return target
+      tail.unshift(basename(current))
+      current = parent
+    }
+  }
+}
+
+/** candidate 是否在 root 之内（含 root 自身）。Windows/macOS 文件名大小写不敏感。 */
+function isInside(root: string, candidate: string): boolean {
+  if (candidate === root) return true
+  const prefix = root.endsWith(sep) ? root : root + sep
+  if (process.platform === 'win32' || process.platform === 'darwin') {
+    return candidate.toLowerCase().startsWith(prefix.toLowerCase())
+  }
+  return candidate.startsWith(prefix)
+}
+
+/**
+ * 解析工作区内的目标路径：词法边界 + 符号链接边界都过一遍。
+ * @param root - 工作区根目录。
+ * @param path - 调用方给的路径。
+ * @returns 规范化后的绝对路径（仍用词法结果，调用方按它读写）。
+ * @throws PathEscapeError - 词法逃逸，或真实路径逃出工作区（符号链接/junction）。
+ */
+function resolveTarget(root: string, path: string): string {
+  const target = resolveInWorkspace(root, path)
+  // 根目录本身也走一遍：根是符号链接时（macOS 的 /tmp、工作区指到别处），
+  // 拿词法根去比真实路径会误判成逃逸。
+  const realRoot = realpathWithTail(root)
+  const real = realpathWithTail(target)
+  if (!isInside(realRoot, real)) {
+    throw new PathEscapeError(root, `${path}（真实路径 ${real} 指向工作区之外）`)
+  }
+  return target
+}
 
 function argString(args: unknown, key: string): string {
   if (typeof args === 'object' && args !== null && key in args) {
@@ -46,7 +98,7 @@ export const fsRead: Tool = {
     // 取消优先于任何副作用：已取消的轮次不再读写工作区。
     throwIfAborted(ctx.signal)
     return guard(() => {
-      const target = resolveInWorkspace(ctx.workspaceRoot, argString(args, 'path'))
+      const target = resolveTarget(ctx.workspaceRoot, argString(args, 'path'))
       const stat = statSync(target, { throwIfNoEntry: false })
       if (stat === undefined) return { content: `file not found: ${target}`, isError: true }
       if (!stat.isFile()) return { content: `not a file: ${target}`, isError: true }
@@ -88,7 +140,7 @@ export const fsWrite: Tool = {
   async execute(args, ctx) {
     throwIfAborted(ctx.signal)
     return guard(() => {
-      const target = resolveInWorkspace(ctx.workspaceRoot, argString(args, 'path'))
+      const target = resolveTarget(ctx.workspaceRoot, argString(args, 'path'))
       const content = argString(args, 'content')
       mkdirSync(dirname(target), { recursive: true })
       writeFileSync(target, content, 'utf8')

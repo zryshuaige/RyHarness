@@ -14,17 +14,22 @@
 
 export type { CuratorEntryView, EvolveLlm, PlaybookDelta, TurnTrajectory } from './llm.ts'
 export { ChatEvolveLlm, CURATOR_ENTRY_LIMIT, EVOLVE_LLM_CODES, NEGATIVE_FEEDBACK_RE } from './llm.ts'
+export type { EvolutionRoundMetrics, EvolveMetricsSnapshot, RoundKind, RoundTotals } from './metrics.ts'
+export { RoundRecorder } from './metrics.ts'
 export { maxOverlap, normalizeText, textOverlap, textSimilarity } from './relevance.ts'
-export type { EntryStatus, PlaybookSection, ReflectionStatus } from './schema.ts'
+export type { EntryOriginKind, EntryStatus, PlaybookSection, ReflectionStatus } from './schema.ts'
 export { AUTO_DEPRECATE_HARMFUL, CONVERT_HIT_THRESHOLD, EVOLVE_SCHEMA_VERSION, migrateEvolve } from './schema.ts'
 export { SEED_PLAYBOOKS, seedIfEmpty } from './seeds.ts'
 export type {
   AgentEvolutionHooks,
   CompiledEvolution,
+  ConsolidationResult,
+  EntryExplanation,
   EvolutionTurn,
+  EvolveLimits,
   EvolveServiceOptions,
   MemorySweep,
 } from './service.ts'
-export { EvolveService } from './service.ts'
-export type { PlaybookEntry, ReflectionRow } from './store.ts'
+export { DEFAULT_EVOLVE_LIMITS, EvolveService } from './service.ts'
+export type { EntryOrigin, EntryOriginInput, PlaybookEntry, ReflectionRow } from './store.ts'
 export { EvolveStore, NEAR_DUPLICATE_THRESHOLD, REFLECTION_RELEVANCE_THRESHOLD } from './store.ts'

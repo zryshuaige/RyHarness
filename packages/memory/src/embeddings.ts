@@ -156,6 +156,28 @@ export function textSimilarity(a: string, b: string): number {
   return intersection / (left.size + right.size - intersection)
 }
 
+/**
+ * 文本近重复（无 embedding 时的去重底座）：同一事实换个说法，不是"更完整"。
+ *
+ * 判据两条——bigram Jaccard 高，或短句的 bigram 基本被长句覆盖且长度接近
+ * （"用户养了只橘猫叫布丁" vs "用户养了一只橘猫叫布丁"）。两条附加约束都是
+ * 为了放过细化式改写（"用户喜欢川菜" vs "用户喜欢川菜和湘菜"、"用户住在北京"
+ * vs "用户住在北京市朝阳区"）：那类该走 UPDATE，丢掉就是漏记。
+ */
+export function textNearDuplicate(a: string, b: string): boolean {
+  const left = bigramSet(a)
+  const right = bigramSet(b)
+  if (left.size === 0 || right.size === 0) return false
+  let intersection = 0
+  for (const gram of left) {
+    if (right.has(gram)) intersection++
+  }
+  if (intersection / (left.size + right.size - intersection) >= 0.7) return true
+  const shorter = Math.min(left.size, right.size)
+  const longer = Math.max(left.size, right.size)
+  return intersection / shorter >= 0.85 && shorter / longer >= 0.65
+}
+
 function bigramSet(text: string): Set<string> {
   const compact = text.toLowerCase().replace(/[\s\p{P}\p{S}]/gu, '')
   const grams = new Set<string>()

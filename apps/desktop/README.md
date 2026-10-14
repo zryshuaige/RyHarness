@@ -5,7 +5,7 @@ RyAgent 桌面应用：Electron 壳 + Vite + React 渲染层。类微信的社�
 ## 结构
 
 ```
-electron/main.ts           主进程：内嵌 @ryagent/server（随机端口）+ BrowserWindow + 应用菜单
+electron/main.ts           主进程：内嵌 @ryagent/server（固定端口，占用回退随机）+ BrowserWindow + 应用菜单
 electron/preload.ts        contextBridge（openPath 白名单桥；API 地址经主进程推送）
 electron/renderer-assets.ts 渲染层静态资源伺服（回环 HTTP，随机端口，挂载点 /app）
 electron/capture.ts        RYAGENT_CAPTURE=1 的自动截图模式
@@ -41,13 +41,55 @@ pnpm --filter @ryagent/desktop build      # main/ + renderer/dist
 pnpm --filter @ryagent/desktop start      # electron .
 ```
 
-> 渲染层**不走 file://**：主进程在回环随机端口起一个静态服务伺服 `renderer/dist`
+> 渲染层**不走 file://**：主进程在回环端口起一个静态服务伺服 `renderer/dist`
 > （挂载点 `/app`），窗口以同源 URL 加载。早期版本用 file:// + 内联单文件 HTML，
 > 代价是丢掉并行加载、HTTP 缓存与 code splitting（产物一度涨到 1.3MB 单 chunk）；
 > 现在入口 `index.html` 约 3KB，其余按依赖域拆成 vendor-react / vendor-marked /
 > vendor-avatar 等分片并行下载。见 `electron/renderer-assets.ts`。
 
-数据目录默认 `app.getPath('userData')/ryagent-data`，可用 `RYAGENT_DATA_DIR` 覆盖；端口默认随机，可设 `RYAGENT_PORT` 固定。
+数据目录默认 `app.getPath('userData')/ryagent-data`，可用 `RYAGENT_DATA_DIR` 覆盖。
+
+## 端口与缓存
+
+| 服务 | 默认端口 | 环境变量 | 端口策略 |
+|---|---|---|---|
+| 内嵌后端（`@ryagent/server`） | **32100 固定** | `RYAGENT_PORT`（`0` = 随机） | 固定优先；被占用时回退随机，实际地址推给渲染层 |
+| 渲染层静态资源（`renderer-assets.ts`） | 随机 | — | 随机（见下方待办） |
+
+**为什么后端要固定端口**：Chromium 的 HTTP 缓存与 V8 代码缓存都按 URL 索引。端口
+每次启动都换 = 每次冷启动换一个 origin，整份缓存归零，渲染层的分片要重新下载、
+重新解析、重新编译。固定端口后 `http://127.0.0.1:32100` 与渲染层 `api.ts` 的
+`DEFAULT_API_BASE` 一致，浏览器直连开发与桌面内嵌也落在同一个 origin 上。
+
+端口被占用（开发态同时开着另一个实例、机器上正好有别的程序）时，主进程先探测再
+绑定，占用则回退随机端口——`RyAgentServer.create` 内部的 `listen` 失败不会 reject，
+直接撞端口会让主进程带未捕获异常闪退。回退后**实际地址照常推给渲染层**
+（`window.__RYAGENT_API_BASE__` + `ryagent:api-base` 事件），渲染层不需要知道
+配置值。
+
+**还没做的两件事**（各自文件不在本轮改动范围内）：
+
+1. `electron/renderer-assets.ts` 仍在随机端口起静态服务，**渲染层的 origin 因此
+   每次启动都变**，这才是缓存归零的大头。接线方只需把 `server.listen(0, …)` 改成
+   固定端口（可配）+ 占用回退随机，页面的缓存策略已经就位（`index.html` `no-cache`，
+   带 hash 的分片 `immutable` 一年）。
+2. 静态资源服务没有条件请求（`If-None-Match` / `If-Modified-Since` → 304）。补上后
+   配合固定 origin，冷启动可以走 304 而不是重新下载整份分片；服务端
+   `apps/server/src/app.ts` 的 `/api/*` 同样没有 ETag。
+
+## 启动计时
+
+从进程冷启动到首屏，各阶段耗时记在主进程的 `BootTrace` 里：
+
+- 阶段：`process-start → app-ready → assets-ready → window-created → backend-ready →
+  api-base-pushed → dom-ready → loaded → renderer:module → renderer:first-paint`。
+- 渲染层自己记的部分挂在 `window.__RYAGENT_BOOT__`（`renderer/src/lib/boot-trace.ts`），
+  主进程在 `did-finish-load` 之后用 `executeJavaScript` 读走、按 `loadURL` 时刻换算
+  到主进程时钟上——不经 preload，也没有网络。
+- 查询三选一：控制台一行 `[ryagent] 启动 N 段：…`；`userData/boot-trace.log`
+  （每次启动覆盖写一份 JSON）；渲染层经 preload 调 `ryagent:boot-trace` IPC 拿快照。
+- 首屏「可交互」由 `markFirstInteractive()` 打点，`App.tsx` 拿到首份会话列表后调它
+  即可（幂等）；不调也不影响其余阶段。
 
 ### 打包（electron-builder）
 

@@ -89,9 +89,38 @@ export function bigrams(text: string): string {
   return parts.join(' ')
 }
 
+/** 单条 FTS 删除的参数上限分片。 */
+const FTS_DELETE_CHUNK = 500
+
+/**
+ * FTS5 MATCH 查询串：bigram token 逐个加引号，token 内的 `"` 双写。
+ *
+ * 不转义时 bigram 会把原文标点带进查询语法，整条词法通道直接抛错：
+ * `e:` 被当成列过滤器（no such column: e）、`a"b` 的引号当成字符串定界
+ * （unterminated string）、`PORT` 的 `OR` 段成了布尔关键字。用户发一条带
+ * `- . / @ # : "` 的输入，长期记忆检索就整条静默失效。
+ */
+export function ftsMatchQuery(text: string): string {
+  return bigrams(text)
+    .split(' ')
+    .filter((token) => token.length > 0)
+    .map((token) => `"${token.replace(/"/g, '""')}"`)
+    .join(' OR ')
+}
+
 /** 记忆存储。 */
 export class MemoryStore {
   private readonly db: DatabaseSync
+  /**
+   * active 向量常驻缓存（键 = 空间 + 向量模型）。
+   *
+   * recall 在首 token 路径上：每轮都从表里读全部 active 记忆的 BLOB 再算余弦，
+   * 延迟随库规模线性增长（1000 条 × 1024 维 ≈ 4MB/轮的读 + 反序列化）。
+   * 失效条件 = 本连接写代数变化，或其他连接提交过（agent 删除等跨连接写入走
+   * PRAGMA data_version）。访问计数就地改缓存行，不因此整体失效。
+   */
+  private readonly embeddingIndex = new Map<string, { stamp: string; rows: MemoryRow[] }>()
+  private embeddingEpoch = 0
 
   constructor(dbPath: string) {
     this.db = new DatabaseSync(dbPath)
@@ -132,6 +161,7 @@ export class MemoryStore {
     this.db
       .prepare('INSERT INTO memories_fts (rowid, content) VALUES (?, ?)')
       .run(this.rowidOf(id), bigrams(input.content))
+    this.invalidateEmbeddingIndex()
     const row = this.get(id)
     if (row === undefined) throw new Error('@ryagent/memory: insert did not persist')
     return row
@@ -141,6 +171,7 @@ export class MemoryStore {
   supersede(id: string, status: 'superseded' | 'deleted' = 'superseded'): void {
     this.db.prepare('UPDATE memories SET status = ?, updated_at = ? WHERE id = ?').run(status, Date.now(), id)
     this.db.prepare('DELETE FROM memories_fts WHERE rowid = ?').run(this.rowidOf(id))
+    this.invalidateEmbeddingIndex()
   }
 
   /** 读取一条（任意状态）。 */
@@ -159,7 +190,7 @@ export class MemoryStore {
   /** FTS5 BM25 top-N（active 记忆，限定空间：agent 私有 + 共享）。 */
   searchFts(agentId: string, query: string, limit = 10): MemoryRow[] {
     // OR 语义：候选事实常比记忆长，全 AND 会零命中；BM25 按命中比例排序。
-    const matchQuery = bigrams(query).split(' ').join(' OR ')
+    const matchQuery = ftsMatchQuery(query)
     if (matchQuery.length === 0) return []
     const rowids = this.db
       .prepare(
@@ -181,8 +212,12 @@ export class MemoryStore {
     return out
   }
 
-  /** 拉取某空间全部 active 向量（用于内存余弦；单用户规模 <10k，暴力即可）。 */
+  /** 拉取某空间全部 active 向量（用于内存余弦；单用户规模 <10k，暴力即可）。返回的是常驻缓存，调用方按只读用。 */
   listActiveEmbeddings(agentId: string, embeddingModel?: string): MemoryRow[] {
+    const key = `${agentId}|${embeddingModel ?? ''}`
+    const stamp = this.embeddingStamp()
+    const cached = this.embeddingIndex.get(key)
+    if (cached !== undefined && cached.stamp === stamp) return cached.rows
     const rows = (
       embeddingModel === undefined
         ? this.db
@@ -196,7 +231,23 @@ export class MemoryStore {
             )
             .all(embeddingModel, agentId, SHARED_SPACE)
     ) as Record<string, unknown>[]
-    return rows.map(rowToMemory)
+    const out = rows.map(rowToMemory)
+    this.embeddingIndex.set(key, { stamp, rows: out })
+    return out
+  }
+
+  /**
+   * 缓存有效期：本连接写代数 + PRAGMA data_version。
+   * data_version 只在**其他连接**提交时变化（agent 删除等跨连接写入），
+   * 本连接的写由 embeddingEpoch 负责，两边都变了才算失效。
+   */
+  private embeddingStamp(): string {
+    const row = this.db.prepare('PRAGMA data_version').get() as { data_version: number }
+    return `${this.embeddingEpoch}:${Number(row.data_version)}`
+  }
+
+  private invalidateEmbeddingIndex(): void {
+    this.embeddingEpoch += 1
   }
 
   /** 共享画像：profile 类全量（量小，Core 式注入）。 */
@@ -216,11 +267,22 @@ export class MemoryStore {
       'UPDATE memories SET access_count = access_count + 1, last_accessed_at = ? WHERE id = ?',
     )
     for (const id of ids) stmt.run(now, id)
+    // 常驻缓存里是同一批对象，就地改：每轮召回都会 touchAccess，
+    // 若因此整体失效，缓存就等于没加（下一轮照样全表读）。
+    const touched = new Set(ids)
+    for (const entry of this.embeddingIndex.values()) {
+      for (const row of entry.rows) {
+        if (!touched.has(row.id)) continue
+        row.accessCount += 1
+        row.lastAccessedAt = now
+      }
+    }
   }
 
   /** 回写 updatedAt（巩固/衰减任务与测试用）。 */
   backdate(id: string, timestamp: number): void {
     this.db.prepare('UPDATE memories SET updated_at = ? WHERE id = ?').run(timestamp, id)
+    this.invalidateEmbeddingIndex()
   }
 
   /** 某 agent 的 active 记忆列表。 */
@@ -258,6 +320,7 @@ export class MemoryStore {
     const rowid = this.rowidOf(id)
     this.db.prepare('DELETE FROM memories_fts WHERE rowid = ?').run(rowid)
     this.db.prepare('INSERT INTO memories_fts (rowid, content) VALUES (?, ?)').run(rowid, bigrams(row.content))
+    this.invalidateEmbeddingIndex()
     return true
   }
 
@@ -290,6 +353,12 @@ export class MemoryStore {
         embeddingModel,
         id,
       )
+    this.invalidateEmbeddingIndex()
+  }
+
+  /** FTS 索引行数（观测用：归档/软删同步清理后应随之下降）。 */
+  ftsIndexSize(): number {
+    return Number((this.db.prepare('SELECT COUNT(*) AS count FROM memories_fts').get() as { count: number }).count)
   }
 
   // ---- embedding 缓存（按模型分桶，换模型不混库）----
@@ -351,9 +420,21 @@ export class MemoryStore {
    *
    * 共享画像（SHARED_SPACE）排除在外：它记录的是用户是谁，一旦归档就没有任何
    * 恢复入口（界面上看不到 inactive 行），等于静默抹掉用户画像。
+   *
+   * 归档同步清出 FTS 索引：只改 status 的话索引里全是死行，BM25 候选窗口被
+   * 吃光，召回质量随时间单调退化（行数据保留，restore 时重建索引行）。
    * @returns 归档条数。
    */
   archiveDormant(dormantAfterMs: number, now = Date.now()): number {
+    const stale = this.db
+      .prepare(
+        `SELECT rowid FROM memories
+       WHERE status = 'active'
+         AND agent_id != ?
+         AND access_count = 0
+         AND COALESCE(NULLIF(last_accessed_at, 0), updated_at) < ?`,
+      )
+      .all(SHARED_SPACE, now - dormantAfterMs) as { rowid: number }[]
     const result = this.db
       .prepare(
         `UPDATE memories SET status = 'inactive', updated_at = ?
@@ -363,16 +444,34 @@ export class MemoryStore {
          AND COALESCE(NULLIF(last_accessed_at, 0), updated_at) < ?`,
       )
       .run(now, SHARED_SPACE, now - dormantAfterMs)
+    this.dropFtsRows(
+      stale.map((row) => {
+        return Number(row.rowid)
+      }),
+    )
+    this.invalidateEmbeddingIndex()
     return Number(result.changes)
   }
 
   /**
    * 归档陈旧软删链：superseded 且已超过保留期的历史版本 → inactive。
    * 当前 active 记忆的直接前身保留（软删链末端的可追溯性），更早的中间版本
-   * 归档；行本身不删，`supersedes_id` 指针仍可追溯。
+   * 归档；行本身不删，`supersedes_id` 指针仍可追溯。FTS 索引同步清理（同 archiveDormant）。
    * @returns 归档条数。
    */
   archiveColdSuperseded(maxAgeMs: number, now = Date.now()): number {
+    const stale = this.db
+      .prepare(
+        `SELECT rowid FROM memories
+       WHERE status = 'superseded'
+         AND updated_at < ?
+         AND id NOT IN (
+           SELECT y.supersedes_id FROM memories y
+           WHERE y.supersedes_id IS NOT NULL
+             AND NOT EXISTS (SELECT 1 FROM memories z WHERE z.supersedes_id = y.id)
+         )`,
+      )
+      .all(now - maxAgeMs) as { rowid: number }[]
     const result = this.db
       .prepare(
         `UPDATE memories SET status = 'inactive', updated_at = ?
@@ -385,7 +484,29 @@ export class MemoryStore {
          )`,
       )
       .run(now, now - maxAgeMs)
+    this.dropFtsRows(
+      stale.map((row) => {
+        return Number(row.rowid)
+      }),
+    )
+    this.invalidateEmbeddingIndex()
     return Number(result.changes)
+  }
+
+  /** 批量删 FTS 索引行（分片，避免 IN 参数超上限）。 */
+  private dropFtsRows(rowids: readonly number[]): void {
+    for (let start = 0; start < rowids.length; start += FTS_DELETE_CHUNK) {
+      const chunk = rowids.slice(start, start + FTS_DELETE_CHUNK)
+      this.db
+        .prepare(
+          `DELETE FROM memories_fts WHERE rowid IN (${chunk
+            .map(() => {
+              return '?'
+            })
+            .join(',')})`,
+        )
+        .run(...chunk)
+    }
   }
 
   // ---- 统计 ----

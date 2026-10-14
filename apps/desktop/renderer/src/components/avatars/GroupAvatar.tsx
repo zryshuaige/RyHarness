@@ -1,4 +1,5 @@
 import { Avatar } from './Avatar.tsx'
+import { AVATAR_SPEC } from './avatars.tsx'
 
 interface Member {
   id: string
@@ -62,7 +63,9 @@ export function GroupAvatar({ members, size = 48 }: { members: Member[]; size?: 
       {shown.map((member, index) => (
         <span
           key={member.id}
-          style={{ gridArea: grid[index], overflow: 'hidden', borderRadius: shown.length <= 2 ? 3 : 4 }}
+          // 单格与头像同一套圆角规格（AVATAR_SPEC.radius），此前 2 人用 3px、
+          // 3 人以上用 4px 的方格，和成员头像的圆形并排时是两种零件。
+          style={{ gridArea: grid[index], overflow: 'hidden', borderRadius: AVATAR_SPEC.radius }}
         >
           <Avatar avatarKey={member.avatar} name={member.name} seed={member.id} size={cell} />
         </span>

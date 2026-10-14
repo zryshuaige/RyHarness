@@ -18,6 +18,10 @@
  * {@link MAX_LOOP_CONTEXT_CHARS} 累计，超预算截断并标注——多步工具循环的回填
  * 量不受入口预算约束，不设上限必然把请求顶到几十万字符。
  *
+ * 配额：工具调用先过 {@link SessionQuota}（shell 次数 / 写入字节数）再落地，
+ * 越限的调用变成错误结果回给模型并计入 rejected；同额度要跨轮共享由调用方把
+ * 同一个 {@link createSessionQuota} 实例传进来。
+ *
  * 与上游 dsh-agent-loop 的关系：只保留"循环 + 工具调度"内核，不带
  * session 发布、sandbox 执行器与审批生态（M0 决策：agent 循环自写精简版）。
  * @module @ryagent/agent/loop
@@ -79,6 +83,12 @@ export interface AgentLoopOptions {
    * 每轮结束异步 enqueueTurn（Reflector 计数 + Reflexion + Curator delta）。
    */
   evolution?: AgentEvolutionHooks
+  /**
+   * 会话级工具配额（shell 调用次数 / 写入字节数）。缺省时循环自建一个，
+   * 只覆盖本次运行；同一会话要跨轮、跨群成员共享同一份额度，由调用方
+   * {@link createSessionQuota} 建一次并传进来。
+   */
+  quota?: SessionQuota
 }
 
 /** 记忆系统对运行时的最小接口（由 @ryagent/memory 的 MemoryService 实现）。 */
@@ -169,6 +179,88 @@ class LoopContextBudget {
   }
 }
 
+/** 会话级工具配额的默认上限（`Infinity` 表示不设该项）。 */
+export const DEFAULT_SESSION_QUOTA_LIMITS = {
+  /** 每个会话允许的 shell_exec 调用次数。 */
+  maxShellCalls: 40,
+  /** 每个会话允许的写入字节数（fs_write / file_produce）。 */
+  maxWriteBytes: 2 * 1024 * 1024,
+}
+
+/** 配额上限；缺省项取 {@link DEFAULT_SESSION_QUOTA_LIMITS}，传 `Infinity` 关闭该项。 */
+export interface SessionQuotaLimits {
+  maxShellCalls?: number
+  maxWriteBytes?: number
+}
+
+/** 配额用量：只增不减，由闸自己记账，调用方只读。 */
+export interface SessionQuotaUsage {
+  shellCalls: number
+  writeBytes: number
+  /** 被闸拦下的调用次数。 */
+  rejected: number
+}
+
+/**
+ * 会话级工具配额闸。
+ *
+ * shell_exec 与写文件都能在几分钟里烧掉一台机器（死循环、`curl | sh`、往工作区
+ * 灌 GB 级文件），而 maxSteps 只管步数、管不住单步的代价。闸按"次数"和"字节"
+ * 两种口径记账，超限的调用变成错误结果回给模型——不静默丢，模型看得见并可以改口。
+ */
+export interface SessionQuota {
+  readonly limits: Required<SessionQuotaLimits>
+  readonly usage: SessionQuotaUsage
+  /**
+   * 记账并判定：越限返回拒绝理由（不计入用量，另计 rejected），未越限返回 undefined。
+   * 计入在真正执行之前——执行失败也算用掉的额度。
+   * @param toolName - 被调用的工具名。
+   * @param args - 已解析的工具参数（写类工具按 content 字节数计）。
+   */
+  charge(toolName: string, args: unknown): string | undefined
+}
+
+/** 哪些工具吃哪种配额：shell 按次数，写类工具按写入字节数；其余工具不计。 */
+function quotaCost(toolName: string, args: unknown): { calls: number; bytes: number } | undefined {
+  if (toolName === 'shell_exec') return { calls: 1, bytes: 0 }
+  if (toolName !== 'fs_write' && toolName !== 'file_produce') return undefined
+  const content = typeof args === 'object' && args !== null ? (args as Record<string, unknown>).content : undefined
+  return { calls: 0, bytes: typeof content === 'string' ? Buffer.byteLength(content, 'utf8') : 0 }
+}
+
+/**
+ * 建一个会话配额闸。同一个对象要在该会话的每轮、每个 agent 上共用，额度才是
+ * "每会话"而不是"每轮"。
+ * @param limits - 上限覆盖项。
+ * @returns 可变的配额闸（usage 只增不减）。
+ */
+export function createSessionQuota(limits: SessionQuotaLimits = {}): SessionQuota {
+  const resolved: Required<SessionQuotaLimits> = {
+    maxShellCalls: limits.maxShellCalls ?? DEFAULT_SESSION_QUOTA_LIMITS.maxShellCalls,
+    maxWriteBytes: limits.maxWriteBytes ?? DEFAULT_SESSION_QUOTA_LIMITS.maxWriteBytes,
+  }
+  const usage: SessionQuotaUsage = { shellCalls: 0, writeBytes: 0, rejected: 0 }
+  return {
+    limits: resolved,
+    usage,
+    charge(toolName: string, args: unknown): string | undefined {
+      const cost = quotaCost(toolName, args)
+      if (cost === undefined) return undefined
+      if (usage.shellCalls + cost.calls > resolved.maxShellCalls) {
+        usage.rejected++
+        return `quota exceeded: shell_exec calls ${usage.shellCalls}/${resolved.maxShellCalls} for this session`
+      }
+      if (usage.writeBytes + cost.bytes > resolved.maxWriteBytes) {
+        usage.rejected++
+        return `quota exceeded: write ${usage.writeBytes + cost.bytes}/${resolved.maxWriteBytes} bytes for this session`
+      }
+      usage.shellCalls += cost.calls
+      usage.writeBytes += cost.bytes
+      return undefined
+    },
+  }
+}
+
 /** 把任意 thrown value 归一为事件用的 { message, code }。 */
 function failureOf(error: unknown): { message: string; code: string } {
   return {
@@ -234,6 +326,7 @@ export function trimHistoryToBudget(history: readonly Message[], budgetChars: nu
 /** 精简 agent 消息循环。一个实例可反复 run；每次 run 从初始 history 派生。 */
 export class AgentLoop {
   private readonly allowedTools: Map<string, Tool>
+  private readonly quota: SessionQuota
 
   constructor(private readonly options: AgentLoopOptions) {
     const wanted = new Set(options.definition.tools)
@@ -246,6 +339,7 @@ export class AgentLoop {
           return [tool.name, tool]
         }),
     )
+    this.quota = options.quota ?? createSessionQuota()
   }
 
   /**
@@ -512,7 +606,7 @@ ${definition.name}：${assistantText.trim()}`,
     }
   }
 
-  /** 执行一个 tool_call：未知工具与参数解析失败都转化为错误结果而非抛异常。 */
+  /** 执行一个 tool_call：未知工具、参数解析失败与配额越限都转化为错误结果而非抛异常。 */
   private async executeCall(call: ToolCallBlock, context: ToolContext): Promise<ToolResult> {
     const tool = this.allowedTools.get(call.name)
     if (tool === undefined) {
@@ -523,6 +617,11 @@ ${definition.name}：${assistantText.trim()}`,
       args = JSON.parse(call.arguments)
     } catch {
       return { content: `invalid tool arguments JSON: ${call.arguments}`, isError: true }
+    }
+    // 记账在执行之前：工具没跑成也用掉了额度，超限的调用压根不落地。
+    const denial = this.quota.charge(call.name, args)
+    if (denial !== undefined) {
+      return { content: denial, isError: true }
     }
     try {
       return await tool.execute(args, context)

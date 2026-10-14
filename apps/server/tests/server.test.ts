@@ -176,7 +176,7 @@ describe('RyAgentServer', () => {
       const created = await postJson(base, '/api/agents', { templateKey: 'coding', name: 'Coder' })
       expect(created.status).toBe(201)
       const coder = (created.body as { agent: { id: string; tools: string[] } }).agent
-      expect(coder.tools).toEqual(['fs_read', 'fs_write', 'shell_exec', 'file_produce'])
+      expect(coder.tools).toEqual(['fs_read', 'fs_write', 'file_produce'])
 
       const patched = await fetch(`${base}/api/agents/${coder.id}`, {
         method: 'PATCH',

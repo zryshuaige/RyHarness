@@ -1,6 +1,13 @@
 import { type CSSProperties, useState } from 'react'
 import type { AgentDef, AgentTemplate, ProviderInfo } from '../api.ts'
 import { agentById } from '../lib/agents.ts'
+import {
+  explainModelMismatch,
+  firstUsableProviderId,
+  isLocalService,
+  providerModelIds,
+  providersByReadiness,
+} from '../lib/provider-health.ts'
 import { stagger } from '../lib/stagger.ts'
 import { toast } from '../lib/toast.ts'
 import { ALL_TOOLS, toolLabel } from '../lib/tool-labels.ts'
@@ -270,7 +277,19 @@ export function ContactsPage({
   )
 }
 
-/** 新建/编辑 Agent：选模板 → 编辑表单（含头像选择器）。内容区可滚动，操作条吸底。 */
+/** 需要单独告知的工具：勾上它等于把这台机器的一部分交给 agent。 */
+const RISKY_TOOL = 'shell_exec'
+
+/** 勾上执行命令时的一次性风险说明（只告知，不做审批流）。 */
+const RISKY_TOOL_HINT = '执行命令能在你这台电脑上直接跑 shell：改文件、装东西、删东西都做得到。只在任务来源可信时勾选。'
+
+/**
+ * 新建/编辑 Agent：选模板 → 编辑表单（含头像选择器）。内容区可滚动，操作条吸底。
+ *
+ * 供应商与模型必须成对成立：切换供应商时把 model 重置成那家的第一个模型，提交前再
+ * 断言 model ∈ 该供应商的 models——此前 model 可以是模板留下的、属于别家供应商的
+ * 标识，服务端照单全收，agent 建出来第一句话就 404。
+ */
 export function CreateAgentModal({
   templates,
   providers,
@@ -297,9 +316,18 @@ export function CreateAgentModal({
     return editing?.avatar ?? randomAvatarSpec()
   })
   const [systemPrompt, setSystemPrompt] = useState(editing?.systemPrompt ?? template?.suggestedSystemPrompt ?? '')
-  const [provider, setProvider] = useState(editing?.provider ?? providers[0]?.id ?? 'siliconflow')
+  // 默认供应商 = 第一个配好凭据（或免 key 的本地服务）的；否则第一个（多半是没 key 的）。
+  const [provider, setProvider] = useState(
+    editing?.provider ?? firstUsableProviderId(providers) ?? providers[0]?.id ?? 'siliconflow',
+  )
   const [model, setModel] = useState(editing?.model ?? template?.defaultModel ?? '')
-  const [tools, setTools] = useState<string[]>(editing?.tools ?? template?.defaultTools ?? [])
+  // 新建时默认不勾「执行命令」：模板给的默认工具里带着它，但用户从没为它点过头。
+  const [tools, setTools] = useState<string[]>(() => {
+    if (editing !== undefined) return editing.tools
+    return (template?.defaultTools ?? []).filter((tool) => {
+      return tool !== RISKY_TOOL
+    })
+  })
   const [busy, setBusy] = useState(false)
 
   const pickTemplate = (key: string): void => {
@@ -310,15 +338,39 @@ export function CreateAgentModal({
     if (next === undefined) return
     setSystemPrompt(next.suggestedSystemPrompt)
     setModel(next.defaultModel)
-    setTools(next.defaultTools)
+    setTools(
+      next.defaultTools.filter((tool) => {
+        return tool !== RISKY_TOOL
+      }),
+    )
   }
 
-  const models =
-    providers.find((p) => {
-      return p.id === provider
-    })?.models ?? []
+  const current = providers.find((p) => {
+    return p.id === provider
+  })
+  const models = current?.models ?? []
+  /** 没配 key 的供应商降权排后，但仍然可选：先建好 agent 再去补 key 也是条路。 */
+  const orderedProviders = providersByReadiness(providers)
+  const modelIds = providerModelIds(current)
+  const modelValid = modelIds.includes(model)
+  const modelHint =
+    model.length === 0
+      ? explainModelMismatch(current?.displayName ?? provider, modelIds)
+      : modelValid
+        ? undefined
+        : explainModelMismatch(current?.displayName ?? provider, modelIds)
+
+  /** 切供应商必须连 model 一起换：留着别家的模型标识等于建出一个永远 404 的 agent。 */
+  const pickProvider = (id: string): void => {
+    setProvider(id)
+    const next = providers.find((p) => {
+      return p.id === id
+    })
+    setModel(next?.models[0]?.id ?? '')
+  }
 
   const submit = async (): Promise<void> => {
+    if (!modelValid) return
     setBusy(true)
     try {
       await onSubmit({
@@ -327,7 +379,7 @@ export function CreateAgentModal({
         avatar: avatarKey,
         systemPrompt,
         provider,
-        model: model || models[0]?.id,
+        model,
         tools,
       })
       onClose()
@@ -375,7 +427,8 @@ export function CreateAgentModal({
             />
           </label>
         </div>
-        <fieldset className="field">
+        {/* fieldset 里的 <span> 不是 <legend>，读屏器只会念「分组」——补上名字。 */}
+        <fieldset className="field" aria-label="头像">
           <span>头像</span>
           <AvatarPicker value={avatarKey} onChange={setAvatarKey} />
         </fieldset>
@@ -395,14 +448,14 @@ export function CreateAgentModal({
             <select
               value={provider}
               onChange={(e) => {
-                setProvider(e.target.value)
+                pickProvider(e.target.value)
               }}
             >
-              {providers.map((p) => {
+              {orderedProviders.map((p) => {
                 return (
                   <option key={p.id} value={p.id}>
                     {p.displayName}
-                    {p.apiKeyConfigured ? '' : '（未配置 key）'}
+                    {p.apiKeyConfigured ? '' : isLocalService(p) ? '（本地服务）' : '（未配置 key）'}
                   </option>
                 )
               })}
@@ -416,6 +469,9 @@ export function CreateAgentModal({
                 setModel(e.target.value)
               }}
             >
+              {/* 手上这个模型不属于所选供应商时把它显式列出来：<select> 静默落空会让
+                  用户以为是自己操作错了，而不是"这个组合存不下来"。 */}
+              {!modelValid && model.length > 0 && <option value={model}>{model}（不属于当前供应商）</option>}
               {models.map((m) => {
                 return (
                   <option key={m.id} value={m.id}>
@@ -426,7 +482,12 @@ export function CreateAgentModal({
             </select>
           </label>
         </div>
-        <fieldset className="field">
+        {modelHint !== undefined && (
+          <p className="apikey-error" role="alert">
+            {modelHint}
+          </p>
+        )}
+        <fieldset className="field" aria-label="工具白名单">
           <span>工具白名单</span>
           <div className="tool-checks">
             {ALL_TOOLS.map((tool) => (
@@ -448,6 +509,7 @@ export function CreateAgentModal({
               </label>
             ))}
           </div>
+          {tools.includes(RISKY_TOOL) && <p className="provider-note">{RISKY_TOOL_HINT}</p>}
         </fieldset>
       </div>
       <div className="modal-actions modal-actions-sticky">
@@ -457,7 +519,8 @@ export function CreateAgentModal({
         <button
           type="button"
           className="btn btn-primary"
-          disabled={busy}
+          disabled={busy || !modelValid}
+          title={modelValid ? undefined : modelHint}
           onClick={() => {
             void submit()
           }}
@@ -535,7 +598,7 @@ export function CreateGroupModal({
           }}
         />
       </label>
-      <fieldset className="field">
+      <fieldset className="field" aria-label="选择成员">
         <span>选择成员</span>
         <div className="member-checks">
           {agents.map((agent) => (

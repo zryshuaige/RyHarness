@@ -77,7 +77,14 @@ const templates: AgentTemplate[] = [
 ]
 
 const providers: ProviderInfo[] = [
-  { id: 'siliconflow', displayName: 'SiliconFlow', apiKeyConfigured: true, models: [{ id: 'm' }] },
+  // 模型列表要含模板的默认模型：新建表单现在会断言 model ∈ 该供应商的 models，
+  // 不合法的组合直接禁用保存（真实服务端 config.ts 的 siliconflow 正是这样对齐的）。
+  {
+    id: 'siliconflow',
+    displayName: 'SiliconFlow',
+    apiKeyConfigured: true,
+    models: [{ id: 'm' }, { id: 'deepseek-ai/DeepSeek-V3' }],
+  },
 ]
 
 function historyRow(): MessageRow {

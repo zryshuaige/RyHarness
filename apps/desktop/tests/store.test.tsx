@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ChatStore } from '../renderer/src/store.ts'
+import { ChatStore, composeMessageText, formatSize } from '../renderer/src/store.ts'
 
 function collect(store: ChatStore) {
   const events: unknown[] = []
@@ -80,6 +80,55 @@ describe('ChatStore 事件折叠', () => {
     expect(store.getSnapshot().queueing).toBe(true)
     store.apply({ type: 'message-done', conversationId: 'c', senderId: 'ryen', turnIndex: 0 })
     expect(store.getSnapshot().queueing).toBe(false)
+  })
+
+  it('首个 text-delta 即清 typing：不与正在出字的气泡并存，message-done 幂等兜底', () => {
+    const store = new ChatStore()
+    store.apply({ type: 'message-start', conversationId: 'c', senderId: 'ryen', senderName: 'Ryen', turnIndex: 0 })
+    expect(store.getSnapshot().typing).toEqual({ ryen: 1 })
+    store.apply({ type: 'text-delta', conversationId: 'c', senderId: 'ryen', text: '你' })
+    expect(store.getSnapshot().typing).toEqual({})
+    // 气泡还在写：消息本身必须仍是未完成态（停止按钮据此判活）
+    expect(store.getSnapshot().messages[0]?.done).toBe(false)
+    store.apply({ type: 'text-delta', conversationId: 'c', senderId: 'ryen', text: '好' })
+    expect(store.getSnapshot().typing).toEqual({})
+    store.apply({ type: 'message-done', conversationId: 'c', senderId: 'ryen', turnIndex: 0 })
+    expect(store.getSnapshot().typing).toEqual({})
+    expect(store.getSnapshot().messages[0]).toMatchObject({ done: true })
+  })
+
+  it('用户附件按 file 部件上屏（与产物卡片同一条渲染通道）', () => {
+    const store = new ChatStore()
+    store.addUserMessage('看下这个', 3, [{ name: 'shot.png', size: 2048, mime: 'image/png' }])
+    const message = store.getSnapshot().messages[0]
+    expect(message).toMatchObject({ senderType: 'user', turnIndex: 3, done: true })
+    expect(message?.parts[0]).toEqual({ kind: 'text', text: '看下这个' })
+    expect(message?.parts[1]).toMatchObject({ kind: 'file', name: 'shot.png', size: 2048, mime: 'image/png' })
+    expect(store.artifacts()).toEqual([{ callId: expect.any(String), name: 'shot.png', size: 2048, mime: 'image/png' }])
+  })
+
+  it('纯附件消息不发空文本块', () => {
+    const store = new ChatStore()
+    store.addUserMessage('', 0, [{ name: 'a.txt', size: 10, mime: 'text/plain' }])
+    expect(store.getSnapshot().messages[0]?.parts).toHaveLength(1)
+    expect(store.getSnapshot().messages[0]?.parts[0]).toMatchObject({ kind: 'file' })
+  })
+
+  it('composeMessageText：正文 + 附件记述；无附件时就是正文本身', () => {
+    expect(composeMessageText('  帮我看看  ')).toBe('帮我看看')
+    expect(composeMessageText('帮我看看', [{ name: 'report.pdf', size: 1536, mime: 'application/pdf' }])).toBe(
+      '帮我看看\n[附件] report.pdf（1.5 KB，application/pdf）',
+    )
+    // 只有附件时正文不能为空，否则服务端会以 body.text 缺失拒收
+    expect(composeMessageText('', [{ name: 'a.png', size: 512, mime: 'image/png' }])).toBe(
+      '[附件] a.png（512 B，image/png）',
+    )
+  })
+
+  it('formatSize 三档', () => {
+    expect(formatSize(512)).toBe('512 B')
+    expect(formatSize(1536)).toBe('1.5 KB')
+    expect(formatSize(3 * 1024 * 1024)).toBe('3.0 MB')
   })
 
   it('多个 agent 的流式消息互不串扰', () => {

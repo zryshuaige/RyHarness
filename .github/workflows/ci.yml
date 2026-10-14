@@ -38,6 +38,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Dependency audit
+        # 当前 13 条 high 全部来自 apps/desktop 锁定的 electron 37.10.2（上游公告
+        # 修在 41.10.6）与 electron-builder 侧的 extract-zip。升 Electron 是独立的
+        # 兼容性决策，不在 CI 里用一次红线把它悄悄放过去：先让报告可见，等升级落地
+        # 再删掉 continue-on-error 让它转为硬门禁。
+        continue-on-error: true
+        run: pnpm audit --audit-level=high
+
       - name: Lint & format check
         run: pnpm lint
 

@@ -3,8 +3,8 @@ import type { AgentDef, ApiClient, Conversation, MessageRow } from '../api.ts'
 import { messageText } from '../api.ts'
 import { toast } from '../lib/toast.ts'
 import { LEAVE_MS, prefersReducedMotion, useLeaving } from '../lib/useLeaving.ts'
-import type { ChatStore, UiMessage } from '../store.ts'
-import { useChat } from '../store.ts'
+import type { ChatStore, MessageAttachment, UiMessage } from '../store.ts'
+import { composeMessageText, useChat } from '../store.ts'
 import { Cat } from './Cat.tsx'
 import { ChatInput } from './ChatInput.tsx'
 import { Icon } from './Icon.tsx'
@@ -65,6 +65,22 @@ const FOLLOW_THRESHOLD = 100
 
 /** 每页历史消息数（向上翻页）。 */
 const PAGE_SIZE = 50
+
+/** 单个附件上限：走 JSON base64 进内存，超过 20MB 先在客户端挡住。 */
+const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+
+/**
+ * Uint8Array → base64（分块拼，避免 apply 的参数上限）。
+ * 服务端消息体是 JSON，附件字节因此以 base64 过网；解码后落进工作区产物目录。
+ */
+export function toBase64(bytes: Uint8Array): string {
+  let binary = ''
+  const chunk = 0x8000
+  for (let offset = 0; offset < bytes.length; offset += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunk))
+  }
+  return btoa(binary)
+}
 
 /** 渲染上限：超长会话只渲染最近若干条，「加载更早」时同步放宽。 */
 const RENDER_CAP = 150
@@ -182,11 +198,11 @@ export function ChatView({
    * 闭包里的 history / snapshot 还是挂载前的那一帧。
    */
   const dispatch = useCallback(
-    (text: string, turnIndex: number): void => {
-      store.addUserMessage(text, turnIndex)
+    (text: string, turnIndex: number, attachments: readonly MessageAttachment[] = []): void => {
+      store.addUserMessage(text, turnIndex, attachments)
       stickToBottom.current = true
       setStopped(false)
-      void api.postMessage(conversation.id, text).catch((error: unknown) => {
+      void api.postMessage(conversation.id, composeMessageText(text, attachments)).catch((error: unknown) => {
         store.apply({
           type: 'error',
           conversationId: conversation.id,
@@ -196,6 +212,37 @@ export function ChatView({
       })
     },
     [api, conversation.id, store],
+  )
+
+  /**
+   * 附件落库：字节 POST 给会话的文件端点，由它写进工作区产物目录，
+   * 回执是与 file_produce 产物卡片同构的 {name,size,mime}。
+   */
+  const uploadAttachment = useCallback(
+    async (file: File): Promise<MessageAttachment> => {
+      if (file.size > MAX_ATTACHMENT_BYTES) {
+        throw new Error(`单个附件不能超过 ${Math.floor(MAX_ATTACHMENT_BYTES / 1024 / 1024)} MB`)
+      }
+      const response = await fetch(`${api.base}/api/conversations/${conversation.id}/files`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: file.name,
+          mime: file.type,
+          data: toBase64(new Uint8Array(await file.arrayBuffer())),
+        }),
+      })
+      const body = (await response.json().catch(() => {
+        return {}
+      })) as Partial<MessageAttachment> & { error?: string }
+      if (!response.ok) throw new Error(body.error ?? `HTTP ${response.status}`)
+      return {
+        name: body.name ?? file.name,
+        size: body.size ?? file.size,
+        mime: body.mime ?? file.type,
+      }
+    },
+    [api, conversation.id],
   )
 
   /** 欢迎页那条待发消息（见 props）。发完立刻置空，重渲染/重挂载都不会发第二遍。 */
@@ -374,9 +421,9 @@ export function ChatView({
       })
   }, [conversation.memberAgentIds, agents])
 
-  const send = (text: string): void => {
+  const send = (text: string, attachments?: MessageAttachment[]): void => {
     // turnIndex 基于全量消息（历史 + 流式快照），与服务端口径一致。
-    dispatch(text, nextTurnIndex([...history, ...snapshot.messages]))
+    dispatch(text, nextTurnIndex([...history, ...snapshot.messages]), attachments ?? [])
   }
 
   // 中止后 store 里的流式消息永远停在 done=false（没有 message-done），光标会一直闪。
@@ -387,6 +434,13 @@ export function ChatView({
       })
     : snapshot.messages
   const allMessages = [...history, ...streamed]
+  /**
+   * 「这一轮还在跑」的判据是「还有没写完的消息」，不是 typing 计数：首个
+   * text-delta 到达后 store 会清掉 typing（「正在输入」不该和正在出字的气泡
+   * 并存），但这一轮远没结束——停止按钮与秒表必须留着。
+   */
+  const streamingActive =
+    !stopped && (Object.keys(snapshot.typing).length > 0 || streamed.some((message) => !message.done))
   // 渲染上限随「加载更早」同步放宽（renderCap 初始 RENDER_CAP，每次翻页 +PAGE_SIZE）。
   const visibleMessages = allMessages.length > renderCap ? allMessages.slice(-renderCap) : allMessages
   const allMessagesRef = useRef<UiMessage[]>([])
@@ -499,7 +553,17 @@ export function ChatView({
         </p>
       )}
 
-      <div className="chat-scroll" ref={scrollRef} onScroll={handleScroll} style={{ position: 'relative' }}>
+      {/* 对话流是一份不断追加的日志：role="log" + polite + 只读 additions，
+          新消息到达才播报，流式重排（同一节点内改字）不会反复念。 */}
+      <div
+        className="chat-scroll"
+        ref={scrollRef}
+        onScroll={handleScroll}
+        role="log"
+        aria-live="polite"
+        aria-relevant="additions"
+        style={{ position: 'relative' }}
+      >
         <div className="chat-col">
           {!historyLoaded && <PanelSkeleton rows={4} />}
           {historyLoaded && hasMore && (
@@ -604,8 +668,8 @@ export function ChatView({
             <ChatInput
               members={conversation.kind === 'group' ? members : []}
               onSend={send}
-              disabled={snapshot.queueing}
-              streaming={!stopped && Object.keys(snapshot.typing).length > 0}
+              onUpload={uploadAttachment}
+              streaming={streamingActive}
               onStop={() => {
                 // 先复位再发请求：中止确认要等服务端回 ABORTED 才到，那之前界面不能
                 // 还停在"生成中"——这正是此前"点了停止像卡死"的观感来源。

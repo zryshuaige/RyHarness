@@ -1,33 +1,36 @@
 import { memo, useState } from 'react'
 import type { AgentDef } from '../api.ts'
 import { isGuardRelay, relayChainLabel } from '../lib/relay-labels.ts'
-import type { MessagePart, UiMessage } from '../store.ts'
+import { toast } from '../lib/toast.ts'
+import { formatSize, type MessagePart, type UiMessage } from '../store.ts'
+// 代码块容器与段落换行（styles.css 不长 pre/code 规则，这里是内容渲染的扩展层）。
+import '../styles-content.css'
 import { Avatar } from './avatars/Avatar.tsx'
 import { Icon } from './Icon.tsx'
 import { Markdown } from './Markdown.tsx'
 
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-}
+/** 历史消息 key 的前缀（ChatView 拼的），与 {@link serverMessageId} 同约定。 */
+const HIST_KEY_PREFIX = 'hist:'
 
-/** 单个消息部件的渲染。markdown=true 时文本按 Markdown 渲染（消息完成后）。 */
+/** 单个消息部件的渲染。markdown=true 时文本按 Markdown 渲染（agent 消息全程）。 */
 export function MessagePartView({
   part,
   fileUrl,
   markdown = false,
+  streaming = false,
 }: {
   part: MessagePart
   fileUrl: (name: string) => string
   markdown?: boolean
+  /** 还在流式：未闭合的尾块降级为纯文本，避免随 token 长出结构。 */
+  streaming?: boolean
 }) {
   if (part.kind === 'text') {
-    // 流式期间纯文本直出（token 高频追加，不重复解析）；完成后渲染 Markdown。
+    // 流式期也走 Markdown：等 done 才切会让整条气泡在结束瞬间重排（单换行塌成空格）。
     if (markdown)
       return (
         <div className="bubble-text bubble-md">
-          <Markdown text={part.text} />
+          <Markdown text={part.text} streaming={streaming} />
         </div>
       )
     return <p className="bubble-text">{part.text}</p>
@@ -75,6 +78,17 @@ function messagePlainText(message: UiMessage): string {
     .join('\n')
 }
 
+/**
+ * 搜索命中定位用的服务端消息 id。
+ *
+ * 历史消息的 React key 由 ChatView 拼成 `hist:<服务端 id>`，而 /api/search 回的是
+ * 裸 id——不摘掉这个前缀，「滚到那条消息」的选择器永远选不中气泡。流式与本地
+ * 用户消息没有服务端 id（也不会被搜索命中），保留原 key 不动。
+ */
+function serverMessageId(key: string): string {
+  return key.startsWith(HIST_KEY_PREFIX) ? key.slice(HIST_KEY_PREFIX.length) : key
+}
+
 /** 聊天气泡：用户居右（琥珀渐变、右下直角），agent 居左（白底、左下直角）；
  *  带头像列、hover 浮现复制操作、流式光标。 */
 function MessageBubbleInner({
@@ -110,8 +124,9 @@ function MessageBubbleInner({
       setTimeout(() => {
         setCopied(false)
       }, 1200)
-    } catch {
-      // 剪贴板不可用时静默。
+    } catch (error) {
+      // 剪贴板不可用（未授权 / 非安全上下文）时按钮毫无变化，等于没点过。
+      toast.error(`复制失败：${error instanceof Error ? error.message : String(error)}`)
     }
   }
 
@@ -126,7 +141,7 @@ function MessageBubbleInner({
     .join(' ')
 
   return (
-    <div className={rowClass} data-sender={message.senderId}>
+    <div className={rowClass} data-sender={message.senderId} data-message-id={serverMessageId(message.key)}>
       {!isUser && (
         <span style={{ width: 40, flexShrink: 0, paddingTop: 2 }}>
           {firstOfGroup && agent !== undefined ? (
@@ -142,7 +157,8 @@ function MessageBubbleInner({
               key={`${part.kind}-${index}`}
               part={part}
               fileUrl={fileUrl}
-              markdown={message.done && message.senderType === 'agent'}
+              markdown={message.senderType === 'agent'}
+              streaming={!message.done}
             />
           ))}
           {message.senderType === 'agent' && !message.done && <span className="bubble-cursor">▍</span>}
@@ -152,6 +168,7 @@ function MessageBubbleInner({
             type="button"
             className="bubble-action"
             title="复制"
+            aria-label={copied ? '已复制' : '复制这条消息'}
             onClick={() => {
               void copy()
             }}
@@ -164,6 +181,7 @@ function MessageBubbleInner({
                 type="button"
                 className={`bubble-action ${feedback === 'thumb_up' ? 'is-active' : ''}`}
                 title="有帮助"
+                aria-label="有帮助"
                 onClick={() => {
                   setFeedback('thumb_up')
                   onFeedback(message, 'thumb_up')
@@ -175,6 +193,7 @@ function MessageBubbleInner({
                 type="button"
                 className={`bubble-action ${feedback === 'thumb_down' ? 'is-active-neg' : ''}`}
                 title="有问题（触发反思）"
+                aria-label="有问题（会触发它反思）"
                 onClick={() => {
                   setFeedback('thumb_down')
                   onFeedback(message, 'thumb_down')

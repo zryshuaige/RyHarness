@@ -66,6 +66,7 @@ interface ProviderRow {
   custom: boolean
   apiKeyConfigured: boolean
   models: { id: string }[]
+  usedBy: { agentId: string; agentName: string }[]
 }
 
 async function listProviders(base: string): Promise<ProviderRow[]> {
@@ -435,6 +436,12 @@ describe('内置供应商视图', () => {
           { id: 'deepseek-ai/DeepSeek-V3', name: 'DeepSeek-V3', contextWindow: 64_000 },
           { id: 'deepseek-ai/DeepSeek-R1', name: 'DeepSeek-R1', contextWindow: 64_000 },
           { id: 'Qwen/Qwen2.5-72B-Instruct', name: 'Qwen2.5-72B', contextWindow: 32_000 },
+        ],
+        usedBy: [
+          // 内置小队三位都走这条路由（Ryen + 首启种下的两位常驻成员）。
+          { agentId: 'ryen', agentName: 'Ryen' },
+          { agentId: 'ryen-team-coding', agentName: '阿码' },
+          { agentId: 'ryen-team-organizer', agentName: '阿屉' },
         ],
       })
     } finally {

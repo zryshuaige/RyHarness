@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { CandidateFact, EmbeddingProvider, MemoryLlm, MemoryOperation } from '@ryagent/memory'
 import { HashEmbeddings, MemoryService, NullEmbeddings, SHARED_SPACE } from '@ryagent/memory'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const dirs: string[] = []
 function dbPath(): string {
@@ -384,6 +384,42 @@ describe('检索管线：混合召回', () => {
     service.close()
   })
 
+  it('召回转义：输入带 - . / @ # : " 仍能召回（未转义时整条长期记忆静默失效）', async () => {
+    const service = new MemoryService({ dbPath: dbPath(), embeddings: new NullEmbeddings() })
+    service.store.insert({ agentId: SHARED_SPACE, kind: 'profile', content: '用户是产品经理' })
+    service.store.insert({ agentId: 'a1', kind: 'fact', content: '用户的邮箱是 zry@example.com' })
+    const block = await service.recall('a1', '把周报发到 zry@example.com，谢谢')
+    expect(block).toContain('用户的邮箱是 zry@example.com')
+    expect(block).toContain('用户是产品经理')
+    service.close()
+  })
+
+  it('FTS 通道异常只降级词法通道，共享画像照常注入（降级不等于静默失忆）', async () => {
+    const logs: string[] = []
+    const service = new MemoryService({
+      dbPath: dbPath(),
+      embeddings: new NullEmbeddings(),
+      logger: (m) => {
+        logs.push(m)
+      },
+    })
+    service.store.insert({ agentId: SHARED_SPACE, kind: 'profile', content: '用户是产品经理' })
+    service.store.insert({ agentId: 'a1', kind: 'fact', content: '用户偏好简洁的周报' })
+    vi.spyOn(service.store, 'searchFts').mockImplementation(() => {
+      throw new Error('fts5: database disk image is malformed')
+    })
+
+    const block = await service.recall('a1', '周报')
+    expect(block).toContain('用户是产品经理')
+    expect(block).not.toContain('相关记忆')
+    expect(
+      logs.some((m) => {
+        return m.includes('FTS channel degraded')
+      }),
+    ).toBe(true)
+    service.close()
+  })
+
   it('embedding 缓存：相同文本不重复请求嵌入器', async () => {
     let calls = 0
     const counting: EmbeddingProvider = {
@@ -424,6 +460,55 @@ describe('记忆闭环集成', () => {
     service.store.insert({ agentId: 'agent-a', kind: 'fact', content: 'agent-a 的私密约定' })
     const block = await service.recall('agent-b', '私密约定')
     expect(block ?? '').not.toContain('agent-a 的私密约定')
+    service.close()
+  })
+
+  it('纯 FTS5 安装：写路径文本判重，近重复事实不再永久累积', async () => {
+    const turns = ['用户养了一只橘猫叫布丁', '用户养了只橘猫叫布丁', '用户下周要搬到杭州']
+    let cursor = 0
+    const llm: MemoryLlm = {
+      async extractFacts() {
+        const text = turns[cursor++] as string
+        return [{ text, scope: 'shared', kind: 'profile' }]
+      },
+      // 模型每轮都说 ADD：判重不能依赖模型自觉，也不能依赖语义通道
+      async decideOperations() {
+        return [{ action: 'ADD' }]
+      },
+    }
+    const service = new MemoryService({ dbPath: dbPath(), embeddings: new NullEmbeddings(), llm })
+    for (let round = 0; round < turns.length; round++) {
+      service.enqueueExtraction('ryen', 'Ryen', `c${round}`, '用户：随便聊聊')
+      await service.flush()
+    }
+    const contents = service.store
+      .listActiveForAgent(SHARED_SPACE)
+      .map((m) => {
+        return m.content
+      })
+      .sort()
+    expect(contents).toEqual(['用户下周要搬到杭州', '用户养了一只橘猫叫布丁'].sort())
+    service.close()
+  })
+
+  it('纯 FTS5 安装：细化式改写不算近重复，仍然写入（判重不许吃掉 UPDATE 的机会）', async () => {
+    const turns = ['用户住在北京', '用户住在北京市朝阳区']
+    let cursor = 0
+    const llm: MemoryLlm = {
+      async extractFacts() {
+        const text = turns[cursor++] as string
+        return [{ text, scope: 'shared', kind: 'profile' }]
+      },
+      async decideOperations() {
+        return [{ action: 'ADD' }]
+      },
+    }
+    const service = new MemoryService({ dbPath: dbPath(), embeddings: new NullEmbeddings(), llm })
+    for (let round = 0; round < turns.length; round++) {
+      service.enqueueExtraction('ryen', 'Ryen', `c${round}`, '用户：搬家了')
+      await service.flush()
+    }
+    expect(service.store.listActiveForAgent(SHARED_SPACE)).toHaveLength(2)
     service.close()
   })
 })
@@ -497,5 +582,80 @@ describe('向量索引重建', () => {
     expect(await fresh.reembedAll()).toBe(1)
     expect(fresh.store.listActiveEmbeddings('ryen', fresh.embeddingModel)).toHaveLength(1)
     fresh.close()
+  })
+
+  it('重建用后台预算而不是首 token 的 800ms：慢端点下照样重建成功', async () => {
+    const slow: EmbeddingProvider = {
+      label: 'slow-model',
+      available: true,
+      async embed(texts) {
+        await new Promise((resolve) => {
+          return setTimeout(resolve, 60)
+        })
+        return texts.map(() => {
+          return Float32Array.from([1, 0, 0, 0])
+        })
+      },
+    }
+    // 召回预算 20ms（端点慢到召回只能走纯 FTS5），重建预算用默认后台值
+    const service = new MemoryService({ dbPath: dbPath(), embeddings: slow, embedTimeoutMs: 20 })
+    service.store.insert({ agentId: 'ryen', kind: 'fact', content: '用户住在北京' })
+    expect(await service.reembedAll()).toBe(1)
+    expect(service.store.embeddingModelStats()['slow-model']).toBe(1)
+    service.close()
+  })
+
+  it('reembedAll 分片推进：条数超过单片上限时逐片重建，返回值如实等于写入条数', async () => {
+    let batches = 0
+    const batched: EmbeddingProvider = {
+      label: 'batched-model',
+      available: true,
+      async embed(texts) {
+        batches += 1
+        return texts.map(() => {
+          return Float32Array.from([1, 0, 0, 0])
+        })
+      },
+    }
+    const service = new MemoryService({ dbPath: dbPath(), embeddings: batched, reembedBatchSize: 2 })
+    for (let i = 0; i < 5; i++) {
+      service.store.insert({ agentId: 'ryen', kind: 'fact', content: `事实 ${i}` })
+    }
+    expect(await service.reembedAll()).toBe(5)
+    expect(batches).toBe(3) // 2 + 2 + 1
+    expect(service.store.embeddingModelStats()['batched-model']).toBe(5)
+    expect(await service.reembedAll()).toBe(0)
+    service.close()
+  })
+
+  it('端点无响应时如实停住：返回已写入条数，不把处理过的条数当成功', async () => {
+    const logs: string[] = []
+    const hanging: EmbeddingProvider = {
+      label: 'hanging-model',
+      available: true,
+      embed: () => {
+        return new Promise(() => {})
+      },
+    }
+    const service = new MemoryService({
+      dbPath: dbPath(),
+      embeddings: hanging,
+      reembedBatchSize: 2,
+      reembedTimeoutMs: 20,
+      logger: (m) => {
+        logs.push(m)
+      },
+    })
+    for (let i = 0; i < 4; i++) {
+      service.store.insert({ agentId: 'ryen', kind: 'fact', content: `事实 ${i}` })
+    }
+    expect(await service.reembedAll()).toBe(0)
+    expect(service.store.embeddingModelStats()['hanging-model']).toBeUndefined()
+    expect(
+      logs.some((m) => {
+        return m.includes('reembed stalled')
+      }),
+    ).toBe(true)
+    service.close()
   })
 })

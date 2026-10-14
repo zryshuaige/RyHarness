@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import {
+  ftsMatchQuery,
   MEMORY_SCHEMA_VERSION,
   MemoryStore,
   MIGRATIONS,
@@ -22,6 +23,16 @@ function store(): MemoryStore {
   return new MemoryStore(storePath())
 }
 
+/** 测试用：绕过存储层直接操作底层连接（模拟旧版本留下的脏状态）。 */
+function raw(s: MemoryStore, sql: string, ...args: unknown[]): void {
+  ;(s as unknown as { db: DatabaseSync }).db.prepare(sql).run(...(args as never[]))
+}
+
+/** 测试用：绕过存储层直接查底层连接（含故意写错的 FTS 查询）。 */
+function rawQuery(s: MemoryStore, sql: string, ...args: unknown[]): unknown[] {
+  return (s as unknown as { db: DatabaseSync }).db.prepare(sql).all(...(args as never[])) as unknown[]
+}
+
 afterEach(() => {
   while (dirs.length > 0) {
     try {
@@ -36,7 +47,7 @@ describe('MemoryStore', () => {
   it('schema 迁移幂等，memory_meta 记录版本', () => {
     const s = store()
     migrateMemory(s['db' as keyof MemoryStore] as never) // 二次迁移不抛错
-    expect(MEMORY_SCHEMA_VERSION).toBe(3)
+    expect(MEMORY_SCHEMA_VERSION).toBe(4)
     s.close()
   })
 
@@ -78,6 +89,38 @@ describe('MemoryStore', () => {
     // 软删链：新记忆 supersedes 旧
     const next = s.insert({ agentId: 'a1', kind: 'fact', content: '用户搬到了上海', supersedesId: old.id })
     expect(next.supersedesId).toBe(old.id)
+    s.close()
+  })
+
+  it('FTS 查询转义：带 - . / @ # : " 的输入仍能召回（未转义时 MATCH 直接抛错）', () => {
+    const s = store()
+    s.insert({ agentId: 'a1', kind: 'fact', content: '用户的邮箱是 zry@example.com' })
+    s.insert({ agentId: 'a1', kind: 'fact', content: '项目入口在 src/main.ts（见 #12）' })
+    s.insert({ agentId: 'a1', kind: 'fact', content: '备注写的是 note: 待办' })
+    s.insert({ agentId: 'a1', kind: 'fact', content: '用户强调"很重要"这条' })
+    const cases: [query: string, expected: string][] = [
+      ['邮箱 zry@example.com', '用户的邮箱是 zry@example.com'],
+      ['入口在 src/main.ts', '项目入口在 src/main.ts（见 #12）'],
+      ['note: 待办', '备注写的是 note: 待办'],
+      ['强调"很重要"', '用户强调"很重要"这条'],
+    ]
+    for (const [query, expected] of cases) {
+      expect(
+        s.searchFts('a1', query).map((row) => {
+          return row.content
+        }),
+        query,
+      ).toContain(expected)
+    }
+    // token 逐个加引号、内部 " 双写：拼错一个就是整条通道抛错
+    expect(ftsMatchQuery('a"b')).toBe('"a""" OR """b"')
+    // 未转义的 bigram 查询（修复前的拼法）：落单的 " 被当成未闭合字符串，整条通道抛错
+    expect(() => {
+      rawQuery(s, 'SELECT rowid FROM memories_fts WHERE memories_fts MATCH ?', 'a"')
+    }).toThrow(/unterminated string/)
+    expect(() => {
+      rawQuery(s, 'SELECT rowid FROM memories_fts WHERE memories_fts MATCH ?', 'or OR')
+    }).toThrow(/syntax error/)
     s.close()
   })
 
@@ -184,6 +227,116 @@ describe('MemoryStore', () => {
     expect(s.get(agentFact.id)!.status).toBe('inactive')
     // 画像仍在注入面上，agent 回来还认得用户。
     expect(s.listSharedProfile().map((row) => row.id)).toEqual([profile.id])
+    s.close()
+  })
+
+  it('归档同步清出 FTS 索引：死行不再挤占 BM25 候选窗口，恢复时按 rowid 重建', () => {
+    const s = store()
+    const dormant = s.insert({ agentId: 'a1', kind: 'event', content: '很久以前的事件' })
+    const alive = s.insert({ agentId: 'a1', kind: 'preference', content: '稳定偏好' })
+    s.backdate(dormant.id, Date.now() - 300 * 86_400_000)
+    expect(s.ftsIndexSize()).toBe(2)
+
+    expect(s.archiveDormant(90 * 86_400_000)).toBe(1)
+    // 索引只留 active 行：只过滤不清理的话死行会一直挤占 limit*3 的候选窗口
+    expect(s.ftsIndexSize()).toBe(1)
+    expect(s.get(alive.id)!.status).toBe('active')
+    expect(s.stats().total).toBe(2) // 行数据一条不少，可审计可恢复
+    expect(s.searchFts('a1', '很久以前的事件')).toEqual([])
+    // 冷软删链归档同理（软删时索引行已清，归档不该让索引变大）
+    expect(s.archiveColdSuperseded(180 * 86_400_000)).toBe(0)
+    expect(s.ftsIndexSize()).toBe(1)
+
+    expect(s.restore(dormant.id)).toBe(true)
+    expect(s.ftsIndexSize()).toBe(2)
+    expect(
+      s.searchFts('a1', '很久以前的事件').map((row) => {
+        return row.id
+      }),
+    ).toEqual([dormant.id])
+    s.close()
+  })
+
+  it('v4 迁移：存量库里归档/软删残留的 FTS 行一次清干净', () => {
+    const path = storePath()
+    const s = new MemoryStore(path)
+    const alive = s.insert({ agentId: 'a1', kind: 'fact', content: '活跃记忆' })
+    const archived = s.insert({ agentId: 'a1', kind: 'event', content: '被归档的旧事件' })
+    // 模拟旧版本：只改 status 不清索引，并把版本号拨回 v3
+    raw(s, "UPDATE memories SET status = 'inactive' WHERE id = ?", archived.id)
+    raw(s, "UPDATE memory_meta SET value = '3' WHERE key = 'schema_version'")
+    expect(s.ftsIndexSize()).toBe(2)
+    s.close()
+
+    const reopened = new MemoryStore(path) // 打开即迁移到 v4
+    expect(reopened.ftsIndexSize()).toBe(1)
+    expect(reopened.get(archived.id)!.status).toBe('inactive')
+    expect(
+      reopened.searchFts('a1', '活跃记忆').map((row) => {
+        return row.id
+      }),
+    ).toEqual([alive.id])
+    reopened.close()
+  })
+
+  it('listActiveEmbeddings 常驻：重复召回不再全表读，写入与跨连接删除后失效', () => {
+    const path = storePath()
+    const s = new MemoryStore(path)
+    const first = s.insert({
+      agentId: 'a1',
+      kind: 'fact',
+      content: '甲',
+      embedding: Float32Array.from([1, 0]),
+      embeddingModel: 'm',
+    })
+    const second = s.insert({
+      agentId: 'a1',
+      kind: 'fact',
+      content: '乙',
+      embedding: Float32Array.from([0, 1]),
+      embeddingModel: 'm',
+    })
+    const cached = s.listActiveEmbeddings('a1', 'm')
+    expect(cached.map((row) => row.content)).toEqual(['甲', '乙'])
+    expect(s.listActiveEmbeddings('a1', 'm')).toBe(cached)
+    // 命中计数就地同步：每轮 recall 都 touchAccess，若因此整体失效缓存等于没加
+    s.touchAccess([first.id])
+    expect(s.listActiveEmbeddings('a1', 'm')[0]!.accessCount).toBe(1)
+
+    s.insert({
+      agentId: 'a1',
+      kind: 'fact',
+      content: '丙',
+      embedding: Float32Array.from([0, 0, 1]),
+      embeddingModel: 'm',
+    })
+    expect(
+      s
+        .listActiveEmbeddings('a1', 'm')
+        .map((row) => {
+          return row.content
+        })
+        .sort(),
+    ).toEqual(['丙', '乙', '甲'].sort())
+    s.supersede(first.id, 'superseded')
+    expect(
+      s
+        .listActiveEmbeddings('a1', 'm')
+        .map((row) => {
+          return row.content
+        })
+        .sort(),
+    ).toEqual(['丙', '乙'].sort())
+
+    // 跨连接写入（session 删 agent 走的就是这条路）同样让缓存失效
+    const other = new DatabaseSync(path)
+    other.prepare('DELETE FROM memories WHERE id = ?').run(second.id)
+    other.close()
+    expect(
+      s.listActiveEmbeddings('a1', 'm').map((row) => {
+        return row.content
+      }),
+    ).toEqual(['丙'])
     s.close()
   })
 

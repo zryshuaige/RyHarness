@@ -7,7 +7,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync, type StatementSync } from 'node:sqlite'
 import { migrate, SCHEMA_VERSION } from './schema.ts'
 import type {
   Conversation,
@@ -98,9 +98,21 @@ function usageColumn(usage: StoredUsage | undefined): string | null {
   return usage === undefined ? null : JSON.stringify(usage)
 }
 
+/** 预编译语句缓存上界（SQL 文本种类固定，留两倍余量足够）。 */
+const MAX_PREPARED = 64
+
 /** RyAgent 会话存储。构造时打开（必要时创建）数据库并应用缺失迁移。 */
 export class SessionStore {
   private readonly db: DatabaseSync
+  /**
+   * 预编译语句缓存：`DatabaseSync.prepare()` 每次都要重新解析 SQL 并向 SQLite 要一份
+   * 执行计划，而这里的语句全是固定 SQL + 变长参数（长会话里每翻一页消息、每写一条
+   * 消息都要 prepare 一次）。按 SQL 文本缓存后，同一条语句整个进程只解析一次。
+   * 上界 {@link MAX_PREPARED}：SQL 文本种类固定（表结构固定），留两倍余量足够。
+   */
+  private readonly statements = new Map<string, StatementSync>()
+  /** 命中缓存的次数（诊断用：证明缓存真的在生效，而不是每次都重新 prepare）。 */
+  private statementHits = 0
 
   /** @param path - 数据库文件路径，或 ':memory:'（测试/临时）。 */
   constructor(path: string) {
@@ -108,6 +120,28 @@ export class SessionStore {
     this.db.exec('PRAGMA journal_mode = WAL')
     this.db.exec('PRAGMA foreign_keys = ON')
     migrate(this.db)
+  }
+
+  /** 取预编译语句（首次解析后缓存）。 */
+  private stmt(sql: string): StatementSync {
+    const cached = this.statements.get(sql)
+    if (cached !== undefined) {
+      this.statementHits += 1
+      return cached
+    }
+    const prepared = this.db.prepare(sql)
+    this.statements.set(sql, prepared)
+    while (this.statements.size > MAX_PREPARED) {
+      const oldest = this.statements.keys().next()
+      if (oldest.done === true) break
+      this.statements.delete(oldest.value)
+    }
+    return prepared
+  }
+
+  /** 预编译语句缓存的规模与命中次数（诊断与测试断言用）。 */
+  preparedStats(): { cached: number; reuse: number } {
+    return { cached: this.statements.size, reuse: this.statementHits }
   }
 
   /** 当前 schema 版本（即迁移目标版本）。 */
@@ -126,28 +160,26 @@ export class SessionStore {
   upsertAgent(input: AgentInput): StoredAgent {
     const now = Date.now()
     const existing = this.getAgent(input.id)
-    this.db
-      .prepare(`
+    this.stmt(`
       INSERT INTO agents (id, name, avatar, system_prompt, provider, model, temperature, tools, is_builtin, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (id) DO UPDATE SET
         name = excluded.name, avatar = excluded.avatar, system_prompt = excluded.system_prompt,
         provider = excluded.provider, model = excluded.model, temperature = excluded.temperature,
         tools = excluded.tools, updated_at = excluded.updated_at
-    `)
-      .run(
-        input.id,
-        input.name,
-        input.avatar ?? null,
-        input.systemPrompt,
-        input.provider,
-        input.model,
-        input.temperature ?? null,
-        JSON.stringify(input.tools),
-        input.isBuiltin === true ? 1 : 0,
-        existing?.createdAt ?? now,
-        now,
-      )
+    `).run(
+      input.id,
+      input.name,
+      input.avatar ?? null,
+      input.systemPrompt,
+      input.provider,
+      input.model,
+      input.temperature ?? null,
+      JSON.stringify(input.tools),
+      input.isBuiltin === true ? 1 : 0,
+      existing?.createdAt ?? now,
+      now,
+    )
     const stored = this.getAgent(input.id)
     if (stored === undefined) throw new Error(`@ryagent/session: upsert of agent "${input.id}" did not persist`)
     return stored
@@ -155,13 +187,13 @@ export class SessionStore {
 
   /** 读取一个 Agent 定义；不存在返回 undefined。 */
   getAgent(id: string): StoredAgent | undefined {
-    const row = this.db.prepare('SELECT * FROM agents WHERE id = ?').get(id) as Record<string, unknown> | undefined
+    const row = this.stmt('SELECT * FROM agents WHERE id = ?').get(id) as Record<string, unknown> | undefined
     return row === undefined ? undefined : this.rowToAgent(row)
   }
 
   /** 列出全部 Agent 定义，按创建时间排序。 */
   listAgents(): StoredAgent[] {
-    const rows = this.db.prepare('SELECT * FROM agents ORDER BY created_at, id').all() as Record<string, unknown>[]
+    const rows = this.stmt('SELECT * FROM agents ORDER BY created_at, id').all() as Record<string, unknown>[]
     return rows.map((row) => {
       return this.rowToAgent(row)
     })
@@ -196,29 +228,25 @@ export class SessionStore {
       feedback: 0,
     }
     try {
-      this.db.prepare('DELETE FROM agents WHERE id = ?').run(id)
+      this.stmt('DELETE FROM agents WHERE id = ?').run(id)
       for (const conversation of this.listConversations(10_000)) {
         const members = conversation.memberAgentIds.filter((member) => {
           return member !== id
         })
         const dispatcherRemoved = conversation.dispatcherAgentId === id
         if (members.length === conversation.memberAgentIds.length && !dispatcherRemoved) continue
-        this.db
-          .prepare('UPDATE conversations SET member_agent_ids = ?, dispatcher_agent_id = ? WHERE id = ?')
-          .run(
-            JSON.stringify(members),
-            dispatcherRemoved ? null : (conversation.dispatcherAgentId ?? null),
-            conversation.id,
-          )
+        this.stmt('UPDATE conversations SET member_agent_ids = ?, dispatcher_agent_id = ? WHERE id = ?').run(
+          JSON.stringify(members),
+          dispatcherRemoved ? null : (conversation.dispatcherAgentId ?? null),
+          conversation.id,
+        )
         result.conversationsUpdated++
       }
       // 记忆与进化共用同一个 SQLite 文件（各自的表没有指向 agents 的外键，
       // 跨包没法靠 ON DELETE CASCADE）。这里显式清一次：留着就是孤儿行——
       // agent 没了，画像/教训/反馈却还在被检索与统计。
       if (this.tableExists('memories_fts') && this.tableExists('memories')) {
-        this.db
-          .prepare('DELETE FROM memories_fts WHERE rowid IN (SELECT rowid FROM memories WHERE agent_id = ?)')
-          .run(id)
+        this.stmt('DELETE FROM memories_fts WHERE rowid IN (SELECT rowid FROM memories WHERE agent_id = ?)').run(id)
       }
       result.memories = this.deleteAgentRows('memories', id)
       result.playbookEntries = this.deleteAgentRows('playbook_entries', id)
@@ -234,9 +262,9 @@ export class SessionStore {
 
   /** 表是否存在（记忆/进化子系统被关闭时它们的迁移还没跑过）。 */
   private tableExists(table: string): boolean {
-    const row = this.db
-      .prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = ?")
-      .get(table) as {
+    const row = this.stmt("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = ?").get(
+      table,
+    ) as {
       count: number
     }
     return Number(row.count) > 0
@@ -245,7 +273,7 @@ export class SessionStore {
   /** 按 agent_id 清理一张附属表的行；表不存在（子系统未启用）返回 0。 */
   private deleteAgentRows(table: string, id: string): number {
     if (!this.tableExists(table)) return 0
-    return Number(this.db.prepare(`DELETE FROM ${table} WHERE agent_id = ?`).run(id).changes)
+    return Number(this.stmt(`DELETE FROM ${table} WHERE agent_id = ?`).run(id).changes)
   }
 
   /** 创建会话。 */
@@ -261,61 +289,55 @@ export class SessionStore {
       createdAt: now,
       updatedAt: now,
     }
-    this.db
-      .prepare(`
+    this.stmt(`
       INSERT INTO conversations (id, kind, title, member_agent_ids, dispatcher_agent_id, last_read_seq, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `)
-      .run(
-        conversation.id,
-        conversation.kind,
-        conversation.title,
-        JSON.stringify(conversation.memberAgentIds),
-        conversation.dispatcherAgentId ?? null,
-        0,
-        now,
-        now,
-      )
+    `).run(
+      conversation.id,
+      conversation.kind,
+      conversation.title,
+      JSON.stringify(conversation.memberAgentIds),
+      conversation.dispatcherAgentId ?? null,
+      0,
+      now,
+      now,
+    )
     return conversation
   }
 
   /** 读取会话；不存在返回 undefined。 */
   getConversation(id: string): Conversation | undefined {
-    const row = this.db.prepare('SELECT * FROM conversations WHERE id = ?').get(id) as
-      | Record<string, unknown>
-      | undefined
+    const row = this.stmt('SELECT * FROM conversations WHERE id = ?').get(id) as Record<string, unknown> | undefined
     return row === undefined ? undefined : this.rowToConversation(row)
   }
 
   /** 删除会话（消息与调度事件由外键级联删除）。 */
   deleteConversation(id: string): void {
-    this.db.prepare('DELETE FROM conversations WHERE id = ?').run(id)
+    this.stmt('DELETE FROM conversations WHERE id = ?').run(id)
   }
 
   /** 未读数：seq 大于 lastReadSeq、非用户发送、且含文本块（排除纯 tool_call 行）的消息条数。 */
   unreadCount(conversationId: string, lastReadSeq: number): number {
-    const row = this.db
-      .prepare(
-        `SELECT COUNT(*) AS count FROM messages
+    const row = this.stmt(
+      `SELECT COUNT(*) AS count FROM messages
        WHERE conversation_id = ? AND seq > ? AND sender_type != 'user' AND ${HAS_TEXT_BLOCK_SQL}`,
-      )
-      .get(conversationId, lastReadSeq) as { count: number }
+    ).get(conversationId, lastReadSeq) as { count: number }
     return Number(row.count)
   }
 
   /** 标记已读：lastReadSeq 推进到当前最新消息序号；返回推进后的值。 */
   markConversationRead(conversationId: string): number {
-    const row = this.db
-      .prepare('SELECT COALESCE(MAX(seq), 0) AS max_seq FROM messages WHERE conversation_id = ?')
-      .get(conversationId) as { max_seq: number }
+    const row = this.stmt('SELECT COALESCE(MAX(seq), 0) AS max_seq FROM messages WHERE conversation_id = ?').get(
+      conversationId,
+    ) as { max_seq: number }
     const seq = Number(row.max_seq)
-    this.db.prepare('UPDATE conversations SET last_read_seq = ? WHERE id = ?').run(seq, conversationId)
+    this.stmt('UPDATE conversations SET last_read_seq = ? WHERE id = ?').run(seq, conversationId)
     return seq
   }
 
   /** 最近会话列表，按 updatedAt 倒序。 */
   listConversations(limit = 50): Conversation[] {
-    const rows = this.db.prepare('SELECT * FROM conversations ORDER BY updated_at DESC LIMIT ?').all(limit) as Record<
+    const rows = this.stmt('SELECT * FROM conversations ORDER BY updated_at DESC LIMIT ?').all(limit) as Record<
       string,
       unknown
     >[]
@@ -330,8 +352,7 @@ export class SessionStore {
    * 预览取最近一条含文本块的消息（跳过纯 tool_call 行）。
    */
   listConversationsWithPreview(limit = 50): (Conversation & { lastMessagePreview: string; unreadCount: number })[] {
-    const rows = this.db
-      .prepare(`
+    const rows = this.stmt(`
       SELECT c.*,
         (SELECT content_blocks FROM messages
           WHERE conversation_id = c.id AND ${HAS_TEXT_BLOCK_SQL}
@@ -342,8 +363,7 @@ export class SessionStore {
       FROM conversations c
       ORDER BY c.updated_at DESC
       LIMIT ?
-    `)
-      .all(limit) as Record<string, unknown>[]
+    `).all(limit) as Record<string, unknown>[]
     return rows.map((row) => {
       const blocks = parseJsonArray(String(row.last_blocks ?? '[]')) as { type?: string; text?: string }[]
       const preview = (
@@ -361,7 +381,7 @@ export class SessionStore {
 
   /** 刷新会话的 updatedAt（新消息落库后调用）。 */
   touchConversation(id: string, now = Date.now()): void {
-    this.db.prepare('UPDATE conversations SET updated_at = ? WHERE id = ?').run(now, id)
+    this.stmt('UPDATE conversations SET updated_at = ? WHERE id = ?').run(now, id)
   }
 
   private rowToConversation(row: Record<string, unknown>): Conversation {
@@ -397,23 +417,21 @@ export class SessionStore {
       ...(input.usage === undefined ? {} : { usage: input.usage }),
       createdAt: now,
     }
-    const result = this.db
-      .prepare(`
+    const result = this.stmt(`
       INSERT INTO messages (id, conversation_id, sender_type, sender_id, content_blocks, mentions, tool_call_id, turn_index, usage, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `)
-      .run(
-        message.id,
-        message.conversationId,
-        message.senderType,
-        message.senderId ?? null,
-        JSON.stringify(message.contentBlocks),
-        JSON.stringify(message.mentions),
-        message.toolCallId ?? null,
-        message.turnIndex,
-        usageColumn(input.usage),
-        now,
-      )
+    `).run(
+      message.id,
+      message.conversationId,
+      message.senderType,
+      message.senderId ?? null,
+      JSON.stringify(message.contentBlocks),
+      JSON.stringify(message.mentions),
+      message.toolCallId ?? null,
+      message.turnIndex,
+      usageColumn(input.usage),
+      now,
+    )
     message.seq = Number(result.lastInsertRowid)
     this.touchConversation(input.conversationId, now)
     return message
@@ -426,14 +444,13 @@ export class SessionStore {
    * 二次 UPDATE 挂到"本次调用产出的那条消息"上，而不是写进 INSERT。
    */
   attachUsage(messageId: string, usage: StoredUsage): void {
-    this.db.prepare('UPDATE messages SET usage = ? WHERE id = ?').run(JSON.stringify(usage), messageId)
+    this.stmt('UPDATE messages SET usage = ? WHERE id = ?').run(JSON.stringify(usage), messageId)
   }
 
   /** 会话级累计用量（单查询求和；total 缺失时按 input+output 兜底）。 */
   conversationUsage(conversationId: string): UsageTotals {
-    const row = this.db
-      .prepare(
-        `SELECT
+    const row = this.stmt(
+      `SELECT
            COALESCE(SUM(CAST(json_extract(usage, '$.inputTokens') AS INTEGER)), 0) AS input,
            COALESCE(SUM(CAST(json_extract(usage, '$.outputTokens') AS INTEGER)), 0) AS output,
            COALESCE(SUM(COALESCE(
@@ -442,8 +459,7 @@ export class SessionStore {
            )), 0) AS total,
            COUNT(usage) AS messages
          FROM messages WHERE conversation_id = ? AND usage IS NOT NULL`,
-      )
-      .get(conversationId) as { input: number; output: number; total: number; messages: number }
+    ).get(conversationId) as { input: number; output: number; total: number; messages: number }
     return {
       inputTokens: Number(row.input),
       outputTokens: Number(row.output),
@@ -457,12 +473,15 @@ export class SessionStore {
     const limit = page.limit ?? 50
     const rows = (
       page.beforeSeq === undefined
-        ? this.db
-            .prepare('SELECT * FROM messages WHERE conversation_id = ? ORDER BY seq DESC LIMIT ?')
-            .all(conversationId, limit)
-        : this.db
-            .prepare('SELECT * FROM messages WHERE conversation_id = ? AND seq < ? ORDER BY seq DESC LIMIT ?')
-            .all(conversationId, page.beforeSeq, limit)
+        ? this.stmt('SELECT * FROM messages WHERE conversation_id = ? ORDER BY seq DESC LIMIT ?').all(
+            conversationId,
+            limit,
+          )
+        : this.stmt('SELECT * FROM messages WHERE conversation_id = ? AND seq < ? ORDER BY seq DESC LIMIT ?').all(
+            conversationId,
+            page.beforeSeq,
+            limit,
+          )
     ) as Record<string, unknown>[]
     return rows.reverse().map((row) => {
       return this.rowToMessage(row)
@@ -471,13 +490,15 @@ export class SessionStore {
 
   /** 会话的下一个 turn 序号（max(turn_index) + 1，首条为 0）。 */
   nextTurnIndex(conversationId: string): number {
-    const row = this.db
-      .prepare('SELECT COALESCE(MAX(turn_index), -1) + 1 AS next FROM messages WHERE conversation_id = ?')
-      .get(conversationId) as { next: number }
+    const row = this.stmt(
+      'SELECT COALESCE(MAX(turn_index), -1) + 1 AS next FROM messages WHERE conversation_id = ?',
+    ).get(conversationId) as { next: number }
     return Number(row.next)
   }
 
   private rowToMessage(row: Record<string, unknown>): StoredMessage {
+    // usage 解析一次就够：翻一页历史要跑 50 次 JSON.parse，翻两遍纯属白花 CPU。
+    const usage = parseUsage(row.usage)
     return {
       id: String(row.id),
       seq: Number(row.seq),
@@ -488,7 +509,7 @@ export class SessionStore {
       mentions: parseJsonArray(String(row.mentions)) as string[],
       ...(row.tool_call_id === null || row.tool_call_id === undefined ? {} : { toolCallId: String(row.tool_call_id) }),
       turnIndex: Number(row.turn_index),
-      ...(parseUsage(row.usage) === undefined ? {} : { usage: parseUsage(row.usage) as StoredUsage }),
+      ...(usage === undefined ? {} : { usage }),
       createdAt: Number(row.created_at),
     }
   }
@@ -498,28 +519,26 @@ export class SessionStore {
   /** 记录一次群聊调度决策。 */
   recordDispatchEvent(input: Omit<DispatchEvent, 'id' | 'createdAt'>): DispatchEvent {
     const event: DispatchEvent = { id: randomUUID(), createdAt: Date.now(), ...input }
-    this.db
-      .prepare(`
+    this.stmt(`
       INSERT INTO dispatch_events (id, conversation_id, from_agent, to_agent, reason, turn_index, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
-    `)
-      .run(
-        event.id,
-        event.conversationId,
-        event.fromAgent ?? null,
-        event.toAgent,
-        event.reason,
-        event.turnIndex,
-        event.createdAt,
-      )
+    `).run(
+      event.id,
+      event.conversationId,
+      event.fromAgent ?? null,
+      event.toAgent,
+      event.reason,
+      event.turnIndex,
+      event.createdAt,
+    )
     return event
   }
 
   /** 按会话列出调度事件，写入顺序（rowid）升序——同毫秒时间戳也能保持确定性顺序。 */
   listDispatchEvents(conversationId: string): DispatchEvent[] {
-    const rows = this.db
-      .prepare('SELECT * FROM dispatch_events WHERE conversation_id = ? ORDER BY rowid')
-      .all(conversationId) as Record<string, unknown>[]
+    const rows = this.stmt('SELECT * FROM dispatch_events WHERE conversation_id = ? ORDER BY rowid').all(
+      conversationId,
+    ) as Record<string, unknown>[]
     return rows.map((row): DispatchEvent => {
       return {
         id: String(row.id),

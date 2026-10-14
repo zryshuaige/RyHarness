@@ -13,7 +13,7 @@
  */
 
 import type { EmbeddingProvider } from './embeddings.ts'
-import { cosine, embeddingModelOf, NullEmbeddings, textSimilarity } from './embeddings.ts'
+import { cosine, embeddingModelOf, NullEmbeddings, textNearDuplicate, textSimilarity } from './embeddings.ts'
 import type { CandidateFact, MemoryLlm, MemoryOperation } from './llm.ts'
 import type { MemoryKind } from './schema.ts'
 import { SHARED_SPACE } from './schema.ts'
@@ -32,6 +32,12 @@ const DECAY_DAYS = 30
 const DEFAULT_EMBED_TIMEOUT_MS = 800
 /** 默认 recall 整体预算（毫秒）——保障首 token 延迟。 */
 const DEFAULT_RECALL_BUDGET_MS = 1_200
+/** 重建向量是后台批量任务，预算与首 token 路径无关（沿用 800ms 必然写 0 条）。 */
+const DEFAULT_REEMBED_TIMEOUT_MS = 30_000
+/** 重建分片：单次请求条数，多数 embedding 端点有上限，整批塞进去容易被拒。 */
+const REEMBED_BATCH = 64
+/** 无 embedding 时文本判重扫描的窗口（每空间最近这么多条 active 记忆）。 */
+const TEXT_DEDUPE_WINDOW = 200
 /**
  * DECIDE 相似度兜底阈值：
  * - 候选与最相似旧记忆 < ADD_FORCE：判定为"没有真重复"，强制 ADD（不让 NOOP
@@ -59,6 +65,10 @@ export interface MemoryServiceOptions {
   embedTimeoutMs?: number
   /** recall 整体预算（默认 1200ms）：超预算则跳过本轮记忆注入，不阻塞首 token。 */
   recallBudgetMs?: number
+  /** 向量重建单批超时（默认 30s）；与 recall 的 800ms 预算是两回事。 */
+  reembedTimeoutMs?: number
+  /** 向量重建分片大小（默认 64）。 */
+  reembedBatchSize?: number
 }
 
 export class MemoryService implements AgentMemory {
@@ -69,6 +79,8 @@ export class MemoryService implements AgentMemory {
   private readonly log: (message: string) => void
   private readonly embedTimeoutMs: number
   private readonly recallBudgetMs: number
+  private readonly reembedTimeoutMs: number
+  private readonly reembedBatchSize: number
   /** 单 writer 队列。 */
   private queue: Promise<void> = Promise.resolve()
 
@@ -79,6 +91,8 @@ export class MemoryService implements AgentMemory {
     this.topN = options.recallTopN ?? RECALL_TOP_N
     this.embedTimeoutMs = options.embedTimeoutMs ?? DEFAULT_EMBED_TIMEOUT_MS
     this.recallBudgetMs = options.recallBudgetMs ?? DEFAULT_RECALL_BUDGET_MS
+    this.reembedTimeoutMs = options.reembedTimeoutMs ?? DEFAULT_REEMBED_TIMEOUT_MS
+    this.reembedBatchSize = options.reembedBatchSize ?? REEMBED_BATCH
     this.log =
       options.logger ??
       ((message) => {
@@ -197,7 +211,7 @@ export class MemoryService implements AgentMemory {
       addRanked(semantic)
     }
 
-    addRanked(this.store.searchFts(agentId, input, RECALL_PER_CHANNEL))
+    addRanked(this.searchFtsChannel(agentId, input))
 
     const now = Date.now()
     return [...candidates.values()]
@@ -219,6 +233,22 @@ export class MemoryService implements AgentMemory {
       })
   }
 
+  /**
+   * BM25 通道单独兜住异常：词法通道坏了只丢它自己（降级纯语义或纯画像），
+   * 绝不把 recall 整条抛出——共享画像每轮都在注入路径上，一起丢就是静默失忆。
+   */
+  private searchFtsChannel(agentId: string, input: string): MemoryRow[] {
+    try {
+      return this.store.searchFts(agentId, input, RECALL_PER_CHANNEL)
+    } catch (error) {
+      this.log(
+        `@ryagent/memory: FTS channel degraded to ${this.embeddings.available ? 'semantic-only' : 'no-results'}: ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+      )
+      return []
+    }
+  }
+
   /** embedding + 按模型分桶的文本缓存：相同文本不重复请求；网络请求带超时，超时降级纯 FTS5。 */
   private async embedCached(text: string): Promise<Float32Array | null> {
     if (!this.embeddings.available) return null
@@ -237,25 +267,44 @@ export class MemoryService implements AgentMemory {
   /**
    * 为存量记忆回填向量（换了 embedding 模型，或历史数据当初没配上向量）。
    *
-   * 只处理"当前模型下缺向量"的记忆；embedding 不可用（无凭据、纯 FTS5）时返回
-   * 0，不假装重建过——静默的 0 会让用户以为旧记忆已经可被语义检索。
+   * 分片推进：每片重建完就已匹配不到"缺向量"的过滤条件，下一片自然取到下一批，
+   * 数据量再大也不受单次请求条数限制。预算是后台预算（默认 30s），不能沿用
+   * recall 的 800ms——真装下那条 800ms 必然超时，于是每片都写 0 条还"成功"返回。
+   *
+   * 返回值只数真正写进库的条数：端点不可用/超时导致整片没写成时如实停在已写条数
+   * 并记日志，绝不用"处理过的条数"冒充"重建好的条数"。
    * @returns 实际写入向量的条数。
    */
   async reembedAll(limit = 500): Promise<number> {
     if (!this.embeddings.available) return 0
-    const pending = this.store.listMissingEmbeddings(this.embeddingModel, limit)
-    if (pending.length === 0) return 0
-    const vectors = await this.embedBatch(
-      pending.map((memory) => {
-        return memory.content
-      }),
-    )
+    const batchSize = Math.max(1, this.reembedBatchSize)
+    let budget = Math.max(0, limit)
     let written = 0
-    for (const [index, memory] of pending.entries()) {
-      const vector = vectors[index]
-      if (vector === undefined || vector === null) continue
-      this.store.setEmbedding(memory.id, vector, this.embeddingModel)
-      written += 1
+    while (budget > 0) {
+      const pending = this.store.listMissingEmbeddings(this.embeddingModel, Math.min(batchSize, budget))
+      if (pending.length === 0) break
+      const vectors = await this.embedBatch(
+        pending.map((memory) => {
+          return memory.content
+        }),
+        this.reembedTimeoutMs,
+      )
+      let wrote = 0
+      for (const [index, memory] of pending.entries()) {
+        const vector = vectors[index]
+        if (vector === undefined || vector === null) continue
+        this.store.setEmbedding(memory.id, vector, this.embeddingModel)
+        wrote += 1
+      }
+      written += wrote
+      budget -= pending.length
+      if (wrote === 0) {
+        this.log(
+          `@ryagent/memory: reembed stalled at ${written} rows; embedding endpoint returned nothing ` +
+            `(timeout or error), this batch and the rest are skipped`,
+        )
+        break
+      }
     }
     return written
   }
@@ -264,7 +313,10 @@ export class MemoryService implements AgentMemory {
    * 批量嵌入：逐条查（hash, model）缓存，未命中的合并成一次请求。
    * 重建动辄几百条，逐条发请求既慢又容易撞上单次超时。
    */
-  private async embedBatch(texts: readonly string[]): Promise<Array<Float32Array | null>> {
+  private async embedBatch(
+    texts: readonly string[],
+    timeoutMs = this.embedTimeoutMs,
+  ): Promise<Array<Float32Array | null>> {
     const model = this.embeddingModel
     const out: Array<Float32Array | null> = texts.map((text) => {
       return this.store.cachedEmbedding(text, model)
@@ -273,9 +325,9 @@ export class MemoryService implements AgentMemory {
       return out[index] === null
     })
     if (misses.length === 0) return out
-    const fetched = await withTimeout(this.embeddings.embed(misses), this.embedTimeoutMs)
+    const fetched = await withTimeout(this.embeddings.embed(misses), timeoutMs)
     if (fetched === null) {
-      this.log(`@ryagent/memory: embedding batch timed out after ${this.embedTimeoutMs}ms`)
+      this.log(`@ryagent/memory: embedding batch timed out after ${timeoutMs}ms`)
       return out
     }
     const byText = new Map<string, Float32Array | null>(
@@ -399,6 +451,24 @@ export class MemoryService implements AgentMemory {
     return best
   }
 
+  /**
+   * 无 embedding 时的文本判重（写路径最后一道）。
+   *
+   * 纯 FTS5 安装里语义通道不存在，判重只剩 BM25 与 LLM 判定两道：换个说法
+   * 的同一事实召回不到就直接 ADD，记忆库于是永久积累近重复。这里在写入前扫
+   * 一遍本空间最近的 active 记忆，命中近重复就丢弃（有 embedding 时不做——
+   * 余弦 + 相似度守卫已经在做同一件事）。
+   */
+  private isTextNearDuplicate(spaceId: string, text: string): boolean {
+    if (this.embeddings.available) return false
+    for (const memory of this.store.listActiveForAgent(spaceId, TEXT_DEDUPE_WINDOW)) {
+      if (!textNearDuplicate(text, memory.content)) continue
+      this.log(`@ryagent/memory: dropped near-duplicate memory in "${spaceId}": ${text}`)
+      return true
+    }
+    return false
+  }
+
   /** 应用四操作；UPDATE/DELETE 用 superseded 软删保历史（Zep 思路）。 */
   private async applyOperations(
     spaceId: string,
@@ -426,7 +496,9 @@ export class MemoryService implements AgentMemory {
         case 'ADD': {
           if (addConsumed) break
           addConsumed = true
-          await write(candidate.kind as MemoryKind, op.text ?? candidate.text)
+          const text = (op.text ?? candidate.text).trim()
+          if (this.isTextNearDuplicate(spaceId, text)) break
+          await write(candidate.kind as MemoryKind, text)
           break
         }
         case 'UPDATE': {

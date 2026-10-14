@@ -40,7 +40,8 @@ pnpm install
 pnpm build
 ```
 
-配置 LLM key（SiliconFlow，也可改 `data/config/providers.json` 加别的 OpenAI 兼容供应商）：
+配置 LLM key（SiliconFlow；也可在设置面板里粘贴，或改数据目录下的
+`config/providers.json` 加别的 OpenAI 兼容供应商）：
 
 ```powershell
 # Windows 用户环境变量（设置后重启应用）
@@ -48,10 +49,11 @@ pnpm build
 # 或开发时放在仓库根 .env（已 gitignore），从仓库根启动的脚本会读取
 ```
 
-换用别的 OpenAI 兼容供应商时，向 `data/config/providers.json` 增加一条 `providers`
-条目即可。长期记忆的向量模型是**另一个模型 id**：默认供应商就是 SiliconFlow 时
-沿用它的默认向量模型；换成别家后需要显式指定 `embedding`，否则检索退化为纯
-FTS5——不猜模型，避免不同模型的向量被放在一起算相似度：
+换用别的 OpenAI 兼容供应商时，向数据目录下的 `config/providers.json` 增加一条
+`providers` 条目即可（数据目录在哪见「本地数据与凭据」）。长期记忆的向量模型是
+**另一个模型 id**：默认供应商就是 SiliconFlow 时沿用它的默认向量模型；换成别家后
+需要显式指定 `embedding`，否则检索退化为纯 FTS5——不猜模型，避免不同模型的向量被
+放在一起算相似度：
 
 ```jsonc
 {
@@ -60,7 +62,7 @@ FTS5——不猜模型，避免不同模型的向量被放在一起算相似度�
 }
 ```
 
-启动桌面应用（内嵌后端，数据在 `%APPDATA%/ryagent-data`）：
+启动桌面应用（内嵌后端，数据目录见「本地数据与凭据」）：
 
 ```sh
 pnpm --filter @ryagent/desktop start        # 生产模式（主进程回环 HTTP 伺服渲染层）
@@ -78,6 +80,85 @@ pnpm --filter @ryagent/desktop dev          # 开发模式（Vite HMR + Electron
 - **自我进化**（`@ryagent/evolve`）：ACE 式经验手册（策略/坑/偏好/工具用法，helpful-harmful 计数驱动升降级）+ Reflexion 确定性反思 + 👍/👎 用户反馈归因 + 定时巩固调度，闭环不烧额外 LLM 调用。
 - **持久化**：SQLite（WAL），agents/conversations/messages/dispatch_events 等表单调迁移；未读徽标（seq 比较，本人消息不计）；per-conversation 消息串行队列（排队有 WS 提示）。
 - **LLM 层**：`chat/completions` + SSE；流式 tool-call 组装；usage 提取（含 reasoning/cache token）；统一错误码（RATE_LIMIT/QUOTA/CONTEXT_WINDOW_EXCEEDED/…）；配置驱动多供应商路由。
+
+## 本地数据与凭据
+
+所有东西都只写在这台电脑上。对话、长期记忆、经验手册、供应商配置与凭据都在同一个
+**数据目录**下，默认是 Electron 的 userData 再加一层 `ryagent-data/`，可用环境变量
+`RYAGENT_DATA_DIR` 指到别处（比如放数据盘）：
+
+| 怎么启动 | 数据目录（Windows） |
+| --- | --- |
+| 安装版（`RyAgent Setup *.exe`） | `%APPDATA%\RyAgent\ryagent-data\` |
+| 源码启动（`pnpm --filter @ryagent/desktop start`） | `%APPDATA%\@ryagent\desktop\ryagent-data\` |
+| 只跑后端（`pnpm --filter @ryagent/server dev`） | `apps/server\data\` |
+
+（Windows 上 userData = `%APPDATA%` + Electron 解析出的应用名；源码态的应用名取自包名
+`@ryagent/desktop`。拿不准就设 `RYAGENT_DATA_DIR`，别去猜路径——两种启动方式都认它。）
+
+目录里有什么：
+
+```
+ryagent.db              SQLite：agents / conversations / messages / dispatch_events /
+                        长期记忆 / playbook / 反馈……（WAL，删库即彻底重来）
+conversation-state.json 会话界面态：改名、置顶、静音、群成员
+config/providers.json   供应商与模型路由（无明文 key）
+config/api-keys.json    明文 API key，仅本人读写（0600）
+workspace/              fs_read / fs_write / file_produce 的根，产物卡片里的文件也在这
+```
+
+凭据只有两条来路：环境变量 / 仓库根 `.env`（开发态），或在设置面板里粘贴（落到上面
+那个 `config/api-keys.json`）。两者都**不进数据库、不进日志、不随安装包分发**。备份
+数据目录前记得先把 `api-keys.json` 单独拿出来——它是可以重新粘贴的，`ryagent.db`
+里沉淀的记忆不是。
+
+> 换机器 / 重装：整个 `ryagent-data` 拷过去即可；只想保留记忆与手册的话，拷
+> `ryagent.db` 也够（`config/` 会按默认配置重新生成）。
+
+## 安全边界
+
+### 能力边界：谁能在这台电脑上执行命令
+
+工具白名单里有一项叫「执行命令」（内部标识 `shell_exec`）：它以**你的权限**在
+工作区目录里直接跑 shell。改文件、装东西、删东西都做得到；一旦上游内容被注入
+（网页、附件、别的 agent 的回复里夹带指令），提示注入就能直接升级成任意代码执行。
+RyAgent 因此不做「执行前逐条审批」这种流程，只在两个地方设闸：
+
+- **默认不给。** 5 个模板的默认白名单都不含「执行命令」，新建或换模板时也不勾选
+  （`apps/server/src/seed.ts` 的模板目录）。你亲手勾上时，表单里会挂一行说明。
+- **随时收回。** 通讯录 → 编辑该 Agent → 工具白名单里取消勾选「执行命令」→ 保存，
+  下一轮就只剩读写文件与产出文件。
+
+已知的边界，说在前面：内置的 **Ryen（猫管家总管）** 是系统自带的，它的白名单来自
+内置模板并在每次启动时按模板重新对齐，界面上也没有编辑入口（内置 Agent 不可编辑、
+不可删除）。也就是说 Ryen 的「执行命令」目前关不掉。如果你不接受这个默认值，可行的
+做法是从模板新建一个自己的助理（默认不含执行命令），并在建群时把它选为调度员。
+
+### 未签名安装包：校验和与 SmartScreen
+
+发布流水线（`.github/workflows/release.yml`，推 `v*` tag 触发）产出的
+`RyAgent Setup <版本>.exe` **没有代码签名**：NSIS 配置刻意选了 `oneClick: false` +
+`perMachine: false`，装进当前用户目录、不需要管理员权限，代价是文件没有发布者签名。
+因此下载后请自己核一遍：
+
+```sh
+# 1) GitHub Release 页面同时提供 SHA256SUMS.txt，与安装包放同一目录：
+sha256sum -c SHA256SUMS.txt          # 输出 OK 才继续
+
+# 2) 或用 PowerShell 取哈希，与上面那行比对：
+Get-FileHash -Algorithm SHA256 '.\RyAgent Setup 0.1.0.exe'
+```
+
+然后你会看到 Windows 的两个已知提示，都是**未签名程序**的正常表现，不是中毒：
+
+- **SmartScreen**：「Windows 已保护你的电脑」→ 展开「更多信息」→「仍要运行」。
+  这个拦截按「发布者签名是否存在」触发，不会校验文件哈希，所以第 1 步的校验和才是
+  真正的判据。
+- **NSIS 安装器**：「Windows  SmartScreen 已阻止无法识别的应用」或「未知发布者」，
+  同样点「更多信息」→「仍要运行」。
+
+长期方案是买一张代码签名证书（OV 起，EV 起更稳）并配 `CSC_LINK` / `CSC_KEY_PASSWORD`
+构建；本仓库目前没有签名材料，所以选择把校验步骤写在这里而不是藏起来。
 
 ## 测试与构建
 
@@ -106,6 +187,24 @@ pnpm --filter @ryagent/desktop package       # Windows NSIS 安装包
 （Dylan! by Natalia Spivak、Fun Emoji by Davis Uche）因此随包交付。
 新增或替换任何第三方资产、依赖时，同步更新 [NOTICE.md](./NOTICE.md) 是发布前的硬性步骤。
 
+### 发版
+
+版本号只在一处改：根 `package.json` 是唯一真值来源，20 个工作区包的 `version`、
+「我的」页展示版本与 CHANGELOG 头部由脚本一次对齐。
+
+```sh
+pnpm version:check              # 只读校验（CI 与发版前跑）
+pnpm version:check --tag v1.2.3 # 额外校验 tag 存在且与版本号一致
+pnpm version:bump 1.1.0         # 改全部位置，并把 [Unreleased] 承接成 [1.1.0] 小节
+pnpm version:bump 1.1.0 --dry-run   # 只打印会动哪些文件
+```
+
+发版流程：`pnpm version:bump <版本>` → 提交 → `git tag v<版本> && git push --tags` →
+推 tag 触发 `.github/workflows/release.yml`：lint/typecheck/test → `electron-builder --win --dir`
+起停冒烟 → `--win nsis` → 上传 GitHub Release 并附 `SHA256SUMS.txt`。
+依赖与 GitHub Actions 由 `.github/dependabot.yml` 每周更一次。
+安装包的校验步骤见「未签名安装包：校验和与 SmartScreen」。
+
 ## 目录结构
 
 ```
@@ -119,8 +218,10 @@ packages/
   memory/ evolve/                长期记忆与自我进化闭环
   typert/protocol/ attachment/types/ util/{brand,crypto,timeout,values,llm-json}/  地基与 stub
 vendor/        cordis / cosmokit / schemastery（dsh vendor 改名，各附上游 MIT LICENSE）
-scripts/       demo-*.ts 冒烟与集成脚本、e2e-driver.mjs（CDP 驱动）、capture-window.ps1（只截窗口矩形）
-.github/       CI（master 分支触发：lint → build → typecheck → test → coverage）
+scripts/       demo-*.ts 冒烟与集成脚本、bump.mjs（版本号单一真值）、e2e-driver.mjs（CDP 驱动）、capture-window.ps1（只截窗口矩形）
+.github/       workflows/ci.yml（master 触发：lint → build → typecheck → test → coverage → audit）
+               workflows/release.yml（v* tag 触发：校验 → 解包冒烟 → NSIS → Release + SHA256SUMS）
+               dependabot.yml（依赖与 GitHub Actions 周更）
 docs（各包 README）· M0-dependency-audit.md · LICENSE · NOTICE.md
 CONTRIBUTING.md · CODE_OF_CONDUCT.md · SECURITY.md · CHANGELOG.md
 ```

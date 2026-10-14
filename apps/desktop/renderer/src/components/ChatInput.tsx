@@ -1,7 +1,7 @@
-import type { KeyboardEvent } from 'react'
+import type { ClipboardEvent, DragEvent, KeyboardEvent } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { LEAVE_MS, useLeaving } from '../lib/useLeaving.ts'
-import { filterMentions, mentionQueryAt } from '../store.ts'
+import { filterMentions, formatSize, type MessageAttachment, mentionQueryAt } from '../store.ts'
 import { Avatar } from './avatars/Avatar.tsx'
 import { Icon } from './Icon.tsx'
 
@@ -13,9 +13,34 @@ interface MentionMember {
   tools?: string[]
 }
 
+/** 预览条上的一个附件：粘贴/拖进来即开始上传，落库成功后随消息一起发出去。 */
+interface AttachmentEntry {
+  id: string
+  name: string
+  size: number
+  mime: string
+  status: 'uploading' | 'ready' | 'error'
+  /** 上传失败原因（中文，直接给用户看）。 */
+  error?: string
+  file: File
+}
+
+let attachmentSeq = 0
+
+/** 附件 id：单调计数即可，同一进程内不会与 DOM key 撞车。 */
+function nextAttachmentId(): string {
+  attachmentSeq += 1
+  return `att:${attachmentSeq}`
+}
+
+/** 文件类型优先取浏览器给的 MIME，剪贴板/拖放常常给空串。 */
+function mimeOf(file: File): string {
+  return file.type !== '' ? file.type : 'application/octet-stream'
+}
+
 /**
  * 聊天输入框：Enter 发送（Shift+Enter 换行）、自动增高到 6 行；
- * 输入 @ 弹出成员补全（头像 + ↑↓ + Enter/点击 + Esc）。
+ * 输入 @ 弹出成员补全（头像 + ↑↓ + Enter/点击 + Esc）；支持粘贴/拖放附件。
  *
  * 文本默认自管；传 `draft` 则改为受控（欢迎页用它把建议 chip 的文案填进来而不是
  * 替用户直接发出去——发出去就改不回来了）。`focusToken` 每次变化即聚焦并把光标
@@ -30,9 +55,10 @@ export function ChatInput({
   draft,
   onDraftChange,
   focusToken,
+  onUpload,
 }: {
   members: MentionMember[]
-  onSend: (text: string) => void
+  onSend: (text: string, attachments?: MessageAttachment[]) => void
   disabled?: boolean
   /** 对方正在生成：显示停止按钮与"已用时"。 */
   streaming?: boolean
@@ -42,6 +68,8 @@ export function ChatInput({
   onDraftChange?: (text: string) => void
   /** 变化即聚焦输入框并把光标移到末尾。 */
   focusToken?: number
+  /** 附件落库通道：把文件交上去，返回落库后的卡片元数据（与 file_produce 同构）。 */
+  onUpload?: (file: File) => Promise<MessageAttachment>
 }) {
   const [ownText, setOwnText] = useState('')
   const text = draft ?? ownText
@@ -54,6 +82,98 @@ export function ChatInput({
   /** Esc 显式关闭补全菜单；文本变动时复位（不往文本里塞魔法字符）。 */
   const [dismissed, setDismissed] = useState(false)
   const ref = useRef<HTMLTextAreaElement>(null)
+  /** 输入法组合中：部分 Electron 下的 IME 不给 keydown 带 isComposing，
+   *  compositionstart/end 是不依赖该标志的兜底信号。 */
+  const composingRef = useRef(false)
+  const [attachments, setAttachments] = useState<AttachmentEntry[]>([])
+  const [dragging, setDragging] = useState(false)
+
+  const patchAttachment = (id: string, patch: Partial<AttachmentEntry>): void => {
+    setAttachments((prev) => {
+      return prev.map((item) => {
+        return item.id === id ? { ...item, ...patch } : item
+      })
+    })
+  }
+
+  const runUpload = async (entry: AttachmentEntry): Promise<void> => {
+    if (onUpload === undefined) {
+      patchAttachment(entry.id, { status: 'error', error: '当前未开放附件上传' })
+      return
+    }
+    try {
+      const stored = await onUpload(entry.file)
+      patchAttachment(entry.id, {
+        status: 'ready',
+        name: stored.name,
+        size: stored.size,
+        mime: stored.mime,
+        error: undefined,
+      })
+    } catch (error) {
+      patchAttachment(entry.id, {
+        status: 'error',
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
+  /** 粘贴/拖放进来的文件：先上屏（上传中），落库成功后转为已附加。 */
+  const attachFiles = (files: FileList | null): void => {
+    if (files === null || files.length === 0) return
+    const entries: AttachmentEntry[] = []
+    for (const file of Array.from(files)) {
+      if (file.size === 0) continue
+      entries.push({
+        id: nextAttachmentId(),
+        name: file.name,
+        size: file.size,
+        mime: mimeOf(file),
+        status: 'uploading',
+        file,
+      })
+    }
+    if (entries.length === 0) return
+    setAttachments((prev) => {
+      return [...prev, ...entries]
+    })
+    for (const entry of entries) void runUpload(entry)
+  }
+
+  const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>): void => {
+    const files = event.clipboardData?.files
+    if (files === undefined || files.length === 0) return
+    // 拦住默认插入：否则剪贴板里的文件会以残影形式跟着进文本框。
+    event.preventDefault()
+    attachFiles(files)
+  }
+
+  const onDragOver = (event: DragEvent<HTMLDivElement>): void => {
+    const types = event.dataTransfer?.types
+    if (types === undefined || !Array.from(types).includes('Files')) return
+    // 不 preventDefault 的话浏览器不会派发 drop，拖放等于没接。
+    event.preventDefault()
+    if (event.dataTransfer !== null) event.dataTransfer.dropEffect = 'copy'
+    setDragging(true)
+  }
+
+  const onDragLeave = (event: DragEvent<HTMLDivElement>): void => {
+    if (event.currentTarget.contains(event.relatedTarget as Node | null)) return
+    setDragging(false)
+  }
+
+  const onDrop = (event: DragEvent<HTMLDivElement>): void => {
+    event.preventDefault()
+    setDragging(false)
+    attachFiles(event.dataTransfer?.files ?? null)
+  }
+
+  const readyAttachments = attachments.filter((item) => {
+    return item.status === 'ready'
+  })
+  const uploading = attachments.some((item) => {
+    return item.status === 'uploading'
+  })
 
   const mention = dismissed ? null : mentionQueryAt(text, cursor)
   const candidates = mention === null ? [] : filterMentions(members, mention.query).slice(0, 6)
@@ -136,6 +256,10 @@ export function ChatInput({
   }
 
   const handleKey = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
+    // 输入法组合中的回车是「选词」，不是「发送」：拼音/日文输入法上按回车会把
+    // 半截拼音当消息发出去（中文用户必踩）。nativeEvent.isComposing 是标准信号，
+    // 部分 Electron 下的 IME 不带它，再由 compositionstart/end 的 ref 兜底。
+    if (event.nativeEvent.isComposing || composingRef.current) return
     if (event.key === 'Enter' && !event.shiftKey && candidates.length === 0) {
       event.preventDefault()
       submit()
@@ -156,10 +280,16 @@ export function ChatInput({
   }
 
   const submit = (): void => {
+    // 附件还在路上就不发：宁可让用户看见"上传中"，也不要发出去一条缺文件的请求。
+    if (uploading) return
+    const files = readyAttachments.map((item) => {
+      return { name: item.name, size: item.size, mime: item.mime }
+    })
     const trimmed = text.trim()
-    if (trimmed.length === 0) return
-    onSend(trimmed)
+    if (trimmed.length === 0 && files.length === 0) return
+    onSend(trimmed, files.length === 0 ? undefined : files)
     setText('')
+    setAttachments([])
     setCursor(0)
     requestAnimationFrame(() => {
       autoGrow(ref.current)
@@ -198,28 +328,90 @@ export function ChatInput({
             ))}
           </ul>
         )}
-        <textarea
-          ref={(node) => {
-            ref.current = node
-            autoGrow(node)
-          }}
-          value={text}
-          disabled={disabled}
-          placeholder={members.length > 0 ? '输入消息，@ 可提及成员…' : '输入消息…'}
-          rows={1}
-          onChange={(event) => {
-            setText(event.target.value)
-            setCursor(event.target.selectionStart ?? event.target.value.length)
-            setDismissed(false)
-            autoGrow(event.target)
-          }}
-          onKeyDown={handleKey}
-          onSelect={(event) => {
-            setCursor(event.currentTarget.selectionStart ?? 0)
-          }}
-        />
+        {/* biome-ignore lint/a11y/noStaticElementInteractions: 拖放区不是控件，只是接收 drop 的区域；键盘用户走粘贴同一条通道 */}
+        <div
+          className={dragging ? 'attach-zone is-dragover' : 'attach-zone'}
+          onDragOver={onDragOver}
+          onDragLeave={onDragLeave}
+          onDrop={onDrop}
+        >
+          {attachments.length > 0 && (
+            <div className="attach-strip">
+              {attachments.map((item) => (
+                <span key={item.id} className={`attach-item is-${item.status}`} title={item.error ?? item.name}>
+                  <Icon name="file" size={12} />
+                  <span className="attach-name">{item.name}</span>
+                  <span className="attach-meta">
+                    {item.status === 'uploading'
+                      ? '上传中…'
+                      : item.status === 'error'
+                        ? (item.error ?? '上传失败')
+                        : formatSize(item.size)}
+                  </span>
+                  {item.status === 'error' && (
+                    <button
+                      type="button"
+                      className="attach-retry"
+                      onClick={() => {
+                        void runUpload(item)
+                      }}
+                    >
+                      重试
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="attach-remove"
+                    aria-label={`移除 ${item.name}`}
+                    onClick={() => {
+                      setAttachments((prev) => {
+                        return prev.filter((other) => {
+                          return other.id !== item.id
+                        })
+                      })
+                    }}
+                  >
+                    <Icon name="x" size={12} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          <textarea
+            ref={(node) => {
+              ref.current = node
+              autoGrow(node)
+            }}
+            value={text}
+            disabled={disabled}
+            placeholder={members.length > 0 ? '输入消息，@ 可提及成员…' : '输入消息…'}
+            rows={1}
+            onChange={(event) => {
+              setText(event.target.value)
+              setCursor(event.target.selectionStart ?? event.target.value.length)
+              setDismissed(false)
+              autoGrow(event.target)
+            }}
+            onKeyDown={handleKey}
+            onPaste={onPaste}
+            onCompositionStart={() => {
+              composingRef.current = true
+            }}
+            onCompositionEnd={() => {
+              composingRef.current = false
+            }}
+            onSelect={(event) => {
+              setCursor(event.currentTarget.selectionStart ?? 0)
+            }}
+          />
+        </div>
       </div>
-      <button type="button" className="send-btn" onClick={submit} disabled={disabled || text.trim().length === 0}>
+      <button
+        type="button"
+        className="send-btn"
+        onClick={submit}
+        disabled={disabled || uploading || (text.trim().length === 0 && readyAttachments.length === 0)}
+      >
         <Icon name="send" size={16} />
         <span>发送</span>
       </button>

@@ -18,8 +18,8 @@ describe('Cat 品牌橘猫（统一几何母版）', () => {
     expect(html).toContain('aria-label="Ryen idle"')
     expect(html).toContain('stop-color="#FBBF24"') // 琥珀渐变起点
     expect(html).toContain('stop-color="#D97706"') // 琥珀渐变终点
-    // 三态共用同一套轮廓：脸底板 + 两只耳朵
-    expect(html).toContain('<circle cx="32" cy="35.5" r="15.2" fill="#FFFDF8"/>')
+    // 三态共用同一套轮廓：脸底板 + 两只耳朵（.face 是随主题翻底色的钩子）
+    expect(html).toContain('<circle cx="32" cy="35.5" r="15.2" class="face" fill="#FFFDF8"/>')
     expect(html).toContain('d="M24 26.4 L17 10.4 L34 22 Z"')
     expect(html).toContain('d="M40 26.4 L47 9 L30 21.8 Z"')
   })
@@ -84,13 +84,23 @@ describe('Cat 品牌橘猫（统一几何母版）', () => {
     expect(happy).not.toContain('class="star fast"')
   })
 
-  it('shape：默认 squircle 应用图标底板，shape="circle" 供头像圆形裁切', () => {
+  it('shape：默认 squircle 应用图标底板，shape="circle" 是头像位的满幅圆画布', () => {
     const squircle = renderToStaticMarkup(<Cat mood="idle" size={40} />)
     expect(squircle).toContain('d="M32 2 C46.375 2 62 10.75 62 32')
-    expect(squircle).not.toContain('A30.5 30.5')
+    expect(squircle).not.toContain('A32 32')
+    // 圆形底板满幅（r32）：与 DiceBear 风格头像是同一块画布，头像规格才统一得了
     const circle = renderToStaticMarkup(<Cat mood="idle" size={40} shape="circle" />)
-    expect(circle).toContain('d="M32 1.5 A30.5 30.5 0 1 1 32 62 A30.5 30.5 0 1 1 32 1.5 Z"')
+    expect(circle).toContain('d="M32 0 A32 32 0 1 1 32 64 A32 32 0 1 1 32 0 Z"')
     expect(circle).not.toContain('C46.375')
+  })
+
+  it('脸与耳朵挂 class="face" 钩子：暗色下底色由 assets/brand/cat.css 翻深', () => {
+    for (const mood of ['idle', 'thinking', 'happy'] as const) {
+      const html = renderToStaticMarkup(<Cat mood={mood} size={40} />)
+      // 三个奶油色块（脸 + 双耳）都要有钩子，少一个就有一块留在奶油底上
+      expect((html.match(/class="face"/g) ?? []).length, mood).toBe(3)
+      expect(html, mood).toContain('<circle cx="32" cy="35.5" r="15.2" class="face" fill="#FFFDF8"/>')
+    }
   })
 
   it('size 透传到 svg 宽高', () => {

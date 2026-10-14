@@ -49,21 +49,22 @@ export function RightPanel({
       }),
     )
   }, [conversations])
-  if (collapsed) {
-    return (
-      <aside className="right-panel is-collapsed">
+  // 收起态不早返回：整块面板（柔光带 + 内容）始终挂着，收起/展开才是同一根
+  // width 过渡上的两次伸缩。早返回会让内容在动画开始前就没了，两个方向都成了
+  // 硬切；而宽度归零时展开键跟着被 overflow:hidden 裁掉，右栏就再也展不开。
+  return (
+    <aside className={collapsed ? 'right-panel is-collapsed' : 'right-panel'}>
+      <span className="panel-banner" aria-hidden="true" />
+      {/* 收起键与展开键在同一角上互换，面板本体始终在场 */}
+      {collapsed ? (
         <button type="button" className="panel-expand-btn" title="展开信息板" onClick={onToggle}>
           <Icon name="panel-right" size={14} />
         </button>
-      </aside>
-    )
-  }
-  return (
-    <aside className="right-panel">
-      <span className="panel-banner" aria-hidden="true" />
-      <button type="button" className="right-panel-toggle" title="收起信息板" onClick={onToggle}>
-        <Icon name="chevron-right" size={13} />
-      </button>
+      ) : (
+        <button type="button" className="right-panel-toggle" title="收起信息板" onClick={onToggle}>
+          <Icon name="chevron-right" size={13} />
+        </button>
+      )}
       <div className="panel-body">
         {conversation === undefined ? (
           <p className="panel-empty">选择一个会话查看详情</p>

@@ -12,6 +12,9 @@
  */
 import { useSyncExternalStore } from 'react'
 import type { WsEvent } from './api.ts'
+// 启动埋点挂在这个模块上：它是渲染层入口（App.tsx）一定会加载的第一个自有模块，
+// 埋点因此从应用启动的第一行代码就开始计，不需要改入口文件。
+import './lib/boot-trace.ts'
 
 /** 消息内的一个展示部件。 */
 export type MessagePart =
@@ -38,6 +41,40 @@ export interface UiMessage {
    * 由 store 维护；历史消息（ChatView 的 fromHistory）没有此字段，按 0 处理。
    */
   version?: number
+}
+
+/**
+ * 用户侧附件的落库元数据，与 file_produce 的产物卡片同构（name/size/mime）：
+ * 字节由附件通道落进工作区产物目录，卡片只带元数据，渲染层据此渲染文件消息。
+ */
+export interface MessageAttachment {
+  name: string
+  size: number
+  mime: string
+}
+
+export function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+/**
+ * 用户消息发往服务端的正文。附件以一行 [附件] 记述带出去：服务端消息体只有
+ * 文本字段，agent 侧要看到「有个可读文件落在工作区产物目录」，就得在这里
+ * 把文件名与体量说出来，而不是指望前端把字节塞进正文。
+ */
+export function composeMessageText(text: string, attachments: readonly MessageAttachment[] = []): string {
+  const trimmed = text.trim()
+  if (attachments.length === 0) return trimmed
+  const lines = attachments.map((file) => {
+    return `[附件] ${file.name}（${formatSize(file.size)}，${file.mime}）`
+  })
+  return [trimmed, ...lines]
+    .filter((line) => {
+      return line.length > 0
+    })
+    .join('\n')
 }
 
 export interface RelayItem {
@@ -69,6 +106,38 @@ const EMPTY: ChatSnapshot = { messages: [], relays: [], typing: {}, queueing: fa
 
 /** 重绘节流窗口：连续流式事件在窗口内合并成一次重绘（≈25fps）。 */
 const NOTIFY_INTERVAL_MS = 40
+
+/**
+ * 索引上界：一个会话在册几千条消息时，下面两张索引表也会长到几千条。
+ * key 本身带 turn 序号 / 消息 id（`stream:<sender>:<turn>`、`user:<时间戳>:<序>`、
+ * `hist:<消息 id>`），丢掉历史条目只可能挡下一次「同 key 撞车」，而那需要系统时间
+ * 倒流才会发生；callId 同理。故按插入顺序丢最旧的，内存占用与会话长度脱钩。
+ */
+const MAX_LIVE_KEYS = 512
+const MAX_CALL_INDEX = 256
+
+/** Map/Set 都按插入顺序迭代：超上界就丢最旧的，直到落回上界内。 */
+function trimIndex<K>(index: Map<K, unknown> | Set<K>, max: number): void {
+  while (index.size > max) {
+    const oldest = index.keys().next()
+    if (oldest.done === true) return
+    index.delete(oldest.value)
+  }
+}
+
+/** 流式链路的本地度量（排障「为什么卡」时先看这组数字；只在本地内存里，不外发）。 */
+export interface StoreMetrics {
+  /** 已 apply 的 WS 事件数。 */
+  events: number
+  /** 实际触发订阅者的重绘次数（远小于事件数 = 节流在起作用）。 */
+  flushes: number
+  /** 最近一次重绘的耗时（毫秒，含所有订阅者）。 */
+  lastFlushMs: number
+  /** 快照里的消息条数。 */
+  messages: number
+  /** 快照里的部件总数（text/tool/file 合计）。 */
+  parts: number
+}
 
 /** 一条消息内文本部件的累积写入辅助（纯函数：绝不改传入的数组）。 */
 function appendText(parts: readonly MessagePart[], text: string): MessagePart[] {
@@ -111,18 +180,36 @@ export class ChatStore {
   private agentNames = new Map<string, string>()
 
   // ---- 索引：把「每次事件扫全量」降为 O(1) ----
-  /** 全部在册 key（分配流式 key 时防重）。 */
+  /** 全部在册 key（分配流式 key 时防重）；按插入顺序截到 {@link MAX_LIVE_KEYS}。 */
   private readonly liveKeys = new Set<string>()
   /** stream key → 消息下标。 */
   private readonly streamKeyIndex = new Map<string, number>()
   /** senderId → 正在流式写入的消息下标（miss 或已 done 时回退倒扫）。 */
   private readonly streamingIndex = new Map<string, number>()
-  /** callId → 含该 callId 的消息下标（tool-result 定点更新）。 */
+  /** callId → 含该 callId 的消息下标（tool-result 定点更新）；截到 {@link MAX_CALL_INDEX}。 */
   private readonly callIndex = new Map<string, number[]>()
 
   /** 产物缓存：artifactsVersion 不变时返回同一数组身份（右栏直接复用）。 */
   private artifactsVersion = 0
   private artifactsCache: { version: number; list: ArtifactItem[] } | undefined
+
+  /** 已 apply 的事件数与重绘次数（度量，不参与渲染决策）。 */
+  private events = 0
+  private flushes = 0
+  private lastFlushMs = 0
+
+  /** 诊断快照：排障「为什么卡」时先看这组数字。 */
+  metrics(): StoreMetrics {
+    let parts = 0
+    for (const message of this.snapshot.messages) parts += message.parts.length
+    return {
+      events: this.events,
+      flushes: this.flushes,
+      lastFlushMs: this.lastFlushMs,
+      messages: this.snapshot.messages.length,
+      parts,
+    }
+  }
 
   setAgentNames(names: Map<string, string>): void {
     this.agentNames = names
@@ -171,7 +258,10 @@ export class ChatStore {
 
   private flush(): void {
     this.lastFlushAt = Date.now()
+    const startedAt = Date.now()
     for (const listener of this.listeners) listener()
+    this.flushes += 1
+    this.lastFlushMs = Date.now() - startedAt
   }
 
   private emit(patch: SnapshotPatch): void {
@@ -242,6 +332,7 @@ export class ChatStore {
 
   /** 折叠一条 WS 事件。 */
   apply(event: WsEvent): void {
+    this.events += 1
     switch (event.type) {
       case 'message-start': {
         if (event.senderId === 'user') {
@@ -262,7 +353,7 @@ export class ChatStore {
           version: 0,
         }
         const index = messages.length
-        this.liveKeys.add(key)
+        this.trackKey(key)
         this.streamKeyIndex.set(key, index)
         this.streamingIndex.set(event.senderId, index)
         this.emit({
@@ -276,8 +367,14 @@ export class ChatStore {
         const index = this.findStreamingIndex(event.senderId)
         if (index < 0) return
         const message = this.snapshot.messages[index]!
+        // 首个字到达即视为「已经在说话」：此刻气泡里正在出字，同一个 sender
+        // 头上再挂一行「正在输入」是自相矛盾的。message-done 里的递减照旧兜底，
+        // 且对已清空的键是幂等的（减到 0 就删，不会减出负数）。
+        const typing = { ...this.snapshot.typing }
+        delete typing[event.senderId]
         this.emit({
           messages: replaceAt(this.snapshot.messages, index, withParts(message, appendText(message.parts, event.text))),
+          typing,
         })
         return
       }
@@ -376,6 +473,8 @@ export class ChatStore {
             messages = replaceAt(messages, index, { ...message, done: true, version: (message.version ?? 0) + 1 })
           }
         }
+        // 兜底清 typing：键可能已在首个 text-delta 就被摘掉，这里对缺失的键
+        // 同样只是「减到 0 即删」，重复到达不会减出负数。
         const typing = { ...this.snapshot.typing }
         const remaining = (typing[event.senderId] ?? 1) - 1
         if (remaining <= 0) delete typing[event.senderId]
@@ -396,22 +495,39 @@ export class ChatStore {
     }
   }
 
-  /** 本地插入用户消息（发送即上屏，不等 WS）。 */
-  addUserMessage(text: string, turnIndex: number): void {
+  /** 本地插入用户消息（发送即上屏，不等 WS）。附件按 file 部件上屏，与产物卡片同一条渲染通道。 */
+  addUserMessage(text: string, turnIndex: number, attachments: readonly MessageAttachment[] = []): void {
     // 重发即视为新一轮：清掉上一条错误横幅。
     const messages = this.snapshot.messages
+    const stamp = Date.now()
+    const parts: MessagePart[] = text.length > 0 ? [{ kind: 'text', text }] : []
+    attachments.forEach((file, index) => {
+      parts.push({
+        kind: 'file',
+        callId: `user-file:${stamp}:${index}`,
+        name: file.name,
+        size: file.size,
+        mime: file.mime,
+      })
+    })
     const message: UiMessage = {
-      key: `user:${Date.now()}:${messages.length}`,
+      key: `user:${stamp}:${messages.length}`,
       senderType: 'user',
       senderId: 'user',
       senderName: '我',
       turnIndex,
-      parts: [{ kind: 'text', text }],
+      parts,
       done: true,
       version: 0,
     }
-    this.liveKeys.add(message.key)
+    this.trackKey(message.key)
     this.emit({ messages: [...messages, message], clearError: true })
+  }
+
+  /** 登记一条在册消息 key，并守住 {@link MAX_LIVE_KEYS} 上界。 */
+  private trackKey(key: string): void {
+    this.liveKeys.add(key)
+    trimIndex(this.liveKeys, MAX_LIVE_KEYS)
   }
 
   private streamingKey(senderId: string, turnIndex: number): string {
@@ -432,6 +548,7 @@ export class ChatStore {
     const list = this.callIndex.get(callId)
     if (list === undefined) this.callIndex.set(callId, [index])
     else if (!list.includes(index)) list.push(index)
+    trimIndex(this.callIndex, MAX_CALL_INDEX)
   }
 
   /** 找 sender 正在流式写入的消息下标：命中缓存 O(1)，失效时倒扫一次并回填。 */

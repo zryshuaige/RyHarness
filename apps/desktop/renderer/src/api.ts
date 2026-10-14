@@ -33,7 +33,7 @@ export interface ProviderInfo {
   apiKeyConfigured: boolean
   models: { id: string; name?: string; contextWindow?: number }[]
   /**
-   * 以下三项在服务端补齐前是可选的（apps/server 的 GET /api/providers 目前只回
+   * 以下几项在服务端补齐前是可选的（apps/server 的 GET /api/providers 只回
    * 上面四个字段），渲染层按「有才展示」处理，不猜协议、不猜归属。
    */
   /** 用户手动添加的供应商（可删除）；缺省视为内置。 */
@@ -41,6 +41,47 @@ export interface ProviderInfo {
   /** 接入协议（openai / anthropic / ollama …），徽标展示用。 */
   protocol?: string
   baseUrl?: string
+  /** 正在使用它的 agent：删除前要先把它们改绑（缺省 = 没人用）。 */
+  usedBy?: { agentId: string; agentName: string }[]
+}
+
+/** 测连接的结果（POST /api/providers/:id/verify）。 */
+export interface ProviderVerifyResult {
+  ok: boolean
+  /** ok=false 时的原因；服务端给什么就显示什么（渲染层另有中文归类）。 */
+  message: string
+  latencyMs: number
+}
+
+/** DELETE /api/settings/api-key/:id 的响应体（见 ApiClient.deleteApiKey）。 */
+export interface DeletedApiKeyResult {
+  providerId: string
+  configured: boolean
+  /**
+   * 服务端**不**回这个字段，标成 never 而不是省掉：ProviderApi（ProviderSettings.tsx）
+   * 目前还把 deleteApiKey 声明成返回 `{ deleted: string }`，省掉这一行会让整个
+   * ApiClient 塞不进 MeApi。never 的作用是「谁真去读它，类型上就立刻拿到无值」，
+   * 等那层声明跟真实响应对齐之后，把这一行删掉即可。
+   */
+  deleted: never
+}
+
+/** 全文搜索命中的一行（GET /api/search）。 */
+export interface SearchResultRow {
+  conversationId: string
+  conversationTitle: string
+  messageId: string
+  /** 命中片段（服务端已按关键词截断）。 */
+  snippet: string
+  agentId: string
+  createdAt: number
+}
+
+/** 会话可改的元信息（PATCH /api/conversations/:id）。 */
+export interface ConversationPatch {
+  title?: string
+  pinned?: boolean
+  muted?: boolean
 }
 
 /** 供应商预设（/api/provider-presets）：添加供应商向导的可选项。 */
@@ -74,6 +115,10 @@ export interface Conversation {
   updatedAt: number
   lastMessagePreview?: string
   unreadCount?: number
+  /** 置顶：会话列表里排在最前；缺省 = 没置顶。 */
+  pinned?: boolean
+  /** 静音：不弹未读；缺省 = 没静音。 */
+  muted?: boolean
 }
 
 export interface MessageRow {
@@ -288,6 +333,22 @@ export class ApiClient {
     })
   }
 
+  /**
+   * 移除已存的凭据（换 Key 前先清除、或彻底不用这家了）。
+   *
+   * 响应体只有两个字段：`{ providerId, configured: false }`——服务端没有别处那些
+   * `{ deleted }` 回执，「已经删掉」这件事就是 configured 翻回 false，调用方据此
+   * 重拉供应商清单。
+   */
+  deleteApiKey(providerId: string): Promise<DeletedApiKeyResult> {
+    return this.request(`/api/settings/api-key/${encodeURIComponent(providerId)}`, { method: 'DELETE' })
+  }
+
+  /** 测连接：真正打一次供应商，拿到是否通过与往返延迟。 */
+  verifyProvider(providerId: string): Promise<ProviderVerifyResult> {
+    return this.request(`/api/providers/${encodeURIComponent(providerId)}/verify`, { method: 'POST' })
+  }
+
   templates(): Promise<{ templates: AgentTemplate[] }> {
     return this.request('/api/agent-templates')
   }
@@ -313,6 +374,19 @@ export class ApiClient {
   /** 删除自定义供应商（内置供应商后端会拒绝）；未实现时 404。 */
   deleteProvider(id: string): Promise<{ deleted: string }> {
     return this.request(`/api/providers/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  }
+
+  /** 改会话元信息（重命名 / 置顶 / 静音）。 */
+  patchConversation(conversationId: string, patch: ConversationPatch): Promise<{ conversation: Conversation }> {
+    return this.request(`/api/conversations/${conversationId}`, { method: 'PATCH', body: JSON.stringify(patch) })
+  }
+
+  /** 全文搜索：搜会话名之外还搜消息正文，命中按会话分组回。 */
+  searchMessages(params: { q: string; conversationId?: string }): Promise<{ results: SearchResultRow[] }> {
+    const query = new URLSearchParams()
+    query.set('q', params.q)
+    if (params.conversationId !== undefined) query.set('conversationId', params.conversationId)
+    return this.request(`/api/search?${query.toString()}`)
   }
 
   conversations(): Promise<{ conversations: Conversation[] }> {
@@ -496,6 +570,83 @@ export class ApiClient {
       socket?.close()
     }
   }
+
+  /** 运行时计量快照：轮次耗时（首 token 延迟 / 总耗时 / 记忆召回计量）与请求计时。 */
+  telemetry(limit?: number): Promise<TelemetrySnapshot> {
+    const query = limit === undefined ? '' : `?limit=${Math.trunc(limit)}`
+    return this.request(`/api/telemetry${query}`)
+  }
+
+  /**
+   * playbook 条目的来源证据链（这条经验从哪次对话 / 哪条教训 / 哪次反馈来）。
+   * 服务端未注册该路由时回 404 + { error: 'not found: ...' }，调用方据此降级。
+   */
+  explainPlaybookEntry(id: string): Promise<EntryExplanation> {
+    return this.request(`/api/evolve/entries/${encodeURIComponent(id)}/explain`)
+  }
+
+  /**
+   * 会话消息里的 usage 行（每条 assistant 消息挂一次模型调用的 token 用量）。
+   * 按供应商归因只能从这里拿——服务端把 usage 挂在消息行上，会话级汇总并不保留
+   * "哪个 agent 花的"这一维。limit 省略时按服务端单页上限取。
+   */
+  listUsageRows(conversationId: string, limit: number = USAGE_PAGE_LIMIT): Promise<{ messages: MessageUsageRow[] }> {
+    return this.request(`/api/conversations/${conversationId}/messages?limit=${Math.trunc(limit)}`)
+  }
+}
+
+/** 用量账单单会话拉取的消息条数上限（与服务端 MAX_MESSAGE_PAGE 对齐）。 */
+const USAGE_PAGE_LIMIT = 200
+
+// ---- 记忆健康度 / 用量账单 / 经验溯源：这三块面板要读的服务端形状 ----
+
+/** 一轮 turn 的耗时画像（GET /api/telemetry 的 turns 元素）。 */
+export interface TurnTiming {
+  conversationId: string
+  kind: 'direct' | 'group'
+  turnIndex: number
+  /** 首 token 延迟；全程无文本时缺省。 */
+  firstTokenMs?: number
+  totalMs: number
+  /** 本轮记忆召回累计耗时（毫秒）。 */
+  memoryRecallMs: number
+  /** 注入本轮的记忆条数。 */
+  memoryItems: number
+  status: 'ok' | 'error' | 'aborted'
+  finishedAt: number
+}
+
+/** GET /api/telemetry 的返回体。 */
+export interface TelemetrySnapshot {
+  /** 最近的轮次，按结束时间倒序。 */
+  turns: TurnTiming[]
+  /** 最近的请求，按完成时间倒序。 */
+  requests: { method: string; path: string; status: number; durationMs: number; at: number }[]
+  /** 环形缓冲容量（两类各一份）。 */
+  capacity: number
+}
+
+/** 带 usage 的消息行：服务端在消息行上带 usage，MessageRow 未声明这一维。 */
+export interface MessageUsageRow extends MessageRow {
+  usage?: TurnUsage
+}
+
+/** 一条溯源记录：这条经验是从哪儿来的。 */
+export interface EntryOriginRow {
+  kind: 'trajectory' | 'reflection' | 'feedback' | 'memory' | 'seed'
+  /** 溯源对象 id：会话 id / 教训 id / 反馈事件 id / 记忆 id / 模板 key。 */
+  refId: string
+  /** 一句话说明（UI 直接显示；服务端缺失时留空）。 */
+  detail?: string
+  createdAt?: number
+}
+
+/** playbook 条目的证据链（GET /api/evolve/entries/:id/explain）。 */
+export interface EntryExplanation {
+  entry: PlaybookEntryRow
+  origins: EntryOriginRow[]
+  /** 服务端生成的一句话来源摘要（中文）。 */
+  summary: string
 }
 
 /** 从消息行提取展示文本。 */

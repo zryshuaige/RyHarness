@@ -86,6 +86,27 @@ describe('MessageBubble', () => {
     }
     expect(renderToStaticMarkup(<MessageBubble message={message} fileUrl={fileUrl} />)).toContain('bubble-cursor')
   })
+
+  it('每条消息带 data-message-id，历史消息摘掉 hist: 前缀', () => {
+    // 搜索命中回的是裸 id；行上的属性得是同一个 id，否则定位选择器永远选不中。
+    const history: UiMessage = {
+      key: 'hist:m-42',
+      senderType: 'agent',
+      senderId: 'ryen',
+      senderName: 'Ryen',
+      turnIndex: 0,
+      done: true,
+      parts: [{ kind: 'text', text: '周报第三点' }],
+    }
+    expect(renderToStaticMarkup(<MessageBubble message={history} fileUrl={fileUrl} />)).toContain(
+      'data-message-id="m-42"',
+    )
+    // 流式消息没有服务端 id（也不会被搜索命中），原样保留 key
+    const streaming: UiMessage = { ...history, key: 'stream:ryen:0', done: false }
+    expect(renderToStaticMarkup(<MessageBubble message={streaming} fileUrl={fileUrl} />)).toContain(
+      'data-message-id="stream:ryen:0"',
+    )
+  })
 })
 
 describe('RelayChain 接力链', () => {

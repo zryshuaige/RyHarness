@@ -14,10 +14,23 @@ function ToastSlot({ item, live, onDone }: { item: ToastItem; live: boolean; onD
     if (shown === undefined) onDone(item.id)
   }, [shown, item.id, onDone])
   if (shown === undefined) return null
+  const { action } = shown
   return (
     <div ref={ref} className={`toast toast-${shown.kind}${leaving ? ' is-leaving' : ''}`}>
       {shown.kind === 'error' ? <Icon name="alert" size={14} /> : null}
       <span className="toast-text">{shown.text}</span>
+      {action !== undefined && (
+        <button
+          type="button"
+          className="toast-action"
+          onClick={() => {
+            action.run()
+            toast.dismiss(shown.id)
+          }}
+        >
+          {action.label}
+        </button>
+      )}
       <button
         type="button"
         className="toast-close"

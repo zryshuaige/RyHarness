@@ -89,13 +89,22 @@
   flex-shrink: 0;
   border-radius: 10px;
   overflow: hidden;
-  box-shadow: var(--shadow-1);
+  /* 品牌方块与页面底色同深度时（暗色下 moonshot 的 #26292E、ollama 的 #1F2328 几乎
+     就是 --bg-surface），那圈发丝描边是它唯一的轮廓。抬升仍只走阴影档，描边补的是
+     「边」而不是第几层。 */
+  box-shadow: var(--shadow-1), 0 0 0 1px var(--edge-strong);
   /* 字母标是装饰：拖选整行时不能把 "D" 一起复制走。 */
   user-select: none;
 }
 
+/* 暗色：品牌色整体提一档明度。深色品牌（moonshot / ollama）本来就贴着背景深度，
+   提亮之后字母标才不是「一块底色」。浅色下不需要——那本来就是深色。 */
 .provider-logo text {
   font-family: var(--font-sans);
+}
+
+:root[data-theme='dark'] .provider-logo svg {
+  filter: brightness(1.45);
 }
 
 .provider-name-col {

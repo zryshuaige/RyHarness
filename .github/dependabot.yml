@@ -1,0 +1,43 @@
+version: 2
+
+updates:
+  # 单一 pnpm-lock.yaml 在仓库根：pnpm workspace 的所有包共用一份锁文件，
+  # 这里配 / 就是全部依赖（含 20 个工作区包与 vendor）。
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '04:00'
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 5
+    groups:
+      # 内核/地基小包（vendor + packages/util 等）一起动，避免十几个各改一个版本的 PR。
+      vendor-and-util:
+        patterns:
+          - '@ryagent/cordis'
+          - '@ryagent/cosmokit'
+          - '@ryagent/schemastery'
+          - '@ryagent/typert-protocol'
+          - 'tsdown'
+          - 'typescript'
+        update-types:
+          - minor
+          - patch
+    ignore:
+      # Electron 跨大版本（37 → 41+）不是补丁升级：主进程/渲染层行为与原生模块都要回归，
+      # 升之前先看 electron-builder 与 @electron/get 的兼容性。审计里的 high 也是它带来的。
+      - dependency-name: electron
+        update-types:
+          - version-update:semver-major
+      - dependency-name: '@ryagent/*'
+
+  # CI 用到的 action 也吃 dependabot 更新，否则 checkout/setup-node 悄悄落后。
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '04:00'
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 5

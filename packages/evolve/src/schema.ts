@@ -5,7 +5,7 @@
 
 import type { DatabaseSync } from 'node:sqlite'
 
-export const EVOLVE_SCHEMA_VERSION = 1
+export const EVOLVE_SCHEMA_VERSION = 2
 
 /** playbook 条目的 section 分类。 */
 export type PlaybookSection = 'strategy' | 'pitfall' | 'preference' | 'tooling'
@@ -15,6 +15,16 @@ export type EntryStatus = 'active' | 'deprecated'
 
 /** 反思状态：pending 待验证 → converted 转正 / expired 到期清理。 */
 export type ReflectionStatus = 'pending' | 'converted' | 'expired'
+
+/**
+ * 条目溯源种类（证据链）：
+ * - `trajectory`：产生该条目的那一轮对话（Curator add / 改写）。
+ * - `reflection`：转正进手册的那条教训。
+ * - `feedback`：一次 👍/👎 反馈（refId = feedback_events.id）。
+ * - `memory`：巩固时按词面重叠关联上的长期记忆（refId = memories.id）。
+ * - `seed`：冷启动模板（refId = 模板 key）。
+ */
+export type EntryOriginKind = 'trajectory' | 'reflection' | 'feedback' | 'memory' | 'seed'
 
 /** harmful 计数达到该阈值自动 deprecate。 */
 export const AUTO_DEPRECATE_HARMFUL = 3
@@ -67,7 +77,26 @@ function migrateV1(db: DatabaseSync): void {
   `)
 }
 
-const MIGRATIONS: Readonly<Record<number, (db: DatabaseSync) => void>> = { 1: migrateV1 }
+/**
+ * 条目溯源（证据链）。UNIQUE(entry_id, kind, ref_id) 让重复记账变成 no-op：
+ * 巩固每 6 小时跑一次、反馈可以反复点，没有这层约束 origins 会无限膨胀。
+ */
+function migrateV2(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE entry_origins (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      entry_id   TEXT NOT NULL,
+      kind       TEXT NOT NULL CHECK (kind IN ('trajectory', 'reflection', 'feedback', 'memory', 'seed')),
+      ref_id     TEXT NOT NULL,
+      detail     TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL,
+      UNIQUE (entry_id, kind, ref_id)
+    );
+    CREATE INDEX idx_entry_origins_entry ON entry_origins (entry_id, created_at);
+  `)
+}
+
+const MIGRATIONS: Readonly<Record<number, (db: DatabaseSync) => void>> = { 1: migrateV1, 2: migrateV2 }
 
 /** 迁移到 EVOLVE_SCHEMA_VERSION；幂等。 */
 export function migrateEvolve(db: DatabaseSync): void {

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { ApiClient, MemoryRow } from '../api.ts'
+import type { ApiClient, MemoryRow, MemoryStats, TelemetrySnapshot } from '../api.ts'
 import { toast } from '../lib/toast.ts'
 import { ConfirmDialog } from './ConfirmDialog.tsx'
 import { Icon } from './Icon.tsx'
@@ -40,6 +40,7 @@ export function MemoryPanel({
   const [archived, setArchived] = useState<MemoryRow[] | undefined>(undefined)
   const [archivedOpen, setArchivedOpen] = useState(false)
   const [restoringId, setRestoringId] = useState<string | undefined>(undefined)
+  const [deletingId, setDeletingId] = useState<string | undefined>(undefined)
   const [confirmingReembed, setConfirmingReembed] = useState(false)
   const [reembedding, setReembedding] = useState(false)
 
@@ -71,8 +72,17 @@ export function MemoryPanel({
   }, [reload, reloadArchived])
 
   const remove = async (id: string): Promise<void> => {
-    await api.deleteMemory(id).catch(() => {})
-    reload()
+    // 删除失败此前是 `.catch(() => {})`：条目还挂在列表里，用户却以为删掉了。
+    setDeletingId(id)
+    try {
+      await api.deleteMemory(id)
+      toast.success('已删除这条记忆')
+      reload()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error))
+    } finally {
+      setDeletingId(undefined)
+    }
   }
 
   const restore = async (id: string): Promise<void> => {
@@ -118,6 +128,7 @@ export function MemoryPanel({
         type="button"
         className="memory-delete"
         title="删除（软删）"
+        disabled={deletingId === memory.id}
         onClick={() => {
           void remove(memory.id)
         }}
@@ -133,6 +144,7 @@ export function MemoryPanel({
         <PanelSkeleton rows={4} />
       ) : (
         <>
+          <MemoryHealth api={api} agentId={agentId} archivedCount={archived === undefined ? null : archived.length} />
           {memories.shared.length > 0 && (
             <>
               <p className="section-title">共享画像（Ryen 了解你）</p>
@@ -224,5 +236,146 @@ export function MemoryPanel({
         />
       )}
     </Modal>
+  )
+}
+
+/**
+ * 记忆健康度要读的三条数据面。方法可选：任一条读不通只让那一格显示「—」，
+ * 不该把整块面板拖下水（服务端版本落后时这条路径最常走）。
+ */
+export interface MemoryHealthApi {
+  memoryStats?(): Promise<MemoryStats>
+  telemetry?(limit?: number): Promise<TelemetrySnapshot>
+  listArchivedMemories?(): Promise<{ items: MemoryRow[] }>
+}
+
+/** 遥测环形缓冲默认 50 条；翻这么多条足够找出"最近一次召回"。 */
+const RECALL_SCAN_LIMIT = 50
+
+function fail(): undefined {
+  return undefined
+}
+
+function formatRelative(ts: number): string {
+  const diff = Date.now() - ts
+  if (diff < 60_000) return '刚刚'
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`
+  return new Date(ts).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
+}
+
+/**
+ * 记忆健康度：记忆总数 / 已归档 / 缺向量 / 最近一次召回命中与耗时 / 存储体积。
+ *
+ * 服务端目前没有聚合端点：总数与缺向量口径来自 /api/memory/stats，归档来自
+ * /api/memory/archived，召回来自 /api/telemetry。**缺向量**只在"没配 embedding
+ * （纯 FTS）"时能确定等于总数，**存储体积**没有任何路由能给——这两格显示「—」而
+ * 不是猜一个数出来，猜出来的健康度比没有健康度更糟。
+ */
+export function MemoryHealth({
+  api,
+  agentId,
+  archivedCount,
+}: {
+  api: MemoryHealthApi
+  /** 限定某个 agent 的空间；缺省为全部空间。 */
+  agentId?: string
+  /**
+   * 调用方已经数好的归档条数（记忆面板自己拉过那一份，不必再请求一次）。
+   * `undefined` = 自己拉；`null` = 调用方正在拉，此刻留空而不是抢跑一个 0。
+   */
+  archivedCount?: number | null
+}) {
+  const [stats, setStats] = useState<MemoryStats | undefined>(undefined)
+  const [telemetry, setTelemetry] = useState<TelemetrySnapshot | undefined>(undefined)
+  const [archived, setArchived] = useState<number | undefined>(undefined)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let alive = true
+    setLoading(true)
+    Promise.all([api.memoryStats?.().catch(fail), api.telemetry?.(RECALL_SCAN_LIMIT).catch(fail)]).then(([s, t]) => {
+      if (!alive) return
+      setStats(s)
+      setTelemetry(t)
+      setLoading(false)
+    })
+    return () => {
+      alive = false
+    }
+  }, [api])
+
+  useEffect(() => {
+    if (archivedCount !== undefined) {
+      setArchived(archivedCount === null ? undefined : archivedCount)
+      return
+    }
+    let alive = true
+    api.listArchivedMemories?.().then(
+      ({ items }) => {
+        if (alive) setArchived(items.length)
+      },
+      () => {
+        if (alive) setArchived(undefined)
+      },
+    )
+    return () => {
+      alive = false
+    }
+  }, [api, archivedCount])
+
+  const total = stats === undefined ? undefined : agentId === undefined ? stats.total : stats.bySpace?.[agentId]
+  const recall = telemetry?.turns.find((turn) => {
+    return turn.memoryItems > 0
+  })
+  const missingVectors = stats?.embeddings?.label === 'none:fts-only' ? (total ?? 0) : undefined
+
+  if (loading) return <p className="panel-empty">记忆健康度统计中…</p>
+  if (stats !== undefined && stats.enabled === false) {
+    return <p className="panel-empty">记忆系统未启用，这里还没有可统计的记忆。</p>
+  }
+  if (stats === undefined && telemetry === undefined && archived === undefined) {
+    return <p className="panel-empty">记忆健康度暂时读不到。</p>
+  }
+  return (
+    <div className="memory-health">
+      <p className="memory-health-title">
+        记忆健康度
+        <span className="memory-health-scope">{agentId === undefined ? '全部空间' : '该 agent 空间'}</span>
+      </p>
+      <div className="memory-health-grid">
+        <div className="health-stat">
+          <span className="health-label">记忆总数</span>
+          <span className="health-value">{total === undefined ? '—' : `${total} 条`}</span>
+        </div>
+        <div className="health-stat">
+          <span className="health-label">已归档</span>
+          <span className="health-value">{archived === undefined ? '—' : `${archived} 条`}</span>
+        </div>
+        <div
+          className="health-stat"
+          title={missingVectors === undefined ? '服务端尚未提供缺向量计数' : '未配置 embedding，检索只走全文索引'}
+        >
+          <span className="health-label">缺向量</span>
+          <span className={missingVectors === undefined ? 'health-value' : 'health-value is-warn'}>
+            {missingVectors === undefined ? '—' : `${missingVectors} 条`}
+          </span>
+        </div>
+        <div className="health-stat" title={recall === undefined ? '本次运行还没有发生过召回' : undefined}>
+          <span className="health-label">最近召回</span>
+          <span className="health-value">
+            {recall === undefined ? '暂无' : `${recall.memoryItems} 条 · ${recall.memoryRecallMs}ms`}
+          </span>
+        </div>
+        <div className="health-stat" title="服务端尚未提供存储体积口径">
+          <span className="health-label">存储体积</span>
+          <span className="health-value">—</span>
+        </div>
+      </div>
+      <p className="memory-health-foot">
+        {recall === undefined ? '本次运行还没有召回记录。' : `上次召回 ${formatRelative(recall.finishedAt)}。`}
+        {missingVectors === undefined ? '' : '当前未配置 embedding，只能按关键词检索。'}
+      </p>
+    </div>
   )
 }

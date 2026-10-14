@@ -6,16 +6,30 @@
  * + 右侧模型数；未配置的行内直接填 key；自定义供应商带确认可删。
  *
  * 与服务端契约（apps/server/src/app.ts）的实际形状：GET /api/providers 目前只回
- * id / displayName / apiKeyConfigured / models，custom / protocol / baseUrl 是可选
- * 字段——没有就不展示对应徽标，不猜。预设、新增、删除三个接口在后端实现之前回
+ * id / displayName / apiKeyConfigured / models，custom / protocol / baseUrl / usedBy
+ * 是可选字段——没有就不展示对应徽标，不猜。预设、新增、删除三个接口在后端实现之前回
  * 404，界面要降级得体面：预设网格只剩「自定义」并说明原因，写操作失败给出能照着
  * 做的中文提示而不是 'not found: POST /api/providers'。
+ *
+ * 凭据这块讲的是全生命周期：填进去只是「已备」，不测过就不知道这家认不认；所以状态
+ * 分三态（未配置凭据 / 凭据已备（未验证）/ 已验证），并提供更换 Key、移除凭据、
+ * 测试连接三个出口。免 key 的本地服务（Ollama）不套用这套：它没有 key 可填，改用
+ * 探活，探不通就说「未检测到本地服务」，而不是拿一个绿点假装它在。
  *
  * 渲染层对 api 只做结构化要求（测试给子集即可）：新方法缺省视为后端未跟上，
  * 添加入口降级为只有「自定义」一格，表单里的保存按钮直接禁用。
  */
 import { useEffect, useId, useRef, useState } from 'react'
-import type { CreateProviderInput, ProviderInfo, ProviderPreset } from '../api.ts'
+import type { CreateProviderInput, ProviderInfo, ProviderPreset, ProviderVerifyResult } from '../api.ts'
+import {
+  explainVerifyFailure,
+  isKeylessProtocol,
+  isLocalService,
+  LOCAL_SERVICE_DOWN,
+  providerStatus,
+  providerStatusText,
+  providerUsage,
+} from '../lib/provider-health.ts'
 import { toast } from '../lib/toast.ts'
 import { ConfirmDialog } from './ConfirmDialog.tsx'
 import { Icon } from './Icon.tsx'
@@ -26,11 +40,10 @@ export interface ProviderApi {
   providerPresets?(): Promise<{ presets: ProviderPreset[] }>
   createProvider?(input: CreateProviderInput): Promise<{ provider: ProviderInfo }>
   deleteProvider?(id: string): Promise<{ deleted: string }>
-}
-
-/** 免 key 的协议（Ollama 这类本地服务）：行上挂徽标，表单里不展示 key 输入。 */
-function isKeylessProtocol(protocol: string | undefined): boolean {
-  return protocol === 'ollama'
+  /** 测连接；缺省 = 这版服务端没有，界面禁用入口并说明。 */
+  verifyProvider?(id: string): Promise<ProviderVerifyResult>
+  /** 移除已存凭据；缺省同上。 */
+  deleteApiKey?(id: string): Promise<{ deleted: string }>
 }
 
 /**
@@ -73,7 +86,15 @@ export function ProviderIcon({ id, name, size = 36 }: { id?: string; name: strin
   )
 }
 
-/** 单个供应商：可展开行；未配置时行内直接填 key；自定义的可删除。 */
+/** 测连接 / 探活的结果（本地服务与云端供应商共用一条路径）。 */
+type VerifyState =
+  | { kind: 'idle' }
+  | { kind: 'checking' }
+  | { kind: 'ok'; latencyMs: number }
+  | { kind: 'down'; reason: string }
+  | { kind: 'unsupported' }
+
+/** 单个供应商：可展开行；未配置时行内直接填 key；已配置的管凭据与测连接。 */
 function ProviderItem({
   provider,
   api,
@@ -89,14 +110,21 @@ function ProviderItem({
   const [key, setKey] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | undefined>(undefined)
+  const [replacingKey, setReplacingKey] = useState(false)
+  const [verify, setVerify] = useState<VerifyState>({ kind: 'idle' })
+  const [removing, setRemoving] = useState(false)
   const headRef = useRef<HTMLButtonElement>(null)
   const panelId = useId()
-  const configured = provider.apiKeyConfigured || isKeylessProtocol(provider.protocol)
+  const local = isLocalService(provider)
+  const configured = provider.apiKeyConfigured || local
+  const status = providerStatus(provider, verify.kind === 'ok')
+  const usage = providerUsage(provider)
   /** 收起并把焦点还给行标题：Esc 在这一层是「退出当前这层」，不是「关掉应用」。 */
   const collapse = (): void => {
     setOpen(false)
     headRef.current?.focus()
   }
+
   const saveKey = (): void => {
     setBusy(true)
     setError(undefined)
@@ -104,6 +132,9 @@ function ProviderItem({
       .setApiKey(provider.id, key.trim())
       .then(() => {
         setKey('')
+        setReplacingKey(false)
+        // 换了 key 就等于没验过：状态退回「凭据已备（未验证）」，别让旧的绿点骗人。
+        setVerify({ kind: 'idle' })
         toast.success(`「${provider.displayName}」的 key 已存到本机`)
         onChanged()
       })
@@ -114,6 +145,74 @@ function ProviderItem({
         setBusy(false)
       })
   }
+
+  const runVerify = (): void => {
+    if (api.verifyProvider === undefined) {
+      setVerify({ kind: 'unsupported' })
+      return
+    }
+    setVerify({ kind: 'checking' })
+    setError(undefined)
+    api
+      .verifyProvider(provider.id)
+      .then((result) => {
+        if (result.ok) {
+          setVerify({ kind: 'ok', latencyMs: result.latencyMs })
+          if (local) {
+            toast.success(`「${provider.displayName}」本地服务在线（${result.latencyMs}ms）`)
+          } else {
+            toast.success(`「${provider.displayName}」连接正常（${result.latencyMs}ms）`)
+          }
+          return
+        }
+        // 服务端给了 message 就以它为底，界面上仍然是人话（401 / 连不上 / 限流各有说法）。
+        setVerify({ kind: 'down', reason: explainVerifyFailure(result.message) })
+      })
+      .catch((cause: unknown) => {
+        setVerify({
+          kind: 'down',
+          reason: explainVerifyFailure(cause instanceof Error ? cause.message : String(cause)),
+        })
+      })
+  }
+
+  // 本地服务没有「有没有 key」这回事，能不能用只能靠探活：进页面先探一次，
+  // 用户随时能手动重探（Ollama 常常是用户启动之后才起来的）。
+  useEffect(() => {
+    if (!local || api.verifyProvider === undefined) return
+    let cancelled = false
+    setVerify({ kind: 'checking' })
+    api
+      .verifyProvider(provider.id)
+      .then((result) => {
+        if (cancelled) return
+        setVerify(
+          result.ok ? { kind: 'ok', latencyMs: result.latencyMs } : { kind: 'down', reason: LOCAL_SERVICE_DOWN },
+        )
+      })
+      .catch(() => {
+        if (!cancelled) setVerify({ kind: 'down', reason: LOCAL_SERVICE_DOWN })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [local, api, provider.id])
+
+  const statusLabel =
+    status === 'local'
+      ? verify.kind === 'ok'
+        ? `本地服务 · 在线 · ${verify.latencyMs}ms`
+        : verify.kind === 'checking'
+          ? '本地服务 · 检测中…'
+          : verify.kind === 'unsupported'
+            ? providerStatusText('local')
+            : verify.kind === 'down'
+              ? LOCAL_SERVICE_DOWN
+              : providerStatusText('local')
+      : verify.kind === 'ok'
+        ? `${providerStatusText(status)} · ${verify.latencyMs}ms`
+        : providerStatusText(status)
+
   return (
     <div className="provider-item">
       <button
@@ -134,13 +233,14 @@ function ProviderItem({
           <span className="provider-badges">
             <span className="badge">{provider.custom === true ? '自定义' : '内置'}</span>
             {provider.protocol !== undefined && <span className="provider-chip">{provider.protocol}</span>}
-            {isKeylessProtocol(provider.protocol) && <span className="provider-chip">免 key</span>}
+            {local && <span className="provider-chip">免 key</span>}
           </span>
         </span>
         <span className="provider-meta">
           <span className="provider-status">
-            <span className={`status-dot ${configured ? 'ok' : 'warn'}`} aria-hidden="true" />
-            {configured ? '已配置' : '未配置'}
+            {/* 免 key 的本地服务不挂绿点：它没经过任何凭据校验，绿点等于撒谎。 */}
+            {!local && <span className={`status-dot ${status === 'verified' ? 'ok' : 'warn'}`} aria-hidden="true" />}
+            {statusLabel}
           </span>
           <span className="provider-models-count">{provider.models.length} 个模型</span>
           <span className={`me-chevron provider-chevron${open ? ' is-open' : ''}`} aria-hidden="true">
@@ -151,17 +251,70 @@ function ProviderItem({
       {open && (
         <div className="provider-body" id={panelId}>
           {provider.baseUrl !== undefined && <p className="provider-endpoint">{provider.baseUrl}</p>}
-          {configured ? (
-            <ul className="provider-model-list">
-              {provider.models.map((model) => {
-                return (
-                  <li key={model.id}>
-                    {model.name ?? model.id}
-                    <small>{model.id}</small>
-                  </li>
-                )
-              })}
-            </ul>
+          {configured && !replacingKey ? (
+            <>
+              <ul className="provider-model-list">
+                {provider.models.map((model) => {
+                  return (
+                    <li key={model.id}>
+                      {model.name ?? model.id}
+                      <small>{model.id}</small>
+                    </li>
+                  )
+                })}
+              </ul>
+              <div className="provider-item-actions">
+                <button
+                  type="button"
+                  className="btn btn-mini"
+                  disabled={verify.kind === 'checking'}
+                  onClick={runVerify}
+                  title={
+                    api.verifyProvider === undefined ? '这个版本的服务端还没有「测试连接」' : '真的打一次这家供应商'
+                  }
+                >
+                  {verify.kind === 'checking' ? '测试中…' : local ? '重新检测' : '测试连接'}
+                </button>
+                {!local && (
+                  <>
+                    <button
+                      type="button"
+                      className="btn btn-mini"
+                      onClick={() => {
+                        setReplacingKey(true)
+                        setError(undefined)
+                      }}
+                    >
+                      更换 Key
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-mini btn-danger"
+                      disabled={api.deleteApiKey === undefined}
+                      title={api.deleteApiKey === undefined ? '这个版本的服务端还不能移除凭据' : '删掉本机存的这份 key'}
+                      onClick={() => {
+                        setRemoving(true)
+                      }}
+                    >
+                      移除凭据
+                    </button>
+                  </>
+                )}
+              </div>
+              {verify.kind === 'down' && (
+                <p className="apikey-error" role="alert">
+                  {verify.reason}
+                </p>
+              )}
+              {verify.kind === 'unsupported' && (
+                <p className="provider-note">这个版本的服务端还没有「测试连接」，发一条消息也能看出通不通。</p>
+              )}
+              <p className="provider-note">
+                {local
+                  ? '本地服务不需要 key：这条状态来自刚才那次探活，Ollama 起了就会变成「在线」。'
+                  : 'key 只写在本机配置文件（api-keys.json，权限 0600），可随时更换或移除。'}
+              </p>
+            </>
           ) : (
             <>
               {/* 用 form 包裹：回车即可保存，键盘用户不必 Tab 去够「保存」按钮。 */}
@@ -199,23 +352,80 @@ function ProviderItem({
                   {error}
                 </p>
               )}
+              {replacingKey && (
+                <button
+                  type="button"
+                  className="provider-back"
+                  onClick={() => {
+                    setReplacingKey(false)
+                    setError(undefined)
+                  }}
+                >
+                  ‹ 取消更换
+                </button>
+              )}
               <p className="provider-note">Key 只写在本机配置文件（api-keys.json，权限 0600）。</p>
             </>
           )}
           {provider.custom === true && (
             <div className="provider-item-actions">
-              <button
-                type="button"
-                className="btn btn-mini btn-danger"
-                onClick={() => {
-                  onDelete(provider)
-                }}
-              >
-                删除供应商
-              </button>
+              {usage.length > 0 ? (
+                // 服务端会回 409，但界面要先把话说在前面：先改绑，再删。
+                <>
+                  <button type="button" className="btn btn-mini btn-danger" disabled title="先改绑使用它的 agent 再删">
+                    删除供应商
+                  </button>
+                  <p className="provider-note">
+                    正在被{' '}
+                    {usage
+                      .map((item) => {
+                        return item.agentName
+                      })
+                      .join('、')}{' '}
+                    使用：先去通讯录把它们改绑到别的供应商，才能删这家。
+                  </p>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn-mini btn-danger"
+                  onClick={() => {
+                    onDelete(provider)
+                  }}
+                >
+                  删除供应商
+                </button>
+              )}
             </div>
           )}
         </div>
+      )}
+      {removing && (
+        <ConfirmDialog
+          title={`移除「${provider.displayName}」的凭据？`}
+          body={`本机 api-keys.json 里存的那份 key 会被删掉，用它的 agent 立刻回复不了，直到重新填一个。随时可以再填回来。`}
+          confirmLabel="确认移除"
+          onCancel={() => {
+            setRemoving(false)
+          }}
+          onConfirm={async () => {
+            if (api.deleteApiKey === undefined) {
+              setRemoving(false)
+              return
+            }
+            try {
+              await api.deleteApiKey(provider.id)
+            } catch (cause: unknown) {
+              const raw = cause instanceof Error ? cause.message : String(cause)
+              toast.error(`移除「${provider.displayName}」的凭据失败：${raw}`)
+              return
+            }
+            setRemoving(false)
+            setVerify({ kind: 'idle' })
+            onChanged()
+            toast.success(`「${provider.displayName}」的凭据已移除`)
+          }}
+        />
       )}
     </div>
   )
@@ -575,7 +785,15 @@ export function ProviderSettings({
       {deleting !== undefined && (
         <ConfirmDialog
           title={`删除「${deleting.displayName}」？`}
-          body={`「${deleting.displayName}」会从供应商列表移除，正在使用它的 agent 将无法回复，直到改用其他供应商。删除后不可恢复。`}
+          body={
+            providerUsage(deleting).length > 0
+              ? `「${deleting.displayName}」正在被 ${providerUsage(deleting)
+                  .map((item) => {
+                    return item.agentName
+                  })
+                  .join('、')} 使用：先到通讯录把这些 agent 改绑到别的供应商，才能删这家。`
+              : `「${deleting.displayName}」会从供应商列表移除，正在使用它的 agent 将无法回复，直到改用其他供应商。删除后不可恢复。`
+          }
           confirmLabel="确认删除"
           onCancel={() => {
             setDeleting(undefined)
@@ -586,11 +804,17 @@ export function ProviderSettings({
               await api.deleteProvider(deleting.id)
             } catch (cause: unknown) {
               // 自己 toast 而不是把异常抛给 ConfirmDialog：那里只会原样弹英文。
+              const raw = cause instanceof Error ? cause.message : String(cause)
               const { message, missingEndpoint } = explainApiError(
                 cause,
                 '这个版本的服务端还不能删除供应商：接口没实现。需要删的话，先把 data/config/providers.json 里的这一条去掉再重启。',
               )
-              toast.error(message)
+              // 409 = 还有 agent 绑在这家身上（界面上的 usedBy 可能还没刷新到）。
+              toast.error(
+                /409|in use|used by/.test(raw)
+                  ? '还有 agent 正在用它：请先到通讯录把它们改绑到别的供应商，再回来删。'
+                  : message,
+              )
               // 接口不存在时重试也不会变好，留着弹窗只会让人干瞪眼；其余情况留着，
               // 用户能看清原因直接重试。
               if (missingEndpoint) setDeleting(undefined)

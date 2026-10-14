@@ -28,26 +28,30 @@
 
 ## 表结构（与 session 共用 ryagent.db，本包自管 memory_meta 版本轴）
 
-- `memories(id, agent_id, kind, content, embedding BLOB 可空, dim, created_at, updated_at, last_accessed_at, access_count, source_conversation_id, status, supersedes_id)`——`agent_id='*shared*'` 为共享画像；`status: active|superseded|deleted`；软删链用 `supersedes_id` 串联（Zep 思路）。
-- `memories_fts`：FTS5 虚表，**中文 bigram 分词**（unicode61 不切 CJK，整句一个 token 会失效；索引与查询都变换为相邻二字一 token，OR 语义 + BM25）。
+- `memories(id, agent_id, kind, content, embedding BLOB 可空, dim, created_at, updated_at, last_accessed_at, access_count, source_conversation_id, status, supersedes_id)`——`agent_id='*shared*'` 为共享画像；`status: active|superseded|deleted|inactive`；软删链用 `supersedes_id` 串联（Zep 思路）。
+- `memories_fts`：FTS5 虚表，**中文 bigram 分词**（unicode61 不切 CJK，整句一个 token 会失效；索引与查询都变换为相邻二字一 token，OR 语义 + BM25）。查询串逐 token 加引号转义（`:`/`"`/`OR` 等 ASCII 元字符会让 MATCH 直接抛错，整条记忆静默失效）。
 - `embedding_cache(hash=sha256(text), vector, dim)`：相同文本不重复请求。
+
+索引与主表同步：软删与归档都删索引行，`restore` 先删后插重建（rowid 唯一）。索引里不留死行——否则 BM25 候选窗口（limit×3）被非 active 行吃光，召回质量随时间单调退化。
 
 ## 检索配方参数
 
 | 参数 | 值 |
 |---|---|
-| 语义通道 | 余弦 top-10（内存暴力，单用户 <10k 规模足够） |
+| 语义通道 | 余弦 top-10（向量常驻内存，按空间+模型分桶缓存） |
 | 词法通道 | FTS5 BM25 top-10 |
 | 融合 | RRF，k=60 |
 | 时间衰减 | `score *= exp(-Δdays/30)` |
 | 注入 | top-5 + 共享画像全量，格式 `[记忆] 用户画像：… / 相关记忆：…` |
 | 命中反馈 | access_count+1、last_accessed_at=now |
+| 单通道超时 | 召回 800ms / 向量重建 30s（后台分片，默认 64 条一批） |
 
 ## 降级策略
 
 - **有 SILICONFLOW_API_KEY**：`SiliconFlowEmbeddings`（默认 `Qwen/Qwen3-Embedding-0.6B`，实测 1024 维）+ `ChatMemoryLlm` 抽取，全管线。
-- **无 key**：`NullEmbeddings` + 无 LLM → 纯 FTS5 检索（写入管线关闭，记忆可手工/API 种入），代码路径都在。
+- **无 key**：`NullEmbeddings` + 无 LLM → 纯 FTS5 检索（写入管线关闭，记忆可手工/API 种入），代码路径都在；此时写入前补一次**文本近重复判定**，否则同一事实换个说法会无限堆积。
 - **网络失败**：embed 返回 null → 该次召回走纯 FTS5；抽取失败重试一次后记日志。
+- **通道异常**：BM25 通道单独 try/catch，坏掉只丢它自己，共享画像照常注入。
 - embedding 不可用的记忆行（手写/API 种入）自动跳过语义通道，仅参与 BM25。
 
 ## 接入点

@@ -1,0 +1,230 @@
+name: Release
+
+# 发版主线：推 v* tag → 校验 → 解包起停冒烟 → 打 NSIS 安装包 → 上传 GitHub Release。
+# 版本号由 scripts/bump.mjs 统一改（根 package.json 是唯一真值来源），这里只消费
+# tag 与已经 bump 过的仓库状态。
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布的 tag（留空 = 用触发本次运行的 ref）'
+        required: false
+        default: ''
+
+# 默认只读；只有 publish job 拿到写权限来推 Release。
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ---- 1. 质量门禁：与 CI 同一套，另加版本一致性 ----
+  verify:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Resolve tag
+        id: tag
+        shell: pwsh
+        # tag 名会进后面的 shell 命令行，一律走 env 传，不做字符串插值。
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          $t = $env:INPUT_TAG.Trim()
+          if ($t -eq '') { $t = $env:GITHUB_REF_NAME }
+          if ($t -eq '') { throw '无法确定要发布的 tag：用 push tag 触发，或在 workflow_dispatch 里填 tag' }
+          # workflow_dispatch 也可能从分支上跑，那样 GITHUB_REF_NAME 是 master——
+          # 早失败好过最后一步 gh release create 才炸。
+          if ($t -notmatch '^v\d+\.\d+\.\d+') { throw "tag 必须是 vX.Y.Z 形式，收到的是：$t" }
+          "tag=$t" >> $env:GITHUB_OUTPUT
+
+      - uses: actions/checkout@v4
+        with:
+          # tag 校验要 `git rev-parse refs/tags/<tag>`，浅克隆拿不到 tag 列表。
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Dependency audit
+        continue-on-error: true
+        run: pnpm audit --audit-level=high
+
+      - name: Lint & format check
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: npx vitest run
+
+      - name: Version consistency
+        # 根 package.json / 20 个工作区包 / 「我的」页展示版本 / CHANGELOG 四处必须
+        # 与 tag 对得上，否则安装包文件名会和依赖图互相矛盾。
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: pnpm version:check --tag $env:RELEASE_TAG
+
+  # ---- 2. 打包：先 --dir 起停冒烟，再出 NSIS ----
+  package:
+    needs: verify
+    runs-on: windows-latest
+    # electron-builder 要下 Electron 发行包 + NSIS 工具链，首次冷跑偏慢。
+    timeout-minutes: 45
+    env:
+      RELEASE_TAG: ${{ needs.verify.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.verify.outputs.tag }}
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace
+        # 必须走根的 -r：desktop 的 tsdown 把 @ryagent/* 标成 external，装包时靠
+        # node_modules 解析，所以 server 等包要先有 dist。
+        run: pnpm build
+
+      - name: Package (unpacked)
+        run: pnpm --filter @ryagent/desktop exec electron-builder --win --dir
+
+      - name: Smoke test the unpacked build
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'apps\desktop\release\win-unpacked\RyAgent.exe'
+          if (-not (Test-Path $exe)) { throw "解包产物缺失：$exe" }
+          $dataDir = Join-Path $env:RUNNER_TEMP 'ryagent-smoke-data'
+          Remove-Item -Recurse -Force $dataDir -ErrorAction SilentlyContinue
+          $env:RYAGENT_DATA_DIR = $dataDir
+          # 固定端口：默认随机，冒烟脚本没法预测该打哪个口。
+          $env:RYAGENT_PORT = '32199'
+          $env:ELECTRON_ENABLE_LOGGING = '1'
+          $log = Join-Path $env:RUNNER_TEMP 'ryagent-smoke.log'
+          $proc = Start-Process -FilePath $exe -PassThru -RedirectStandardOutput $log -RedirectStandardError "$log.err"
+          try {
+            $deadline = (Get-Date).AddSeconds(180)
+            $agents = $null
+            while ((Get-Date) -lt $deadline) {
+              if ($proc.HasExited) { break }
+              try {
+                $agents = (Invoke-RestMethod -Uri 'http://127.0.0.1:32199/api/agents' -TimeoutSec 5).agents
+                break
+              } catch {
+                Start-Sleep -Seconds 2
+              }
+            }
+            if ($null -eq $agents) {
+              Get-Content $log, "$log.err" -ErrorAction SilentlyContinue | Write-Host
+              throw '打包产物 180s 内没有在 127.0.0.1:32199 供出 /api/agents'
+            }
+            Write-Host "smoke ok：内置 agent $($agents.Count) 位"
+          } finally {
+            # /T 连渲染/工具子进程一起收，否则 runner 上会留一串孤儿 electron。
+            & taskkill /PID $proc.Id /T /F | Out-Null
+          }
+          if (-not (Test-Path (Join-Path $dataDir 'ryagent.db'))) {
+            throw "冒烟跑完数据目录里没有 ryagent.db：$dataDir"
+          }
+
+      - name: Package (NSIS)
+        run: pnpm --filter @ryagent/desktop exec electron-builder --win nsis
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer
+          path: apps/desktop/release/*.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  # ---- 3. 发布：校验和 + GitHub Release ----
+  publish:
+    needs: [verify, package]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ needs.verify.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.verify.outputs.tag }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: installer
+          path: dist
+
+      - name: Checksum the installer
+        run: |
+          cd dist
+          # 不带 ./ 前缀：`sha256sum -c SHA256SUMS.txt` 在同目录下即可直接用。
+          sha256sum *.exe > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Release notes from CHANGELOG
+        id: notes
+        run: |
+          # bump.mjs 发版时已经把本轮变更写进 `## [x.y.z] - date` 小节，
+          # 直接拿它当 Release 正文；取不到就退回 GitHub 自动生成的提交列表。
+          # 按行切而不是一条正则：版本号要转义、终止锚点在 JS 里没有 \Z。
+          node -e '
+            const fs = require("node:fs");
+            const tag = process.env.RELEASE_TAG.replace(/^v/, "");
+            const lines = fs.readFileSync("CHANGELOG.md", "utf8").split(/\r?\n/);
+            const start = lines.findIndex((line) => line.startsWith("## [" + tag + "]"));
+            if (start !== -1) {
+              let end = lines.length;
+              for (let i = start + 1; i < lines.length; i += 1) {
+                if (lines[i].startsWith("## [")) { end = i; break }
+              }
+              const body = lines.slice(start + 1, end).join("\n").trim();
+              if (body) fs.writeFileSync("RELEASE_NOTES.md", body + "\n");
+            }
+          '
+          if [ -s RELEASE_NOTES.md ]; then echo "found=true" >> "$GITHUB_OUTPUT"; else echo "found=false" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Create or update the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HAS_NOTES: ${{ steps.notes.outputs.found }}
+        run: |
+          set -euo pipefail
+          mapfile -t assets < <(find dist -maxdepth 1 -type f \( -name '*.exe' -o -name 'SHA256SUMS.txt' \) -print)
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
+          elif [ "$HAS_NOTES" = "true" ]; then
+            gh release create "$RELEASE_TAG" "${assets[@]}" --title "RyAgent $RELEASE_TAG" --notes-file RELEASE_NOTES.md
+          else
+            gh release create "$RELEASE_TAG" "${assets[@]}" --title "RyAgent $RELEASE_TAG" --generate-notes
+          fi
+          gh release view "$RELEASE_TAG" --json url,tagName,assets

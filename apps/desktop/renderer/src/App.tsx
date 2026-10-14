@@ -26,14 +26,27 @@ const THEME_ANIMATING_CLASS = 'theme-animating'
 /** 已读等高频刷新事件的合并窗口（ms）。 */
 const REFRESH_DEBOUNCE_MS = 800
 
-function loadTheme(): Theme {
+/**
+ * 无存储时的兜底：跟随系统深浅色。此前一律硬回浅色，等于把系统设置反着来——
+ * Windows 开着暗色的用户一进窗口就是一片奶油色，还得自己翻设置才发现能改。
+ */
+function systemTheme(): Theme {
+  try {
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+  } catch {
+    return 'light'
+  }
+}
+
+/** 导出供测试与 App 共用：口径必须与 renderer/index.html 的内联脚本一致。 */
+export function loadTheme(): Theme {
   try {
     const stored = localStorage.getItem('ryagent-theme')
     if (stored === 'light' || stored === 'dark') return stored
   } catch {
-    // 隐私模式下 localStorage 不可用，回退浅色。
+    // 隐私模式下 localStorage 不可用，继续往系统偏好上退。
   }
-  return 'light'
+  return systemTheme()
 }
 
 /** 应用 documentElement 的 data-theme（供测试与 App 共用）。 */
@@ -307,7 +320,7 @@ export function App() {
     <div className="app-shell">
       {/* 栏 1：72px icon rail */}
       <nav className="rail" aria-label="主导航">
-        <span className="rail-logo">
+        <span className="rail-logo" aria-hidden="true">
           <Cat mood="idle" size={40} />
         </span>
         {RAIL_TABS.map((item) => (
@@ -315,6 +328,7 @@ export function App() {
             type="button"
             key={item.key}
             className={`rail-tab ${tab === item.key ? 'is-active' : ''}`}
+            aria-current={tab === item.key ? 'page' : undefined}
             onClick={() => {
               setTab(item.key)
             }}
@@ -364,6 +378,19 @@ export function App() {
             }}
             onGoContacts={() => {
               setTab('contacts')
+            }}
+            // 宿主自己的 ApiClient：列表自己 new 一个的话，置顶/静音/删除会绕过
+            // 壳的刷新与错误处理。onChanged 让操作后的真值重新落到列表上。
+            api={api}
+            onChanged={() => {
+              void refresh()
+            }}
+            onJumpToMessage={(conversationId) => {
+              // 定位本身由 ConversationList 抛 ryagent:scroll-to-message 并用
+              // scrollIntoView 兜底；壳这头只负责把目标会话摆到台面上。
+              setTab('chats')
+              setActiveId(conversationId)
+              setPendingSend(undefined)
             }}
           />
         </aside>

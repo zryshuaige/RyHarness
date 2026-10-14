@@ -26,6 +26,10 @@ export interface AgentTemplate {
  * 而是一只住在家里的小动物，用户新建助理时看到的是「阿码 · 猫头鹰程序员」，
  * 而不是「Coding Agent」。systemPrompt 也用这个口吻写成，写法示例而非命令清单。
  * avatar 是固定语义值（db:{family}:{seed}），不随机混搭。
+ *
+ * 默认工具一律**不含 shell_exec**：能执行任意命令是最高一档的能力，不该在用户
+ * 还没意识到「这只小动物能在我的电脑上敲命令」时就默认打开（提示注入可直接
+ * 升级成任意代码执行）。要用就在 agent 编辑里显式勾选。
  */
 export const AGENT_TEMPLATES: Readonly<Record<string, AgentTemplate>> = {
   general: {
@@ -33,7 +37,7 @@ export const AGENT_TEMPLATES: Readonly<Record<string, AgentTemplate>> = {
     name: 'Ryen',
     description: 'Ryen：温暖干练的橘猫管家总管，日常问答与事务安排。',
     suggestedSystemPrompt: RYEN_TEMPLATE.systemPrompt,
-    defaultTools: ['fs_read', 'fs_write', 'shell_exec', 'file_produce'],
+    defaultTools: ['fs_read', 'fs_write', 'file_produce'],
     defaultModel: 'deepseek-ai/DeepSeek-V3',
     avatar: 'cat',
   },
@@ -46,7 +50,7 @@ export const AGENT_TEMPLATES: Readonly<Record<string, AgentTemplate>> = {
       '先读相关文件再动手，改动保持最小；改完跑一次验证，然后把「改了什么、验证结果如何」讲清楚。',
       '产出物用 file_produce 落成文件再交付。',
     ].join('\n'),
-    defaultTools: ['fs_read', 'fs_write', 'shell_exec', 'file_produce'],
+    defaultTools: ['fs_read', 'fs_write', 'file_produce'],
     defaultModel: 'deepseek-ai/DeepSeek-V3',
     avatar: 'db:dylan:nightowl',
   },
@@ -85,13 +89,37 @@ export const AGENT_TEMPLATES: Readonly<Record<string, AgentTemplate>> = {
       '先盘点工作区，再按要求移动、归档或建索引；动手删之前一定会先说一声。',
       '做完用一份清单汇报，什么放在哪儿一目了然。',
     ].join('\n'),
-    defaultTools: ['fs_read', 'fs_write', 'shell_exec'],
+    defaultTools: ['fs_read', 'fs_write'],
     defaultModel: 'deepseek-ai/DeepSeek-V3',
     avatar: 'db:mascot:hoarder',
   },
 }
 
-/** 首启种子：保证内置 Ryen 存在于 agents 表。 */
+/** 模板 agent 与用户自建 agent 共用的默认路由（与 instantiateTemplate 一致）。 */
+const DEFAULT_PROVIDER = 'siliconflow'
+
+/** 首启小队里除 Ryen 之外的成员。id 固定：重复启动只会覆盖同一条记录。 */
+export interface StarterTeammate {
+  id: string
+  templateKey: string
+}
+
+/**
+ * 首启就位的小队成员。
+ *
+ * 只有一个联系人时「多 agent」只是文档里的一句话：用户打开通讯录看到 Ryen
+ * 一只猫，得自己再建两个才想得到群聊这回事。这里随模板一起种下两位常驻成员，
+ * 他们和 Ryen 一起构成首屏演示会话里的三人组。
+ */
+export const STARTER_TEAMMATES: readonly StarterTeammate[] = [
+  { id: 'ryen-team-coding', templateKey: 'coding' },
+  { id: 'ryen-team-organizer', templateKey: 'file-organizer' },
+]
+
+/**
+ * 首启种子：内置 Ryen + 小队另外两位存在于 agents 表。
+ * 三条都是 isBuiltin：删不掉、也不会和用户自己建的 agent 混淆。
+ */
 export function ensureSeedAgents(
   upsert: (input: {
     id: string
@@ -114,6 +142,21 @@ export function ensureSeedAgents(
     tools: [...RYEN_TEMPLATE.tools],
     isBuiltin: true,
   })
+  for (const teammate of STARTER_TEAMMATES) {
+    const template = AGENT_TEMPLATES[teammate.templateKey]
+    // 模板表被改过（少了某个键）时跳过这位，而不是把整个启动带崩。
+    if (template === undefined) continue
+    upsert({
+      id: teammate.id,
+      name: template.name,
+      ...(template.avatar === undefined ? {} : { avatar: template.avatar }),
+      systemPrompt: template.suggestedSystemPrompt,
+      provider: DEFAULT_PROVIDER,
+      model: template.defaultModel,
+      tools: [...template.defaultTools],
+      isBuiltin: true,
+    })
+  }
 }
 
 /**
@@ -135,7 +178,7 @@ export function instantiateTemplate(
       ? {}
       : { avatar: overrides.avatar ?? template.avatar }),
     systemPrompt: overrides.systemPrompt ?? template.suggestedSystemPrompt,
-    provider: overrides.provider ?? 'siliconflow',
+    provider: overrides.provider ?? DEFAULT_PROVIDER,
     model: overrides.model ?? template.defaultModel,
     tools: overrides.tools ?? [...template.defaultTools],
     isBuiltin: false,

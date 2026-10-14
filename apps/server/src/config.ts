@@ -343,3 +343,21 @@ export function providerKeyConfigured(
 ): boolean {
   return hasUsableCredential(provider, env)
 }
+
+/**
+ * 解析记忆/进化管线要用的 LLM 连接：取第一个凭据已配置的供应商，
+ * 模型取该供应商的第一个。这样用户在 providers.json 里换成别家服务商后，
+ * 记忆与进化也跟着走，而不是写死 SiliconFlow。
+ */
+export function resolveSidecarLlm(
+  providers: ProvidersConfigFile,
+): { providerId: string; apiKey: string; baseURL: string; model: string } | undefined {
+  for (const [providerId, provider] of Object.entries(providers.providers)) {
+    const apiKey = provider.apiKey ?? (provider.apiKeyEnv === undefined ? undefined : process.env[provider.apiKeyEnv])
+    if (apiKey === undefined || apiKey.length === 0) continue
+    const model = provider.models[0]?.id
+    if (model === undefined) continue
+    return { providerId, apiKey, baseURL: provider.baseURL, model }
+  }
+  return undefined
+}

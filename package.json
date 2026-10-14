@@ -14,6 +14,8 @@
     "lint": "biome check .",
     "test": "vitest run",
     "build": "pnpm -r run build",
+    "version:check": "node scripts/bump.mjs --check",
+    "version:bump": "node scripts/bump.mjs --set",
     "smoke:siliconflow": "tsx scripts/smoke-siliconflow.ts",
     "demo:agent": "tsx scripts/demo-agent.ts",
     "demo:group": "tsx scripts/demo-group.ts",

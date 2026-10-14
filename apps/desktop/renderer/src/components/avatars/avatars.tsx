@@ -14,6 +14,7 @@
  * 品牌橘猫；未知值回退首字符饱和色块（旧库数据平滑降级）。
  */
 
+import type { CSSProperties } from 'react'
 import type { AvatarRenderer } from './styles-avatar.ts'
 
 export interface AvatarStyleDef {
@@ -28,6 +29,34 @@ export interface AvatarStyleDef {
  * 免得「'cat' 这个字面量」在多处各写一遍。
  */
 export const BRAND_AVATAR = 'cat'
+
+/**
+ * 头像统一规格。此前「品牌橘猫」与「DiceBear 风格头像」是两套处理并排：猫自己一套
+ * 底板半径（留了 1.5/64 的白边），风格头像满幅，兜底色块又是另一套字号——同屏摆一
+ * 排就是两种零件。现在四条分支（猫 / 风格 / 骨架 / 首字符）共用同一块画布：
+ * 正方形 size×size、圆形、图案满幅、同一圈描边。描边用 outline 而不是 box-shadow，
+ * 这样和 .avatar-lg-ring 那套外发光 box-shadow 叠加时不互相覆盖。
+ */
+export const AVATAR_SPEC = {
+  /** 圆角：全规格只有圆形一种（群聊九宫格的单格同样圆）。 */
+  radius: '50%',
+  /** 描边宽度（px）：小尺寸 1px 就够，≥48px 给 2px，否则会被图案边缘吃掉。 */
+  stroke: (size: number): number => {
+    return size >= 48 ? 2 : 1
+  },
+  /** 首字符色块的字号比例（24px 头像下是 11px，仍读得出来）。 */
+  letterRatio: 0.44,
+} as const
+
+/** 头像画布样式：全应用只有这一处定义，四种头像共用。 */
+export function avatarCanvas(size: number): CSSProperties {
+  return {
+    width: size,
+    height: size,
+    borderRadius: AVATAR_SPEC.radius,
+    outline: `${AVATAR_SPEC.stroke(size)}px solid var(--edge)`,
+  }
+}
 
 export const AVATAR_STYLES: readonly AvatarStyleDef[] = [
   { key: 'dylan', name: '人物', license: 'CC-BY-4.0' },

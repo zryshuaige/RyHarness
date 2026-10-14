@@ -1,8 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { ApiClient, PlaybookEntryRow, ReflectionRow } from '../api.ts'
+import { toast } from '../lib/toast.ts'
 import { Icon } from './Icon.tsx'
 import { Modal } from './Modal.tsx'
 import { PanelSkeleton } from './Skeleton.tsx'
+
+function reason(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
 
 const SECTION_LABELS: Record<PlaybookEntryRow['section'], string> = {
   strategy: '策略',
@@ -38,19 +43,32 @@ export function PlaybookPanel({
   onClose: () => void
 }) {
   const [data, setData] = useState<{ entries: PlaybookEntryRow[]; reflections: ReflectionRow[] } | undefined>(undefined)
+  const [loadError, setLoadError] = useState<string | undefined>(undefined)
 
   const reload = useCallback(() => {
     api
       .getPlaybook(agentId)
-      .then(setData)
-      .catch(() => {
+      .then((next) => {
+        setData(next)
+        setLoadError(undefined)
+      })
+      .catch((error: unknown) => {
+        // 读不出来就说读不出来：静默清空会让「加载失败」长成「手册还是空的」。
         setData({ entries: [], reflections: [] })
+        setLoadError(reason(error))
       })
   }, [api, agentId])
   useEffect(reload, [reload])
 
   const toggle = async (entry: PlaybookEntryRow): Promise<void> => {
-    await api.setPlaybookStatus(entry.id, entry.status === 'active' ? 'deprecated' : 'active').catch(() => {})
+    const next = entry.status === 'active' ? 'deprecated' : 'active'
+    try {
+      await api.setPlaybookStatus(entry.id, next)
+    } catch (error) {
+      toast.error(`${next === 'active' ? '恢复' : '停用'}这条经验失败：${reason(error)}`)
+      return
+    }
+    toast.success(next === 'active' ? '已恢复，不再忽略这条经验' : '已停用，它不会再被注入提示')
     reload()
   }
 
@@ -64,6 +82,20 @@ export function PlaybookPanel({
         <PanelSkeleton rows={4} />
       ) : (
         <>
+          {loadError !== undefined && (
+            <p className="apikey-error" role="alert">
+              经验手册没读出来：{loadError}
+              <button
+                type="button"
+                className="btn btn-mini"
+                onClick={() => {
+                  reload()
+                }}
+              >
+                重试
+              </button>
+            </p>
+          )}
           {data.reflections.length > 0 && (
             <>
               <p className="section-title">反思中的教训（待验证，命中 {2} 次转正）</p>
@@ -108,6 +140,7 @@ export function PlaybookPanel({
                         type="button"
                         className="memory-delete"
                         title={entry.status === 'active' ? '停用（软删）' : '恢复'}
+                        aria-label={`${entry.content.slice(0, 20)}：${entry.status === 'active' ? '停用' : '恢复'}`}
                         onClick={() => {
                           void toggle(entry)
                         }}
@@ -120,7 +153,7 @@ export function PlaybookPanel({
               </div>
             )
           })}
-          {data.entries.length === 0 && data.reflections.length === 0 && (
+          {loadError === undefined && data.entries.length === 0 && data.reflections.length === 0 && (
             <p className="panel-empty">手册还是空的——多聊几轮，我会从轨迹里沉淀经验。</p>
           )}
         </>

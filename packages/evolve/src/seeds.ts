@@ -38,7 +38,14 @@ export function seedIfEmpty(store: EvolveStore, agentId: string, templateKey: st
   const seeds = SEED_PLAYBOOKS[templateKey]
   if (seeds === undefined) return 0
   for (const seed of seeds) {
-    store.insertEntry({ agentId, section: seed.section, content: seed.content, source: 'seed' })
+    store.insertEntry({
+      agentId,
+      section: seed.section,
+      content: seed.content,
+      source: 'seed',
+      // 种子也进证据链：用户问「这条为什么在这儿」时要能答"来自内置模板"。
+      origins: [{ kind: 'seed', refId: templateKey, detail: `内置 ${templateKey} 模板` }],
+    })
   }
   return seeds.length
 }

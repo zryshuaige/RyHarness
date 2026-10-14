@@ -21,7 +21,11 @@ export const RYEN_TEMPLATE: AgentDefinition = {
   ].join('\n'),
   provider: 'siliconflow',
   model: 'deepseek-ai/DeepSeek-V3',
-  tools: ['fs_read', 'fs_write', 'shell_exec', 'file_produce'],
+  // 默认工具**不含 shell_exec**：能在用户电脑上执行任意命令是最高一档能力，
+  // 一条提示注入就能把它升级成任意代码执行，不该在用户还没意识到「这只小动物
+  // 会敲我的电脑」时默认打开。与服务端模板目录（apps/server/src/seed.ts）保持
+  // 一致；要用就在 agent 编辑里显式勾选，工具本身还有敏感路径闸兜底。
+  tools: ['fs_read', 'fs_write', 'file_produce'],
   isBuiltin: true,
 }
 

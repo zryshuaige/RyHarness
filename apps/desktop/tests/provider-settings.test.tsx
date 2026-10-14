@@ -167,9 +167,12 @@ describe('供应商区块：分组与状态', () => {
     })!
     expect(silicon.textContent).toContain('内置')
     expect(silicon.textContent).toContain('openai')
-    expect(silicon.textContent).toContain('已配置')
+    // 有 key 不等于这家认：没测过之前只能是「凭据已备（未验证）」，更不能给绿点。
+    expect(silicon.textContent).toContain('凭据已备（未验证）')
+    expect(silicon.textContent).not.toContain('已验证')
     expect(silicon.textContent).toContain('2 个模型')
-    expect(silicon.querySelector('.status-dot.ok')).not.toBeNull()
+    expect(silicon.querySelector('.status-dot.ok')).toBeNull()
+    expect(silicon.querySelector('.status-dot.warn')).not.toBeNull()
     // 图标是内联 SVG 字母标，不引外部资源。
     expect(silicon.querySelector('.provider-logo svg')).not.toBeNull()
 
@@ -177,15 +180,15 @@ describe('供应商区块：分组与状态', () => {
       return node.textContent?.includes('Ollama')
     })!
     expect(ollama.textContent).toContain('免 key')
-    // 免 key 的供应商不算「未配置」，不用状态点吓人。
-    expect(ollama.textContent).toContain('已配置')
-    expect(ollama.querySelector('.status-dot.ok')).not.toBeNull()
+    // 免 key 的本地服务换了一套说法，且不再挂绿点：它没经过任何凭据校验。
+    expect(ollama.textContent).toContain('本地服务')
+    expect(ollama.querySelector('.status-dot')).toBeNull()
 
     const custom = heads.find((node) => {
       return node.textContent?.includes('我的私有服务')
     })!
     expect(custom.textContent).toContain('自定义')
-    expect(custom.textContent).toContain('未配置')
+    expect(custom.textContent).toContain('未配置凭据')
     expect(custom.querySelector('.status-dot.warn')).not.toBeNull()
   })
 
@@ -609,5 +612,263 @@ describe('MePage 集成', () => {
     expect(container.querySelector('.provider-section-head')?.textContent).toContain('模型供应商')
     expect(container.querySelector('.provider-add-btn')?.textContent).toContain('添加供应商')
     expect(container.querySelector('.provider-head')?.textContent).toContain('SiliconFlow')
+  })
+})
+
+/** 凭据全生命周期：测连接 / 更换 Key / 移除凭据，以及三态在其中的流转。 */
+describe('凭据生命周期', () => {
+  it('测试连接：进行中态 → 通过后显示延迟与已验证', async () => {
+    const calls: string[] = []
+    let resolveVerify: ((value: { ok: boolean; message: string; latencyMs: number }) => void) | undefined
+    const api = fakeApi({
+      verifyProvider: (id: string) => {
+        calls.push(id)
+        return new Promise((resolve) => {
+          resolveVerify = resolve
+        })
+      },
+    })
+    await renderSettings(api, [builtinProvider])
+    act(() => {
+      buttonByText('SiliconFlow').click()
+    })
+    act(() => {
+      buttonByText('测试连接').click()
+    })
+    expect(calls).toEqual(['siliconflow'])
+    expect(buttonByText('测试中…', container.querySelector('.provider-body')!).textContent).toContain('测试中')
+    await act(async () => {
+      resolveVerify?.({ ok: true, message: 'ok', latencyMs: 128 })
+      await Promise.resolve()
+    })
+    expect(container.querySelector('.provider-head')?.textContent).toContain('已验证 · 128ms')
+    expect(container.querySelector('.provider-head')?.querySelector('.status-dot.ok')).not.toBeNull()
+    expect(toastTexts()).toContain('「SiliconFlow」连接正常（128ms）')
+  })
+
+  it('测试连接失败：给出中文原因，并说清下一步（不弹 401 原文）', async () => {
+    const api = fakeApi({
+      verifyProvider: () => {
+        return Promise.resolve({ ok: false, message: '401 Unauthorized', latencyMs: 90 })
+      },
+    })
+    await renderSettings(api, [builtinProvider])
+    act(() => {
+      buttonByText('SiliconFlow').click()
+    })
+    await act(async () => {
+      buttonByText('测试连接').click()
+      await Promise.resolve()
+    })
+    const error = container.querySelector('.provider-body .apikey-error')!
+    expect(error.getAttribute('role')).toBe('alert')
+    expect(error.textContent).toContain('凭据被供应商拒绝')
+    expect(error.textContent).toContain('更换 Key')
+    expect(error.textContent).not.toContain('401')
+    // 没验过就不给绿点。
+    expect(container.querySelector('.provider-head')?.textContent).toContain('凭据已备（未验证）')
+  })
+
+  it('服务端没有 verify 时说明这版还测不了（不假装测过）', async () => {
+    await renderSettings(fakeApi(), [builtinProvider])
+    act(() => {
+      buttonByText('SiliconFlow').click()
+    })
+    await act(async () => {
+      buttonByText('测试连接', container.querySelector('.provider-body')!).click()
+      await Promise.resolve()
+    })
+    expect(container.querySelector('.provider-body')?.textContent).toContain('还没有「测试连接」')
+  })
+
+  it('更换 Key：行内重新填 → setApiKey → 状态退回未验证', async () => {
+    const saved: string[] = []
+    const api = fakeApi({
+      setApiKey: (providerId: string, apiKey: string) => {
+        saved.push(apiKey)
+        return Promise.resolve({ providerId, configured: true })
+      },
+      verifyProvider: () => {
+        return Promise.resolve({ ok: true, message: 'ok', latencyMs: 50 })
+      },
+    })
+    await renderSettings(api, [builtinProvider])
+    act(() => {
+      buttonByText('SiliconFlow').click()
+    })
+    await act(async () => {
+      buttonByText('测试连接').click()
+      await Promise.resolve()
+    })
+    expect(container.querySelector('.provider-head')?.textContent).toContain('已验证')
+
+    act(() => {
+      buttonByText('更换 Key').click()
+    })
+    const body = container.querySelector('.provider-body')!
+    typeInto(body.querySelector<HTMLInputElement>('input[type="password"]')!, 'sk-new')
+    await act(async () => {
+      buttonByText('保存', body).click()
+      await Promise.resolve()
+    })
+    expect(saved).toEqual(['sk-new'])
+    // 换了 key 等于没验过：不能让上一次的绿点继续骗人。
+    expect(container.querySelector('.provider-head')?.textContent).toContain('凭据已备（未验证）')
+    expect(container.querySelector('.provider-head')?.textContent).not.toContain('已验证')
+  })
+
+  it('移除凭据：确认弹窗里才发 DELETE，成功后提示并刷新', async () => {
+    const deleted: string[] = []
+    let changed = 0
+    const api = fakeApi({
+      deleteApiKey: (id: string) => {
+        deleted.push(id)
+        return Promise.resolve({ deleted: id })
+      },
+    })
+    await renderSettings(api, [builtinProvider], () => {
+      changed += 1
+    })
+    act(() => {
+      buttonByText('SiliconFlow').click()
+    })
+    act(() => {
+      buttonByText('移除凭据').click()
+    })
+    const dialog = container.querySelector('[role="dialog"]')!
+    expect(dialog.textContent).toContain('移除「SiliconFlow」的凭据')
+    expect(deleted).toEqual([])
+    await act(async () => {
+      buttonByText('确认移除', dialog).click()
+      await Promise.resolve()
+    })
+    expect(deleted).toEqual(['siliconflow'])
+    expect(changed).toBe(1)
+    expect(toastTexts()).toContain('「SiliconFlow」的凭据已移除')
+  })
+
+  it('服务端没有移除凭据接口时按钮禁用并给出原因', async () => {
+    await renderSettings(fakeApi(), [builtinProvider])
+    act(() => {
+      buttonByText('SiliconFlow').click()
+    })
+    const button = buttonByText('移除凭据', container.querySelector('.provider-body')!) as HTMLButtonElement
+    expect(button.disabled).toBe(true)
+    expect(button.title).toContain('还不能移除凭据')
+  })
+
+  it('没人用的供应商照样能删（usedBy 只是提示，不是永久禁用）', async () => {
+    const deleted: string[] = []
+    const api = fakeApi({
+      deleteProvider: (id: string) => {
+        deleted.push(id)
+        return Promise.resolve({ deleted: id })
+      },
+    })
+    await renderSettings(api, [{ ...customProvider, usedBy: [] }])
+    act(() => {
+      buttonByText('我的私有服务').click()
+    })
+    act(() => {
+      buttonByText('删除供应商', container.querySelector('.provider-body')!).click()
+    })
+    await act(async () => {
+      buttonByText('确认删除', container.querySelector('[role="dialog"]')!).click()
+      await Promise.resolve()
+    })
+    expect(deleted).toEqual(['custom-abc'])
+  })
+})
+
+/** 免 key 的本地服务：探活取代「有没有 key」这套说法。 */
+describe('本地服务探活', () => {
+  it('探得通：进页面就探，显示在线与延迟（不挂绿点）', async () => {
+    const api = fakeApi({
+      verifyProvider: () => {
+        return Promise.resolve({ ok: true, message: 'ollama is running', latencyMs: 12 })
+      },
+    })
+    await renderSettings(api, [ollamaProvider])
+    await act(async () => {
+      await Promise.resolve()
+    })
+    const head = container.querySelector('.provider-head')!
+    expect(head.textContent).toContain('本地服务 · 在线 · 12ms')
+    expect(head.querySelector('.status-dot')).toBeNull()
+  })
+
+  it('探不通：说「未检测到本地服务」，并可手动重探', async () => {
+    let attempt = 0
+    const api = fakeApi({
+      verifyProvider: () => {
+        attempt += 1
+        return attempt === 1
+          ? Promise.reject(new Error('fetch failed'))
+          : Promise.resolve({ ok: true, message: 'ok', latencyMs: 9 })
+      },
+    })
+    await renderSettings(api, [ollamaProvider])
+    await act(async () => {
+      await Promise.resolve()
+    })
+    const head = container.querySelector('.provider-head')!
+    expect(head.textContent).toContain('未检测到本地服务')
+    expect(head.querySelector('.status-dot')).toBeNull()
+
+    act(() => {
+      buttonByText('Ollama').click()
+    })
+    await act(async () => {
+      buttonByText('重新检测', container.querySelector('.provider-body')!).click()
+      await Promise.resolve()
+    })
+    expect(container.querySelector('.provider-head')?.textContent).toContain('本地服务 · 在线 · 9ms')
+    // 免 key 的本地服务不提供更换/移除凭据：它压根没有凭据。
+    expect(container.querySelector('.provider-body')?.textContent).not.toContain('更换 Key')
+    expect(container.querySelector('.provider-body')?.querySelector('input[type="password"]')).toBeNull()
+  })
+})
+
+/** 删除前先把使用者说清楚：被引用时禁用删除，而不是等服务端 409。 */
+describe('删除供应商前先看谁在用', () => {
+  it('有使用者：删除按钮禁用并列出 agent，提示先改绑', async () => {
+    await renderSettings(fakeApi(), [{ ...customProvider, usedBy: [{ agentId: 'mine', agentName: '小译' }] }])
+    act(() => {
+      buttonByText('我的私有服务').click()
+    })
+    const body = container.querySelector('.provider-body')!
+    const button = buttonByText('删除供应商', body) as HTMLButtonElement
+    expect(button.disabled).toBe(true)
+    expect(body.textContent).toContain('小译')
+    expect(body.textContent).toContain('改绑')
+    // 禁用时根本不进确认弹窗。
+    act(() => {
+      button.click()
+    })
+    expect(container.querySelector('[role="dialog"]')).toBeNull()
+  })
+
+  it('服务端回 409（界面的 usedBy 还没刷新到）：提示先改绑而不是英文原文', async () => {
+    const api = fakeApi({
+      deleteProvider: () => {
+        return Promise.reject(new Error('provider is in use by 2 agents'))
+      },
+    })
+    await renderSettings(api, [{ ...customProvider, usedBy: [] }])
+    act(() => {
+      buttonByText('我的私有服务').click()
+    })
+    act(() => {
+      buttonByText('删除供应商').click()
+    })
+    await act(async () => {
+      buttonByText('确认删除', container.querySelector('[role="dialog"]')!).click()
+      await Promise.resolve()
+    })
+    expect(
+      toastTexts().some((text) => {
+        return text.includes('改绑') && !text.includes('in use')
+      }),
+    ).toBe(true)
   })
 })

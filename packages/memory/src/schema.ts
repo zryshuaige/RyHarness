@@ -10,7 +10,7 @@
 import type { DatabaseSync } from 'node:sqlite'
 
 /** 本包 schema 版本（独立于 session 的 SCHEMA_VERSION）。 */
-export const MEMORY_SCHEMA_VERSION = 3
+export const MEMORY_SCHEMA_VERSION = 4
 
 /** 共享用户画像空间的 agent_id（写隔离、读共享，调研 §3.6）。 */
 export const SHARED_SPACE = '*shared*'
@@ -126,10 +126,27 @@ function migrateV3(db: DatabaseSync): void {
   `)
 }
 
+/**
+ * v4：把非 active 记忆的历史残留清出 FTS 索引。
+ *
+ * 归档（inactive）与软删（superseded/deleted）此前只改 status，FTS 行留着：
+ * 检索时逐行过滤掉，BM25 候选窗口（limit*3）被死行吃光，召回质量随时间单调
+ * 退化。存量库一次性清干净，之后由存储层在归档时同步删除（restore 时重建，
+ * 遵守 rowid 唯一约束）。
+ */
+function migrateV4(db: DatabaseSync): void {
+  db.exec(`
+    DELETE FROM memories_fts WHERE rowid IN (
+      SELECT rowid FROM memories WHERE status != 'active'
+    );
+  `)
+}
+
 export const MIGRATIONS: Readonly<Record<number, (db: DatabaseSync) => void>> = {
   1: migrateV1,
   2: migrateV2,
   3: migrateV3,
+  4: migrateV4,
 }
 
 function metaVersion(db: DatabaseSync): number {

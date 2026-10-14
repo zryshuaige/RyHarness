@@ -1,0 +1,83 @@
+/**
+ * 内容渲染扩展层：Markdown 正文（段落换行、代码块容器）与输入区附件预览条。
+ *
+ * 只长 .md- / .attach- 前缀的类，不重画 styles.css 的任何既有选择器
+ * （design-system.test.tsx 会把各层选择器集合拿来对撞）。styles.css 里
+ * 没有 pre/code 规则，代码块此前是浏览器默认样式，这一层补上容器语义。
+ */
+
+/* ---- Markdown 正文 ---- */
+
+/* 段落保留模型给的单换行：模型把单换行当换行用（清单、诗、命令输出），
+   塌成空格会让整条气泡在生成结束那一刻重排。 */
+.md-p { white-space: pre-wrap; }
+
+/* 未闭合的尾块降级纯文本（列表/表格还在长结构时）：外观与正文同档，
+   只把次要信息交给原文本身。 */
+.md-tail { margin: 6px 0; }
+
+/* 代码块：悬浮复制 + 语言标签的容器，代码区横向滚动不撑破气泡。 */
+.md-code {
+  margin: 8px 0; border: 1px solid var(--edge); border-radius: var(--radius-md);
+  background: var(--tool-row-bg); overflow: hidden;
+}
+.md-code-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-2);
+  padding: 2px var(--space-2) 2px var(--space-3);
+  background: var(--bg-surface); border-bottom: 1px solid var(--divider);
+}
+.md-code-lang {
+  font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-tertiary);
+}
+.md-code-copy {
+  display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px;
+  border: none; border-radius: var(--radius-xs); background: transparent;
+  color: var(--text-secondary); font-size: var(--fs-xs); cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--dur-hover) var(--ease-out), color var(--dur-hover) var(--ease-out),
+    background var(--dur-hover) var(--ease-out), transform var(--dur-press) var(--ease-spring);
+}
+.md-code:hover .md-code-copy, .md-code:focus-within .md-code-copy { opacity: 1; }
+.md-code-copy:hover { color: var(--amber-text); background: var(--amber-primary-soft); }
+.md-code-copy:active { transform: scale(var(--press-scale)); }
+.md-code pre {
+  margin: 0; padding: var(--space-3); overflow-x: auto;
+  font-family: var(--font-mono); font-size: var(--fs-sm); line-height: 1.6;
+}
+.md-code code { font-family: inherit; background: none; padding: 0; border: none; }
+
+/* ---- 附件通道 ---- */
+
+.attach-zone { position: relative; display: flex; flex-direction: column; }
+.attach-zone.is-dragover { border-radius: var(--radius-md); box-shadow: 0 0 0 2px var(--amber-primary) inset; }
+.attach-zone.is-dragover::after {
+  content: '松开即可添加附件'; position: absolute; inset: 0; pointer-events: none;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-md); background: var(--amber-primary-soft);
+  font-size: var(--fs-sm); color: var(--amber-text);
+}
+.attach-strip { display: flex; flex-wrap: wrap; gap: var(--space-2); padding: var(--space-2) var(--space-3) 0; }
+.attach-item {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 240px;
+  padding: 3px 6px 3px 8px; border: 1px solid var(--edge); border-radius: var(--radius-sm);
+  background: var(--tool-row-bg); font-size: var(--fs-xs); color: var(--text-secondary);
+}
+.attach-item.is-uploading { border-style: dashed; }
+.attach-item.is-error { border-color: var(--danger); color: var(--danger); }
+.attach-name {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text-primary);
+}
+.attach-item.is-error .attach-name { color: var(--danger); }
+.attach-meta { flex-shrink: 0; }
+.attach-retry {
+  flex-shrink: 0; border: none; background: transparent; padding: 0 2px;
+  color: var(--amber-text); font-size: var(--fs-xs); font-weight: 600; cursor: pointer;
+}
+.attach-retry:hover { text-decoration: underline; }
+.attach-remove {
+  flex-shrink: 0; display: inline-flex; border: none; background: transparent;
+  padding: 0; color: var(--text-tertiary); cursor: pointer; border-radius: var(--radius-xs);
+  transition: color var(--dur-hover) var(--ease-out);
+}
+.attach-remove:hover { color: var(--danger); }

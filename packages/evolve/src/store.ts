@@ -6,7 +6,7 @@
 import { randomUUID } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { normalizeText, textOverlap, textSimilarity } from './relevance.ts'
-import type { EntryStatus, PlaybookSection, ReflectionStatus } from './schema.ts'
+import type { EntryOriginKind, EntryStatus, PlaybookSection, ReflectionStatus } from './schema.ts'
 import { migrateEvolve } from './schema.ts'
 
 /** 近似去重的相似度阈值（Jaccard）。 */
@@ -46,6 +46,24 @@ export interface ReflectionRow {
   status: ReflectionStatus
   createdAt: number
   updatedAt: number
+}
+
+/** 一条溯源记录：这条经验是从哪儿来的。 */
+export interface EntryOrigin {
+  entryId: string
+  kind: EntryOriginKind
+  /** 溯源对象 id：会话 id / 教训 id / 反馈事件 id / 记忆 id / 模板 key。 */
+  refId: string
+  /** 一句话说明（UI 直接显示，缺失时由 explain 兜底）。 */
+  detail: string
+  createdAt: number
+}
+
+/** 写入溯源时的最小载荷。 */
+export interface EntryOriginInput {
+  kind: EntryOriginKind
+  refId: string
+  detail?: string
 }
 
 function toEntry(row: Record<string, unknown>): PlaybookEntry {
@@ -100,6 +118,7 @@ export class EvolveStore {
     section: PlaybookSection
     content: string
     source?: PlaybookEntry['source']
+    origins?: readonly EntryOriginInput[]
   }): PlaybookEntry {
     const now = Date.now()
     const id = randomUUID()
@@ -109,7 +128,46 @@ export class EvolveStore {
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `)
       .run(id, input.agentId, input.section, input.content, input.source ?? 'curator', now, now)
+    if (input.origins !== undefined) this.recordOrigins(id, input.origins)
     return this.getEntry(id)!
+  }
+
+  // ---- 溯源（证据链）----
+
+  /**
+   * 追加溯源（幂等）：同 (entry, kind, refId) 只记一次，返回实际新增条数。
+   * 巩固与反馈是重复触发的，重复记账会让"来源"列表被同一条刷屏。
+   */
+  recordOrigins(entryId: string, origins: readonly EntryOriginInput[]): number {
+    if (origins.length === 0) return 0
+    const stmt = this.db.prepare(
+      'INSERT OR IGNORE INTO entry_origins (entry_id, kind, ref_id, detail, created_at) VALUES (?, ?, ?, ?, ?)',
+    )
+    const now = Date.now()
+    let added = 0
+    for (const origin of origins) {
+      const result = stmt.run(entryId, origin.kind, origin.refId, origin.detail ?? '', now)
+      added += Number(result.changes)
+    }
+    return added
+  }
+
+  /** 某条目的全部溯源（按记账先后）。 */
+  listOrigins(entryId: string): EntryOrigin[] {
+    const rows = this.db
+      .prepare(
+        'SELECT entry_id, kind, ref_id, detail, created_at FROM entry_origins WHERE entry_id = ? ORDER BY created_at, id',
+      )
+      .all(entryId) as Record<string, unknown>[]
+    return rows.map((row) => {
+      return {
+        entryId: String(row.entry_id),
+        kind: String(row.kind) as EntryOriginKind,
+        refId: String(row.ref_id),
+        detail: String(row.detail),
+        createdAt: Number(row.created_at),
+      }
+    })
   }
 
   getEntry(id: string): PlaybookEntry | undefined {
@@ -182,11 +240,17 @@ export class EvolveStore {
     return rows.map(toEntry)
   }
 
-  /** 编译注入用：active 条目，按 section 分组、组内 (helpful - harmful) 降序。 */
+  /**
+   * 编译注入用：active 条目，按 (helpful - harmful) 全局降序、并列取新。
+   *
+   * 不能按 section 排：LIMIT 会把候选池截断成"前几个 section 塞满、后面的
+   * section 一条都进不来"，于是某 agent 只要 strategy 条目超过上限，净分最高的
+   * 坑/偏好就永远排在手册之外——进化学到的经验注不进去，等于没进化。
+   */
   listActiveForCompile(agentId: string, limit = 200): PlaybookEntry[] {
     const rows = this.db
       .prepare(
-        "SELECT * FROM playbook_entries WHERE agent_id = ? AND status = 'active' ORDER BY section, (helpful - harmful) DESC, updated_at DESC LIMIT ?",
+        "SELECT * FROM playbook_entries WHERE agent_id = ? AND status = 'active' ORDER BY (helpful - harmful) DESC, updated_at DESC LIMIT ?",
       )
       .all(agentId, limit) as Record<string, unknown>[]
     return rows.map(toEntry)
@@ -283,17 +347,20 @@ export class EvolveStore {
 
   // ---- feedback ----
 
+  /** 记一条反馈，返回事件 id（溯源要用）。 */
   recordFeedback(input: {
     agentId: string
     conversationId: string
     turnIndex: number
     signal: 'thumb_up' | 'thumb_down'
-  }): void {
+  }): string {
+    const id = randomUUID()
     this.db
       .prepare(
         'INSERT INTO feedback_events (id, agent_id, conversation_id, turn_index, signal, created_at) VALUES (?, ?, ?, ?, ?, ?)',
       )
-      .run(randomUUID(), input.agentId, input.conversationId, input.turnIndex, input.signal, Date.now())
+      .run(id, input.agentId, input.conversationId, input.turnIndex, input.signal, Date.now())
+    return id
   }
 
   countFeedback(agentId: string): { up: number; down: number } {
