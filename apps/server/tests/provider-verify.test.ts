@@ -90,6 +90,7 @@ async function sendJson<T = Record<string, unknown>>(
 
 interface VerifyBody {
   ok: boolean
+  code: string
   message: string
   latencyMs: number
 }
@@ -122,7 +123,7 @@ describe('POST /api/providers/:id/verify', () => {
     }
   })
 
-  it('凭据无效（401）与服务没启动（连接被拒）与网络不可达：三种中文诊断，都不是 500', async () => {
+  it('凭据无效（401）与服务没启动（连接被拒）与域名解析失败：三种中文诊断，都不是 500', async () => {
     const fake = await startFakeProvider(() => {
       return 401
     })
@@ -140,7 +141,10 @@ describe('POST /api/providers/:id/verify', () => {
       const unauthorized = await sendJson<VerifyBody>(server.url, `/api/providers/${badKeyId}/verify`, 'POST')
       expect(unauthorized.status).toBe(200)
       expect(unauthorized.body.ok).toBe(false)
+      expect(unauthorized.body.code).toBe('bad-key')
       expect(unauthorized.body.message).toContain('API Key 无效')
+      // 说清下一步：403/401 也可能是余额或模型权限，不是只有"key 填错"。
+      expect(unauthorized.body.message).toContain('余额')
 
       const dead = await sendJson(server.url, '/api/providers', 'POST', {
         displayName: '没启动的服务',
@@ -153,9 +157,10 @@ describe('POST /api/providers/:id/verify', () => {
       const refused = await sendJson<VerifyBody>(server.url, `/api/providers/${deadId}/verify`, 'POST')
       expect(refused.status).toBe(200)
       expect(refused.body.ok).toBe(false)
+      expect(refused.body.code).toBe('service-down')
       expect(refused.body.message).toContain('连不上')
 
-      // 域名解析不出来 → 网络不可达。
+      // 域名解析不出来 → 单独一类诊断（改 baseUrl / 换网络，不是 key 的问题）。
       const badHost = await sendJson(server.url, '/api/providers', 'POST', {
         displayName: '不存在的域名',
         protocol: 'openai',
@@ -167,7 +172,57 @@ describe('POST /api/providers/:id/verify', () => {
       const unreachable = await sendJson<VerifyBody>(server.url, `/api/providers/${badHostId}/verify`, 'POST')
       expect(unreachable.status).toBe(200)
       expect(unreachable.body.ok).toBe(false)
-      expect(unreachable.body.message).toContain('网络不可达')
+      expect(unreachable.body.code).toBe('dns')
+      expect(unreachable.body.message).toContain('域名解析不出来')
+      // 内部错误码不进人话：ENOTFOUND 是排查看的，不是用户能处理的东西。
+      expect(unreachable.body.message).not.toContain('ENOTFOUND')
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('限流（429）单独一类：说过一会儿再试，而不是当成服务错误', async () => {
+    const fake = await startFakeProvider(() => {
+      return 429
+    })
+    const server = await RyAgentServer.create({ port: 0, dataDir: tempDataDir('ratelimit') })
+    try {
+      const created = await sendJson(server.url, '/api/providers', 'POST', {
+        displayName: '限流的网关',
+        protocol: 'openai',
+        baseUrl: fake.baseUrl,
+        models: ['m1'],
+        apiKey: 'sk-any',
+      })
+      const providerId = (created.body as { provider: { id: string } }).provider.id
+      const res = await sendJson<VerifyBody>(server.url, `/api/providers/${providerId}/verify`, 'POST')
+      expect(res.status).toBe(200)
+      expect(res.body.ok).toBe(false)
+      expect(res.body.code).toBe('rate-limited')
+      expect(res.body.message).toContain('限流')
+      expect(res.body.message).toContain('Key 本身没问题')
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('地址写错（404）与本地服务未启动：各自给能照着做的一句话', async () => {
+    const fake = await startFakeProvider(() => {
+      return 404
+    })
+    const server = await RyAgentServer.create({ port: 0, dataDir: tempDataDir('notfound') })
+    try {
+      const created = await sendJson(server.url, '/api/providers', 'POST', {
+        displayName: '地址写错了',
+        protocol: 'openai',
+        baseUrl: fake.baseUrl,
+        models: ['m1'],
+        apiKey: 'sk-any',
+      })
+      const providerId = (created.body as { provider: { id: string } }).provider.id
+      const res = await sendJson<VerifyBody>(server.url, `/api/providers/${providerId}/verify`, 'POST')
+      expect(res.body.code).toBe('not-found')
+      expect(res.body.message).toContain('/v1')
     } finally {
       await server.close()
     }
@@ -210,9 +265,12 @@ describe('POST /api/providers/:id/verify', () => {
   it('没配 Key 时直接给出人话提示，不去打网络；未知供应商 404', async () => {
     const server = await RyAgentServer.create({ port: 0, dataDir: tempDataDir('nokey') })
     try {
-      const noKey = await sendJson(server.url, '/api/providers/siliconflow/verify', 'POST')
+      const noKey = await sendJson<VerifyBody>(server.url, '/api/providers/siliconflow/verify', 'POST')
       expect(noKey.status).toBe(200)
       expect(noKey.body.ok).toBe(false)
+      // code 让界面不必再猜：「还没填 Key」里也有 "API Key"，按关键词重判会被
+      // 改写成「凭据被供应商拒绝」。
+      expect(noKey.body.code).toBe('no-key')
       expect(noKey.body.message).toContain('还没填 API Key')
       expect(noKey.body.latencyMs).toBe(0)
       expect((await sendJson(server.url, '/api/providers/nope/verify', 'POST')).status).toBe(404)

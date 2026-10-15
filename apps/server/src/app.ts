@@ -10,14 +10,16 @@
  * @module @ryagent/server/app
  */
 
+import { timingSafeEqual } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { join } from 'node:path'
+import type { Duplex } from 'node:stream'
 import type { AgentEvolutionHooks, AgentMemoryHooks } from '@ryagent/agent'
 import { Context } from '@ryagent/cordis'
 import { ChatEvolveLlm, EvolveService, seedIfEmpty } from '@ryagent/evolve'
 import type { AdapterRegistrationHandle } from '@ryagent/llm'
-import LlmRuntime from '@ryagent/llm'
+import { isHarnessError, LlmRuntime } from '@ryagent/llm'
 import type { OpenAiAdapterConfig } from '@ryagent/llm-openai'
 import { OpenAiAdapter } from '@ryagent/llm-openai'
 import {
@@ -43,7 +45,7 @@ import {
   toAdapterConfig,
 } from './config.ts'
 import type { WsEvent } from './events.ts'
-import { json, Router } from './router.ts'
+import { HttpRequestError, json, Router } from './router.ts'
 import { registerAgentRoutes } from './routes/agents.ts'
 import { type ConversationState, registerConversationRoutes, type TurnConversation } from './routes/conversations.ts'
 import { type ConsolidationRun, registerEvolveRoutes } from './routes/evolve.ts'
@@ -91,6 +93,88 @@ function originAllowed(origin: string | undefined): boolean {
   }
 }
 
+/** 定长比较，避免按字节提前返回把 token 猜出来。 */
+function secretEquals(provided: string | undefined, expected: string): boolean {
+  if (provided === undefined || provided.length !== expected.length) return false
+  return timingSafeEqual(Buffer.from(provided, 'utf8'), Buffer.from(expected, 'utf8'))
+}
+
+/**
+ * 从请求里取 token：Authorization: Bearer、x-ryagent-token 头，或 ?token= 查询串。
+ *
+ * 查询串是 WebSocket 唯一可行的通道——浏览器 WS API 不能自定义请求头，渲染层的
+ * 订阅就是这么连的。三处都收，CLI/curl 与测试不必知道桌面端走哪条。
+ */
+function presentedToken(req: IncomingMessage, url: URL): string | undefined {
+  const authorization = req.headers.authorization
+  if (typeof authorization === 'string' && authorization.startsWith('Bearer ')) {
+    return authorization.slice('Bearer '.length)
+  }
+  const header = req.headers['x-ryagent-token']
+  if (typeof header === 'string' && header.length > 0) return header
+  const query = url.searchParams.get('token')
+  return query !== null && query.length > 0 ? query : undefined
+}
+
+/**
+ * WS upgrade 的拒绝应答：必须先写一帧完整的 HTTP 响应再 destroy。
+ *
+ * 直接 destroy 的话客户端只看到连接被重置，拿不到 401 与错误码，排查时无从下手。
+ */
+function rejectUpgrade(socket: Duplex, status: number, code: string): void {
+  const body = JSON.stringify({ error: code, code })
+  socket.write(
+    `HTTP/1.1 ${status} ${status === 401 ? 'Unauthorized' : 'Forbidden'}\r\n` +
+      'content-type: application/json; charset=utf-8\r\n' +
+      `content-length: ${Buffer.byteLength(body)}\r\n` +
+      'connection: close\r\n\r\n' +
+      body,
+  )
+  socket.destroy()
+}
+
+/** 上游供应商故障的码 → HTTP 状态。其余按 500/502 处理。 */
+const UPSTREAM_STATUS: Record<string, number> = {
+  RATE_LIMIT: 429,
+  TIMEOUT: 502,
+  TRANSPORT: 502,
+  SERVER: 502,
+  EMPTY_RESPONSE: 502,
+  QUOTA: 502,
+  INVALID_CREDENTIAL: 502,
+  ABORTED: 499,
+}
+
+/** 一次失败的统一形状：错误响应恒为 `{error, code}`。 */
+export interface FailureDescription {
+  status: number
+  code: string
+  message: string
+}
+
+/**
+ * 把抛出的东西翻译成 HTTP 边缘的错误形状。
+ *
+ * - `HttpRequestError`：调用方自己抛的 4xx，状态与机器码都是它定的。
+ * - `HarnessError`（packages/llm 的 taxonomy）：**保留它自己的 code**——`RATE_LIMIT`
+ *   与 `QUOTA` 对调用方是完全不同的处置（退避重试 vs 换 key），压成 500 就等于
+ *   把内核已经分好的类又揉回一团。
+ * - 其余：500 INTERNAL，消息只进日志与响应体，不再假装是请求方的错。
+ */
+export function describeFailure(error: unknown): FailureDescription {
+  if (error instanceof HttpRequestError) {
+    return { status: error.status, code: error.code, message: error.message }
+  }
+  if (isHarnessError(error)) {
+    return { status: UPSTREAM_STATUS[error.code] ?? 502, code: error.code, message: error.message }
+  }
+  return {
+    status: 500,
+    code: 'INTERNAL',
+    message: error instanceof Error ? error.message : String(error),
+  }
+}
+
 /** 服务构造选项。 */
 export interface ServerOptions {
   /** 监听端口，默认 32100；传 0 由系统分配（测试用）。 */
@@ -124,6 +208,14 @@ export interface ServerOptions {
   shutdownTimeoutMs?: number
   /** 供应商连通性探测超时毫秒（默认 8s；测试可调小）。 */
   verifyTimeoutMs?: number
+  /**
+   * API 一次性 token：给了就**强制**校验（HTTP 中间件 + WS upgrade，失败 401）。
+   *
+   * 桌面端由主进程在启动时随机生成并推给渲染层（见 pushApiBase）。留空时退回
+   * 环境变量 RYAGENT_API_TOKEN；两者都没有则不鉴权，只在日志里喊一声——那只适用于
+   * 独立开发进程与测试，不适用于发布版。
+   */
+  authToken?: string
 }
 
 /**
@@ -218,6 +310,8 @@ export class RyAgentServer {
     private readonly shutdownTimeoutMs: number,
     private readonly telemetry: Telemetry,
     private readonly verifyTimeoutMs: number,
+    /** API token；undefined = 不鉴权（仅独立开发进程与测试）。 */
+    private readonly authToken: string | undefined,
   ) {}
 
   /** 第二次及以后的 close() 直接复用首次的停机 Promise（幂等）。 */
@@ -249,6 +343,17 @@ export class RyAgentServer {
   get url(): string {
     const address = this.http.address() as { port: number; address: string }
     return `http://${address.address}:${address.port}`
+  }
+
+  /** 本次启动的 API token；不鉴权的实例返回 undefined。 */
+  get apiToken(): string | undefined {
+    return this.authToken
+  }
+
+  /** 请求是否带着本次启动的 token；未启用鉴权时恒为 true。 */
+  private tokenAuthorized(req: IncomingMessage, url: URL): boolean {
+    if (this.authToken === undefined) return true
+    return secretEquals(presentedToken(req, url), this.authToken)
   }
 
   /**
@@ -348,6 +453,13 @@ export class RyAgentServer {
       })
     }
     const telemetry = new Telemetry()
+    const authToken = options.authToken ?? process.env.RYAGENT_API_TOKEN
+    // 端口固定 + 零鉴权意味着本机任何进程都能驱动 shellExec。桌面端一定会传
+    // token（主进程随机生成），所以只提醒，不阻断：独立开发进程与测试不传。
+    // 随机端口（测试）不喊——端口猜不到，喊了只是噪音。
+    if ((authToken === undefined || authToken.length === 0) && (options.port ?? DEFAULT_PORT) !== 0) {
+      console.warn('@ryagent/server: API token 未启用，HTTP/WS 不鉴权（仅限开发环境）')
+    }
     // 记忆钩子套一层计时：召回耗时/条数是首 token 路径上最值得盯的一段。
     const coordinatorMemory = memoryOption === undefined ? undefined : timedMemoryHooks(memoryOption, telemetry)
     const coordinator = new SessionCoordinator({
@@ -376,6 +488,7 @@ export class RyAgentServer {
       options.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS,
       telemetry,
       options.verifyTimeoutMs ?? DEFAULT_VERIFY_TIMEOUT_MS,
+      authToken === undefined || authToken.length === 0 ? undefined : authToken,
     )
     server.loadConversationStates()
     if (options.mountLlm === undefined) {
@@ -386,7 +499,9 @@ export class RyAgentServer {
     }
     server.http.on('request', (req, res) => {
       server.onRequest(req, res).catch((error: unknown) => {
-        if (!res.headersSent) json(res, 500, { error: error instanceof Error ? error.message : String(error) })
+        const failure = describeFailure(error)
+        console.error(`[ryagent] ${req.method ?? 'GET'} failed:`, failure.message)
+        if (!res.headersSent) json(res, failure.status, { error: failure.message, code: failure.code })
         res.end()
       })
     })
@@ -542,17 +657,23 @@ export class RyAgentServer {
 
     this.http.on('upgrade', (req, socket, head) => {
       if (!originAllowed(req.headers.origin)) {
-        socket.destroy()
+        rejectUpgrade(socket, 403, 'ORIGIN_NOT_ALLOWED')
         return
       }
       const url = new URL(req.url ?? '/', 'http://localhost')
       if (url.pathname !== '/ws') {
-        socket.destroy()
+        rejectUpgrade(socket, 404, 'NOT_FOUND')
         return
       }
       const conversationId = url.searchParams.get('conversationId')
       if (conversationId === null || conversationId.length === 0) {
-        socket.destroy()
+        rejectUpgrade(socket, 400, 'conversationId is required')
+        return
+      }
+      // 浏览器 WS 不能带自定义头，token 只能走查询串（presentedToken 也收头，
+      // CLI 用 ?token= 之外的写法时不必另开一条路）。
+      if (!this.tokenAuthorized(req, url)) {
+        rejectUpgrade(socket, 401, 'UNAUTHORIZED')
         return
       }
       this.wss.handleUpgrade(req, socket, head, (ws) => {
@@ -605,7 +726,7 @@ export class RyAgentServer {
     try {
       url = new URL(req.url ?? '/', 'http://localhost')
     } catch {
-      json(res, 400, { error: 'malformed request URL' })
+      json(res, 400, { error: 'malformed request URL', code: 'BAD_REQUEST' })
       return
     }
     if (req.method === 'OPTIONS') {
@@ -625,8 +746,15 @@ export class RyAgentServer {
         at: Date.now(),
       })
     })
+    // 鉴权放在 Origin 白名单之后、CORS 头之后：预检与跨源读到的 401 都要带 CORS
+    // 头，否则渲染层只看到"网络错误"，排查时看不到 401 与 UNAUTHORIZED。
+    // 又放在计时之后——被拒的请求同样是一次请求，不该在遥测里凭空消失。
+    if (!this.tokenAuthorized(req, url)) {
+      json(res, 401, { error: 'missing or invalid API token', code: 'UNAUTHORIZED' })
+      return
+    }
     const handled = await this.router().dispatch(req, res, url.pathname + url.search)
-    if (!handled) json(res, 404, { error: `not found: ${req.method} ${url.pathname}` })
+    if (!handled) json(res, 404, { error: `not found: ${req.method} ${url.pathname}`, code: 'NOT_FOUND' })
   }
 
   private routerLazy: Router | undefined

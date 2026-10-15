@@ -10,6 +10,10 @@
  *   4. line-height 一律相对单位：写死 px 会在下级字号上把 CJK 字面压掉。
  *   5. 够不着的东西必须还在：窄窗口下气泡操作条、右栏展开键都不得被裁掉。
  *   6. 暗色用户不被按在浅色上：无存储时跟随系统，启动闪屏也跟主题走。
+ *   7. 首屏栅格：消息列与输入卡同宽同缘，两侧 gutter 取同一个 token。
+ *   8. 窗口化列表：行进场只在首帧播一次，滚回来的行不重播。
+ *   9. Markdown 层级与表格：标题/清单/引用/分隔线/链接各有一档，表格自己横滚。
+ *  10. 窄窗口：列表面板先让宽度，且保留一条收起的窄边（折叠键不被裁掉）。
  *
  * 另外两条资产/组件层的约定：品牌猫单源、橘猫是一等头像选项。
  */
@@ -105,6 +109,18 @@ function ruleBody(css: string, selector: string): string {
   return ''
 }
 
+/**
+ * 同一条选择器可能被「规则组」和「逐级覆盖」各写一次，层叠里生效的是靠后的那条。
+ * 查具体档位（字号、上边距…）时必须用它，否则会读到规则组那条通用声明。
+ */
+function effectiveBody(css: string, selector: string): string {
+  let found = ''
+  for (const rule of topLevelRules(css)) {
+    if (rule.selectors.includes(selector)) found = rule.body
+  }
+  return found
+}
+
 /** 某个 at-rule（@media / @container）内部的整段文本（含嵌套规则）。 */
 function blockAfter(css: string, marker: string): string {
   const start = css.indexOf(marker)
@@ -120,6 +136,49 @@ function blockAfter(css: string, marker: string): string {
     }
   }
   return ''
+}
+
+/** 把 `var(--x)` 链解成它最终指向的数值（只走本文件的 token 图，够用即可）。 */
+function resolveValue(value: string, tokens: Map<string, string>): string {
+  let current = value.trim()
+  for (let depth = 0; depth < 5; depth++) {
+    const name = /^var\(\s*(--[a-z0-9-]+)\s*\)$/.exec(current)?.[1]
+    if (name === undefined) break
+    const next = tokens.get(name)
+    if (next === undefined) break
+    current = next
+  }
+  return current
+}
+
+/** 某条规则里某个盒模型简写的四边 px 值（padding / margin 通用）。 */
+function boxSides(
+  body: string,
+  prop: string,
+  tokens: Map<string, string>,
+): { top: number; right: number; bottom: number; left: number } {
+  const raw = new RegExp(`${prop}:\\s*([^;]+);`).exec(body)?.[1]?.trim() ?? ''
+  const parts = raw.split(/\s+/).filter((part) => {
+    return part !== ''
+  })
+  const top = parts[0] ?? '0'
+  const right = parts[1] ?? top
+  const bottom = parts[2] ?? top
+  const left = parts[3] ?? right
+  return {
+    top: Number.parseFloat(resolveValue(top, tokens)),
+    right: Number.parseFloat(resolveValue(right, tokens)),
+    bottom: Number.parseFloat(resolveValue(bottom, tokens)),
+    left: Number.parseFloat(resolveValue(left, tokens)),
+  }
+}
+
+/** 选择器特异性：id ×1e4 + class/属性/伪类 ×1e2 + 元素。数够这几条规则用。 */
+function specificity(selector: string): number {
+  const ids = selector.match(/#[\w-]+/g)?.length ?? 0
+  const classes = selector.match(/\.[\w-]+|\[[^\]]+\]|::?[\w-]+(?:\([^)]*\))?/g)?.length ?? 0
+  const types = selector.match(/(^|[\s>+~,])([a-zA-Z][\w-]*)/g)?.length ?? 0
+  return ids * 10_000 + classes * 100 + types
 }
 
 /**
@@ -467,9 +526,9 @@ describe('品牌猫单源', () => {
     }
     const idle = brandAsset('cat-face.svg')
     // 轮廓：脸底板 + 两只三角耳 + 圆眼 + 三角鼻 + 笑嘴，就这些
-    expect(idle).toContain('<circle cx="32" cy="35.5" r="15.2"')
-    expect(idle).toContain('d="M24 26.4 L17 10.4 L34 22 Z"')
-    expect(idle).toContain('d="M40 26.4 L47 9 L30 21.8 Z"')
+    expect(idle).toContain('<circle cx="32" cy="36" r="17"')
+    expect(idle).toContain('d="M21.5 22.6 L19.6 10.4 L29.1 19.3 Z"')
+    expect(idle).toContain('d="M42.5 22.6 L44.4 10.4 L34.9 19.3 Z"')
     // 领结是此前 AppIcon 那只手绘猫的记号，母版里不许再出现
     expect(idle).not.toMatch(/bow|领结/)
   })
@@ -507,5 +566,226 @@ describe('橘猫是一等头像选项', () => {
     expect(html).toContain('<svg class="cat"')
     expect(html).not.toContain('avatar-fallback')
     expect(html).not.toContain('avatar-loading')
+  })
+})
+
+describe('首屏栅格：消息列与输入卡同宽同缘', () => {
+  const base = sheet('styles.css')
+  const tokens = themeTokens(base)
+
+  it('两侧 gutter 全取同一个 token（此前消息列 32px、输入卡 20px，差出 12px）', () => {
+    const gutter = Number.parseFloat(resolveValue('var(--gutter-x)', tokens))
+    expect(gutter).toBe(32)
+    // 消息列、输入卡、聊天顶栏、断线提示条：四处的左右留白必须是这一个值
+    expect(boxSides(ruleBody(base, '.chat-scroll'), 'padding', tokens).left).toBe(gutter)
+    expect(boxSides(ruleBody(base, '.chat-input-wrap'), 'padding', tokens).left).toBe(gutter)
+    expect(boxSides(ruleBody(base, '.chat-header'), 'padding', tokens).left).toBe(gutter)
+    expect(boxSides(ruleBody(base, '.conn-banner'), 'margin', tokens).left).toBe(gutter)
+  })
+
+  it('每一处自身左右对称，且没有任何一处再写裸 gutter 值', () => {
+    for (const [selector, prop] of [
+      ['.chat-scroll', 'padding'],
+      ['.chat-input-wrap', 'padding'],
+      ['.chat-header', 'padding'],
+      ['.conn-banner', 'margin'],
+    ] as const) {
+      const sides = boxSides(ruleBody(base, selector), prop, tokens)
+      expect(sides.left, `${selector} 左右不对称`).toBe(sides.right)
+      expect(ruleBody(base, selector), `${selector} 仍在写裸 gutter`).toContain('var(--gutter-x)')
+    }
+  })
+
+  it('两列宽度上限与居中方式同源，窄窗下也不会差出 24px', () => {
+    const col = ruleBody(base, '.chat-col')
+    const input = ruleBody(base, '.chat-input-col')
+    for (const body of [col, input]) {
+      expect(body).toContain('max-width: var(--chat-col)')
+      expect(body).toContain('margin: 0 auto')
+    }
+    // 几何自证：从两个外壳各自的内边距算出两列的宽与左缘，逐个聊天区宽度比对。
+    // 未触到 --chat-col 时左缘就等于各自的外壳内边距（32 vs 20 立刻分叉 12px，
+    // 宽度差则是两侧各 12px 合计 24px）；触到上限后两边都贴到同一上限，居中后重合。
+    const cap = Number.parseFloat(resolveValue('var(--chat-col)', tokens))
+    const geometry = (wrapper: string, prop: string) => {
+      const gutter = boxSides(ruleBody(base, wrapper), prop, tokens).left
+      return (areaWidth: number): { width: number; left: number } => {
+        const available = areaWidth - gutter * 2
+        const width = Math.min(available, cap)
+        return { width, left: gutter + (available - width) / 2 }
+      }
+    }
+    const messageCol = geometry('.chat-scroll', 'padding')
+    const composer = geometry('.chat-input-wrap', 'padding')
+    for (const areaWidth of [372, 408, 560, 900, 1600]) {
+      expect(messageCol(areaWidth), `聊天区 ${areaWidth}px 下两列不同宽`).toEqual(composer(areaWidth))
+    }
+  })
+})
+
+describe('窗口化列表：行进场只在首帧播一次', () => {
+  const base = sheet('styles.css')
+
+  it('基线仍给整列错落进场（--i 照旧封顶 8 档）', () => {
+    const item = ruleBody(base, '.conversation-item')
+    expect(item).toContain('animation: item-in')
+    expect(item).toContain('calc(min(var(--i, 0), 8) * 30ms)')
+  })
+
+  it('data-windowed="true" 的列表把默认动画关掉，只留 .is-animated 的首帧行', () => {
+    const off = `.conversation-list[data-windowed='true'] .conversation-item`
+    const on = `${off}.is-animated`
+    expect(ruleBody(base, off)).toMatch(/animation:\s*none/)
+    expect(ruleBody(base, on)).toContain('animation: item-in')
+    expect(ruleBody(base, on)).toContain('calc(min(var(--i, 0), 8) * 30ms)')
+  })
+
+  it('恢复动画那条必然赢过关掉它那条，不靠源码顺序', () => {
+    const off = `.conversation-list[data-windowed='true'] .conversation-item`
+    const on = `${off}.is-animated`
+    expect(specificity(on)).toBeGreaterThan(specificity(off))
+    expect(specificity(off)).toBeGreaterThan(specificity('.conversation-item'))
+  })
+})
+
+describe('Markdown 层级与表格', () => {
+  const base = sheet('styles.css')
+
+  it('标题层级：越浅越大、离上一段越远（五级往下改用次级色分层）', () => {
+    const tokens = themeTokens(base)
+    const read = (depth: string, prop: string): number => {
+      return Number.parseFloat(
+        resolveValue(
+          new RegExp(`${prop}:\\s*([^;]+);`).exec(effectiveBody(base, `.bubble-md ${depth}`))?.[1] ?? '0',
+          tokens,
+        ),
+      )
+    }
+    const fontSizes = ['h1', 'h2', 'h3', 'h4', 'h5'].map((depth) => {
+      return read(depth, 'font-size')
+    })
+    const margins = ['h1', 'h2', 'h3', 'h4', 'h5'].map((depth) => {
+      return read(depth, 'margin-top')
+    })
+    // 一到四级：字号与上边距逐级收。两档撞成同一号，层级就白设了
+    for (let i = 1; i < 4; i++) {
+      expect(fontSizes[i], `h${i + 1} 没比 h${i} 小`).toBeLessThan(fontSizes[i - 1] as number)
+      expect(margins[i], `h${i + 1} 没比 h${i} 收`).toBeLessThanOrEqual(margins[i - 1] as number)
+    }
+    // 五级往下不再靠字号分层：再降就掉到 --fs-xs 的 CJK 可读下限以下，
+    // 改用次级色当「这是小节标签」的唯一信号。
+    expect(fontSizes[4]).toBe(fontSizes[3])
+    expect(effectiveBody(base, '.bubble-md h5')).toContain('color: var(--text-secondary)')
+    expect(effectiveBody(base, '.bubble-md h6')).toContain('color: var(--text-secondary)')
+    // 首块不留上边距：标题再浅也不该把气泡顶出一个台阶
+    expect(specificity('.bubble-md > :first-child')).toBeGreaterThan(specificity('.bubble-md h1'))
+  })
+
+  it('清单逐级缩进，标记压次级色', () => {
+    const tokens = themeTokens(base)
+    const indent = (selector: string): number => {
+      return Number.parseFloat(
+        resolveValue(/padding-left:\s*([^;]+);/.exec(effectiveBody(base, selector))?.[1] ?? '0', tokens),
+      )
+    }
+    expect(indent('.bubble-md ul')).toBe(24)
+    expect(indent('.bubble-md ol')).toBe(24)
+    // 嵌套一档收 8px：浏览器默认一缩就是 40px，在气泡里直接顶到正文上沿
+    expect(indent('.bubble-md li ul')).toBe(20)
+    expect(indent('.bubble-md li ol')).toBe(20)
+    expect(ruleBody(base, '.bubble-md li::marker')).toContain('color: var(--text-tertiary)')
+  })
+
+  it('表格自己横向滚：宽表不撑破气泡（外壳是 overflow-x: hidden）', () => {
+    const table = ruleBody(base, '.bubble-md table')
+    // <table> 自身当滚动容器：没有包装节点可依赖
+    expect(table).toContain('display: block')
+    expect(table).toContain('overflow-x: auto')
+    expect(table).toContain('max-width: 100%')
+    expect(ruleBody(base, '.chat-scroll')).toContain('overflow-x: hidden')
+  })
+
+  it('表格边框、表头底色、单元格留白各有一档，且都走 token', () => {
+    const cell = ruleBody(base, '.bubble-md td')
+    expect(cell).toContain('border: 1px solid var(--edge)')
+    expect(cell).toContain('text-align: left')
+    expect(ruleBody(base, '.bubble-md th')).toContain('border: 1px solid var(--edge)')
+    expect(effectiveBody(base, '.bubble-md th')).toContain('background: var(--bg-subtle)')
+  })
+
+  it('引用块 / 分隔线 / 链接 / 行内代码都有配套，且无裸色值', () => {
+    expect(ruleBody(base, '.bubble-md blockquote')).toContain('border-left: 3px solid var(--amber-text)')
+    expect(ruleBody(base, '.bubble-md hr')).toContain('border-top: 1px solid var(--divider)')
+    expect(ruleBody(base, '.bubble-md a:hover')).toContain('color: var(--amber-primary-hover)')
+    expect(ruleBody(base, '.bubble-md a:focus-visible')).toContain('outline: 2px solid var(--focus-outline)')
+    // 行内代码不能顺手把围栏代码也画上底色（围栏那块由 styles-content.css 复位）
+    expect(ruleBody(base, '.bubble-md code:not(.md-code *)')).toContain('background: var(--bg-subtle)')
+    const markdown = topLevelRules(base).filter((rule) => {
+      return rule.selectors.some((sel) => {
+        return sel.startsWith('.bubble-md')
+      })
+    })
+    for (const rule of markdown) {
+      expect(rule.body.match(/#[0-9A-Fa-f]{3,8}|\brgba?\(/g), `${rule.selectors.join(' ')} 有裸色值`).toBeNull()
+    }
+  })
+
+  it('自己的琥珀气泡里，引用块与表格的底色/描边跟着翻过来', () => {
+    expect(base).toContain('.bubble-row.from-user .bubble-bubble .bubble-md blockquote')
+    expect(base).toContain('.bubble-row.from-user .bubble-bubble .bubble-md th')
+    // 翻面规则只改底色与描边，不碰字号/间距（否则两条气泡的排版会分叉）
+    const flipped = topLevelRules(base).filter((rule) => {
+      return rule.selectors.some((sel) => {
+        return sel.startsWith('.bubble-row.from-user .bubble-bubble .bubble-md')
+      })
+    })
+    expect(flipped.length).toBeGreaterThan(0)
+    for (const rule of flipped) {
+      expect(rule.body, rule.selectors.join(' ')).not.toMatch(/font-size|margin-top|padding:/)
+    }
+  })
+})
+
+describe('窄窗口：列表面板先让宽度', () => {
+  const base = sheet('styles.css')
+  const tokens = themeTokens(base)
+
+  it('1200px 以下列表让到 240px，1040px 以下让到 200px（1024 窗口的聊天区不再只剩 372px）', () => {
+    expect(ruleBody(base, '.list-panel')).toContain('width: var(--list-panel-w)')
+    const md = blockAfter(base, '@media (max-width: 1199px)')
+    const sm = blockAfter(base, '@media (max-width: 1040px)')
+    expect(md).toContain('.list-panel')
+    expect(sm).toContain('.list-panel')
+    const mdWidth = Number.parseFloat(resolveValue(/width:\s*([^;]+);/.exec(md)?.[1] ?? '0', tokens))
+    const smWidth = Number.parseFloat(resolveValue(/width:\s*([^;]+);/.exec(sm)?.[1] ?? '0', tokens))
+    const full = Number.parseFloat(resolveValue('var(--list-panel-w)', tokens))
+    expect([full, mdWidth, smWidth]).toEqual([300, 240, 200])
+    // 1024px 窗口：72(rail) + 200(列表) + 280(右栏) 之外，聊天区还剩 472px
+    const rail = Number(/width:\s*(\d+)px/.exec(ruleBody(base, '.rail'))?.[1] ?? 0)
+    const right = Number(/width:\s*(\d+)px/.exec(ruleBody(base, '.right-panel'))?.[1] ?? 0)
+    expect(1024 - rail - smWidth - right).toBeGreaterThan(372)
+  })
+
+  it('收起态留一条够放折叠键的窄边，不是 0 宽（宽度归零就再也展不开）', () => {
+    const collapsed = ruleBody(base, '.list-panel.is-collapsed')
+    expect(collapsed).toContain('width: var(--panel-collapsed-w)')
+    expect(collapsed).not.toContain('width: 0')
+    expect(collapsed).toContain('overflow: hidden')
+    const edge = Number.parseFloat(tokens.get('--panel-collapsed-w') ?? '')
+    const btnWidth = Number(/width:\s*(\d+)px/.exec(ruleBody(base, '.list-panel-toggle'))?.[1] ?? 0)
+    const btnOffset = Number.parseFloat(
+      /left:\s*(\d+)px/.exec(ruleBody(base, '.list-panel.is-collapsed .list-panel-toggle'))?.[1] ?? '0',
+    )
+    expect(edge).toBeGreaterThanOrEqual(btnWidth + btnOffset)
+    // 内容退场走 visibility，延时跟得上 width 过渡（与右栏同一套降级对）
+    expect(ruleBody(base, '.list-panel.is-collapsed .list-panel-header')).toContain('visibility: hidden')
+    expect(ruleBody(base, '.list-panel')).toContain('transition: width')
+  })
+
+  it('折叠键让开搜索框，且只在真的挂了键时才让', () => {
+    expect(ruleBody(base, '.list-panel:has(.list-panel-toggle) .search-box')).toContain('padding-right: 40px')
+    expect(specificity('.list-panel:has(.list-panel-toggle) .search-box')).toBeGreaterThan(
+      specificity('.search-box.has-icon'),
+    )
   })
 })

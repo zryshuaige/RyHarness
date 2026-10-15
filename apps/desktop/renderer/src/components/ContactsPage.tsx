@@ -14,6 +14,7 @@ import { ALL_TOOLS, toolLabel } from '../lib/tool-labels.ts'
 import { Avatar } from './avatars/Avatar.tsx'
 import { AVATAR_STYLE_BY_KEY, AVATAR_STYLES, BRAND_AVATAR, dicebearSvg, randomAvatarSpec } from './avatars/avatars.tsx'
 import { Cat } from './Cat.tsx'
+import { GroupSettingsModal } from './GroupSettingsModal.tsx'
 import { Icon } from './Icon.tsx'
 import { Modal } from './Modal.tsx'
 
@@ -532,7 +533,12 @@ export function CreateAgentModal({
   )
 }
 
-/** 建群：多选成员 + 群名 + 调度员。 */
+/**
+ * 建群：转发到 {@link GroupSettingsModal} 的建群态。
+ *
+ * 成员多选与调度员逻辑只有一份（GroupSettingsModal.tsx）：此前它写死在本文件里，
+ * 于是「建完即冻结」——同一个群的改人换调度员没有第二个入口去复用它。
+ */
 export function CreateGroupModal({
   agents,
   onSubmit,
@@ -542,122 +548,5 @@ export function CreateGroupModal({
   onSubmit: (input: { memberAgentIds: string[]; dispatcherAgentId: string; title: string }) => Promise<void>
   onClose: () => void
 }) {
-  const [selected, setSelected] = useState<string[]>(
-    agents
-      .filter((a) => {
-        return a.id === 'ryen'
-      })
-      .map((a) => {
-        return a.id
-      }),
-  )
-  const [dispatcher, setDispatcher] = useState('ryen')
-  const [title, setTitle] = useState('')
-  const [busy, setBusy] = useState(false)
-
-  const toggle = (id: string): void => {
-    const next = selected.includes(id)
-      ? selected.filter((x) => {
-          return x !== id
-        })
-      : [...selected, id]
-    setSelected(next)
-    // 取消勾选调度员本人时，调度员要同步落到剩下的第一个成员。少了这一步，
-    // <select> 里已经没有当前值了：界面显示的是第一项，state 还指着被摘掉的那个，
-    // 提交上去的 dispatcherAgentId 不在成员名单里，服务端直接 400（"群一进去就哑"）。
-    setDispatcher((current) => {
-      return next.includes(current) ? current : (next[0] ?? '')
-    })
-  }
-
-  /** 调度员必须在已勾选成员里：不合法就不让建群，也不发请求。 */
-  const dispatcherValid = selected.includes(dispatcher)
-
-  const submit = async (): Promise<void> => {
-    if (!dispatcherValid) return
-    setBusy(true)
-    try {
-      await onSubmit({ memberAgentIds: selected, dispatcherAgentId: dispatcher, title: title || '群聊' })
-      onClose()
-    } catch (error) {
-      toast.error(`建群失败：${error instanceof Error ? error.message : String(error)}`)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <Modal title="新建群聊" onClose={onClose}>
-      <label className="field">
-        <span>群名</span>
-        <input
-          value={title}
-          placeholder="群聊"
-          onChange={(e) => {
-            setTitle(e.target.value)
-          }}
-        />
-      </label>
-      <fieldset className="field" aria-label="选择成员">
-        <span>选择成员</span>
-        <div className="member-checks">
-          {agents.map((agent) => (
-            <label key={agent.id}>
-              <input
-                type="checkbox"
-                checked={selected.includes(agent.id)}
-                onChange={() => {
-                  toggle(agent.id)
-                }}
-              />
-              <Avatar avatarKey={agent.avatar} name={agent.name} seed={agent.id} size={22} />
-              <span className="member-label">
-                <span className="member-name">{agent.name}</span>
-                <small className="member-sub">
-                  {agent.provider} · {agent.systemPrompt.slice(0, 18)}
-                </small>
-              </span>
-            </label>
-          ))}
-        </div>
-      </fieldset>
-      <label className="field">
-        <span>调度员（无 @ 消息的默认响应者）</span>
-        <select
-          value={dispatcher}
-          disabled={selected.length === 0}
-          onChange={(e) => {
-            setDispatcher(e.target.value)
-          }}
-        >
-          {/* 没人可派时占一行说明，免得空 select 看起来像坏了。 */}
-          {selected.length === 0 && <option value="">先勾选成员</option>}
-          {selected.map((id) => {
-            const agent = agentById(agents, id)
-            return agent === undefined ? null : (
-              <option key={id} value={id}>
-                {agent.name}
-              </option>
-            )
-          })}
-        </select>
-      </label>
-      <div className="modal-actions">
-        <button type="button" className="btn" onClick={onClose}>
-          取消
-        </button>
-        <button
-          type="button"
-          className="btn btn-primary"
-          disabled={busy || !dispatcherValid}
-          title={dispatcherValid ? undefined : '调度员必须在已勾选的成员里'}
-          onClick={() => {
-            void submit()
-          }}
-        >
-          创建
-        </button>
-      </div>
-    </Modal>
-  )
+  return <GroupSettingsModal mode="create" agents={agents} onSubmit={onSubmit} onClose={onClose} />
 }

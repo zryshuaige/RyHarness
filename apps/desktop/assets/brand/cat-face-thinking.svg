@@ -1,12 +1,12 @@
 <g id="ryen-cat-thinking">
   <g transform="translate(32 34) scale(1.05) translate(-32 -34)">
-    <circle cx="32" cy="35.5" r="15.2" class="face" fill="#FFFDF8"/>
-    <path d="M24 26.4 L17 10.4 L34 22 Z" class="face" fill="#FFFDF8"/>
-    <path d="M40 26.4 L47 9 L30 21.8 Z" class="face" fill="#FFFDF8"/>
-    <circle class="inkf" cx="27.2" cy="33.6" r="2.25" fill="#4a2e1a"/>
-    <circle class="inkf" cx="36.8" cy="33.6" r="2.25" fill="#4a2e1a"/>
-    <path class="inkf" d="M29.9 39 L32 42.1 L34.1 39 Z" fill="#4a2e1a"/>
-    <path class="ink" d="M27.1 43.2 q4.9 4.4 9.8 0" fill="none" style="stroke-width:1.9"/>
+    <circle cx="32" cy="36" r="17" class="face" fill="#FFFDF8"/>
+    <path d="M21.5 22.6 L19.6 10.4 L29.1 19.3 Z" class="face" fill="#FFFDF8"/>
+    <path d="M42.5 22.6 L44.4 10.4 L34.9 19.3 Z" class="face" fill="#FFFDF8"/>
+    <circle class="inkf" cx="26.9" cy="33.2" r="2.7" fill="#4a2e1a"/>
+    <circle class="inkf" cx="36.1" cy="33.2" r="2.7" fill="#4a2e1a"/>
+    <path class="inkf" d="M29.8 39.4 L32 42.6 L34.2 39.4 Z" fill="#4a2e1a"/>
+    <path class="ink" d="M27.5 43.6 q2.25 3.9 4.5 0 q2.25 3.9 4.5 0" fill="none" style="stroke-width:1.9"/>
   </g>
   <path class="star fast" d="M51 10.9 Q51.7 12.5 53.3 13.2 Q51.7 13.9 51 15.5 Q50.3 13.9 48.7 13.2 Q50.3 12.5 51 10.9 Z" fill="#FFFDF8"/>
 </g>

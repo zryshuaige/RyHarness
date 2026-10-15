@@ -62,7 +62,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Dependency audit
-        continue-on-error: true
+        # 与 CI 同一套硬门禁：发布构建不允许带着 high/critical 漏洞出厂。
         run: pnpm audit --audit-level=high
 
       - name: Lint & format check
@@ -126,16 +126,34 @@ jobs:
           $env:RYAGENT_DATA_DIR = $dataDir
           # 固定端口：默认随机，冒烟脚本没法预测该打哪个口。
           $env:RYAGENT_PORT = '32199'
+          # 后端默认鉴权（一次性 token），冒烟脚本在进程外访问，必须自带 token。
+          $env:RYAGENT_API_TOKEN = 'release-smoke-token'
           $env:ELECTRON_ENABLE_LOGGING = '1'
           $log = Join-Path $env:RUNNER_TEMP 'ryagent-smoke.log'
           $proc = Start-Process -FilePath $exe -PassThru -RedirectStandardOutput $log -RedirectStandardError "$log.err"
           try {
             $deadline = (Get-Date).AddSeconds(180)
             $agents = $null
+            $gateChecked = $false
             while ((Get-Date) -lt $deadline) {
               if ($proc.HasExited) { break }
+              # 连接被拒（status 0）= 应用还没起来，等下一轮；拿到 HTTP 状态才算数。
+              $status = 0
               try {
-                $agents = (Invoke-RestMethod -Uri 'http://127.0.0.1:32199/api/agents' -TimeoutSec 5).agents
+                Invoke-RestMethod -Uri 'http://127.0.0.1:32199/api/agents' -TimeoutSec 5 | Out-Null
+                $status = 200
+              } catch {
+                if ($_.Exception.Response -ne $null) { $status = [int]$_.Exception.Response.StatusCode }
+              }
+              if ($status -eq 401) {
+                # 断言的就是「打包产物里鉴权确实开着」：无 token 必须被拒。
+                $gateChecked = $true
+              } elseif ($status -ne 0) {
+                throw "无 token 的请求返回了 $status 而不是 401：打包产物的 API 可能没鉴权"
+              }
+              try {
+                $agents = (Invoke-RestMethod -Uri 'http://127.0.0.1:32199/api/agents' -TimeoutSec 5 `
+                    -Headers @{ authorization = "Bearer $env:RYAGENT_API_TOKEN" }).agents
                 break
               } catch {
                 Start-Sleep -Seconds 2
@@ -145,7 +163,8 @@ jobs:
               Get-Content $log, "$log.err" -ErrorAction SilentlyContinue | Write-Host
               throw '打包产物 180s 内没有在 127.0.0.1:32199 供出 /api/agents'
             }
-            Write-Host "smoke ok：内置 agent $($agents.Count) 位"
+            if (-not $gateChecked) { throw '冒烟期间没有观察到 401：打包产物的 API 鉴权可能没生效' }
+            Write-Host "smoke ok：内置 agent $($agents.Count) 位，鉴权 401 已验证"
           } finally {
             # /T 连渲染/工具子进程一起收，否则 runner 上会留一串孤儿 electron。
             & taskkill /PID $proc.Id /T /F | Out-Null

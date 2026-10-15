@@ -55,6 +55,17 @@ export interface ConversationRoutes {
 
 /** 消息列表单页条数上限（?limit 的上限，也用作 ?since= 的翻页步长）。 */
 const MAX_MESSAGE_PAGE = 200
+/** `?around=` 命中窗口：命中前后各取多少条（?window= 的缺省值与上限）。 */
+const DEFAULT_AROUND_WINDOW = 25
+const MAX_AROUND_WINDOW = 50
+/**
+ * `?around=` 向前回扫找命中消息的最大条数。
+ *
+ * 存储层只有 beforeSeq 这一个游标（没有"按 id 取 seq"也没有"取某 seq 之后"），
+ * 命中消息的 seq 只能靠回扫找出来。找不到就 404，不做无界扫描——一次搜索跳转
+ * 不该把整个会话拖进内存。
+ */
+const MAX_AROUND_SCAN = 2000
 /** 全文搜索返回的条数上限。 */
 const MAX_SEARCH_RESULTS = 50
 /** 全文搜索每个会话回看的消息条数上限（倒序翻页，够用且不让搜索变成全库扫描）。 */
@@ -246,6 +257,90 @@ function searchMessages(
   return results.slice(0, MAX_SEARCH_RESULTS)
 }
 
+/** 回扫找一条消息的 seq；翻过 {@link MAX_AROUND_SCAN} 条还没找到就当不存在。 */
+function findMessageSeq(store: SessionStore, conversationId: string, messageId: string): number | undefined {
+  let scanned = 0
+  let beforeSeq: number | undefined
+  for (;;) {
+    const page = store.listMessages(conversationId, {
+      limit: MAX_MESSAGE_PAGE,
+      ...(beforeSeq === undefined ? {} : { beforeSeq }),
+    })
+    if (page.length === 0) return undefined
+    for (const message of page) {
+      if (message.id === messageId) return message.seq
+    }
+    scanned += page.length
+    const oldest = page[0]
+    if (scanned >= MAX_AROUND_SCAN || oldest === undefined) return undefined
+    beforeSeq = oldest.seq
+  }
+}
+
+/** 「seq < X 的最后 window 条里，最早那条的 seq」——不够 window 条时返回 undefined。 */
+function windowBottomSeq(
+  store: SessionStore,
+  conversationId: string,
+  beforeSeq: number,
+  window: number,
+): number | undefined {
+  const page = store.listMessages(conversationId, { limit: window, beforeSeq })
+  return page.length >= window ? page[0]?.seq : undefined
+}
+
+/**
+ * `?around=`：以命中消息为中心的一段窗口（命中前后各 window 条，含命中本身）。
+ *
+ * 全文搜索能把任意一条历史消息指给用户，但聊天区一次只加载最新一页——命中多半不在
+ * 已加载的窗口里，此前只能"点了没反应"。这段窗口就是给那次跳转补齐上下文的。
+ *
+ * 存储层只有 beforeSeq 这一个游标（`seq < beforeSeq`），两个方向因此不对称：
+ * - 命中**之前**的 window 条：一次 `beforeSeq = hitSeq`；
+ * - 命中**之后**的 window 条要的是「离命中最近的那 window 条」，而游标只能往回走。
+ *   从最新一页倒着扫能把"最新的 window 条"捞出来（不是要的这段），整段扫完又贵，
+ *   所以按 seq 二分：`beforeSeq = X` 那页的最早一条是否仍大于命中 seq，对 X 单调，
+ *   十几次 1 行查询就能定位到那条边界。
+ */
+function messagesAround(
+  store: SessionStore,
+  conversationId: string,
+  messageId: string,
+  window: number,
+): { messages: StoredMessage[]; hitSeq: number } | undefined {
+  const hitSeq = findMessageSeq(store, conversationId, messageId)
+  if (hitSeq === undefined) return undefined
+  const before = store.listMessages(conversationId, { limit: window, beforeSeq: hitSeq })
+  // `seq < hitSeq + 1` ⇔ `seq ≤ hitSeq`：这一页的最后一条正是命中本身。
+  const hit = store.listMessages(conversationId, { limit: 1, beforeSeq: hitSeq + 1 })[0]
+  if (hit === undefined || hit.id !== messageId) return undefined
+  const latest = store.listMessages(conversationId, { limit: 1 })[0]
+  // 二分「最早的那个 X，使 seq < X 的最后 window 条全部晚于命中」；找不到就是命中
+  // 之后不足 window 条——那就把已有的全取出来（最新一页里 seq 大于命中的那些）。
+  let after: StoredMessage[] = []
+  if (latest !== undefined) {
+    let low = hitSeq + 1
+    let high = latest.seq + 1
+    let boundary: number | undefined
+    while (low <= high) {
+      const mid = Math.floor((low + high) / 2)
+      const bottom = windowBottomSeq(store, conversationId, mid, window)
+      if (bottom !== undefined && bottom > hitSeq) {
+        boundary = mid
+        high = mid - 1
+      } else {
+        low = mid + 1
+      }
+    }
+    after =
+      boundary === undefined
+        ? store.listMessages(conversationId, { limit: window, beforeSeq: latest.seq + 1 }).filter((message) => {
+            return message.seq > hitSeq
+          })
+        : store.listMessages(conversationId, { limit: window, beforeSeq: boundary })
+  }
+  return { messages: [...before, hit, ...after], hitSeq }
+}
+
 /**
  * 附件名的消毒：只放行叶子名。
  *
@@ -395,55 +490,54 @@ export function registerConversationRoutes(router: Router, deps: ConversationRou
   router.post('/api/conversations', async (req, res) => {
     const body = await req.body()
     const kind = strField(body, 'kind')
-    try {
-      if (kind === 'direct') {
-        const agentId = strField(body, 'agentId')
-        if (agentId === undefined) throw new Error('direct conversation requires agentId')
-        if (store.getAgent(agentId) === undefined) throw new Error(`unknown agent "${agentId}"`)
-        const conversation = store.createConversation({
-          kind: 'direct',
-          title: strField(body, 'title') ?? store.getAgent(agentId)?.name ?? '',
-          memberAgentIds: [agentId],
-        })
-        json(res, 201, { conversation })
-        return
-      }
-      if (kind === 'group') {
-        const memberIds = (body as { memberAgentIds?: unknown })?.memberAgentIds
-        if (!Array.isArray(memberIds) || memberIds.length === 0) {
-          throw new Error('group conversation requires non-empty memberAgentIds')
-        }
-        if (
-          memberIds.some((id) => {
-            return typeof id !== 'string'
-          })
-        ) {
-          throw new Error('memberAgentIds must be an array of agent ids')
-        }
-        const members = memberIds as string[]
-        for (const id of members) {
-          if (store.getAgent(id) === undefined) throw new Error(`unknown agent "${id}"`)
-        }
-        const dispatcherAgentId = strField(body, 'dispatcherAgentId') ?? 'ryen'
-        // 调度员必须在成员名单里：群聊第一轮就是由它派工，不在名单里的话每条
-        // 消息都会以 UNKNOWN_AGENT 报错（"群一进去就哑"）。前端勾选成员与选
-        // 调度员是两处独立状态，这里是最后一道闸——不合法直接 400，不建群。
-        if (!members.includes(dispatcherAgentId)) {
-          throw new Error(`dispatcher "${dispatcherAgentId}" must be one of memberAgentIds`)
-        }
-        const conversation = store.createConversation({
-          kind: 'group',
-          title: strField(body, 'title') ?? '群聊',
-          memberAgentIds: members,
-          dispatcherAgentId,
-        })
-        json(res, 201, { conversation })
-        return
-      }
-      throw new Error('kind must be "direct" or "group"')
-    } catch (error) {
-      json(res, 400, { error: error instanceof Error ? error.message : String(error) })
+    // 校验一律抛 HttpRequestError（400 + 机器码），由 dispatch 统一成响应；
+    // 落库失败不再 catch 成 400——那是服务端故障，冒成 400 会让调用方
+    // 以为改改请求体就能成。
+    if (kind === 'direct') {
+      const agentId = strField(body, 'agentId')
+      if (agentId === undefined) throw new HttpRequestError(400, 'direct conversation requires agentId')
+      if (store.getAgent(agentId) === undefined) throw new HttpRequestError(400, `unknown agent "${agentId}"`)
+      const conversation = store.createConversation({
+        kind: 'direct',
+        title: strField(body, 'title') ?? store.getAgent(agentId)?.name ?? '',
+        memberAgentIds: [agentId],
+      })
+      json(res, 201, { conversation })
+      return
     }
+    if (kind === 'group') {
+      const memberIds = (body as { memberAgentIds?: unknown })?.memberAgentIds
+      if (!Array.isArray(memberIds) || memberIds.length === 0) {
+        throw new HttpRequestError(400, 'group conversation requires non-empty memberAgentIds')
+      }
+      if (
+        memberIds.some((id) => {
+          return typeof id !== 'string'
+        })
+      ) {
+        throw new HttpRequestError(400, 'memberAgentIds must be an array of agent ids')
+      }
+      const members = memberIds as string[]
+      for (const id of members) {
+        if (store.getAgent(id) === undefined) throw new HttpRequestError(400, `unknown agent "${id}"`)
+      }
+      const dispatcherAgentId = strField(body, 'dispatcherAgentId') ?? 'ryen'
+      // 调度员必须在成员名单里：群聊第一轮就是由它派工，不在名单里的话每条
+      // 消息都会以 UNKNOWN_AGENT 报错（"群一进去就哑"）。前端勾选成员与选
+      // 调度员是两处独立状态，这里是最后一道闸——不合法直接 400，不建群。
+      if (!members.includes(dispatcherAgentId)) {
+        throw new HttpRequestError(400, `dispatcher "${dispatcherAgentId}" must be one of memberAgentIds`)
+      }
+      const conversation = store.createConversation({
+        kind: 'group',
+        title: strField(body, 'title') ?? '群聊',
+        memberAgentIds: members,
+        dispatcherAgentId,
+      })
+      json(res, 201, { conversation })
+      return
+    }
+    throw new HttpRequestError(400, 'kind must be "direct" or "group"')
   })
 
   router.get('/api/conversations/:id', async (req, res) => {
@@ -516,6 +610,24 @@ export function registerConversationRoutes(router: Router, deps: ConversationRou
     const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, MAX_MESSAGE_PAGE) : 50
     const before = req.query.get('before')
     const since = req.query.get('since')
+    const around = req.query.get('around')
+    if (around !== null && around.length > 0) {
+      // around 是搜索命中的定位游标：取命中前后各若干条（含命中本身），供聊天区
+      // 把一条不在已加载页里的历史消息插进流里再滚过去。它与 before/since 互斥，
+      // 给了 around 就以它为准（客户端跳转到一条具体消息，要的不是"最新一页"）。
+      const rawWindow = Number(req.query.get('window') ?? DEFAULT_AROUND_WINDOW)
+      const window =
+        Number.isFinite(rawWindow) && rawWindow > 0
+          ? Math.min(Math.trunc(rawWindow), MAX_AROUND_WINDOW)
+          : DEFAULT_AROUND_WINDOW
+      const found = messagesAround(store, conversationId, around, window)
+      if (found === undefined) {
+        json(res, 404, { error: 'message not found' })
+        return
+      }
+      json(res, 200, { messages: found.messages, hit: { messageId: around, seq: found.hitSeq } })
+      return
+    }
     if (since !== null && since.length > 0) {
       // since 是 seq 游标（客户端断线重连后补齐缺口用），非法数字直接 400：
       // 悄悄当成 0 会把整段历史当增量发过去。

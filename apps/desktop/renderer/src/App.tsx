@@ -4,14 +4,15 @@ import { ApiClient } from './api.ts'
 import { Cat } from './components/Cat.tsx'
 import { ChatView } from './components/ChatView.tsx'
 import { ConfirmDialog } from './components/ConfirmDialog.tsx'
-import { ContactsPage, CreateAgentModal, CreateGroupModal } from './components/ContactsPage.tsx'
+import { ContactsPage, CreateAgentModal } from './components/ContactsPage.tsx'
 import { ConversationList } from './components/ConversationList.tsx'
+import { GroupSettingsModal } from './components/GroupSettingsModal.tsx'
 import type { IconName } from './components/Icon.tsx'
 import { Icon } from './components/Icon.tsx'
 import { MePage } from './components/MePage.tsx'
 import { RightPanel } from './components/RightPanel.tsx'
 import { ToastHost } from './components/ToastHost.tsx'
-import { WelcomeHome } from './components/WelcomeHome.tsx'
+import { DEMO_CONVERSATION_PREFIX, WelcomeHome, type WelcomeTarget } from './components/WelcomeHome.tsx'
 import { agentById } from './lib/agents.ts'
 import { useApiBase } from './lib/boot.ts'
 import { markFirstInteractive } from './lib/boot-trace.ts'
@@ -26,6 +27,16 @@ type Theme = 'light' | 'dark'
 const THEME_ANIMATING_CLASS = 'theme-animating'
 /** 已读等高频刷新事件的合并窗口（ms）。 */
 const REFRESH_DEBOUNCE_MS = 800
+
+/**
+ * 托盘「新对话」抛给渲染层的事件名。
+ *
+ * 主进程没有渲染层状态句柄，此前托盘替用户做了决定：切到通讯录 → 点 Ryen 的
+ * 「发消息」，于是「开个小队」这条路从托盘出发永远不存在。现在由页面自己接：
+ * 事件把窗口带回欢迎页，去向（跟 Ryen 聊 / 开个小队）由用户在上面选。
+ * main.ts 的 NEW_CHAT_SCRIPT 只负责派发这个事件。
+ */
+export const NEW_CHAT_EVENT = 'ryagent:new-chat'
 
 /**
  * 无存储时的兜底：跟随系统深浅色。此前一律硬回浅色，等于把系统设置反着来——
@@ -96,6 +107,8 @@ export function App() {
   const [listLoading, setListLoading] = useState(true)
   const [activeId, setActiveId] = useState<string | undefined>(undefined)
   const [modal, setModal] = useState<'agent' | 'group' | undefined>(undefined)
+  /** 正在改设置的群（群设置弹窗）；建群走 modal='group'。 */
+  const [editingGroup, setEditingGroup] = useState<Conversation | undefined>(undefined)
   /** 待确认删除的 agent（确认弹窗内完成，避免 window.confirm 割裂界面）。 */
   const [deletingAgent, setDeletingAgent] = useState<AgentDef | undefined>(undefined)
   /** 新建 agent 时的初始模板（通讯录模板轨带入）。 */
@@ -295,6 +308,75 @@ export function App() {
     }
   }
 
+  /**
+   * 多 agent 场景的去处：落到已存在的小队群，没有就建一个，然后把这句话交给它。
+   *
+   * 首屏那枚写着「我们三个」的 chip 此前往落 Ryen 的单聊——文案与行为不一致，
+   * 用户以为群里还有两位在等回答。这里保证群场景一定落在 kind='group' 的会话上。
+   * 示例会话不算「已存在的小队」：那是产品演示，把用户的第一句话写进去等于污染它。
+   */
+  const startGroupChat = async (text: string): Promise<void> => {
+    if (api === undefined) return
+    const squad = agents.map((a) => {
+      return a.id
+    })
+    if (squad.length < 2) {
+      toast.error('小队至少要两位 agent——先去通讯录新建一位，再回来一起聊。')
+      return
+    }
+    try {
+      const existing = conversations.find((c) => {
+        return (
+          c.kind === 'group' &&
+          !c.title.startsWith(DEMO_CONVERSATION_PREFIX) &&
+          squad.every((id) => {
+            return c.memberAgentIds.includes(id)
+          })
+        )
+      })
+      let conversationId: string
+      if (existing !== undefined) {
+        conversationId = existing.id
+      } else {
+        const { conversation } = await api.createConversation({
+          kind: 'group',
+          memberAgentIds: squad,
+          dispatcherAgentId: ryen?.id ?? squad[0],
+          title: '小队',
+        })
+        conversationId = conversation.id
+        await refresh()
+      }
+      setActiveId(conversationId)
+      setTab('chats')
+      setPendingSend({ conversationId, text })
+    } catch (error) {
+      toast.error(`没能把小队叫起来：${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  /** 欢迎页发话：去向由用户在页面上选（跟 Ryen 聊 / 开个小队），这里只负责落到会话。 */
+  const startChat = async (text: string, target: WelcomeTarget): Promise<void> => {
+    if (target.kind === 'group') {
+      await startGroupChat(text)
+      return
+    }
+    await startChatWithRyen(text)
+  }
+
+  /** 托盘「新对话」：回到欢迎页，让用户自己选跟 Ryen 聊还是开个小队。 */
+  useEffect(() => {
+    const onNewChat = (): void => {
+      setPendingSend(undefined)
+      setActiveId(undefined)
+      setTab('chats')
+    }
+    window.addEventListener(NEW_CHAT_EVENT, onNewChat)
+    return () => {
+      window.removeEventListener(NEW_CHAT_EVENT, onNewChat)
+    }
+  }, [])
+
   if (api === undefined) return <BootSkeleton />
 
   if (loadError !== undefined) {
@@ -383,6 +465,9 @@ export function App() {
             onGoContacts={() => {
               setTab('contacts')
             }}
+            onEditGroup={(conversation) => {
+              setEditingGroup(conversation)
+            }}
             // 宿主自己的 ApiClient：列表自己 new 一个的话，置顶/静音/删除会绕过
             // 壳的刷新与错误处理。onChanged 让操作后的真值重新落到列表上。
             api={api}
@@ -433,8 +518,8 @@ export function App() {
                   await api.setApiKey(providerId, apiKey)
                   await refresh()
                 }}
-                onSend={(text) => {
-                  void startChatWithRyen(text)
+                onSend={(text, target) => {
+                  void startChat(text, target)
                 }}
                 onOpenConversation={(id) => {
                   setActiveId(id)
@@ -518,7 +603,8 @@ export function App() {
         />
       )}
       {modal === 'group' && (
-        <CreateGroupModal
+        <GroupSettingsModal
+          mode="create"
           agents={agents}
           onClose={() => {
             setModal(undefined)
@@ -528,6 +614,31 @@ export function App() {
             await refresh()
             setActiveId(conversation.id)
             setTab('chats')
+          }}
+        />
+      )}
+      {editingGroup !== undefined && (
+        <GroupSettingsModal
+          mode="settings"
+          agents={agents}
+          conversation={editingGroup}
+          onClose={() => {
+            setEditingGroup(undefined)
+          }}
+          onSubmit={async (input) => {
+            const { conversation } = await api.patchGroup(editingGroup.id, input)
+            // 换调度员目前服务端还不落这个字段：拿回包里的真值比对，别替它宣布成功。
+            if (input.dispatcherAgentId !== undefined && conversation.dispatcherAgentId !== input.dispatcherAgentId) {
+              const now = conversation.dispatcherAgentId
+              toast.error(
+                now === undefined
+                  ? '群名与成员已保存；调度员没改成——当前服务端还不支持改已有群的调度员。'
+                  : `群名与成员已保存；调度员仍是 ${agentById(agents, now)?.name ?? now}（当前服务端还不支持改已有群的调度员）。`,
+              )
+            } else {
+              toast.success('群设置已保存')
+            }
+            await refresh()
           }}
         />
       )}

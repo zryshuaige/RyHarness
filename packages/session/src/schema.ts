@@ -8,9 +8,10 @@
  */
 
 import type { DatabaseSync } from 'node:sqlite'
+import { bigrams, messageSearchText } from './fts.ts'
 
 /** 当前 schema 版本；每次变更表结构时 +1 并追加迁移函数。 */
-export const SCHEMA_VERSION = 4
+export const SCHEMA_VERSION = 5
 
 /** 版本 1：初始表结构。 */
 function migrateV1(db: DatabaseSync): void {
@@ -85,12 +86,46 @@ function migrateV4(db: DatabaseSync): void {
   db.exec('ALTER TABLE messages ADD COLUMN usage TEXT')
 }
 
+/**
+ * 版本 5：messages_fts —— 消息正文的 FTS5 索引（与记忆侧同一套 bigram 分词）。
+ *
+ * 正文存在 content_blocks 的 JSON 里，不可索引，于是关键词搜索只能把整库消息
+ * 分页拉进内存做子串匹配（每条都要 JSON.parse），会话一多就是全库同步扫描。
+ * 索引行以 messages.seq（rowid 别名）为键，存储层在写消息时同步维护、删会话时
+ * 同步清理；存量消息在这次迁移里一次性补齐。
+ */
+function migrateV5(db: DatabaseSync): void {
+  db.exec("CREATE VIRTUAL TABLE messages_fts USING fts5(content, tokenize = 'unicode61')")
+  const rows = db.prepare('SELECT seq, content_blocks FROM messages').all() as {
+    seq: number
+    content_blocks: string
+  }[]
+  const insert = db.prepare('INSERT INTO messages_fts (rowid, content) VALUES (?, ?)')
+  for (const row of rows) {
+    const text = messageSearchText(parseBlocks(row.content_blocks))
+    // 纯工具结果消息没有文本块，不占索引行（与写入路径同一口径）。
+    if (text.length === 0) continue
+    insert.run(Number(row.seq), bigrams(text))
+  }
+}
+
+/** 迁移里解析 content_blocks（脏数据按空数组处理，不让一条坏行废掉迁移）。 */
+function parseBlocks(value: string): unknown[] {
+  try {
+    const parsed: unknown = JSON.parse(value)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
 /** 全部迁移：索引即目标版本。新增迁移只追加，不改动既有条目。 */
 export const MIGRATIONS: Readonly<Record<number, (db: DatabaseSync) => void>> = {
   1: migrateV1,
   2: migrateV2,
   3: migrateV3,
   4: migrateV4,
+  5: migrateV5,
 }
 
 function userVersion(db: DatabaseSync): number {

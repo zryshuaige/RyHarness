@@ -54,6 +54,17 @@ export interface AgentMemory {
   enqueueExtraction(agentId: string, agentName: string, conversationId: string, turnText: string): void
 }
 
+/**
+ * 扇出召回的可选扩展面（由 {@link MemoryService} 实现）。
+ *
+ * 群聊一次 @ 多个成员时，各成员拿到的是**同一段输入**，对同一空间的召回结果
+ * 本来就相同。调度器（@ryagent/group）检测到这个方法就用它，把 N 次
+ * recall 收敛成一次；没有实现时逐成员 recall 也照旧工作（只是重复请求）。
+ */
+export interface MemoryRecallMany {
+  recallMany(agentIds: readonly string[], inputText: string): Promise<Map<string, string | undefined>>
+}
+
 export interface MemoryServiceOptions {
   dbPath: string
   embeddings?: EmbeddingProvider
@@ -71,7 +82,7 @@ export interface MemoryServiceOptions {
   reembedBatchSize?: number
 }
 
-export class MemoryService implements AgentMemory {
+export class MemoryService implements AgentMemory, MemoryRecallMany {
   readonly store: MemoryStore
   private readonly embeddings: EmbeddingProvider
   private readonly llm: MemoryLlm | undefined
@@ -83,6 +94,15 @@ export class MemoryService implements AgentMemory {
   private readonly reembedBatchSize: number
   /** 单 writer 队列。 */
   private queue: Promise<void> = Promise.resolve()
+  /**
+   * 在途 embedding 请求（键 = 模型 + 文本）：同一段输入的并发召回共享一次
+   * 网络往返。
+   *
+   * 群聊扇出会同时问 N 个成员"这段输入是什么意思"，它们的查询串完全相同。
+   * 落库缓存（embedding_cache）救不了并发——N 个请求在任何一个写回之前就都
+   * 读到了未命中，于是同一段文本在一轮里被打成 N 次 embedding 请求。
+   */
+  private readonly inflightEmbeddings = new Map<string, Promise<Float32Array | null>>()
 
   constructor(options: MemoryServiceOptions) {
     this.store = new MemoryStore(options.dbPath)
@@ -120,60 +140,112 @@ export class MemoryService implements AgentMemory {
    * @returns 注入文本；无记忆时返回 undefined（不注入空块）。
    */
   async recall(agentId: string, inputText: string): Promise<string | undefined> {
-    const budgetStart = Date.now()
-    const text = inputText.trim()
-    const sections: string[] = []
+    const context = await this.recallContext(inputText, true)
+    return this.formatRecall(context, agentId)
+  }
 
-    const profile = this.store.listSharedProfile()
-    if (profile.length > 0) {
-      sections.push(
-        `用户画像：\n${profile
-          .map((m) => {
-            return `- ${m.content}`
-          })
-          .join('\n')}`,
-      )
-      // 注入即访问：画像每轮都被读进 prompt，却从不计入访问统计，access_count
-      // 恒为 0，巩固任务会把整批画像判成"长期零访问"直接归档——用户画像因此
-      // 悄无声息地整体消失。
-      this.store.touchAccess(
-        profile.map((m) => {
-          return m.id
-        }),
-      )
+  /**
+   * 一次扇出里的多成员召回（群聊 @ 多成员）：同一段输入的查询向量、共享画像与
+   * BM25 候选窗口只取一次，各成员只补自己的私有空间。
+   *
+   * 命中的记忆与逐成员 {@link recall} 是同一批（同一段输入、同一个查询向量、
+   * 同一份 BM25 窗口、同样的融合与衰减配方），省下的是 N-1 次重复检索与 N-1 次
+   * embedding 网络往返。两处可观察的差别：共享画像的访问计数按「一次输入」记 1
+   * 而不是「每个成员各记 1」；行序可能因两套数据的时间戳差几毫秒而在同分行间
+   * 互换（衰减项所致，与召回集合无关）。
+   */
+  async recallMany(agentIds: readonly string[], inputText: string): Promise<Map<string, string | undefined>> {
+    const context = await this.recallContext(inputText, true)
+    const out = new Map<string, string | undefined>()
+    for (const agentId of new Set(agentIds)) {
+      out.set(agentId, this.formatRecall(context, agentId))
     }
-
-    // 预算守卫：画像已超预算时直接返回（profile 量小，正常不会发生）。
-    if (Date.now() - budgetStart > this.recallBudgetMs) {
-      return sections.length > 0 ? `[记忆] ${sections.join('\n')}` : undefined
-    }
-
-    const recalled = await this.hybridRecall(agentId, text)
-    if (recalled.length > 0) {
-      sections.push(
-        `相关记忆：\n${recalled
-          .map((m) => {
-            return `- ${m.content}`
-          })
-          .join('\n')}`,
-      )
-      this.store.touchAccess(
-        recalled.map((m) => {
-          return m.id
-        }),
-      )
-    }
-
-    if (sections.length === 0) return undefined
-    return `[记忆] ${sections.join('\n')}`
+    return out
   }
 
   /** 混合检索：embedding + BM25 → RRF(k=60) → 访问基准衰减 → top-N。 */
   async hybridRecall(agentId: string, input: string, limit = this.topN): Promise<MemoryRow[]> {
-    const queryVector = await this.embedCached(input)
-    const candidates = new Map<string, { memory: MemoryRow; rrf: number }>()
+    return this.rankRecall(await this.recallContext(input, false), agentId, limit)
+  }
 
-    const addRanked = (ranked: MemoryRow[]): void => {
+  /**
+   * 一段输入的召回上下文：与空间无关的那部分（向量、共享画像、共享空间的
+   * 语义打分、BM25 候选窗口）在这里一次算完，供本空间的通道复用。
+   *
+   * `withProfile` 只给注入路径开：抽取管线里的相似查询不算「注入即访问」，
+   * 否则每次抽取都把共享画像的 access_count 顶上去，归档判定就失真了。
+   */
+  private async recallContext(input: string, withProfile: boolean): Promise<RecallContext> {
+    const budgetStart = Date.now()
+    const text = input.trim()
+    let profile: MemoryRow[] = []
+    let budgetExceeded = false
+    if (withProfile) {
+      profile = this.store.listSharedProfile()
+      if (profile.length > 0) {
+        // 注入即访问：画像每轮都被读进 prompt，却从不计入访问统计，access_count
+        // 恒为 0，巩固任务会把整批画像判成"长期零访问"直接归档——用户画像因此
+        // 悄无声息地整体消失。
+        this.store.touchAccess(
+          profile.map((m) => {
+            return m.id
+          }),
+        )
+      }
+      // 预算守卫：画像已超预算时直接注入画像就收尾（profile 量小，正常不会发生）。
+      budgetExceeded = Date.now() - budgetStart > this.recallBudgetMs
+    }
+
+    let vector: Float32Array | null = null
+    let sharedSemantic: ScoredMemory[] = []
+    let ftsHits: { memory: MemoryRow; score: number }[] = []
+    if (!budgetExceeded) {
+      vector = await this.embedCached(text)
+      if (vector !== null) {
+        sharedSemantic = this.scoreSemantic(SHARED_SPACE, vector)
+      }
+      ftsHits = this.searchFtsChannel(text)
+    }
+    return { vector, profile, budgetExceeded, sharedSemantic, ftsHits }
+  }
+
+  /** 组装注入块并记账访问（共享画像已在上下文里记过一次）。 */
+  private formatRecall(context: RecallContext, agentId: string): string | undefined {
+    const sections: string[] = []
+    if (context.profile.length > 0) {
+      sections.push(
+        `用户画像：\n${context.profile
+          .map((m) => {
+            return `- ${m.content}`
+          })
+          .join('\n')}`,
+      )
+    }
+    if (!context.budgetExceeded) {
+      const recalled = this.rankRecall(context, agentId)
+      if (recalled.length > 0) {
+        sections.push(
+          `相关记忆：\n${recalled
+            .map((m) => {
+              return `- ${m.content}`
+            })
+            .join('\n')}`,
+        )
+        this.store.touchAccess(
+          recalled.map((m) => {
+            return m.id
+          }),
+        )
+      }
+    }
+    if (sections.length === 0) return undefined
+    return `[记忆] ${sections.join('\n')}`
+  }
+
+  /** 两通道融合 + 衰减 + top-N（RRF(k=60) 与访问基准衰减，配方见调研 §3.4）。 */
+  private rankRecall(context: RecallContext, agentId: string, limit = this.topN): MemoryRow[] {
+    const candidates = new Map<string, { memory: MemoryRow; rrf: number }>()
+    const addRanked = (ranked: readonly MemoryRow[]): void => {
       ranked.forEach((memory, index) => {
         const entry = candidates.get(memory.id) ?? { memory, rrf: 0 }
         entry.rrf += 1 / (RRF_K + index + 1)
@@ -181,37 +253,30 @@ export class MemoryService implements AgentMemory {
       })
     }
 
-    if (queryVector !== null) {
-      // 只在同一向量空间内比较：模型不同或维度不符的向量一律排除，绝不让
-      // cosine 静默返回 -1 把检索质量拖垮（曾导致"换 embedding 模型即塌陷"）。
-      const dimMismatch = new Set<string>()
-      const semantic = this.store
-        .listActiveEmbeddings(agentId, this.embeddingModel)
-        .filter((memory) => {
-          if (memory.embedding === null) return false
-          if (memory.embedding.length === queryVector.length) return true
-          dimMismatch.add(memory.id)
-          return false
-        })
-        .map((memory) => {
-          return { memory, score: cosine(queryVector, memory.embedding as Float32Array) }
-        })
-        .sort((a, b) => {
-          return b.score - a.score
+    if (context.vector !== null) {
+      // 语义通道 = 私有空间 + 共享空间（共享部分在上下文里已算好，扇出内只算一次）。
+      addRanked(
+        [...this.scoreSemantic(agentId, context.vector), ...context.sharedSemantic]
+          .sort((a, b) => {
+            return b.score - a.score
+          })
+          .slice(0, RECALL_PER_CHANNEL)
+          .map((hit) => {
+            return hit.memory
+          }),
+      )
+    }
+
+    addRanked(
+      context.ftsHits
+        .filter((hit) => {
+          return hit.memory.agentId === agentId || hit.memory.agentId === SHARED_SPACE
         })
         .slice(0, RECALL_PER_CHANNEL)
         .map((hit) => {
           return hit.memory
-        })
-      if (dimMismatch.size > 0) {
-        this.log(
-          `@ryagent/memory: skipped ${dimMismatch.size} memories whose embedding dim differs from model "${this.embeddingModel}"`,
-        )
-      }
-      addRanked(semantic)
-    }
-
-    addRanked(this.searchFtsChannel(agentId, input))
+        }),
+    )
 
     const now = Date.now()
     return [...candidates.values()]
@@ -234,12 +299,45 @@ export class MemoryService implements AgentMemory {
   }
 
   /**
+   * 某空间的语义通道打分（余弦降序）。
+   *
+   * 只在同一向量空间内比较：模型不同或维度不符的向量一律排除，绝不让 cosine
+   * 静默返回 -1 把检索质量拖垮（曾导致"换 embedding 模型即塌陷"）。
+   */
+  private scoreSemantic(spaceId: string, vector: Float32Array): ScoredMemory[] {
+    const dimMismatch = new Set<string>()
+    const scored = this.store
+      .listSpaceEmbeddings(spaceId, this.embeddingModel)
+      .filter((memory) => {
+        if (memory.embedding === null) return false
+        if (memory.embedding.length === vector.length) return true
+        dimMismatch.add(memory.id)
+        return false
+      })
+      .map((memory) => {
+        return { memory, score: cosine(vector, memory.embedding as Float32Array) }
+      })
+      .sort((a, b) => {
+        return b.score - a.score
+      })
+    if (dimMismatch.size > 0) {
+      this.log(
+        `@ryagent/memory: skipped ${dimMismatch.size} memories in "${spaceId}" whose embedding dim ` +
+          `differs from model "${this.embeddingModel}"`,
+      )
+    }
+    return scored
+  }
+
+  /**
    * BM25 通道单独兜住异常：词法通道坏了只丢它自己（降级纯语义或纯画像），
    * 绝不把 recall 整条抛出——共享画像每轮都在注入路径上，一起丢就是静默失忆。
+   *
+   * 候选窗口取自全库（空间过滤在调用侧），所以扇出里多个成员共用这一份。
    */
-  private searchFtsChannel(agentId: string, input: string): MemoryRow[] {
+  private searchFtsChannel(input: string): { memory: MemoryRow; score: number }[] {
     try {
-      return this.store.searchFts(agentId, input, RECALL_PER_CHANNEL)
+      return this.store.searchFtsHits(input, RECALL_PER_CHANNEL * 3)
     } catch (error) {
       this.log(
         `@ryagent/memory: FTS channel degraded to ${this.embeddings.available ? 'semantic-only' : 'no-results'}: ` +
@@ -249,16 +347,39 @@ export class MemoryService implements AgentMemory {
     }
   }
 
-  /** embedding + 按模型分桶的文本缓存：相同文本不重复请求；网络请求带超时，超时降级纯 FTS5。 */
+  /**
+   * embedding + 按模型分桶的文本缓存 + 在途请求合并：相同文本不重复请求。
+   *
+   * 三层缺一不可：落库缓存挡住跨轮重复，在途合并挡住**同轮内**的并发重复
+   * （扇出时 N 个成员同时问同一段输入，落库缓存那时谁都还没写回），超时降级
+   * 纯 FTS5。
+   */
   private async embedCached(text: string): Promise<Float32Array | null> {
     if (!this.embeddings.available) return null
     const model = this.embeddingModel
     const cached = this.store.cachedEmbedding(text, model)
     if (cached !== null) return cached
+    const key = `${model}\u0000${text}`
+    const inFlight = this.inflightEmbeddings.get(key)
+    if (inFlight !== undefined) return inFlight
+    const request = this.requestEmbedding(text, model)
+    this.inflightEmbeddings.set(key, request)
+    try {
+      return await request
+    } finally {
+      this.inflightEmbeddings.delete(key)
+    }
+  }
+
+  /** 单次 embedding 网络请求：超时返回 null（降级纯 FTS5），不回灌给调用方。 */
+  private async requestEmbedding(text: string, model: string): Promise<Float32Array | null> {
     const vectors = await withTimeout(this.embeddings.embed([text]), this.embedTimeoutMs)
     const vector = vectors === null ? null : (vectors[0] ?? null)
-    if (vector !== null) this.store.cacheEmbedding(text, vector, model)
-    else this.log(`@ryagent/memory: embedding timed out after ${this.embedTimeoutMs}ms, falling back to FTS-only`)
+    if (vector === null) {
+      this.log(`@ryagent/memory: embedding timed out after ${this.embedTimeoutMs}ms, falling back to FTS-only`)
+      return null
+    }
+    this.store.cacheEmbedding(text, vector, model)
     return vector
   }
 
@@ -520,6 +641,31 @@ export class MemoryService implements AgentMemory {
       }
     }
   }
+}
+
+/** 语义通道的一行（记忆 + 与查询向量的余弦）。 */
+interface ScoredMemory {
+  memory: MemoryRow
+  score: number
+}
+
+/**
+ * 一段输入的召回上下文：与空间无关的那部分。
+ *
+ * 同一段输入被多个成员同时召回时（群聊扇出），向量、共享画像、共享空间的语义
+ * 通道与 BM25 候选窗口都只算一次；各成员只补自己的私有空间。
+ */
+interface RecallContext {
+  /** 查询向量（无 embedding 凭据或超时时为 null → 纯 BM25）。 */
+  vector: Float32Array | null
+  /** 共享画像（注入路径才有；抽取管线不读也不记访问）。 */
+  profile: MemoryRow[]
+  /** 已超 recall 预算：只注入画像，跳过两个检索通道。 */
+  budgetExceeded: boolean
+  /** 共享空间的语义通道（余弦降序）。 */
+  sharedSemantic: ScoredMemory[]
+  /** 全库 BM25 候选窗口（bm25 升序；空间过滤在调用侧）。 */
+  ftsHits: { memory: MemoryRow; score: number }[]
 }
 
 /** Promise 超时包装：超时返回 null（embedding 降级纯 FTS5 路径用）。 */

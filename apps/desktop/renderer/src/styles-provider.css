@@ -211,6 +211,19 @@
   font-weight: 600;
 }
 
+/* 删模型/改地址这类"会影响别人"的事故预告：与普通说明不同色，但不到报错的强度。 */
+.provider-note.provider-warn {
+  color: var(--amber-text);
+}
+
+/* 保存失败时错误段落会被聚焦（tabindex=-1）：得画出焦点圈，
+   否则键盘用户只看到光标消失在原地。 */
+.provider-form .apikey-error:focus-visible {
+  outline: 2px solid var(--focus-outline);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
 /* ---- 添加向导：预设网格 ---- */
 .provider-preset-grid {
   display: grid;
@@ -243,6 +256,29 @@
 .provider-preset-tile:focus-visible {
   outline: 2px solid var(--focus-outline);
   outline-offset: -2px;
+}
+
+/*
+ * 已经配过的预设：置灰并按下去。
+ * 不置灰的话用户点进去填半天，存下来的是一条丢品牌图标的 custom-xxxxxxxx 重复项
+ * （服务端会回 409，但界面先认出来更省事）。品牌方块一并降饱和——「已添加」这一层
+ * 靠副标题已经说清楚了，图标继续抢眼只会让人以为还能再点一次。
+ */
+.provider-preset-tile.is-installed {
+  cursor: not-allowed;
+  opacity: 0.55;
+  background: var(--bg-app);
+  border-style: dashed;
+}
+
+.provider-preset-tile.is-installed:hover {
+  background: var(--bg-app);
+  border-color: var(--edge);
+  box-shadow: none;
+}
+
+.provider-preset-tile.is-installed .provider-logo {
+  filter: grayscale(1);
 }
 
 .provider-preset-name {

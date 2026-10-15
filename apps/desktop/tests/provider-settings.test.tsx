@@ -9,7 +9,7 @@ import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CreateProviderInput, ProviderInfo, ProviderPreset } from '../renderer/src/api.ts'
 import { MePage } from '../renderer/src/components/MePage.tsx'
-import type { ProviderApi } from '../renderer/src/components/ProviderSettings.tsx'
+import type { ProviderApi, UpdateProviderInput } from '../renderer/src/components/ProviderSettings.tsx'
 import { ProviderSettings } from '../renderer/src/components/ProviderSettings.tsx'
 import { getToasts, toast } from '../renderer/src/lib/toast.ts'
 
@@ -404,6 +404,84 @@ describe('添加供应商向导', () => {
     expect(container.querySelector('.modal')).not.toBeNull()
   })
 
+  it('配过的预设置灰并标「已添加 · N 个模型」，点不进去（不会再生成重复项）', async () => {
+    let created = 0
+    const api = fakeApi({
+      providerPresets: () => Promise.resolve({ presets }),
+      createProvider: () => {
+        created += 1
+        return Promise.resolve({ provider: customProvider })
+      },
+    })
+    // DeepSeek 这个地址已经配过；Ollama 没配过。
+    const installed = {
+      ...builtinProvider,
+      id: 'deepseek',
+      displayName: 'DeepSeek',
+      baseUrl: 'https://api.deepseek.com/v1',
+      models: [{ id: 'deepseek-chat' }],
+    }
+    await renderSettings(api, [installed])
+    await act(async () => {
+      buttonByText('添加供应商').click()
+      await Promise.resolve()
+    })
+    const tiles = [...container.querySelectorAll<HTMLButtonElement>('.provider-preset-tile')]
+    const deepseek = tiles.find((tile) => {
+      return tile.querySelector('.provider-preset-name')?.textContent === 'DeepSeek'
+    })!
+    expect(deepseek.disabled).toBe(true)
+    expect(deepseek.className).toContain('is-installed')
+    expect(deepseek.querySelector('.provider-preset-sub')?.textContent).toBe('已添加 · 1 个模型')
+    expect(deepseek.title).toContain('编辑')
+    // 没配过的照常可选，副标题仍是协议 + 推荐模型数。
+    const ollama = tiles.find((tile) => {
+      return tile.querySelector('.provider-preset-name')?.textContent === 'Ollama'
+    })!
+    expect(ollama.disabled).toBe(false)
+    expect(ollama.querySelector('.provider-preset-sub')?.textContent).toBe('ollama · 免 key')
+
+    await act(async () => {
+      deepseek.click()
+      await Promise.resolve()
+    })
+    // 点不进去：没有表单，也没有发出新增请求。
+    expect(container.querySelector('form.provider-form')).toBeNull()
+    expect(created).toBe(0)
+  })
+
+  it('服务端对重复地址回 409 时：把中文原因就地显示，表单留着让用户改', async () => {
+    const api = fakeApi({
+      providerPresets: () => Promise.resolve({ presets }),
+      createProvider: () => {
+        return Promise.reject(
+          new Error(
+            '已经添加过指向同一个地址的供应商「DeepSeek」，不用重复添加；要改名字、地址或模型，去列表里点「编辑」。',
+          ),
+        )
+      },
+    })
+    await renderSettings(api, [])
+    await act(async () => {
+      buttonByText('添加供应商').click()
+      await Promise.resolve()
+    })
+    await act(async () => {
+      buttonByText('DeepSeek', container.querySelector('.provider-preset-grid')!).click()
+      await Promise.resolve()
+    })
+    const form = container.querySelector('form.provider-form')!
+    typeInto(form.querySelector('input[type="password"]')!, 'sk-x')
+    await act(async () => {
+      buttonByText('保存', form).click()
+      await Promise.resolve()
+    })
+    const error = form.querySelector('.apikey-error')!
+    expect(error.textContent).toContain('已经添加过')
+    expect(error.textContent).toContain('DeepSeek')
+    expect(container.querySelector('form.provider-form')).not.toBeNull()
+  })
+
   it('后端还没跟上（方法缺失）时降级为只有「自定义」一格', async () => {
     await renderSettings(fakeApi(), [])
     act(() => {
@@ -555,6 +633,182 @@ describe('自定义供应商删除', () => {
     ).toBe(true)
     expect(container.querySelector('[role="dialog"]')).toBeNull()
     expect(changed).toBe(0)
+  })
+})
+
+describe('编辑供应商', () => {
+  it('行内「编辑」→ 弹窗预填现值 → PATCH 载荷只含四个白名单字段', async () => {
+    const patched: Array<[string, UpdateProviderInput]> = []
+    let changed = 0
+    const api = fakeApi({
+      updateProvider: (id: string, patch: UpdateProviderInput) => {
+        patched.push([id, patch])
+        return Promise.resolve({ provider: { ...builtinProvider, displayName: patch.displayName } })
+      },
+    })
+    await renderSettings(api, [builtinProvider], () => {
+      changed += 1
+    })
+    act(() => {
+      buttonByText('SiliconFlow').click()
+    })
+    act(() => {
+      buttonByText('编辑', container.querySelector('.provider-body')!).click()
+    })
+    const form = container.querySelector('form.provider-form')!
+    // 预填的是这条路由现在的值（不是预设，也不是空表单）。
+    const inputs = [...form.querySelectorAll('input')]
+    expect(inputs[0]!.value).toBe('SiliconFlow')
+    expect(inputs[1]!.value).toBe('openai')
+    expect(inputs[2]!.value).toBe('https://api.siliconflow.cn/v1')
+    expect(form.querySelector('textarea')!.value).toBe('deepseek-ai/DeepSeek-V3\nQwen/Qwen2.5-7B-Instruct')
+    // 编辑时不提供改 key 的入口：那是行内「更换 Key」的事，两处混在一起会说不清谁生效。
+    expect(form.querySelector('input[type="password"]')).toBeNull()
+
+    typeInto(inputs[0]!, 'SiliconFlow 公司版')
+    typeInto(inputs[2]!, 'https://gw.internal/v1')
+    typeInto(form.querySelector('textarea')!, 'internal-chat\ninternal-reason')
+    await act(async () => {
+      buttonByText('保存修改', form).click()
+      await Promise.resolve()
+    })
+    expect(patched).toEqual([
+      [
+        'siliconflow',
+        {
+          displayName: 'SiliconFlow 公司版',
+          protocol: 'openai',
+          baseUrl: 'https://gw.internal/v1',
+          models: ['internal-chat', 'internal-reason'],
+        },
+      ],
+    ])
+    expect(changed).toBe(1)
+    expect(container.querySelector('.modal')).toBeNull()
+    expect(toastTexts()).toContain('「SiliconFlow」已更新')
+  })
+
+  it('保存失败：原因就地显示且拿到焦点，用户刚填的内容原样留着', async () => {
+    const api = fakeApi({
+      updateProvider: () => {
+        return Promise.reject(
+          new Error('模型「m1」正被 小译 使用：先到通讯录把这些 agent 改绑到别的模型，再删这些模型。'),
+        )
+      },
+    })
+    await renderSettings(api, [{ ...customProvider, usedBy: [{ agentId: 'a', agentName: '小译' }] }])
+    act(() => {
+      buttonByText('我的私有服务').click()
+    })
+    act(() => {
+      buttonByText('编辑', container.querySelector('.provider-body')!).click()
+    })
+    const form = container.querySelector('form.provider-form')!
+    const inputs = [...form.querySelectorAll('input')]
+    typeInto(inputs[0]!, '我的私有服务（改了名）')
+    typeInto(form.querySelector('textarea')!, 'm-new')
+    await act(async () => {
+      buttonByText('保存修改', form).click()
+      await Promise.resolve()
+    })
+    const error = form.querySelector('.apikey-error')!
+    expect(error.getAttribute('role')).toBe('alert')
+    // 点名到 agent：用户知道该去改绑谁，而不是"保存失败"三个字。
+    expect(error.textContent).toContain('小译')
+    // 键盘可达：保存失败后焦点直接落在原因上。
+    expect(error.getAttribute('tabindex')).toBe('-1')
+    expect(document.activeElement).toBe(error)
+    // 输入没有被清空：改完原因直接重试就行。
+    expect(container.querySelector('form.provider-form')).not.toBeNull()
+    expect(form.querySelectorAll('input')[0]!.value).toBe('我的私有服务（改了名）')
+    expect(form.querySelector('textarea')!.value).toBe('m-new')
+  })
+
+  it('删模型时先提醒：还在列表里的模型不动，删掉的点名使用者', async () => {
+    const api = fakeApi({ updateProvider: () => Promise.resolve({ provider: customProvider }) })
+    await renderSettings(api, [
+      {
+        ...customProvider,
+        models: [{ id: 'm-in-use' }, { id: 'm-free' }],
+        usedBy: [{ agentId: 'a', agentName: '小译' }],
+      },
+    ])
+    act(() => {
+      buttonByText('我的私有服务').click()
+    })
+    act(() => {
+      buttonByText('编辑', container.querySelector('.provider-body')!).click()
+    })
+    const form = container.querySelector('form.provider-form')!
+    typeInto(form.querySelector('textarea')!, 'm-in-use')
+    const warn = form.querySelector('.provider-warn')
+    expect(warn?.textContent).toContain('m-free')
+    expect(warn?.textContent).toContain('小译')
+    // 只增不减（往回加一个）就不该有提醒。
+    typeInto(form.querySelector('textarea')!, 'm-in-use\nm-free\nm-new')
+    expect(form.querySelector('.provider-warn')).toBeNull()
+  })
+
+  it('服务端没实现编辑接口时：按钮禁用并说明，不让点了没反应', async () => {
+    await renderSettings(fakeApi(), [builtinProvider])
+    act(() => {
+      buttonByText('SiliconFlow').click()
+    })
+    const button = buttonByText('编辑', container.querySelector('.provider-body')!) as HTMLButtonElement
+    expect(button.disabled).toBe(true)
+    expect(button.title).toContain('还不能编辑供应商')
+  })
+
+  it('服务端没实现编辑接口（打开弹窗后）：保存禁用并说明替代做法', async () => {
+    const api = fakeApi({
+      updateProvider: () => Promise.reject(new Error('not found: PATCH /api/providers/custom-abc')),
+    })
+    await renderSettings(api, [builtinProvider])
+    act(() => {
+      buttonByText('SiliconFlow').click()
+    })
+    act(() => {
+      buttonByText('编辑', container.querySelector('.provider-body')!).click()
+    })
+    const form = container.querySelector('form.provider-form')!
+    typeInto(form.querySelectorAll('input')[0]!, 'SiliconFlow 改名')
+    await act(async () => {
+      buttonByText('保存修改', form).click()
+      await Promise.resolve()
+    })
+    const message = form.querySelector('.apikey-error')?.textContent ?? ''
+    expect(message).toContain('还不能编辑供应商')
+    expect(message).toContain('providers.json')
+    expect(message).not.toContain('PATCH /api/providers')
+  })
+
+  it('改过 Base URL 之后，上一次「已验证」的绿点撤掉', async () => {
+    const api = fakeApi({
+      verifyProvider: () => Promise.resolve({ ok: true, message: 'ok', latencyMs: 42 }),
+      updateProvider: () => Promise.resolve({ provider: { ...builtinProvider } }),
+    })
+    await renderSettings(api, [{ ...builtinProvider, baseUrl: 'https://api.siliconflow.cn/v1' }])
+    act(() => {
+      buttonByText('SiliconFlow').click()
+    })
+    await act(async () => {
+      buttonByText('测试连接').click()
+      await Promise.resolve()
+    })
+    expect(container.querySelector('.provider-head')?.textContent).toContain('已验证')
+    // 编辑后父组件重新喂一份端点已改的进来：那枚绿点说的已经不是这个地址。
+    await act(async () => {
+      root?.render(
+        <ProviderSettings
+          api={api}
+          providers={[{ ...builtinProvider, baseUrl: 'https://gw.internal/v1' }]}
+          onChanged={() => {}}
+        />,
+      )
+      await Promise.resolve()
+    })
+    expect(container.querySelector('.provider-head')?.textContent).toContain('凭据已备（未验证）')
+    expect(container.querySelector('.provider-head')?.querySelector('.status-dot.ok')).toBeNull()
   })
 })
 

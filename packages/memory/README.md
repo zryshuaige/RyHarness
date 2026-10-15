@@ -54,12 +54,24 @@
 - **通道异常**：BM25 通道单独 try/catch，坏掉只丢它自己，共享画像照常注入。
 - embedding 不可用的记忆行（手写/API 种入）自动跳过语义通道，仅参与 BM25。
 
+## 扇出与出包
+
+- **一次召回、多成员共享**：`recallMany(agentIds, inputText)` 把同一段输入的
+  查询向量、共享画像、共享空间的语义打分与 BM25 候选窗口各算一次，各成员只补
+  自己的私有空间（@ryagent/group 的扇出走这条路径；没有实现它时退化为逐成员
+  并发 recall）。embedding 请求还有一层**在途合并**：同一段文本的并发请求共享
+  一个 promise，落库缓存只能挡跨轮重复，挡不住同轮扇出（那时谁都还没写回）。
+- **向量不出包**：`MemoryRow.embedding` 是 Float32Array，直接序列化就是一坨
+  `{"0":…}` 下标对象（一页列表可到数 MB）。凡是接口回包都先过
+  `toPublicMemory / toPublicMemories`，只给 id/agentId/kind/content/时间戳/
+  访问数/来源会话。
+
 ## 接入点
 
 - `AgentLoop`：`memory` 选项——组装前 recall、finally 中 enqueue（群聊中每个发言 agent 走自己的空间 + 共享画像）。
 - `SessionCoordinator`：`memory` 选项透传并绑定 conversationId。
-- `@ryagent/server`：默认按环境构建（有 key 全管线/无 key 纯 FTS），`GET /api/agents/:id/memories`、`DELETE /api/memories/:id`（软删）、`GET /api/memory/stats`。
+- `@ryagent/server`：默认按环境构建（有 key 全管线/无 key 纯 FTS），`GET /api/agents/:id/memories`（**回包要过 `toPublicMemories`**）、`DELETE /api/memories/:id`（软删）、`GET /api/memory/stats`。
 
 ## 测试
 
-`tests/`：四操作、UPDATE 软删链、RRF 语义压过 BM25 / 纯 FTS 降序、时间衰减、注入格式、缓存去重、空间隔离、闭环集成（一轮写入二轮召回）、AgentLoop 钩子（注入/finally 入队/故障降级）、server 端点。
+`tests/`：四操作、UPDATE 软删链、RRF 语义压过 BM25 / 纯 FTS 降序、时间衰减、注入格式、缓存去重、空间隔离、扇出共享召回（`recallMany` 与逐成员 recall 内容一致、在途合并只发一次请求、共享画像访问计数按一次输入记）、归档分片、对外投影（响应体不含 embedding）、闭环集成（一轮写入二轮召回）、AgentLoop 钩子（注入/finally 入队/故障降级）、server 端点。

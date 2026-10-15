@@ -1,4 +1,12 @@
-import { type CSSProperties, type ReactNode, useEffect, useRef, useState } from 'react'
+import {
+  type CSSProperties,
+  type KeyboardEvent,
+  type ReactNode,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react'
 import type { AgentDef, Conversation, ConversationPatch, SearchResultRow } from '../api.ts'
 import { ApiClient, resolveApiBase } from '../api.ts'
 import { formatTime } from '../lib/format.ts'
@@ -13,6 +21,12 @@ import { ConversationSkeleton } from './Skeleton.tsx'
 
 /** 搜索框停手多久才真去搜（ms）：边打字边打接口既吵又费。 */
 const SEARCH_DEBOUNCE_MS = 220
+
+/**
+ * 浮层与行之间留的缝（px）。量剩余空间时按它留余量：贴着行下沿展开的话，
+ * 「差一点点放得下」和「放不下」会被判成同一件事，末行就会掉出可视区。
+ */
+const MENU_GAP_PX = 8
 
 /**
  * 单行估算高度（px），对上 .conversation-item 的 min-height。
@@ -65,6 +79,15 @@ const ROW_MAIN: CSSProperties = {
  * 里，内联只留布局——内联优先级高于选择器，写在这里就再也点不亮了。
  */
 const ROW_ACTIONS: CSSProperties = { display: 'flex', alignItems: 'center', flexShrink: 0 }
+
+/**
+ * 翻到行上方的定位（内联，且只写 top/bottom 两个偏移）。
+ *
+ * 外观（底色/圆角/阴影/层级）一律留给样式表——内联优先级高于选择器，写在这里就
+ * 再也点不亮了。这里能覆盖的只有「菜单挂哪一侧」这一件布局事，而它必须内联：翻不翻
+ * 取决于这一行在滚动容器里的实时位置，没有哪条静态选择器知道。
+ */
+const MENU_ABOVE: CSSProperties = { top: 'auto', bottom: 'calc(100% + 8px)' }
 
 /**
  * 片段里的查询词包进行内 <mark>：服务端回的片段是纯文本（首尾各可能带一个省略号），
@@ -150,6 +173,7 @@ export function ConversationList({
   onGoContacts,
   api,
   onChanged,
+  onEditGroup,
   onJumpToMessage,
 }: {
   conversations: Conversation[]
@@ -163,6 +187,8 @@ export function ConversationList({
   api?: ConversationApi
   /** 置顶/静音/删除成功后通知宿主重拉列表。 */
   onChanged?: () => void
+  /** 行尾「群设置」：只有群聊才给这个入口；不传则整项不渲染。 */
+  onEditGroup?: (conversation: Conversation) => void
   /** 搜索命中跳转：除切会话外，把定位交给聊天视图。 */
   onJumpToMessage?: (conversationId: string, messageId: string) => void
 }) {
@@ -173,15 +199,92 @@ export function ConversationList({
   const [overrides, setOverrides] = useState<Record<string, { pinned?: boolean; muted?: boolean }>>({})
   const [removed, setRemoved] = useState<string[]>([])
   const [actionFor, setActionFor] = useState<string | undefined>(undefined)
+  /** 菜单挂在行下方放不下、翻到行上方的那个会话 id。 */
+  const [flippedFor, setFlippedFor] = useState<string | undefined>(undefined)
   const [deleting, setDeleting] = useState<Conversation | undefined>(undefined)
   /** 滚动容器（.conversation-list 自身 overflow-y: auto）：窗口化靠它量 scrollTop。 */
   const scrollRef = useRef<HTMLDivElement | null>(null)
+  /** 同一时刻只有一个菜单开着，一份引用就够（外加各行的触发器，用于 Esc 后还焦）。 */
+  const menuRef = useRef<HTMLDivElement | null>(null)
+  const triggerRef = useRef<HTMLButtonElement | null>(null)
   const mounted = useRef(true)
   useEffect(() => {
     return () => {
       mounted.current = false
     }
   }, [])
+
+  /**
+   * 避让：菜单在行下方展开，而滚动容器会 overflow 裁掉溢出部分——列表末行一点
+   * 「⋯」，三个按钮的下半截就没了（看得见一半、点不到另一半）。
+   *
+   * 翻到行上方由实测剩余空间决定；用 layout effect 是因为它在绘制前跑完，
+   * 量完就改定位，屏幕上不会先闪一帧「裁掉一半的菜单」。量不到高度（高度 0，
+   * 例如布局未完成）就不动——没有证据就不改位置。
+   */
+  useLayoutEffect(() => {
+    if (actionFor === undefined) return
+    const menu = menuRef.current
+    const row = menu?.closest<HTMLElement>('.conversation-item')
+    const viewport = scrollRef.current
+    if (menu === null || row === undefined || row === null || viewport === null) return
+    const menuBox = menu.getBoundingClientRect()
+    if (menuBox.height === 0) return
+    const spaceBelow = viewport.getBoundingClientRect().bottom - row.getBoundingClientRect().bottom
+    setFlippedFor(spaceBelow < menuBox.height + MENU_GAP_PX ? actionFor : undefined)
+  }, [actionFor])
+
+  /** 打开即把焦点落在第一项上：键盘用户不该还要再 Tab 一遍才知道菜单里有东西。 */
+  useEffect(() => {
+    if (actionFor === undefined) return
+    menuRef.current?.querySelector<HTMLButtonElement>('button')?.focus()
+  }, [actionFor])
+
+  /** 点到浮层之外就收起来（含确认删除弹窗盖上来那一下）。 */
+  useEffect(() => {
+    if (actionFor === undefined) return
+    const onPointerDown = (event: MouseEvent): void => {
+      const target = event.target
+      if (!(target instanceof Node)) return
+      if (menuRef.current?.contains(target) === true) return
+      if (triggerRef.current?.contains(target) === true) return
+      setActionFor(undefined)
+      setFlippedFor(undefined)
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown)
+    }
+  }, [actionFor])
+
+  const closeMenu = (restoreFocus: boolean): void => {
+    const trigger = triggerRef.current
+    setActionFor(undefined)
+    setFlippedFor(undefined)
+    if (restoreFocus) trigger?.focus()
+  }
+
+  /** ↑↓ 在菜单里走位，Enter 由按钮自己触发，Esc 收起并把焦点还给「⋯」。 */
+  const onMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      closeMenu(true)
+      return
+    }
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+    const items = [...(menuRef.current?.querySelectorAll('button') ?? [])]
+    if (items.length === 0) return
+    event.preventDefault()
+    const at = items.indexOf(document.activeElement as HTMLButtonElement)
+    const next = event.key === 'ArrowDown' ? at + 1 : at - 1
+    items[(next + items.length) % items.length]?.focus()
+  }
+
+  const toggleMenu = (conversationId: string): void => {
+    const next = actionFor === conversationId ? undefined : conversationId
+    setFlippedFor(undefined)
+    setActionFor(next)
+  }
 
   const client: ConversationApi = api ?? defaultConversationApi()
   const trimmed = query.trim()
@@ -433,20 +536,51 @@ export function ConversationList({
                   <button
                     type="button"
                     className="conversation-more"
+                    ref={(node) => {
+                      // 只记当前展开的那一个：Esc 关闭后要把焦点还回它。
+                      if (actionFor === conversation.id) triggerRef.current = node
+                    }}
                     aria-label={`「${conversation.title || nameOf(conversation.memberAgentIds[0] ?? '')}」的操作`}
                     aria-expanded={actionFor === conversation.id}
-                    title="置顶 / 静音 / 删除"
+                    title={
+                      conversation.kind === 'group' && onEditGroup !== undefined
+                        ? '群设置 / 置顶 / 静音 / 删除'
+                        : '置顶 / 静音 / 删除'
+                    }
                     onClick={() => {
-                      setActionFor((prev) => {
-                        return prev === conversation.id ? undefined : conversation.id
-                      })
+                      toggleMenu(conversation.id)
+                    }}
+                    onKeyDown={(event) => {
+                      // 键盘也要能开：↓ 直接进菜单第一项，↑ 进最后一项。
+                      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+                      event.preventDefault()
+                      if (actionFor === conversation.id) return
+                      toggleMenu(conversation.id)
                     }}
                   >
                     ⋯
                   </button>
                 </span>
                 {actionFor === conversation.id && (
-                  <div className="conversation-item-menu">
+                  // biome-ignore lint/a11y/noStaticElementInteractions: 浮层本身不是控件，↑↓/Esc 是替里面那几个按钮转交的
+                  <div
+                    className="conversation-item-menu"
+                    ref={menuRef}
+                    style={flippedFor === conversation.id ? MENU_ABOVE : undefined}
+                    onKeyDown={onMenuKeyDown}
+                  >
+                    {conversation.kind === 'group' && onEditGroup !== undefined && (
+                      <button
+                        type="button"
+                        className="btn btn-mini"
+                        onClick={() => {
+                          closeMenu(false)
+                          onEditGroup(conversation)
+                        }}
+                      >
+                        群设置
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="btn btn-mini"
@@ -469,6 +603,7 @@ export function ConversationList({
                       type="button"
                       className="btn btn-mini btn-danger"
                       onClick={() => {
+                        closeMenu(false)
                         setDeleting(conversation)
                       }}
                     >

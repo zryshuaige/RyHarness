@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react'
 import type {
   AgentDef,
-  Conversation,
+  MemoryHealthReport,
   MemoryRow,
   MemoryStats,
-  MessageUsageRow,
   ProviderInfo,
   TelemetrySnapshot,
+  UsageReport,
 } from '../api.ts'
 import { toast } from '../lib/toast.ts'
 import { Avatar } from './avatars/Avatar.tsx'
@@ -29,9 +29,8 @@ interface MeApi extends ProviderApi {
    * 用量账单与记忆健康度要读的数据面。方法可选：缺任一条只会让对应区块显示一句
    * 说明（服务端版本落后时最常走这条路），不该让「我的」页报错或空着。
    */
-  conversations?(): Promise<{ conversations: Conversation[] }>
-  listAgents?(): Promise<{ agents: AgentDef[] }>
-  listUsageRows?(conversationId: string, limit?: number): Promise<{ messages: MessageUsageRow[] }>
+  usage?(since?: number): Promise<UsageReport>
+  memoryHealth?(): Promise<MemoryHealthReport>
   memoryStats?(): Promise<MemoryStats>
   telemetry?(limit?: number): Promise<TelemetrySnapshot>
   listArchivedMemories?(): Promise<{ items: MemoryRow[] }>
@@ -172,7 +171,7 @@ export function MePage({
                   <Icon name="clipboard-list" size={15} /> 用量账单
                 </div>
                 <div className="me-row-sub">跨会话、跨供应商累计花了多少 token——换模型前先在这里比一比</div>
-                <UsageLedger api={api} providers={providers} />
+                <UsageLedger api={api} />
               </div>
             </div>
             <div className="me-row" style={{ alignItems: 'flex-start' }}>
@@ -276,22 +275,6 @@ export function MePage({
   )
 }
 
-/** 用量账单的一行：某个会话 / 某家供应商的累计 token。 */
-interface UsageBucket {
-  key: string
-  label: string
-  sub: string
-  input: number
-  output: number
-  total: number
-  messages: number
-}
-
-/** 会话用量，另按发言 agent 拆一份——供应商归因只能用这一维。 */
-interface ConversationUsage extends UsageBucket {
-  byAgent: { agentId: string; input: number; output: number; total: number; messages: number }[]
-}
-
 /** 账单一次最多列出的行数；再多折叠成一句「另有 N 项」。 */
 const LEDGER_ROWS = 8
 
@@ -303,148 +286,97 @@ function formatTokens(value: number): string {
 }
 
 /**
- * 单个会话的用量：服务端把 usage 挂在每条 assistant 消息上，会话级汇总并不保留
- * "哪个 agent 花的"，所以这里读消息行而不是 GET /api/conversations/:id 的合计。
- * 两个维度（按会话 / 按供应商）必须来自同一批消息，否则两栏加总对不上、看着像 bug。
+ * 账单的时间窗口。全部历史由服务端扫描全部消息；带 since 的窗口把统计收到
+ * 「最近 N 天」——换模型前后比花销看的就是这个增量，口径写在界面上而不是藏在代码里。
  */
-async function conversationUsage(api: MeApi, conversation: Conversation): Promise<ConversationUsage> {
-  const rows = (
-    await api.listUsageRows!(conversation.id).catch(() => {
-      return { messages: [] }
-    })
-  ).messages
-  const byAgent = new Map<string, { input: number; output: number; total: number; messages: number }>()
-  let input = 0
-  let output = 0
-  let total = 0
-  let messages = 0
-  for (const row of rows) {
-    const usage = row.usage
-    if (usage === undefined || row.senderId === undefined) continue
-    const rowTotal = usage.totalTokens ?? usage.inputTokens + usage.outputTokens
-    input += usage.inputTokens
-    output += usage.outputTokens
-    total += rowTotal
-    messages += 1
-    const acc = byAgent.get(row.senderId) ?? { input: 0, output: 0, total: 0, messages: 0 }
-    acc.input += usage.inputTokens
-    acc.output += usage.outputTokens
-    acc.total += rowTotal
-    acc.messages += 1
-    byAgent.set(row.senderId, acc)
-  }
+const LEDGER_WINDOWS = [
+  { key: 'all', label: '全部历史', days: undefined },
+  { key: '7d', label: '最近 7 天', days: 7 },
+  { key: '30d', label: '最近 30 天', days: 30 },
+] as const
+
+type LedgerWindow = (typeof LEDGER_WINDOWS)[number]['key']
+
+const DAY_MS = 86_400_000
+
+/** 账单里的一行（两个维度投影成同一张表）。 */
+interface LedgerRow {
+  key: string
+  label: string
+  sub: string
+  input: number
+  output: number
+  total: number
+}
+
+/** 按会话维度：标题 + 会话类型与模型调用次数。 */
+function conversationRow(row: UsageReport['byConversation'][number]): LedgerRow {
   return {
-    key: conversation.id,
-    label: conversation.title,
-    sub: conversation.kind === 'group' ? `群聊 · ${conversation.memberAgentIds.length} 位成员` : '单聊',
-    input,
-    output,
-    total,
-    messages,
-    byAgent: [...byAgent].map(([agentId, acc]) => {
-      return { agentId, ...acc }
-    }),
+    key: row.conversationId,
+    label: row.title === '' ? '（未命名会话）' : row.title,
+    sub: `${row.kind === 'group' ? '群聊' : '单聊'} · ${row.messages} 次模型调用`,
+    input: row.input,
+    output: row.output,
+    total: row.total,
   }
 }
 
-/** 把按会话的账单折成按供应商：发言 agent → 其绑定的供应商（agent 已删则记未知）。 */
-function byProvider(rows: ConversationUsage[], agents: AgentDef[], providers: ProviderInfo[]): UsageBucket[] {
-  const buckets = new Map<string, UsageBucket & { agentNames: Set<string> }>()
-  for (const row of rows) {
-    for (const usage of row.byAgent) {
-      const agent = agents.find((a) => {
-        return a.id === usage.agentId
-      })
-      const providerId = agent?.provider ?? 'unknown'
-      const bucket = buckets.get(providerId) ?? {
-        key: providerId,
-        label:
-          providers.find((p) => {
-            return p.id === providerId
-          })?.displayName ?? providerId,
-        sub: providerId,
-        input: 0,
-        output: 0,
-        total: 0,
-        messages: 0,
-        agentNames: new Set<string>(),
-      }
-      bucket.input += usage.input
-      bucket.output += usage.output
-      bucket.total += usage.total
-      bucket.messages += usage.messages
-      if (agent !== undefined) bucket.agentNames.add(agent.name)
-      buckets.set(providerId, bucket)
-    }
+/** 按供应商维度：显示名 + 花钱最多的几个发言 agent。 */
+function providerRow(row: UsageReport['byProvider'][number]): LedgerRow {
+  const names = row.agents.map((agent) => {
+    return agent.name
+  })
+  return {
+    key: row.provider,
+    label: row.displayName,
+    sub: names.length === 0 ? '发言方已删除' : names.join('、'),
+    input: row.input,
+    output: row.output,
+    total: row.total,
   }
-  return [...buckets.values()]
-    .sort((a, b) => {
-      return b.total - a.total
-    })
-    .map((bucket) => {
-      const names = [...bucket.agentNames]
-      return {
-        key: bucket.key,
-        label: bucket.key === 'unknown' ? '未知供应商' : bucket.label,
-        sub: names.length === 0 ? '发言方已删除' : names.join('、'),
-        input: bucket.input,
-        output: bucket.output,
-        total: bucket.total,
-        messages: bucket.messages,
-      }
-    })
 }
 
 /**
  * 用量账单：跨会话、跨供应商的累计 token。此前只有右栏一行"本会话用了多少"，
  * 换个模型到底贵没贵、花在哪个会话，只能靠感觉。
  *
- * 口径写在界面上：只统计每个会话最近 200 条消息里带 usage 的模型调用（服务端单页
- * 上限），更早的轮次要等聚合端点才有——那也是本块需要服务端补的东西。
+ * 数据来自 GET /api/usage：两个维度由服务端从同一批消息算出，合计恒等于 totals。
+ * 此前这一块是渲染层逐会话翻「最近 200 条消息」自己加总的——超过单页上限的会话
+ * 用量被静默丢掉，而且按供应商那一栏是客户端二次归因，两栏加总对不上看着像 bug。
  */
-function UsageLedger({ api, providers }: { api: MeApi; providers: ProviderInfo[] }) {
-  const [rows, setRows] = useState<ConversationUsage[] | undefined>(undefined)
-  const [agents, setAgents] = useState<AgentDef[]>([])
+function UsageLedger({ api }: { api: MeApi }) {
+  const [report, setReport] = useState<UsageReport | undefined>(undefined)
   const [problem, setProblem] = useState<string | undefined>(undefined)
   const [view, setView] = useState<'conversation' | 'provider'>('conversation')
+  const [windowKey, setWindowKey] = useState<LedgerWindow>('all')
 
   useEffect(() => {
-    if (api.conversations === undefined || api.listUsageRows === undefined) {
+    if (api.usage === undefined) {
       setProblem('这版服务端还没有提供用量数据，账单暂时做不出来。')
       return
     }
+    const scope = LEDGER_WINDOWS.find((item) => {
+      return item.key === windowKey
+    })
     let alive = true
-    const load = async (): Promise<void> => {
-      try {
-        const { conversations } = await api.conversations!()
-        const [perConversation, agentList] = await Promise.all([
-          Promise.all(
-            conversations.map((conversation) => {
-              return conversationUsage(api, conversation)
-            }),
-          ),
-          api.listAgents?.().catch(() => {
-            return { agents: [] }
-          }) ?? Promise.resolve({ agents: [] }),
-        ])
+    setReport(undefined)
+    api
+      .usage(scope?.days === undefined ? undefined : Date.now() - scope.days * DAY_MS)
+      .then((next) => {
         if (!alive) return
-        setRows(
-          perConversation.filter((row) => {
-            return row.messages > 0
-          }),
-        )
-        setAgents(agentList.agents)
+        setReport(next)
         setProblem(undefined)
-      } catch (error) {
+      })
+      .catch((error: unknown) => {
         // 统计读不出来就说读不出来：空表和"真的没用过 token"长得一模一样。
-        if (alive) setProblem(`用量没读出来：${reason(error)}`)
-      }
-    }
-    void load()
+        if (!alive) return
+        setReport(undefined)
+        setProblem(`用量没读出来：${reason(error)}`)
+      })
     return () => {
       alive = false
     }
-  }, [api])
+  }, [api, windowKey])
 
   if (problem !== undefined) {
     return (
@@ -453,7 +385,7 @@ function UsageLedger({ api, providers }: { api: MeApi; providers: ProviderInfo[]
       </p>
     )
   }
-  if (rows === undefined) {
+  if (report === undefined) {
     return (
       <p className="panel-empty" style={{ marginTop: 8 }}>
         用量统计中…
@@ -461,44 +393,67 @@ function UsageLedger({ api, providers }: { api: MeApi; providers: ProviderInfo[]
     )
   }
   const buckets =
-    view === 'conversation' ? [...rows].sort((a, b) => b.total - a.total) : byProvider(rows, agents, providers)
-  const totals = rows.reduce(
-    (acc, row) => {
-      return { input: acc.input + row.input, output: acc.output + row.output, total: acc.total + row.total }
-    },
-    { input: 0, output: 0, total: 0 },
-  )
+    view === 'conversation' ? report.byConversation.map(conversationRow) : report.byProvider.map(providerRow)
+  const scopeLabel = LEDGER_WINDOWS.find((item) => {
+    return item.key === windowKey
+  })?.label
   return (
     <div className="usage-ledger">
       <p className="usage-total">
-        累计 {formatTokens(totals.total)} tokens · 输入 {formatTokens(totals.input)} · 输出{' '}
-        {formatTokens(totals.output)}
-        <span className="usage-scope">覆盖 {rows.length} 个会话 · 每个会话最近 200 条消息</span>
+        累计 {formatTokens(report.totals.total)} tokens · 输入 {formatTokens(report.totals.input)} · 输出{' '}
+        {formatTokens(report.totals.output)}
+        <span className="usage-scope">
+          覆盖 {report.byConversation.length} 个会话 · {scopeLabel} · 只算模型回复的开销
+        </span>
       </p>
       <div className="usage-tabs">
-        <button
-          type="button"
-          aria-pressed={view === 'conversation'}
-          className={view === 'conversation' ? 'usage-tab is-active' : 'usage-tab'}
-          onClick={() => {
-            setView('conversation')
-          }}
-        >
-          按会话
-        </button>
-        <button
-          type="button"
-          aria-pressed={view === 'provider'}
-          className={view === 'provider' ? 'usage-tab is-active' : 'usage-tab'}
-          onClick={() => {
-            setView('provider')
-          }}
-        >
-          按供应商
-        </button>
+        {/* biome-ignore lint/a11y/useSemanticElements: 胶囊按钮组，fieldset 的默认边框与内边距套不上 .usage-tab 的样式 */}
+        <span className="usage-tab-group" role="group" aria-label="统计维度">
+          <button
+            type="button"
+            aria-pressed={view === 'conversation'}
+            className={view === 'conversation' ? 'usage-tab is-active' : 'usage-tab'}
+            onClick={() => {
+              setView('conversation')
+            }}
+          >
+            按会话
+          </button>
+          <button
+            type="button"
+            aria-pressed={view === 'provider'}
+            className={view === 'provider' ? 'usage-tab is-active' : 'usage-tab'}
+            onClick={() => {
+              setView('provider')
+            }}
+          >
+            按供应商
+          </button>
+        </span>
+        <span className="usage-tab-sep" aria-hidden="true" />
+        {/* biome-ignore lint/a11y/useSemanticElements: 同上 */}
+        <span className="usage-tab-group" role="group" aria-label="统计窗口">
+          {LEDGER_WINDOWS.map((item) => {
+            return (
+              <button
+                key={item.key}
+                type="button"
+                aria-pressed={windowKey === item.key}
+                className={windowKey === item.key ? 'usage-tab is-active' : 'usage-tab'}
+                onClick={() => {
+                  setWindowKey(item.key)
+                }}
+              >
+                {item.label}
+              </button>
+            )
+          })}
+        </span>
       </div>
       {buckets.length === 0 ? (
-        <p className="panel-empty">还没有可统计的用量——聊一轮就会出现在这里。</p>
+        <p className="panel-empty">
+          {windowKey === 'all' ? '还没有可统计的用量——聊一轮就会出现在这里。' : `最近 ${scopeLabel}还没有模型调用。`}
+        </p>
       ) : (
         <>
           <ul className="usage-list">

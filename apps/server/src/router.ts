@@ -19,15 +19,36 @@ export interface Request {
 
 export type Handler = (req: Request, res: ServerResponse) => Promise<void>
 
-/** 客户端请求错误（非法 JSON body 等）：dispatch 捕获后回对应 4xx，不再冒泡成 500。 */
+/**
+ * 客户端请求错误（非法 JSON body 等）：dispatch 捕获后回对应 4xx，不再冒泡成 500。
+ *
+ * 带机器码 `code`：错误响应恒为 `{error, code}`，调用方按 `code` 分支，不去解析
+ * `message` 文本。没显式给码时按状态码回落到标准名，因此已有的抛出点
+ * （`new HttpRequestError(400, '…')`）自动就有码可读，不用逐个改写。
+ */
 export class HttpRequestError extends Error {
+  readonly code: string
+
   constructor(
     readonly status: number,
     message: string,
+    code: string = DEFAULT_ERROR_CODES[status] ?? 'REQUEST_FAILED',
   ) {
     super(message)
     this.name = 'HttpRequestError'
+    this.code = code
   }
+}
+
+/** 状态码 → 默认机器码。够用的那一组，不做完整 HTTP 状态码表。 */
+const DEFAULT_ERROR_CODES: Record<number, string> = {
+  400: 'BAD_REQUEST',
+  401: 'UNAUTHORIZED',
+  403: 'FORBIDDEN',
+  404: 'NOT_FOUND',
+  409: 'CONFLICT',
+  413: 'PAYLOAD_TOO_LARGE',
+  429: 'RATE_LIMIT',
 }
 
 interface Route {
@@ -80,7 +101,7 @@ export class Router {
           try {
             params[pattern.slice(1)] = decodeURIComponent(actual)
           } catch {
-            json(res, 400, { error: 'malformed URL encoding' })
+            json(res, 400, { error: 'malformed URL encoding', code: 'BAD_REQUEST' })
             return true
           }
         } else if (pattern !== actual) {
@@ -105,7 +126,7 @@ export class Router {
         await route.handler({ method: req.method ?? 'GET', params, query: url.searchParams, body, raw: req }, res)
       } catch (error) {
         if (error instanceof HttpRequestError) {
-          json(res, error.status, { error: error.message })
+          json(res, error.status, { error: error.message, code: error.code })
           return true
         }
         throw error

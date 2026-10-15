@@ -17,27 +17,33 @@ export async function runCapture(
   // 演示数据：Coding Agent + 群 + 两条消息，让三栏都有内容。
   // 消息直接写 store（不走 POST /messages——那会触发 agent turn，
   // 无 mock 适配器时产生 NO_ADAPTER 错误气泡，有 key 时甚至打真实 API）。
-  const coder = (await (
-    await fetch(`${server.url}/api/agents`, {
+  // 走 HTTP 的两发要带 token：桌面端的后端默认是鉴权的。
+  const post = async (path: string, payload: unknown): Promise<Record<string, unknown>> => {
+    const response = await fetch(`${server.url}${path}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ templateKey: 'coding', name: 'CodeBot' }),
+      headers: {
+        'content-type': 'application/json',
+        ...(server.apiToken === undefined ? {} : { authorization: `Bearer ${server.apiToken}` }),
+      },
+      body: JSON.stringify(payload),
     })
-  ).json()) as { agent: { id: string } }
-  const conv = (await (
-    await fetch(`${server.url}/api/conversations`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ kind: 'group', memberAgentIds: ['ryen', coder.agent.id], title: '产品三人组' }),
-    })
-  ).json()) as { conversation: { id: string } }
+    return (await response.json()) as Record<string, unknown>
+  }
+  const created = await post('/api/agents', { templateKey: 'coding', name: 'CodeBot' })
+  const coder = created.agent as { id: string }
+  const conv = await post('/api/conversations', {
+    kind: 'group',
+    memberAgentIds: ['ryen', coder.id],
+    title: '产品三人组',
+  })
+  const conversation = conv.conversation as { id: string }
   server.store.appendMessage({
-    conversationId: conv.conversation.id,
+    conversationId: conversation.id,
     senderType: 'user',
     contentBlocks: [{ type: 'text', text: '大家好，这是界面截图测试' }],
   })
   server.store.appendMessage({
-    conversationId: conv.conversation.id,
+    conversationId: conversation.id,
     senderType: 'agent',
     senderId: 'ryen',
     contentBlocks: [{ type: 'text', text: '收到喵——我是 Ryen，这是截图模式的演示消息。' }],

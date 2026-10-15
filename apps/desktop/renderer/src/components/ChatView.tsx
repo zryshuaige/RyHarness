@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AgentDef, ApiClient, Conversation, MessageRow } from '../api.ts'
 import { messageText } from '../api.ts'
 import { formatTime } from '../lib/format.ts'
 import { toast } from '../lib/toast.ts'
+import { explainTurnError, type TurnErrorTarget } from '../lib/turn-errors.ts'
 import { LEAVE_MS, prefersReducedMotion, useLeaving } from '../lib/useLeaving.ts'
+import { DEFAULT_OVERSCAN, FALLBACK_VIEWPORT_ROWS, visibleRange, windowSlice } from '../lib/windowed.ts'
 import type { ChatStore, MessageAttachment, UiMessage } from '../store.ts'
 import { composeMessageText, useChat } from '../store.ts'
 import { Cat } from './Cat.tsx'
@@ -52,11 +54,86 @@ export function fromHistory(rows: MessageRow[], nameOf: (id: string) => string):
   return out
 }
 
+/**
+ * 合并一段来自服务端的窗口（搜索命中的 around 窗口）到已加载历史。
+ *
+ * 纯函数：已存在（同 key）的不动——定位窗口往往与已加载的那一页重叠，重复插入
+ * 会让同一条消息在流里出现两次。新的按 seq 归位，这样"往前翻历史"与"跳到某条
+ * 命中"两条来路的消息仍然是一条按时间排好的流。
+ */
+export function mergeHistory(current: UiMessage[], incoming: UiMessage[]): UiMessage[] {
+  if (incoming.length === 0) return current
+  const merged = new Map<string, UiMessage>(
+    current.map((message) => {
+      return [message.key, message]
+    }),
+  )
+  let added = false
+  for (const message of incoming) {
+    if (merged.has(message.key)) continue
+    merged.set(message.key, message)
+    added = true
+  }
+  if (!added) return current
+  return [...merged.values()].sort((a, b) => {
+    return (a.seq ?? 0) - (b.seq ?? 0)
+  })
+}
+
+/** 服务端消息 id（React key 的 `hist:` 前缀摘掉后就是它，见 MessageBubble）。 */
+function serverMessageId(key: string): string {
+  return key.startsWith('hist:') ? key.slice('hist:'.length) : key
+}
+
+/** 搜索命中定位时向服务端要的上下文字段数（GET /messages 的 around 游标）。 */
+export const REVEAL_WINDOW = 25
+
+/**
+ * 取一条消息前后的窗口。
+ *
+ * 全文搜索能指到会话里任意一条历史消息，但聊天区只加载了最新一页——命中多半不在
+ * 已加载的窗口内，此前点命中只能"什么都没发生"。这一段窗口就是那次跳转的上下文。
+ *
+ * 走 fetch 而不是 ApiClient.messages()：后者的游标只有 limit/before（两个都表达不了
+ * "以某条为中心"），而那组游标语义稳定、不该为了一个跳转再加第三个。
+ */
+export async function fetchMessageWindow(
+  api: ApiClient,
+  conversationId: string,
+  messageId: string,
+  window: number = REVEAL_WINDOW,
+): Promise<MessageRow[]> {
+  const params = new URLSearchParams({ around: messageId, window: String(window) })
+  const response = await fetch(`${api.base}/api/conversations/${conversationId}/messages?${params.toString()}`)
+  // 404 = 服务端说这条消息不在库里（被删了，或超出它的回扫上限）：不是故障，如实
+  // 返回空窗口，让调用方讲"找不到了"而不是"服务没起来"。
+  if (response.status === 404) return []
+  if (!response.ok) throw new Error(`HTTP ${response.status}`)
+  const body = (await response.json().catch(() => {
+    return {}
+  })) as { messages?: MessageRow[] }
+  return Array.isArray(body.messages) ? body.messages : []
+}
+
 /** 距底阈值：超过则停止自动跟随（报告 §5 的 100px 规则）。 */
 const FOLLOW_THRESHOLD = 100
 
 /** 每页历史消息数（向上翻页）。 */
 const PAGE_SIZE = 50
+
+/** 单条气泡的高度估算（px）：短文本一行 + 内边距。 */
+const BUBBLE_ESTIMATE_PX = 76
+/** 一个 turn（轮次块：时间分隔 + 至少一条气泡）的高度估算（px）。 */
+const TURN_ESTIMATE_PX = 88
+/**
+ * 多少轮以上才启动窗口化：短会话一次性渲染完，滚动条长度、观感与此前完全一致，
+ * 窗口化只对真正会长的流有意义。
+ */
+const WINDOW_MIN_TURNS = 30
+/** 定位时把命中那一轮上方再留几轮余量，避免 scrollIntoView 顶在容器边缘。 */
+const REVEAL_LEAD_TURNS = 2
+/** 定位后补空洞最多翻几页（每页 PAGE_SIZE 条）。 */
+const GAP_BRIDGE_PAGES = 3
 
 /** 单个附件上限：走 JSON base64 进内存，超过 20MB 先在客户端挡住。 */
 const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
@@ -73,9 +150,6 @@ export function toBase64(bytes: Uint8Array): string {
   }
   return btoa(binary)
 }
-
-/** 渲染上限：超长会话只渲染最近若干条，「加载更早」时同步放宽。 */
-const RENDER_CAP = 150
 
 /** 程序化滚动到底；smooth 仅用于「跳至最新」，流式跟随必须即时。
  *  前庭障碍用户关掉动效时 smooth 仍是平滑滚动——同样的位移，同样的动效。 */
@@ -99,6 +173,7 @@ export function ChatView({
   agents,
   store,
   onRead,
+  onNavigate,
   pendingSend,
   onPendingSendDone,
 }: {
@@ -107,6 +182,12 @@ export function ChatView({
   agents: AgentDef[]
   store: ChatStore
   onRead?: () => void
+  /**
+   * 错误条上的可行动作要跳面板时走这里（见 lib/turn-errors.ts 的 TurnErrorTarget）。
+   * 不传时动作退化成窗口事件 `ryagent:navigate`（detail 同 TurnErrorTarget），由
+   * 壳里的导航接线接——聊天视图自己不持有 tab 状态。
+   */
+  onNavigate?: (target: TurnErrorTarget) => void
   /**
    * 待发送的首条消息（欢迎页：先把会话切过来、WS 订阅建好，再发出去）。
    * 见挂载 effect 里的发送时机——顺序反了这条消息就落在订阅之前。
@@ -120,13 +201,21 @@ export function ChatView({
   const [hasMore, setHasMore] = useState(false)
   const [historyLoaded, setHistoryLoaded] = useState(false)
   const [loadingEarlier, setLoadingEarlier] = useState(false)
-  const [renderCap, setRenderCap] = useState(RENDER_CAP)
   const [showJump, setShowJump] = useState(false)
   const [conn, setConn] = useState<'open' | 'reconnecting'>('open')
   const [connDismissed, setConnDismissed] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
   const restoreScroll = useRef<{ prevHeight: number; prevTop: number } | null>(null)
+  /**
+   * 视口位置（窗口化用）：跟 {@link stickToBottom} 同源，但要在渲染里读到，
+   * 所以留一份 state——ref 改了不重渲染，窗口就停在旧区间。
+   */
+  const [atBottom, setAtBottom] = useState(true)
+  const [viewTop, setViewTop] = useState(0)
+  const [viewHeight, setViewHeight] = useState(0)
+  /** 待定位的搜索命中消息 id；拿到后滚过去并高亮（见定位 effect）。 */
+  const [revealTarget, setRevealTarget] = useState<string | undefined>(undefined)
   const [catMood, setCatMood] = useState<'idle' | 'thinking' | 'happy'>('idle')
   /**
    * 用户中止过当前这轮。store 只在 message-done 里清 typing，而中止路径不再有
@@ -134,6 +223,12 @@ export function ChatView({
    * 到达时兜底确认，新一轮开始时清掉。
    */
   const [stopped, setStopped] = useState(false)
+
+  /** 贴底状态的两个真源一起改：ref 供回调与 effect 读，state 供渲染读。 */
+  const pinBottom = useCallback((value: boolean): void => {
+    stickToBottom.current = value
+    setAtBottom(value)
+  }, [])
 
   const nameOf = useCallback(
     (id: string): string => {
@@ -162,11 +257,65 @@ export function ChatView({
     [agentById],
   )
 
+  // 中止后 store 里的流式消息永远停在 done=false（没有 message-done），光标会一直闪。
+  // 冻结成"已完结"再渲染：只在中止那一次分配数组，正常的流式路径零开销。
+  const streamed = stopped
+    ? snapshot.messages.map((message) => {
+        return message.done ? message : { ...message, done: true }
+      })
+    : snapshot.messages
+  const allMessages = useMemo(() => {
+    return [...history, ...streamed]
+  }, [history, streamed])
+  const allMessagesRef = useRef<UiMessage[]>([])
+  allMessagesRef.current = allMessages
+
+  /** 按 turn 分组；turn 间插时间分隔；同 sender 相邻收紧。 */
+  const turns = useMemo(() => {
+    const groups: { turnIndex: number; time: number | undefined; messages: UiMessage[] }[] = []
+    for (const message of allMessages) {
+      const last = groups[groups.length - 1]
+      if (last === undefined || last.turnIndex !== message.turnIndex) {
+        groups.push({ turnIndex: message.turnIndex, time: message.createdAt, messages: [message] })
+      } else {
+        last.messages.push(message)
+      }
+    }
+    return groups
+  }, [allMessages])
+
+  /**
+   * 一个 turn 块的估算高度：按本会话实际的消息密度算（群聊一轮三五句、单聊常常
+   * 一来一回两条），估偏了只是哨兵略有出入，滚动条仍连续——与 lib/windowed.ts 里
+   * 那套"定高估算"的取舍一致。
+   */
+  const turnEstimate = useMemo(() => {
+    const perTurn = turns.length === 0 ? 1 : allMessages.length / turns.length
+    return Math.max(TURN_ESTIMATE_PX, Math.round(perTurn * BUBBLE_ESTIMATE_PX))
+  }, [allMessages.length, turns.length])
+
+  /** 只渲染可视区 + 上下哨兵（会话列表已是同一套能力，见 lib/windowed.ts）。 */
+  const windowed = turns.length > WINDOW_MIN_TURNS
+  const chatWindow = useMemo(() => {
+    const viewportHeight = viewHeight > 0 ? viewHeight : turnEstimate * FALLBACK_VIEWPORT_ROWS
+    const range = visibleRange({
+      count: turns.length,
+      estimateHeight: turnEstimate,
+      /**
+       * 贴底时无视 scrollTop（那一帧可能还停在旧值），窗口直接钉在末尾：新消息
+       * 到达时窗口已经把它算进去了，否则"跟随底部"要等下一次滚动事件才补上。
+       */
+      scrollTop: windowed && atBottom ? Number.POSITIVE_INFINITY : viewTop,
+      viewportHeight,
+      overscan: DEFAULT_OVERSCAN,
+    })
+    return windowSlice(turns, windowed ? range : { start: 0, end: turns.length }, turnEstimate)
+  }, [atBottom, turnEstimate, turns, viewHeight, viewTop, windowed])
+
   /** 断线缺口/重连后重拉最新一页历史 + 调度事件，重置流式状态。 */
   const reloadLatest = useCallback((): void => {
     store.reset()
-    setRenderCap(RENDER_CAP)
-    stickToBottom.current = true
+    pinBottom(true)
     api
       .messages(conversation.id, { limit: PAGE_SIZE })
       .then(({ messages }) => {
@@ -180,9 +329,36 @@ export function ChatView({
         store.setDispatchHistory(events)
       })
       .catch(() => {})
-  }, [api, conversation.id, nameOf, store])
+  }, [api, conversation.id, nameOf, pinBottom, store])
   const reloadRef = useRef(reloadLatest)
   reloadRef.current = reloadLatest
+
+  /**
+   * 把一条已经上屏的用户消息真的发出去，并回填送达状态。
+   *
+   * 「上屏」与「送达」是两件事：气泡先本地插入（用户不用等网络），回执到了才算
+   * 送达。失败必须留在气泡上（消息没到服务端，界面上得看得出来），而不是只弹一条
+   * 转瞬即逝的红条——此前两者都缺，气泡看上去和送达的一模一样。
+   */
+  const deliver = useCallback(
+    (key: string, text: string, attachments: readonly MessageAttachment[]): void => {
+      void api
+        .postMessage(conversation.id, composeMessageText(text, attachments))
+        .then(() => {
+          store.setUserMessageDelivery(key, 'sent')
+        })
+        .catch((error: unknown) => {
+          store.setUserMessageDelivery(key, 'failed')
+          store.apply({
+            type: 'error',
+            conversationId: conversation.id,
+            message: error instanceof Error ? error.message : String(error),
+            code: 'HTTP',
+          })
+        })
+    },
+    [api, conversation.id, store],
+  )
 
   /**
    * 发一轮：先把用户消息落到 store（本地即刻可见），再发给服务端。
@@ -191,20 +367,67 @@ export function ChatView({
    */
   const dispatch = useCallback(
     (text: string, turnIndex: number, attachments: readonly MessageAttachment[] = []): void => {
-      store.addUserMessage(text, turnIndex, attachments)
-      stickToBottom.current = true
+      const key = store.addUserMessage(text, turnIndex, attachments)
+      pinBottom(true)
       setStopped(false)
-      void api.postMessage(conversation.id, composeMessageText(text, attachments)).catch((error: unknown) => {
-        store.apply({
-          type: 'error',
-          conversationId: conversation.id,
-          message: error instanceof Error ? error.message : String(error),
-          code: 'HTTP',
-        })
-      })
+      deliver(key, text, attachments)
     },
-    [api, conversation.id, store],
+    [deliver, pinBottom, store],
   )
+
+  /** 从已上屏的气泡里取回正文与附件（重试时原样重发同一轮）。 */
+  const payloadOf = useCallback((message: UiMessage): { text: string; attachments: MessageAttachment[] } => {
+    const text: string[] = []
+    const attachments: MessageAttachment[] = []
+    for (const part of message.parts) {
+      if (part.kind === 'text') text.push(part.text)
+      else if (part.kind === 'file') {
+        attachments.push({ name: part.name, size: part.size, mime: part.mime })
+      }
+    }
+    return { text: text.join('\n'), attachments }
+  }, [])
+
+  /**
+   * 重发同一轮：气泡不新增，原地回到"发送中"。
+   *
+   * 重发的是**这一轮**而不是追加一条新消息——失败的那条本来就没到服务端，用户
+   * 看到的仍然是"我刚说的那句话"，只是又试了一次。
+   */
+  const retryMessage = useCallback(
+    (message: UiMessage): void => {
+      const { text, attachments } = payloadOf(message)
+      store.clearError()
+      store.setUserMessageDelivery(message.key, 'pending')
+      pinBottom(true)
+      setStopped(false)
+      deliver(message.key, text, attachments)
+    },
+    [deliver, payloadOf, pinBottom, store],
+  )
+
+  /** 错误条上的「重试这一轮」：优先重发没送达的那条，否则把最后一句话重发一遍。 */
+  const retryLastTurn = useCallback((): void => {
+    const failed = [...allMessagesRef.current].reverse().find((message) => {
+      return message.senderType === 'user' && message.delivery === 'failed'
+    })
+    const lastUser =
+      failed ??
+      [...allMessagesRef.current].reverse().find((message) => {
+        return message.senderType === 'user'
+      })
+    if (lastUser === undefined) {
+      toast.info('还没有可以重发的消息')
+      return
+    }
+    if (lastUser === failed) {
+      retryMessage(lastUser)
+      return
+    }
+    // 已送达的一轮失败在模型侧：把它原样再发一轮，是用户期待的"再试一次"。
+    const { text, attachments } = payloadOf(lastUser)
+    dispatch(text, nextTurnIndex(allMessagesRef.current), attachments)
+  }, [dispatch, payloadOf, retryMessage])
 
   /**
    * 附件落库：字节 POST 给会话的文件端点，由它写进工作区产物目录，
@@ -247,11 +470,13 @@ export function ChatView({
     store.reset()
     setHistoryLoaded(false)
     setHasMore(false)
-    setRenderCap(RENDER_CAP)
+    setViewTop(0)
+    setViewHeight(0)
+    setRevealTarget(undefined)
     setConn('open')
     setConnDismissed(false)
     setStopped(false)
-    stickToBottom.current = true
+    pinBottom(true)
     /**
      * 订阅建好、历史就位之后才发欢迎页那条消息。
      * 反过来（先 postMessage 再建订阅）的话，这一轮的事件全部落在订阅建立之前：
@@ -340,9 +565,6 @@ export function ChatView({
       setHistory((prev) => {
         return [...older, ...prev]
       })
-      setRenderCap((cap) => {
-        return cap + PAGE_SIZE
-      })
     } catch {
       // 加载失败保持现状，用户可重试。
     } finally {
@@ -350,37 +572,190 @@ export function ChatView({
     }
   }
 
+  /**
+   * 把定位窗口与已加载页之间的空洞补上（就地往 incoming 里追加）。
+   *
+   * 窗口来自一次 around 请求、已加载页是最新一页，两者之间常常隔着一大段：直接合并
+   * 的话，用户从命中往下一滚就会撞见"对话少了一段"。这里拿既有的 before 游标从已加载
+   * 页最早处往回翻，把中间补齐；翻满上限仍接不上就停——那是隔了上千条的老消息，
+   * 以命中附近的窗口为准比再翻几十页有用。
+   */
+  const closeGapToLoaded = useCallback(
+    async (incoming: UiMessage[]): Promise<void> => {
+      let loadedFirst = allMessagesRef.current.find((message) => {
+        return message.seq !== undefined
+      })?.seq
+      const windowLast = incoming[incoming.length - 1]?.seq
+      if (loadedFirst === undefined || windowLast === undefined || windowLast >= loadedFirst - 1) return
+      for (let page = 0; page < GAP_BRIDGE_PAGES; page++) {
+        const { messages } = await api.messages(conversation.id, { limit: PAGE_SIZE, before: loadedFirst })
+        if (messages.length === 0) return
+        const rows = fromHistory(messages, nameOf)
+        incoming.push(...rows)
+        const earliest = rows[0]?.seq
+        if (earliest === undefined || earliest <= windowLast) return
+        loadedFirst = earliest
+      }
+    },
+    [api, conversation.id, nameOf],
+  )
+
+  /**
+   * 搜索命中的定位：本地窗口里没有这条消息，就向服务端要一段 around 窗口。
+   *
+   * 聊天区一次只加载最新一页，命中多半在更早的历史里——此前点命中只会"什么都不
+   * 发生"（会话切过去了、消息不在 DOM 里、scrollIntoView 找不到节点）。这里补
+   * 齐上下文把它插进流里，再交给下面的定位 effect 滚过去。
+   */
+  const revealMessage = useCallback(
+    async (messageId: string): Promise<void> => {
+      pinBottom(false)
+      setShowJump(true)
+      if (
+        !allMessagesRef.current.some((message) => {
+          return serverMessageId(message.key) === messageId
+        })
+      ) {
+        try {
+          const rows = await fetchMessageWindow(api, conversation.id, messageId)
+          const incoming = fromHistory(rows, nameOf)
+          if (incoming.length === 0) {
+            toast.error('这条消息已经不在了，换个关键词再搜')
+            return
+          }
+          await closeGapToLoaded(incoming)
+          setHistory((prev) => {
+            return mergeHistory(prev, incoming)
+          })
+        } catch {
+          toast.error('没能定位到这条消息，检查一下本地服务是否在运行')
+          return
+        }
+      }
+      setRevealTarget(messageId)
+    },
+    [api, closeGapToLoaded, conversation.id, nameOf, pinBottom],
+  )
+
+  // 左栏搜索命中抛来的定位事件（见 ConversationList 的 onJumpToMessage）。
+  useEffect(() => {
+    const onJump = (event: Event): void => {
+      const detail = (event as CustomEvent<{ conversationId?: string; messageId?: string }>).detail
+      if (detail?.conversationId !== conversation.id || typeof detail.messageId !== 'string') return
+      void revealMessage(detail.messageId)
+    }
+    window.addEventListener('ryagent:scroll-to-message', onJump)
+    return () => {
+      window.removeEventListener('ryagent:scroll-to-message', onJump)
+    }
+  }, [conversation.id, revealMessage])
+
+  /**
+   * 滚到待定位的那条消息，并把窗口挪到它所在的那一轮。
+   *
+   * 两件事都得做：窗口化之后命中很可能**不在渲染窗口里**，只 scrollIntoView 等于
+   * 找不到节点（这正是"静默失败"的第二层）。先按估算高度把视口挪到那一轮附近，
+   * 再交给 DOM 精确定位。隔几拍重试是因为窗口重算是同一帧的事，节点未必已经挂上。
+   */
+  useEffect(() => {
+    if (revealTarget === undefined) return
+    const index = turns.findIndex((turn) => {
+      return turn.messages.some((message) => {
+        return serverMessageId(message.key) === revealTarget
+      })
+    })
+    if (index >= 0) {
+      pinBottom(false)
+      setViewTop(Math.max(0, (index - REVEAL_LEAD_TURNS) * turnEstimate))
+    }
+    const safe =
+      typeof CSS !== 'undefined' && typeof CSS.escape === 'function' ? CSS.escape(revealTarget) : revealTarget
+    const timers = [0, 120, 360, 800].map((delay) => {
+      return window.setTimeout(() => {
+        const node = document.querySelector<HTMLElement>(`[data-message-id="${safe}"]`)
+        if (node === null) return
+        node.scrollIntoView?.({ block: 'center' })
+        node.classList.add('is-search-hit')
+        window.setTimeout(() => {
+          node.classList.remove('is-search-hit')
+        }, 2400)
+        setRevealTarget(undefined)
+      }, delay)
+    })
+    // 一直定位不到（消息被删了、或它始终不在窗口里）也别把"定位中"挂成常态：
+    // 那个状态会让滚动对齐一直让路。超时即收工，之后照样可以再点一次命中。
+    timers.push(
+      window.setTimeout(() => {
+        setRevealTarget(undefined)
+      }, 1400),
+    )
+    return () => {
+      for (const timer of timers) window.clearTimeout(timer)
+    }
+    // 依赖 turns.length 而非 turns 本身：流式追加每个 token 都会换掉 turns 的
+    // 身份，盯着它会让这套重试每帧重来一遍；历史真正变长（定位窗口插进来）才是
+    // 需要重算位置的那一刻。
+  }, [revealTarget, turns.length, turnEstimate, pinBottom])
+
   // 滚动：翻页前插后还原视口；否则仅当视口距底 < 100px 时即时跟随（报告 §5）。
   // 依赖 snapshot.messages 的身份（store 每次通知都重建数组），流式追加也触发。
+  const syncRef = useRef({ scrollTop: 0, padTop: 0 })
   useEffect(() => {
     const node = scrollRef.current
     if (node === null) return
     const restore = restoreScroll.current
     restoreScroll.current = null
+    const synced = syncRef.current
+    const movedByUser = node.scrollTop - synced.scrollTop
     if (restore !== null) {
       node.scrollTop = node.scrollHeight - restore.prevHeight + restore.prevTop
+      syncRef.current = { scrollTop: node.scrollTop, padTop: chatWindow.padTop }
       return
     }
     if (stickToBottom.current) scrollToBottom(node, false)
+    /**
+     * 上哨兵变高（窗口上沿下移）时把 scrollTop 一起搬走，视口才停在原来那条消息上。
+     * 只在"用户自己没滚过、也没有定位任务在跑"时搬：哨兵高度变了也可能只是他滚动
+     * 导致的窗口重算，那时候再补一次位移就等于把他拽回原处。
+     */ else if (movedByUser === 0 && revealTarget === undefined && chatWindow.padTop !== synced.padTop) {
+      node.scrollTop += chatWindow.padTop - synced.padTop
+    }
+    syncRef.current = { scrollTop: node.scrollTop, padTop: chatWindow.padTop }
     setShowJump(!stickToBottom.current)
-  }, [snapshot.messages, history, snapshot.typing])
+    // chatWindow 是本轮渲染的窗口切片；它变了才需要重新对齐。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snapshot.messages, history, snapshot.typing, chatWindow, revealTarget])
 
+  const pendingFrame = useRef(0)
   const handleScroll = (): void => {
     const node = scrollRef.current
     if (node === null) return
     const distance = node.scrollHeight - node.scrollTop - node.clientHeight
-    stickToBottom.current = distance < FOLLOW_THRESHOLD
+    pinBottom(distance < FOLLOW_THRESHOLD)
     setShowJump(distance >= FOLLOW_THRESHOLD)
     // 触顶自动翻页：向上回看历史时不该反复点按钮，也让"窗口"随浏览自然长大。
     if (node.scrollTop < 160 && hasMore && !loadingEarlier) {
       void loadEarlier()
     }
+    // 视口位置按帧合并：连续滚动下每帧最多重算一次窗口，而不是每个 scroll 事件
+    // 都让整条消息流重渲染（与 lib/windowed.ts 里 useVisibleWindow 的取舍一致）。
+    if (pendingFrame.current !== 0) return
+    pendingFrame.current = requestAnimationFrame(() => {
+      pendingFrame.current = 0
+      setViewTop(node.scrollTop)
+      setViewHeight(node.clientHeight)
+    })
   }
+  useEffect(() => {
+    return () => {
+      if (pendingFrame.current !== 0) cancelAnimationFrame(pendingFrame.current)
+    }
+  }, [])
 
   const jumpToLatest = (): void => {
     const node = scrollRef.current
     if (node === null) return
-    stickToBottom.current = true
+    pinBottom(true)
     scrollToBottom(node, true)
     setShowJump(false)
   }
@@ -415,17 +790,9 @@ export function ChatView({
 
   const send = (text: string, attachments?: MessageAttachment[]): void => {
     // turnIndex 基于全量消息（历史 + 流式快照），与服务端口径一致。
-    dispatch(text, nextTurnIndex([...history, ...snapshot.messages]), attachments ?? [])
+    dispatch(text, nextTurnIndex(allMessages), attachments ?? [])
   }
 
-  // 中止后 store 里的流式消息永远停在 done=false（没有 message-done），光标会一直闪。
-  // 冻结成"已完结"再渲染：只在中止那一次分配数组，正常的流式路径零开销。
-  const streamed = stopped
-    ? snapshot.messages.map((message) => {
-        return message.done ? message : { ...message, done: true }
-      })
-    : snapshot.messages
-  const allMessages = [...history, ...streamed]
   /**
    * 「这一轮还在跑」的判据是「还有没写完的消息」，不是 typing 计数：首个
    * text-delta 到达后 store 会清掉 typing（「正在输入」不该和正在出字的气泡
@@ -433,10 +800,6 @@ export function ChatView({
    */
   const streamingActive =
     !stopped && (Object.keys(snapshot.typing).length > 0 || streamed.some((message) => !message.done))
-  // 渲染上限随「加载更早」同步放宽（renderCap 初始 RENDER_CAP，每次翻页 +PAGE_SIZE）。
-  const visibleMessages = allMessages.length > renderCap ? allMessages.slice(-renderCap) : allMessages
-  const allMessagesRef = useRef<UiMessage[]>([])
-  allMessagesRef.current = allMessages
 
   // 稳定引用：MessageBubble 的 memo 依赖这两个 prop 的身份不变。
   const fileUrl = useCallback(
@@ -490,20 +853,6 @@ export function ChatView({
     [api, conversation.id, agentById],
   )
 
-  // 按 turn 分组；turn 间插时间分隔；同 sender 相邻收紧。
-  const turns = useMemo(() => {
-    const groups: { turnIndex: number; time: number | undefined; messages: UiMessage[] }[] = []
-    for (const message of visibleMessages) {
-      const last = groups[groups.length - 1]
-      if (last === undefined || last.turnIndex !== message.turnIndex) {
-        groups.push({ turnIndex: message.turnIndex, time: message.createdAt, messages: [message] })
-      } else {
-        last.messages.push(message)
-      }
-    }
-    return groups
-  }, [visibleMessages])
-
   const typingAgents = Object.keys(snapshot.typing).filter((id) => {
     return id !== 'user'
   })
@@ -518,6 +867,36 @@ export function ChatView({
   const errorBanner = useLeaving(LEAVE_MS, snapshot.error)
   const jumpButton = useLeaving(LEAVE_MS, showJump ? true : undefined)
   const queueHint = useLeaving(LEAVE_MS, snapshot.queueing ? true : undefined)
+
+  /**
+   * 红条上那一句人话（见 lib/turn-errors.ts）。
+   *
+   * 取的是 errorBanner.shown 而不是 snapshot.error：退场动画期间 snapshot 已经
+   * 没了错误，而红条还得留在屏幕上走完动画——跟着 snapshot 走会让文案和按钮在
+   * 动画第一帧就消失。
+   */
+  const explainedError = useMemo(() => {
+    return errorBanner.shown === undefined
+      ? undefined
+      : explainTurnError(errorBanner.shown.code, errorBanner.shown.message)
+  }, [errorBanner.shown])
+
+  /**
+   * 错误条上的动作：重试就地做；跳面板交给宿主（聊天视图不持有 tab 状态）。
+   * 宿主没接线时抛窗口事件 `ryagent:navigate`（detail 带同一个 target），壳里
+   * 一个监听就能接上——不接也只是那一次点击没有去处，其余行为不变。
+   */
+  const runErrorAction = (target: TurnErrorTarget): void => {
+    if (target === 'retry') {
+      retryLastTurn()
+      return
+    }
+    if (onNavigate === undefined) {
+      window.dispatchEvent(new CustomEvent('ryagent:navigate', { detail: { target } }))
+      return
+    }
+    onNavigate(target)
+  }
 
   return (
     <section className="chat-view">
@@ -570,42 +949,66 @@ export function ChatView({
               {loadingEarlier ? '载入中…' : '↑ 加载更早消息'}
             </button>
           )}
-          {allMessages.length > renderCap && (
-            <button
-              type="button"
-              className="chat-hint chat-hint-btn"
-              onClick={() => {
-                // 展开窗口而不是丢弃消息：用户点了就等于"这些我要看"。
-                setRenderCap((cap) => {
-                  return cap + PAGE_SIZE * 2
-                })
-              }}
-            >
-              ↑ 还有 {allMessages.length - renderCap} 条更早的消息，点此展开
-            </button>
-          )}
-          {turns.map((turn) => (
+          {/* 上哨兵：撑住被窗口截掉的上方内容，滚动条长度才不会随窗口抖动。 */}
+          {chatWindow.padTop > 0 && <div style={{ height: chatWindow.padTop }} aria-hidden="true" />}
+          {chatWindow.visible.map((turn) => (
             <div key={turn.turnIndex} className="turn-block">
               {turn.time !== undefined && <div className="turn-time">{formatTime(turn.time)}</div>}
               <RelayChain relays={snapshot.relays} turnIndex={turn.turnIndex} nameOf={nameOf} avatarOf={avatarOf} />
               {turn.messages.map((message, index) => (
-                <MessageBubble
-                  key={message.key}
-                  message={message}
-                  fileUrl={fileUrl}
-                  agent={agentById(message.senderId)}
-                  tight={index > 0 && turn.messages[index - 1]?.senderId === message.senderId}
-                  firstOfGroup={index === 0 || turn.messages[index - 1]?.senderId !== message.senderId}
-                  // 历史消息一次性 150 条同时淡入像掉帧，只有本次会话新到的才播进场。
-                  animated={!message.key.startsWith('hist:')}
-                  onFeedback={onFeedback}
-                />
+                <Fragment key={message.key}>
+                  <MessageBubble
+                    message={message}
+                    fileUrl={fileUrl}
+                    agent={agentById(message.senderId)}
+                    tight={index > 0 && turn.messages[index - 1]?.senderId === message.senderId}
+                    firstOfGroup={index === 0 || turn.messages[index - 1]?.senderId !== message.senderId}
+                    // 历史消息一次性几十条同时淡入像掉帧，只有本次会话新到的才播进场。
+                    animated={!message.key.startsWith('hist:')}
+                    onFeedback={onFeedback}
+                  />
+                  {/* 没送达的气泡自带失败态与重试入口：发失败的消息长得跟送达的一模
+                      一样，用户只会以为 agent 还没开始答。 */}
+                  {message.delivery === 'failed' && (
+                    <p className="chat-hint">
+                      <Icon name="alert" size={12} /> 发送失败，这条没送到
+                      <button
+                        type="button"
+                        className="btn btn-mini"
+                        onClick={() => {
+                          retryMessage(message)
+                        }}
+                      >
+                        重试
+                      </button>
+                    </p>
+                  )}
+                </Fragment>
               ))}
             </div>
           ))}
-          {errorBanner.shown !== undefined && (
-            <p ref={errorBanner.ref} className={errorBanner.leaving ? 'error-banner is-leaving' : 'error-banner'}>
-              <Icon name="alert" size={14} /> [{errorBanner.shown.code}] {errorBanner.shown.message}
+          {/* 下哨兵：同上，撑住下方尚未渲染的部分。 */}
+          {chatWindow.padBottom > 0 && <div style={{ height: chatWindow.padBottom }} aria-hidden="true" />}
+          {explainedError !== undefined && (
+            <p
+              ref={errorBanner.ref}
+              className={errorBanner.leaving ? 'error-banner is-leaving' : 'error-banner'}
+              role="alert"
+            >
+              <Icon name="alert" size={14} />
+              <strong>{explainedError.title}</strong> {explainedError.hint}
+              {explainedError.detail !== undefined && `（${explainedError.detail}）`}
+              {explainedError.action !== undefined && (
+                <button
+                  type="button"
+                  className="btn btn-mini"
+                  onClick={() => {
+                    runErrorAction(explainedError.action?.target ?? 'retry')
+                  }}
+                >
+                  {explainedError.action.label}
+                </button>
+              )}
             </p>
           )}
           {typingLine.shown !== undefined && (

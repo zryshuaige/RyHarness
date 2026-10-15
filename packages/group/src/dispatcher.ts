@@ -10,6 +10,8 @@
  * - **扇出**：入口一次 @ 多个成员时并发起跑（上限 fanoutConcurrency，
  *   默认 3），B 的首 token 不必等 A 跑完整轮；事件按 @ 出现顺序增量转发
  *   （排在前面的成员生成一块就推一块，不必等整批扇出跑完），消息顺序确定。
+ *   扇出内的记忆召回按同一段输入共享一次（{@link FanoutMemory}）：N 个成员
+ *   问同一段输入，本来就该拿同一份注入块，不该打 N 次 embedding 网络往返。
  * - **接力**：任何 agent 输出含 @Y → Y 接力。护栏：
  *   - 单条用户消息触发的总接力轮次 ≤ maxTurns（默认 8）；
  *   - 连续两次路由同一 agent（自己 @ 自己 / 冷却不足）→ 停止；
@@ -169,6 +171,64 @@ async function* memberEvents(
 /** 取消事件：与 AgentLoop 的 AbortedError 对齐，协调器落 [error:ABORTED] system 消息。 */
 function abortedEvent(): GroupEvent {
   return { type: 'error', message: 'agent run aborted', code: ABORTED_CODE }
+}
+
+/** 记忆钩子可选的批量召回面（@ryagent/memory 的 MemoryService 提供）。 */
+interface MemoryRecallMany {
+  recallMany(agentIds: readonly string[], inputText: string): Promise<Map<string, string | undefined>>
+}
+
+function supportsRecallMany(memory: AgentMemoryHooks): memory is AgentMemoryHooks & MemoryRecallMany {
+  return typeof (memory as Partial<MemoryRecallMany>).recallMany === 'function'
+}
+
+/**
+ * 一次扇出内的记忆视图：同一段输入只召回一次，多成员共享。
+ *
+ * 扇出的 N 个成员拿到的是同一个 prompt（同一段用户输入 + 同一份群历史），于是
+ * 它们的记忆召回必然是同一段输入的 N 次重复：一次 fan-out 要打 N 次 embedding
+ * 网络请求、N 次 BM25 扫描。记忆系统实现了 {@link MemoryRecallMany} 就走批量
+ * 召回（N 个成员一次拿齐），否则退化成并发调用 recall（此时内存侧的请求合并
+ * 仍会把同一段文本的网络往返压成一次）。
+ *
+ * 视图的作用域只有这一次扇出：接力链每轮输入不同，不共享。
+ */
+class FanoutMemory implements AgentMemoryHooks {
+  /** 按输入文本缓存的共享召回结果（同一段输入只建一次 promise）。 */
+  private readonly byText = new Map<string, Promise<Map<string, string | undefined>>>()
+
+  constructor(
+    private readonly memory: AgentMemoryHooks,
+    private readonly memberIds: readonly string[],
+  ) {}
+
+  recall(agentId: string, inputText: string): Promise<string | undefined> {
+    return this.shared(inputText).then((blocks) => {
+      return blocks.get(agentId)
+    })
+  }
+
+  enqueueExtraction(agentId: string, agentName: string, conversationId: string, turnText: string): void {
+    this.memory.enqueueExtraction(agentId, agentName, conversationId, turnText)
+  }
+
+  private shared(inputText: string): Promise<Map<string, string | undefined>> {
+    const hit = this.byText.get(inputText)
+    if (hit !== undefined) return hit
+    const pending = supportsRecallMany(this.memory)
+      ? this.memory.recallMany(this.memberIds, inputText)
+      : Promise.all(
+          this.memberIds.map((agentId) => {
+            return this.memory.recall(agentId, inputText).then((block) => {
+              return [agentId, block] as const
+            })
+          }),
+        ).then((entries) => {
+          return new Map(entries)
+        })
+    this.byText.set(inputText, pending)
+    return pending
+  }
 }
 
 /** 每轮重新读取取消状态（signal 可能在 await 期间被中止）。 */
@@ -484,14 +544,19 @@ export class GroupDispatcher {
       : member
   }
 
-  private createLoop(definition: AgentDefinition, onAssistantMessage: (message: AssistantMessage) => void): AgentLoop {
+  private createLoop(
+    definition: AgentDefinition,
+    onAssistantMessage: (message: AssistantMessage) => void,
+    memory?: AgentMemoryHooks,
+  ): AgentLoop {
+    const hooks = memory ?? this.options.memory
     return new AgentLoop({
       definition,
       llm: this.options.llm,
       tools: this.options.tools,
       onAssistantMessage,
       quota: this.quota,
-      ...(this.options.memory === undefined ? {} : { memory: this.options.memory }),
+      ...(hooks === undefined ? {} : { memory: hooks }),
       ...(this.options.evolution === undefined ? {} : { evolution: this.options.evolution }),
     })
   }
@@ -513,6 +578,16 @@ export class GroupDispatcher {
       return new EventQueue()
     })
     const outcomes: (MemberTurnOutcome | undefined)[] = new Array(targets.length)
+    // 同一段输入的记忆召回在整个扇出里共享一次（不再 N 倍 embedding 往返）。
+    const memory =
+      this.options.memory === undefined
+        ? undefined
+        : new FanoutMemory(
+            this.options.memory,
+            targets.map((target) => {
+              return target.id
+            }),
+          )
     let failure: unknown
     let next = 0
     const worker = async (): Promise<void> => {
@@ -527,6 +602,7 @@ export class GroupDispatcher {
             toolContext,
             signal,
             queue,
+            memory,
           )
         } finally {
           queue.close()
@@ -570,11 +646,16 @@ export class GroupDispatcher {
     toolContext: ToolContext,
     signal: AbortSignal | undefined,
     queue: EventQueue,
+    memory?: AgentMemoryHooks,
   ): Promise<MemberTurnOutcome> {
     let assistant: AssistantMessage | undefined
-    const loop = this.createLoop(this.definitionOf(member), (message) => {
-      assistant = message
-    })
+    const loop = this.createLoop(
+      this.definitionOf(member),
+      (message) => {
+        assistant = message
+      },
+      memory,
+    )
     let failed = false
     try {
       for await (const event of memberEvents(

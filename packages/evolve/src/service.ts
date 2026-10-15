@@ -14,8 +14,8 @@
  *
  * 不阻塞主循环（P0）：本包所有重活都在服务进程的事件循环里跑，因此
  * - 每轮管线有超时上限与阶段级失败隔离（LLM 挂掉不影响确定性计数）；
- * - 巩固（O(n²) 判重 + 溯源关联 + 归档）按切片推进，runOnce() 只做有界的一
- *   片就返回，剩余工作让出事件循环后台续跑，受总预算约束；
+ * - 巩固（O(n²) 判重 + 溯源关联 + 归档 UPDATE）按切片推进，runOnce() 只做有界
+ *   的一片就返回，剩余工作让出事件循环后台续跑，受总预算约束；
  * - 每轮都记账耗时与处理条目数（{@link EvolveService.metrics}）供服务端聚合。
  * @module @ryagent/evolve/service
  */
@@ -136,6 +136,8 @@ export interface EvolveLimits {
   turnTimeoutMs: number
   /** 待处理轮次队列上限：超出丢弃最旧的一轮（过载保护，别让队列无界涨）。 */
   maxQueuedTurns: number
+  /** 归档相位单片最多归档多少行记忆（整段 UPDATE 是 1.8s 级的主循环冻结源）。 */
+  consolidationArchiveChunkRows: number
   /** 溯源关联时，每个条目回看的记忆行数上限。 */
   memoryOriginScan: number
   /** 溯源关联的最小词面重叠系数。 */
@@ -150,6 +152,7 @@ export const DEFAULT_EVOLVE_LIMITS: EvolveLimits = {
   consolidationBudgetMs: 30_000,
   turnTimeoutMs: 60_000,
   maxQueuedTurns: 64,
+  consolidationArchiveChunkRows: 200,
   memoryOriginScan: 400,
   memoryOriginMinOverlap: MEMORY_ORIGIN_MIN_OVERLAP,
   metricsRounds: 100,
@@ -177,10 +180,16 @@ export interface MemorySweep {
     updatedAt: number
   }[]
   supersede(id: string, status: 'superseded'): void
-  /** 长期零访问记忆 → inactive（不物理删除）。返回归档条数。 */
-  archiveDormant(dormantAfterMs: number, now: number): number
-  /** 陈旧软删链（保留当前有效版本的直接前身）→ inactive。返回归档条数。 */
-  archiveColdSuperseded(maxAgeMs: number, now: number): number
+  /**
+   * 长期零访问记忆 → inactive（不物理删除）。返回归档条数。
+   *
+   * `limit` 是**必须透传**的分片参数：给出时只归档至多 limit 行（调用方反复
+   * 调用到返回数小于 limit 为止）。整段 UPDATE 在服务进程的事件循环里能把主
+   * 循环冻住 1.8s；漏传 limit 不会算错行数，但那一段又会变回一次性阻塞。
+   */
+  archiveDormant(dormantAfterMs: number, now: number, limit?: number): number
+  /** 陈旧软删链（保留当前有效版本的直接前身）→ inactive。返回归档条数。`limit` 语义同上。 */
+  archiveColdSuperseded(maxAgeMs: number, now: number, limit?: number): number
 }
 
 export class EvolveService implements AgentEvolutionHooks {
@@ -709,7 +718,9 @@ export class EvolveService implements AgentEvolutionHooks {
    * 分片执行：2–4 是 O(n²) 的重活，跑在服务进程的事件循环里，一次性跑完会把
    * 整个 server 冻住（实测可到数十秒）。这里 runOnce() 只同步做**有界的一片**
    * （默认 ≤12ms 或 ≤2000 次比较，先到者为准），剩下的切片让出事件循环后台
-   * 续跑，并受整轮预算约束；单个空间出错只跳过该空间。
+   * 续跑，并受整轮预算约束；单个空间出错只跳过该空间。归档（4）内部还按
+   * {@link EvolveLimits.consolidationArchiveChunkRows} 行一片推进——它是两条
+   * UPDATE，不切片的话单次就能冻住主循环 1.8s。
    */
   runOnce(now = Date.now()): ConsolidationResult {
     const startedAt = Date.now()
@@ -787,6 +798,7 @@ export class EvolveService implements AgentEvolutionHooks {
       errors: 0,
       archivedDormant: 0,
       archivedSuperseded: 0,
+      archiveStage: 'dormant',
       completed: false,
       timedOut: false,
     }
@@ -807,8 +819,7 @@ export class EvolveService implements AgentEvolutionHooks {
   private advance(state: SweepState): number {
     if (state.phase === 'dedupe') return this.advanceDedupe(state)
     if (state.phase === 'origins') return this.advanceOrigins(state)
-    this.runArchive(state)
-    return 1
+    return this.advanceArchive(state)
   }
 
   private advanceDedupe(state: SweepState): number {
@@ -931,17 +942,43 @@ export class EvolveService implements AgentEvolutionHooks {
     return 1
   }
 
-  private runArchive(state: SweepState): void {
-    if (this.memory !== undefined) {
-      try {
-        state.archivedDormant = this.memory.archiveDormant(DORMANT_ARCHIVE_DAYS * 86_400_000, state.now)
-        state.archivedSuperseded = this.memory.archiveColdSuperseded(SUPERSEDED_RETENTION_DAYS * 86_400_000, state.now)
-      } catch (error) {
-        state.errors += 1
-        this.log(`@ryagent/evolve: archive failed: ${describe(error)}`)
-      }
+  /**
+   * 归档相位：一行行搬，搬完一段就换下一段。
+   *
+   * 归档是两条 UPDATE（dormant + 陈旧软删链），不切片就是一次 1.8s 级的同步
+   * 阻塞，把整个 server 冻住——而它就在服务进程的事件循环里。每片只归档
+   * `consolidationArchiveChunkRows` 行，片与片之间由后台续跑让出事件循环；
+   * 一段归档返回数小于片长即视为搬空，转下一段，两段搬完整轮结束。
+   * 语义（哪些行算陈旧）与整段 UPDATE 完全一致，只是拆开执行。
+   */
+  private advanceArchive(state: SweepState): number {
+    const limit = Math.max(1, this.limits.consolidationArchiveChunkRows)
+    if (state.archiveStage === 'dormant') {
+      const archived = this.archiveCall(state, () => {
+        return this.memory?.archiveDormant(DORMANT_ARCHIVE_DAYS * 86_400_000, state.now, limit) ?? 0
+      })
+      state.archivedDormant += archived
+      if (archived < limit) state.archiveStage = 'superseded'
+      return 1
     }
-    state.completed = true
+    const archived = this.archiveCall(state, () => {
+      return this.memory?.archiveColdSuperseded(SUPERSEDED_RETENTION_DAYS * 86_400_000, state.now, limit) ?? 0
+    })
+    state.archivedSuperseded += archived
+    if (archived < limit) state.completed = true
+    return 1
+  }
+
+  /** 归档调用的失败隔离：一段抛错只丢这一段（并跳过它），不带走整轮。 */
+  private archiveCall(state: SweepState, run: () => number): number {
+    if (this.memory === undefined) return 0
+    try {
+      return run()
+    } catch (error) {
+      state.errors += 1
+      this.log(`@ryagent/evolve: archive failed: ${describe(error)}`)
+      return 0
+    }
   }
 
   /** 列出待巩固的空间；抛错按空集处理（一个空间挂掉不该废掉整轮）。 */
@@ -1147,6 +1184,9 @@ interface SweepRow {
 
 type SweepPhase = 'dedupe' | 'origins' | 'archive'
 
+/** 归档相位的两段：长期零访问 → 陈旧软删链。 */
+type ArchiveStage = 'dormant' | 'superseded'
+
 /** 巩固的游标状态（跨 runOnce 续跑，让出事件循环而不是重头再来）。 */
 interface SweepState {
   now: number
@@ -1171,6 +1211,8 @@ interface SweepState {
   errors: number
   archivedDormant: number
   archivedSuperseded: number
+  /** 归档相位走到哪一段了（每段内部按片推进）。 */
+  archiveStage: ArchiveStage
   completed: boolean
   timedOut: boolean
 }

@@ -377,23 +377,42 @@ describe('在场监听：托盘与通知的信号源', () => {
 })
 
 describe('托盘「新对话」', () => {
-  it('在真实 DOM 上跑一遍：切到通讯录并点到 Ryen 的「发消息」', async () => {
-    const chatHtml = '<button class="rail-tab">聊天</button><button class="rail-tab">通讯录</button>'
-    const contactsHtml = `${chatHtml}<article class="contact-card" data-agent="阿码"><h3>阿码</h3><button class="btn">发消息</button></article><article class="contact-card" data-agent="Ryen"><h3>Ryen<span class="badge">内置</span></h3><button class="btn">发消息</button></article>`
-    document.body.innerHTML = chatHtml
-    const sent: string[] = []
-    document.querySelectorAll('.rail-tab')[1]?.addEventListener('click', () => {
-      // React 切页是异步的：先切走，通讯录下一拍才渲染出来。
-      document.body.innerHTML = contactsHtml
-      for (const card of document.querySelectorAll('.contact-card')) {
-        card.querySelector('button')?.addEventListener('click', () => {
-          sent.push(card.getAttribute('data-agent') ?? '')
-        })
-      }
-    })
-    // biome-ignore lint/security/noGlobalEval: 脚本本身就是给渲染层 executeJavaScript 用的
-    const opened = eval(NEW_CHAT_SCRIPT) as Promise<boolean>
-    expect(await opened).toBe(true)
-    expect(sent).toEqual(['Ryen'])
+  /**
+   * 托盘不再替用户决定跟谁聊：脚本只派发事件，渲染层自己回到欢迎页，
+   * 「跟 Ryen 聊 / 开个小队」由用户在上面对话框里选。判据是欢迎页真的在屏上。
+   */
+  it('派发新对话事件，等欢迎页渲染出来才算落地', async () => {
+    document.body.innerHTML = '<div class="chat-view"></div>'
+    let received = 0
+    const listener = (): void => {
+      received += 1
+      // 渲染层收到事件后把自己切回无选中会话的欢迎页。
+      if (document.querySelector('.welcome') !== null) return
+      const welcome = document.createElement('div')
+      welcome.className = 'welcome'
+      document.body.appendChild(welcome)
+    }
+    window.addEventListener('ryagent:new-chat', listener)
+    try {
+      // biome-ignore lint/security/noGlobalEval: 脚本本身就是给渲染层 executeJavaScript 用的
+      const landed = eval(NEW_CHAT_SCRIPT) as Promise<boolean>
+      expect(await landed).toBe(true)
+      expect(received).toBeGreaterThan(0)
+    } finally {
+      window.removeEventListener('ryagent:new-chat', listener)
+    }
+  })
+
+  it('渲染层没接上事件时如实回报失败，不假装已经开聊', { timeout: 15000 }, async () => {
+    vi.useFakeTimers()
+    document.body.innerHTML = '<div class="chat-view"></div>'
+    try {
+      // biome-ignore lint/security/noGlobalEval: 同上
+      const landed = eval(NEW_CHAT_SCRIPT) as Promise<boolean>
+      await vi.advanceTimersByTimeAsync(20 * 150)
+      expect(await landed).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

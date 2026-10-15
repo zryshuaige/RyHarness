@@ -15,6 +15,10 @@
  * - 延迟：active 向量常驻缓存，recall 不再每轮全表读 BLOB。
  * - 向量溯源：embedding 缓存按 (hash, model) 分桶，检索按模型与维度过滤，
  *   换模型不混库。
+ * - 出包投影：接口回包只给业务字段，向量（Float32Array）留在包内
+ *   （toPublicMemory），否则一条 1024 维记忆会序列化成几千个「下标→数值」。
+ * - 扇出召回：同一段输入的并发召回共享一次 embedding 请求与共享空间扫描
+ *   （recallMany），N 个成员不再发 N 次网络往返。
  * - 降级：无 embedding 凭据时自动纯 FTS5（代码路径都在）。
  * @module @ryagent/memory
  */
@@ -33,9 +37,11 @@ export {
 } from './embeddings.ts'
 export type { CandidateFact, MemoryLlm, MemoryOperation } from './llm.ts'
 export { ChatMemoryLlm, MEMORY_LLM_CODES } from './llm.ts'
+export type { PublicMemoryRow } from './project.ts'
+export { toPublicMemories, toPublicMemory } from './project.ts'
 export type { MemoryKind, MemoryStatus } from './schema.ts'
 export { MEMORY_SCHEMA_VERSION, MIGRATIONS, migrateMemory, SHARED_SPACE } from './schema.ts'
-export type { AgentMemory, MemoryServiceOptions } from './service.ts'
+export type { AgentMemory, MemoryRecallMany, MemoryServiceOptions } from './service.ts'
 export { MemoryService } from './service.ts'
 export type { InsertMemoryInput, MemoryRow } from './store.ts'
 export { bigrams, ftsMatchQuery, MemoryStore, textHash } from './store.ts'

@@ -36,7 +36,7 @@ async function getJson(base: string, path: string): Promise<{ status: number; bo
 async function sendJson(
   base: string,
   path: string,
-  method: 'POST' | 'DELETE',
+  method: 'POST' | 'DELETE' | 'PATCH',
   payload?: unknown,
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   const response = await fetch(`${base}${path}`, {
@@ -50,6 +50,18 @@ async function sendJson(
 
 function readJsonFile(path: string): Record<string, unknown> {
   return JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
+}
+
+/**
+ * 读 api-keys.json 里的 key 表。
+ *
+ * 这份文件带一层信封（`{ $schema, cipher, keys }`），但这里的断言关心的是
+ * "哪个 id 存着哪个 key"，不是信封长什么样——换信封不该让它们失真。
+ */
+function readApiKeys(path: string): Record<string, string> {
+  const raw = readJsonFile(path)
+  const keys = raw.keys
+  return (typeof keys === 'object' && keys !== null ? keys : raw) as Record<string, string>
 }
 
 /** POSIX 下断言配置文件权限；Windows 的 mode 语义有限，跳过。 */
@@ -162,7 +174,7 @@ describe('新增供应商', () => {
       expect(stored.apiKey).toBeUndefined()
       expect(readFileSync(configPath, 'utf8')).not.toContain('sk-test-key')
       const keysPath = join(dataDir, 'config', 'api-keys.json')
-      expect(readJsonFile(keysPath)).toEqual({ deepseek: 'sk-test-key' })
+      expect(readApiKeys(keysPath)).toEqual({ deepseek: 'sk-test-key' })
       expectPrivateFile(keysPath)
       expectPrivateFile(configPath)
 
@@ -283,6 +295,44 @@ describe('新增供应商', () => {
         }),
       ).toBe(true)
       expect(ids).toHaveLength(3)
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('同一个 baseUrl 不给建第二条：点已存在的预设回 409，而不是退化成 custom-xxxxxxxx', async () => {
+    const server = await RyAgentServer.create({ port: 0, dataDir: tempDataDir('dup-endpoint') })
+    try {
+      // 内置 SiliconFlow 就指向这个地址：再点一次它的预设必须被挡住，
+      // 否则用户会得到一条丢品牌图标、id 是随机串的重复项。
+      const again = await sendJson(server.url, '/api/providers', 'POST', {
+        displayName: 'SiliconFlow 官方',
+        protocol: 'openai',
+        baseUrl: 'https://api.siliconflow.cn/v1/',
+        models: ['deepseek-ai/DeepSeek-V3'],
+        presetId: 'siliconflow',
+      })
+      expect(again.status).toBe(409)
+      expect(again.body.existingId).toBe('siliconflow')
+      // 说的是中文、点了下一步（去编辑），不是一句英文 conflict。
+      expect(again.body.error).toContain('已经添加过')
+      expect(again.body.error).toContain('SiliconFlow')
+      expect(again.body.error).toContain('编辑')
+      // 一条都没建出来（末尾斜杠也算同一个地址）。
+      expect(
+        (await listProviders(server.url)).map((row) => {
+          return row.id
+        }),
+      ).toEqual(['siliconflow'])
+
+      // 地址不同的「自定义」照旧能建——挡住的是重复，不是自定义。
+      const gateway = await sendJson(server.url, '/api/providers', 'POST', {
+        displayName: '私有网关',
+        protocol: 'openai',
+        baseUrl: 'http://127.0.0.1:9000/v1',
+        models: ['m'],
+      })
+      expect(gateway.status).toBe(201)
     } finally {
       await server.close()
     }
@@ -411,7 +461,196 @@ describe('删除供应商', () => {
       // 路由与 key 一起落盘清掉，不留孤儿。
       const config = readJsonFile(join(dataDir, 'config', 'providers.json'))
       expect((config.providers as Record<string, unknown>)[customId]).toBeUndefined()
-      expect(readJsonFile(join(dataDir, 'config', 'api-keys.json'))).toEqual({})
+      expect(readApiKeys(join(dataDir, 'config', 'api-keys.json'))).toEqual({})
+    } finally {
+      await server.close()
+    }
+  })
+})
+
+describe('编辑供应商', () => {
+  it('PATCH /api/providers/:id 改名字 / 地址 / 模型 / 协议并热注册：不用删了重建', async () => {
+    const dataDir = tempDataDir('patch')
+    const server = await RyAgentServer.create({ port: 0, dataDir })
+    try {
+      const created = await sendJson(server.url, '/api/providers', 'POST', {
+        displayName: '私有网关',
+        protocol: 'openai',
+        baseUrl: 'http://127.0.0.1:9000/v1',
+        models: ['m-old'],
+        apiKey: 'sk-private',
+      })
+      const providerId = (created.body as { provider: { id: string } }).provider.id
+
+      const patched = await sendJson(server.url, `/api/providers/${providerId}`, 'PATCH', {
+        displayName: '公司内网网关',
+        baseUrl: 'http://127.0.0.1:9100/v1/',
+        models: ['m-new', 'm-second'],
+      })
+      expect(patched.status).toBe(200)
+      const provider = (patched.body as { provider: ProviderRow }).provider
+      expect(provider.displayName).toBe('公司内网网关')
+      expect(provider.baseUrl).toBe('http://127.0.0.1:9100/v1') // 归一：去尾部斜杠
+      expect(
+        provider.models.map((model) => {
+          return model.id
+        }),
+      ).toEqual(['m-new', 'm-second'])
+      // 没传的字段原样保留（协议没动，仍是 openai；凭据也别被顺手抹掉）。
+      expect(provider.protocol).toBe('openai')
+      expect(provider.apiKeyConfigured).toBe(true)
+      expect(provider.custom).toBe(true)
+
+      // 落盘 + 热注册：适配器立刻按新地址与新模型目录解析。
+      const stored = (
+        readJsonFile(join(dataDir, 'config', 'providers.json')).providers as Record<string, Record<string, unknown>>
+      )[providerId] as Record<string, unknown>
+      expect(stored.displayName).toBe('公司内网网关')
+      expect(stored.baseURL).toBe('http://127.0.0.1:9100/v1')
+      expect(stored.apiKey).toBeUndefined()
+      expect(readFileSync(join(dataDir, 'config', 'api-keys.json'), 'utf8')).toContain('sk-private')
+      expect(
+        (await server.llm.listModels(providerId)).map((model) => {
+          return model.id
+        }),
+      ).toEqual(['m-new', 'm-second'])
+      const listed = (await listProviders(server.url)).find((row) => {
+        return row.id === providerId
+      })
+      expect(listed?.baseUrl).toBe('http://127.0.0.1:9100/v1')
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('只认 displayName / baseUrl / models / protocol：凭据与归属标记改了也无效', async () => {
+    const dataDir = tempDataDir('patch-whitelist')
+    const server = await RyAgentServer.create({ port: 0, dataDir })
+    try {
+      await sendJson(server.url, '/api/settings/api-key', 'POST', { providerId: 'siliconflow', apiKey: 'sk-silicon' })
+      const patched = await sendJson(server.url, '/api/providers/siliconflow', 'PATCH', {
+        displayName: 'SiliconFlow（公司采购）',
+        // 白名单之外的键：不能靠它改凭据、把自己改成自定义、或抹掉内置路由的归属。
+        apiKey: 'sk-injected',
+        custom: true,
+        presetId: 'nope',
+        baseURL: 'http://127.0.0.1:9999/v1',
+      })
+      expect(patched.status).toBe(200)
+      const provider = (patched.body as { provider: ProviderRow }).provider
+      expect(provider.displayName).toBe('SiliconFlow（公司采购）')
+      expect(provider.custom).toBe(false)
+      expect(provider.baseUrl).toBe('https://api.siliconflow.cn/v1')
+      // 存着的还是原来那个 key。
+      expect(readApiKeys(join(dataDir, 'config', 'api-keys.json')).siliconflow).toBe('sk-silicon')
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('校验：空名字 / 相对地址 / 清空模型列表 / 未知 id 一律 400 或 404', async () => {
+    const server = await RyAgentServer.create({ port: 0, dataDir: tempDataDir('patch-invalid') })
+    try {
+      const patch = async (payload: unknown): Promise<number> => {
+        return (await sendJson(server.url, '/api/providers/siliconflow', 'PATCH', payload)).status
+      }
+      expect(await patch({ displayName: '   ' })).toBe(400)
+      expect(await patch({ baseUrl: 'api.siliconflow.cn/v1' })).toBe(400)
+      expect(await patch({ baseUrl: 'ftp://api.siliconflow.cn' })).toBe(400)
+      expect(await patch({ models: [] })).toBe(400)
+      expect(await patch({ models: ['ok', 7] })).toBe(400)
+      expect(await patch({ protocol: 'anthropic' })).toBe(400)
+      expect((await sendJson(server.url, '/api/providers/nope', 'PATCH', { displayName: 'X' })).status).toBe(404)
+      // 一条都没被改坏。
+      const listed = (await listProviders(server.url)).find((row) => {
+        return row.id === 'siliconflow'
+      })
+      expect(listed?.displayName).toBe('SiliconFlow')
+      expect(listed?.baseUrl).toBe('https://api.siliconflow.cn/v1')
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('改成另一条已存在的 baseUrl：回 409 并点名那一条（不静默产生重复项）', async () => {
+    const server = await RyAgentServer.create({ port: 0, dataDir: tempDataDir('patch-dup') })
+    try {
+      const created = await sendJson(server.url, '/api/providers', 'POST', {
+        displayName: '私有网关',
+        protocol: 'openai',
+        baseUrl: 'http://127.0.0.1:9000/v1',
+        models: ['m'],
+      })
+      const providerId = (created.body as { provider: { id: string } }).provider.id
+      const clash = await sendJson(server.url, `/api/providers/${providerId}`, 'PATCH', {
+        baseUrl: 'https://api.siliconflow.cn/v1',
+      })
+      expect(clash.status).toBe(409)
+      expect(clash.body.existingId).toBe('siliconflow')
+      expect(clash.body.error).toContain('SiliconFlow')
+      // 地址没被改掉。
+      expect(
+        (await listProviders(server.url)).find((row) => {
+          return row.id === providerId
+        })?.baseUrl,
+      ).toBe('http://127.0.0.1:9000/v1')
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('删掉还挂在 agent 上的模型：回 409 并点名是哪个 agent 在用（而不是静默变砖）', async () => {
+    const server = await RyAgentServer.create({ port: 0, dataDir: tempDataDir('patch-model-in-use') })
+    try {
+      const created = await sendJson(server.url, '/api/providers', 'POST', {
+        displayName: '私有网关',
+        protocol: 'openai',
+        baseUrl: 'http://127.0.0.1:9000/v1',
+        models: ['m-in-use', 'm-free'],
+      })
+      const providerId = (created.body as { provider: { id: string } }).provider.id
+      const agent = await sendJson(server.url, '/api/agents', 'POST', {
+        templateKey: 'coding',
+        name: '小译',
+        provider: providerId,
+        model: 'm-in-use',
+      })
+      const agentId = (agent.body as { agent: { id: string } }).agent.id
+
+      // 删掉没人用的那个：放行。
+      const harmless = await sendJson(server.url, `/api/providers/${providerId}`, 'PATCH', {
+        models: ['m-in-use', 'm-brand-new'],
+      })
+      expect(harmless.status).toBe(200)
+
+      // 删掉正在被用的那个：拦下，并点名。
+      const blocked = await sendJson(server.url, `/api/providers/${providerId}`, 'PATCH', {
+        models: ['m-brand-new'],
+      })
+      expect(blocked.status).toBe(409)
+      expect(blocked.body.error).toContain('m-in-use')
+      expect(blocked.body.error).toContain('小译')
+      expect(blocked.body.models).toEqual([{ modelId: 'm-in-use', agents: [{ agentId, agentName: '小译' }] }])
+      // 模型列表原样保留：被拦下的编辑不能有一半生效。
+      expect(
+        (await listProviders(server.url))
+          .find((row) => {
+            return row.id === providerId
+          })
+          ?.models.map((model) => {
+            return model.id
+          }),
+      ).toEqual(['m-in-use', 'm-brand-new'])
+
+      // agent 改绑到别的模型后就能删了。
+      await fetch(`${server.url}/api/agents/${agentId}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'm-brand-new' }),
+      })
+      expect(
+        (await sendJson(server.url, `/api/providers/${providerId}`, 'PATCH', { models: ['m-brand-new'] })).status,
+      ).toBe(200)
     } finally {
       await server.close()
     }

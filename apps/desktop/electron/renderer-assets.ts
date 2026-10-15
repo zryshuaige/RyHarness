@@ -183,9 +183,12 @@ export class RendererAssets {
     return etag
   }
 
-  /** 处理一个请求；不属于自己的路由直接返回（交给别的 handler）。 */
+  /** 处理一个请求；不属于本服务的路径一律回 404（不留悬挂响应）。 */
   private handle(req: IncomingMessage, res: ServerResponse): void {
-    if (req.method !== 'GET' && req.method !== 'HEAD') return
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      res.writeHead(405, { allow: 'GET, HEAD', 'content-type': 'text/plain; charset=utf-8' }).end('method not allowed')
+      return
+    }
     let pathname: string
     try {
       pathname = decodeURIComponent(new URL(req.url ?? '/', 'http://127.0.0.1').pathname)
@@ -198,7 +201,12 @@ export class RendererAssets {
     if (pathname === RENDERER_MOUNT || pathname === `${RENDERER_MOUNT}/`) relative = 'index.html'
     else if (pathname.startsWith(`${RENDERER_MOUNT}/`)) relative = pathname.slice(RENDERER_MOUNT.length + 1)
     else if (pathname.startsWith('/assets/')) relative = pathname.slice(1)
-    else return
+    else {
+      // 直接 return 会让 socket 一直挂着直到对端超时：浏览器看到的是"加载卡住"
+      // 而不是明确的 404，排障时无从判断是路径错了还是服务没起来。
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('not found')
+      return
+    }
     // 防目录穿越：解析后必须仍在 dist 根内。
     const target = resolve(join(this.root, relative))
     if (target !== this.root && !target.startsWith(this.root + sep)) {
@@ -236,6 +244,15 @@ export class RendererAssets {
       res.end()
       return
     }
-    createReadStream(target).pipe(res)
+    // createReadStream 的 error 是异步的（文件被删、权限变了、杀毒软件锁住…）。
+    // 不挂监听就是一次未捕获异常：主进程直接崩，窗口白屏，用户只看到"应用闪退"。
+    const stream = createReadStream(target)
+    stream.on('error', () => {
+      res.destroy()
+    })
+    res.on('close', () => {
+      stream.destroy()
+    })
+    stream.pipe(res)
   }
 }

@@ -405,7 +405,7 @@ describe('检索管线：混合召回', () => {
     })
     service.store.insert({ agentId: SHARED_SPACE, kind: 'profile', content: '用户是产品经理' })
     service.store.insert({ agentId: 'a1', kind: 'fact', content: '用户偏好简洁的周报' })
-    vi.spyOn(service.store, 'searchFts').mockImplementation(() => {
+    vi.spyOn(service.store, 'searchFtsHits').mockImplementation(() => {
       throw new Error('fts5: database disk image is malformed')
     })
 
@@ -436,6 +436,143 @@ describe('检索管线：混合召回', () => {
     await service.hybridRecall('a1', '同样的查询')
     await service.hybridRecall('a1', '同样的查询')
     expect(calls).toBe(1)
+    service.close()
+  })
+
+  it('在途合并：同一段输入的并发召回只发一次 embedding 请求（扇出 N 倍往返的根因）', async () => {
+    let requests = 0
+    const slow: EmbeddingProvider = {
+      label: 'slow',
+      available: true,
+      async embed(texts) {
+        requests += 1
+        // 真实端点有网络延迟：延迟期间所有并发者都在路上，落库缓存还没写回。
+        await new Promise((resolve) => {
+          setTimeout(resolve, 20)
+        })
+        return texts.map(() => {
+          return Float32Array.from([1, 0, 0, 0])
+        })
+      },
+    }
+    const service = new MemoryService({ dbPath: dbPath(), embeddings: slow, logger: () => {} })
+    const spaces = ['a1', 'a2', 'a3', 'a4']
+    // 并发扇出：4 个成员同时问同一段输入。
+    await Promise.all(
+      spaces.map((space) => {
+        return service.recall(space, '同一段用户输入')
+      }),
+    )
+    expect(requests).toBe(1)
+    service.close()
+  })
+})
+
+describe('扇出召回：一次召回多成员共享', () => {
+  /** 注入块拆成行（比较"条数与内容"用，忽略行序）。 */
+  function linesOf(block: string | undefined): string[] {
+    return (block ?? '').split('\n').sort()
+  }
+
+  /** 会数 embedding 请求的提供器（每段文本只该被打一次）。 */
+  function countingEmbeddings(): EmbeddingProvider & { calls: number } {
+    const provider = {
+      calls: 0,
+      label: 'hash-counting',
+      available: true,
+      async embed(texts: readonly string[]) {
+        provider.calls += 1
+        const out = texts.map((text) => {
+          // 逐字符散列成向量：不同文本不同向量，召回排序可复现。
+          const vector = new Float32Array(64)
+          for (let i = 0; i < text.length; i++) vector[i % 64] = (vector[i % 64] as number) + text.charCodeAt(i)
+          return vector
+        })
+        return out
+      },
+    }
+    return provider
+  }
+
+  function seeded(): MemoryService {
+    const service = new MemoryService({ dbPath: dbPath(), embeddings: countingEmbeddings(), logger: () => {} })
+    service.store.insert({ agentId: SHARED_SPACE, kind: 'profile', content: '用户是产品经理' })
+    service.store.insert({ agentId: 'a1', kind: 'fact', content: 'CodeBot 负责写代码' })
+    service.store.insert({ agentId: 'a2', kind: 'fact', content: 'Reviewer 负责审代码' })
+    service.store.insert({ agentId: SHARED_SPACE, kind: 'fact', content: '团队用 TypeScript 写代码' })
+    return service
+  }
+
+  const INPUT = '今天的代码谁来写'
+
+  it('recallMany 的每个成员块与逐成员 recall 内容一致（条数与内容都不变）', async () => {
+    const batched = seeded()
+    const perAgent = seeded()
+    const members = ['a1', 'a2']
+
+    const shared = await batched.recallMany(members, INPUT)
+    const separate = new Map<string, string | undefined>()
+    for (const member of members) {
+      separate.set(member, await perAgent.recall(member, INPUT))
+    }
+
+    expect([...shared.keys()]).toEqual(members)
+    for (const member of members) {
+      // 逐行比：条数与注入内容必须一模一样。行序不比——两套数据的时间戳差着
+      // 几毫秒，时间衰减项会让同分行换个先后，那与召回结果无关。
+      expect(linesOf(shared.get(member))).toEqual(linesOf(separate.get(member)))
+    }
+    // 内容也确实是召回结果（不是两边的 undefined 在"一致"）。
+    expect(shared.get('a1')).toContain('CodeBot 负责写代码')
+    expect(shared.get('a2')).toContain('Reviewer 负责审代码')
+    expect(shared.get('a1')).toContain('用户是产品经理')
+    expect(shared.get('a1')).not.toContain('Reviewer 负责审代码') // 空间隔离仍在
+    batched.close()
+    perAgent.close()
+  })
+
+  it('重复调用不会因为"被访问过"而漂移出不同的召回集合', async () => {
+    const service = seeded()
+    const first = await service.recallMany(['a1', 'a2'], INPUT)
+    const second = await service.recallMany(['a1', 'a2'], INPUT)
+    for (const member of ['a1', 'a2']) {
+      // 行序会随访问强化（命中即强化）变化，召回集合不会。
+      expect(linesOf(second.get(member))).toEqual(linesOf(first.get(member)))
+    }
+    service.close()
+  })
+
+  it('共享画像的访问计数按「一次输入」记 1，而不是每个成员各记 1', async () => {
+    const service = seeded()
+    const profile = service.store.listSharedProfile()[0]!
+
+    await service.recallMany(['a1', 'a2', 'a3'], INPUT)
+    expect(service.store.get(profile.id)!.accessCount).toBe(1)
+
+    await service.recallMany(['a1', 'a2'], INPUT)
+    expect(service.store.get(profile.id)!.accessCount).toBe(2)
+    service.close()
+  })
+
+  it('并发扇出（各自 recall）也只打一次 embedding：批量召回是可选的优化，不是前提', async () => {
+    const embeddings = countingEmbeddings()
+    const service = new MemoryService({ dbPath: dbPath(), embeddings, logger: () => {} })
+    service.store.insert({ agentId: 'a1', kind: 'fact', content: 'CodeBot 负责写代码' })
+
+    await Promise.all(['a1', 'a2', 'a3'].map((space) => service.recall(space, INPUT)))
+    expect(embeddings.calls).toBe(1)
+    service.close()
+  })
+
+  it('无 embedding 的安装（纯 FTS5）下批量召回照常工作', async () => {
+    const service = new MemoryService({ dbPath: dbPath(), embeddings: new NullEmbeddings(), logger: () => {} })
+    service.store.insert({ agentId: SHARED_SPACE, kind: 'profile', content: '用户是产品经理' })
+    service.store.insert({ agentId: 'a1', kind: 'fact', content: 'CodeBot 负责写代码' })
+
+    const shared = await service.recallMany(['a1', 'a2'], INPUT)
+    expect(shared.get('a1')).toContain('CodeBot 负责写代码')
+    expect(shared.get('a2')).toContain('用户是产品经理')
+    expect(shared.get('a2')).not.toContain('CodeBot 负责写代码')
     service.close()
   })
 })

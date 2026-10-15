@@ -44,13 +44,19 @@ function fakeSweep(options: {
   spaces?: string[]
   listSpaces?: () => string[]
   listActiveEmbeddings?: (space: string) => FakeRow[]
-}): MemorySweep & { superseded: string[]; archived: string[] } {
+}): MemorySweep & {
+  superseded: string[]
+  archived: string[]
+  archiveCalls: { method: string; limit: number | undefined }[]
+} {
   const superseded: string[] = []
   const archived: string[] = []
+  const archiveCalls: { method: string; limit: number | undefined }[] = []
   const rows = options.rows
   return {
     superseded,
     archived,
+    archiveCalls,
     listSpaces:
       options.listSpaces ??
       (() => {
@@ -66,19 +72,23 @@ function fakeSweep(options: {
     supersede: (id) => {
       superseded.push(id)
     },
-    archiveDormant: (dormantAfterMs, now) => {
+    archiveDormant: (dormantAfterMs, now, limit) => {
+      archiveCalls.push({ method: 'dormant', limit })
       const hits = rows.filter(
         (r) => r.accessCount === 0 && now - r.updatedAt > dormantAfterMs && !archived.includes(r.id),
       )
-      archived.push(...hits.map((r) => r.id))
-      return hits.length
+      const slice = limit === undefined ? hits : hits.slice(0, limit)
+      archived.push(...slice.map((r) => r.id))
+      return slice.length
     },
-    archiveColdSuperseded: (maxAgeMs, now) => {
+    archiveColdSuperseded: (maxAgeMs, now, limit) => {
+      archiveCalls.push({ method: 'superseded', limit })
       const hits = rows.filter(
         (r) => superseded.includes(r.id) && now - r.updatedAt > maxAgeMs && !archived.includes(r.id),
       )
-      archived.push(...hits.map((r) => r.id))
-      return hits.length
+      const slice = limit === undefined ? hits : hits.slice(0, limit)
+      archived.push(...slice.map((r) => r.id))
+      return slice.length
     },
   }
 }
@@ -159,6 +169,99 @@ describe('巩固分片：主循环不再被冻住', () => {
     expect(second.scannedMemories).toBeLessThanOrEqual(5)
     expect(second.truncated).toBe(false)
     expect(first.pending).toBe(true)
+  })
+})
+
+describe('巩固归档：整段 UPDATE 也要切片，主循环不再被冻 1.8s', () => {
+  /** n 条从未被访问、且很久没更新的记忆（全部够归档）。 */
+  function dormantRows(n: number): FakeRow[] {
+    return Array.from({ length: n }, (_, i) => {
+      return {
+        id: `d${i}`,
+        content: `陈旧记忆 ${i}`,
+        embedding: null,
+        accessCount: 0,
+        updatedAt: Date.now() - 365 * 86_400_000,
+      }
+    })
+  }
+
+  it('归档按片推进：runOnce 一片就返回，runUntilIdle 等到整轮搬完', async () => {
+    const rows = dormantRows(500)
+    const s = service({ limits: { consolidationSliceUnits: 50, consolidationArchiveChunkRows: 25 } })
+    const sweep = fakeSweep({ rows })
+    s.attachMemorySweep(sweep)
+
+    const first = s.runOnce()
+    // 同步部分只搬一片：归档不是一次 500 行的 UPDATE。
+    expect(first.archivedDormant).toBeLessThanOrEqual(25)
+    expect(first.pending).toBe(true)
+
+    let ticks = 0
+    const timer = setInterval(() => {
+      ticks += 1
+    }, 0)
+    const done = await s.runUntilIdle()
+    clearInterval(timer)
+
+    expect(ticks).toBeGreaterThan(0) // 归档期间主循环仍在跑
+    expect(done.pending).toBe(false)
+    expect(done.archivedDormant).toBe(500)
+    expect(sweep.archived).toHaveLength(500)
+  })
+
+  it('每一次归档调用都带片长上限，绝不出现不限行的整段 UPDATE', async () => {
+    const s = service({ limits: { consolidationArchiveChunkRows: 32 } })
+    const sweep = fakeSweep({ rows: dormantRows(200) })
+    s.attachMemorySweep(sweep)
+
+    await s.runUntilIdle()
+
+    expect(sweep.archiveCalls.length).toBeGreaterThan(1) // 200 行 / 32 一片
+    expect(
+      sweep.archiveCalls.every((call) => {
+        return call.limit === 32
+      }),
+    ).toBe(true)
+    expect(s.lastConsolidationResult()?.archivedDormant).toBe(200)
+  })
+
+  it('切片与整段的口径一致：跑完一遍归档，行集合不多不少', async () => {
+    const s = service({ limits: { consolidationArchiveChunkRows: 10 } })
+    const sweep = fakeSweep({ rows: dormantRows(95) })
+    s.attachMemorySweep(sweep)
+
+    const result = await s.runUntilIdle()
+    expect(result.archivedDormant).toBe(95)
+    expect(new Set(sweep.archived).size).toBe(95) // 没有重复归档
+    // 末片返回 7 < 10 → 扫空后补一次 0 收尾，整轮才结束。
+    const calls = sweep.archiveCalls.filter((call) => {
+      return call.method === 'dormant'
+    })
+    expect(calls.at(-1)?.limit).toBe(10)
+  })
+
+  it('未挂记忆面时不报错也不空转（归档相位照常收尾）', () => {
+    const s = service()
+    const result = s.runOnce()
+    expect(result.archivedDormant).toBe(0)
+    expect(result.archivedSuperseded).toBe(0)
+    expect(result.pending).toBe(false)
+  })
+
+  it('归档抛错只丢这一段：整轮仍正常结束，错误被记账', async () => {
+    const s = service()
+    s.attachMemorySweep({
+      ...fakeSweep({ rows: dormantRows(5) }),
+      archiveDormant: () => {
+        throw new Error('memory db locked')
+      },
+    })
+
+    const result = await s.runUntilIdle()
+    expect(result.errors).toBeGreaterThanOrEqual(1)
+    expect(result.archivedDormant).toBe(0)
+    expect(result.pending).toBe(false)
   })
 })
 

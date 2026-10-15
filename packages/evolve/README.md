@@ -56,6 +56,7 @@ server（HTTP + WS + 在途对话）一起冻住。三处重活都有边界：
 | 每轮进化管线 | `turnTimeoutMs`（默认 60s）超时即放弃该轮；Reflexion 与 Curator 阶段各自 try/catch，一个挂不带走另一个 | `limits.turnTimeoutMs` |
 | 待处理轮次队列 | `maxQueuedTurns`（默认 64）上限，溢出丢最旧的一轮并计入 `metrics().droppedTurns` | `limits.maxQueuedTurns` |
 | 巩固（O(n²) 判重/溯源/归档） | `runOnce()` 同步只做一片（`consolidationSliceMs` ≤12ms 或 `consolidationSliceUnits` ≤2000 次比较），剩余切片 `setImmediate` 让出事件循环后台续跑，整轮受 `consolidationBudgetMs`（默认 30s）约束，超时丢弃剩余工作下一轮重来 | `limits.consolidation*` |
+| 归档相位（两条 UPDATE） | 内部再按片推进：单片至多 `consolidationArchiveChunkRows`（默认 200）行，一片搬完让出事件循环，搬空一段（返回数 < 片长）转下一段 | `limits.consolidationArchiveChunkRows` |
 
 要点：
 
@@ -67,6 +68,11 @@ server（HTTP + WS + 在途对话）一起冻住。三处重活都有边界：
   errors / durationMs / pending / truncated`。
 - **超时不等于取消**：LLM 请求本身无法中断，超时只是不再阻塞管线（迟到的
   promise 挂 catch，不会变成 unhandledRejection）。
+- **归档切片依赖记忆面透传片长**：`MemorySweep.archiveDormant /
+  archiveColdSuperseded` 的第三个参数 `limit` 必须由接线方原样转发给
+  `MemoryStore.archiveDormant / archiveColdSuperseded`（@ryagent/memory 的实现
+  按 rowid 分片）。漏传时本包会退化成一次性整段归档（行为仍正确，但那一段会
+  同步阻塞主循环），这是接线时唯一要盯的一行。
 
 ## 证据链（可解释性）
 
@@ -136,6 +142,7 @@ server（HTTP + WS + 在途对话）一起冻住。三处重活都有边界：
 三类反思触发、hitCount 转正闭环、Curator 三操作与去重、👎/👍 反馈链路、种子幂等、
 runOnce 幂等、"失败→反思→注入→成功→转正"端到端。
 `tests/consolidation.test.ts`：分片不冻结主循环（巩固期间事件循环仍在跑）、
+归档按片推进（每次调用都带片长上限、整轮结果与整段一致）、
 预算截断、单空间失败隔离、耗时埋点。
 `tests/provenance.test.ts`：教训/对话/反馈/种子/记忆五类溯源与 explain()。
 `tests/pipeline.test.ts`：LLM 超时与阶段隔离、过载丢弃、埋点，

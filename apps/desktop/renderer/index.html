@@ -11,6 +11,13 @@
       content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src http://127.0.0.1:* ws://127.0.0.1:*; img-src 'self' data:"
     />
     <title>RyAgent</title>
+    <!-- 网页端标签页图标：与 assets/brand 母版同源，gen:icon 导出到 public/（vite 原样拷进
+         dist 根目录）。彩色档自带琥珀底板，深浅底都压得住；mono 档是单色猫，只给深色标签栏，
+         浅色标签栏上会看不见，因此挂在那条 media 上。路径前缀与 electron/renderer-assets.ts 的
+         RENDERER_MOUNT 一致（tests/brand-tiers.test.ts 钉住这条契约）。 -->
+    <link rel="icon" type="image/png" sizes="32x32" href="/app/favicon-32.png" />
+    <link rel="icon" type="image/svg+xml" href="/app/favicon.svg" />
+    <link rel="icon" type="image/svg+xml" href="/app/icon-mono.svg" media="(prefers-color-scheme: dark)" />
     <style>
       /* 启动 splash：logo 渐入，React 挂载后 500ms 内淡出移除（不拖慢感知启动）。
          底色跟主题走：系统是暗色却先铺一片 #FAF7F2，那一下奶油色闪屏本身就是一次
@@ -83,13 +90,13 @@
       <svg class="splash-mark" viewBox="0 0 64 64" fill="none"><defs><linearGradient id="sp-plate" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#FBBF24"/><stop offset="100%" stop-color="#D97706"/></linearGradient></defs><path fill="url(#sp-plate)" d="M32 2 C46.375 2 62 10.75 62 32 C62 53.25 46.375 62 32 62 C17.625 62 2 53.25 2 32 C2 10.75 17.625 2 32 2 Z"/>
         <g id="ryen-cat-idle">
           <g transform="translate(32 34) scale(1.05) translate(-32 -34)">
-            <circle cx="32" cy="35.5" r="15.2" class="face" fill="#FFFDF8"/>
-            <path d="M24 26.4 L17 10.4 L34 22 Z" class="face" fill="#FFFDF8"/>
-            <path d="M40 26.4 L47 9 L30 21.8 Z" class="face" fill="#FFFDF8"/>
-            <circle class="inkf" cx="26.7" cy="35.2" r="2.25" fill="#4a2e1a"/>
-            <circle class="inkf" cx="37.3" cy="35.2" r="2.25" fill="#4a2e1a"/>
-            <path class="inkf" d="M29.9 39.8 L32 42.9 L34.1 39.8 Z" fill="#4a2e1a"/>
-            <path class="ink" d="M27.1 43.9 q4.9 4.4 9.8 0" fill="none" style="stroke-width:1.9"/>
+            <circle cx="32" cy="36" r="17" class="face" fill="#FFFDF8"/>
+            <path d="M21.5 22.6 L19.6 10.4 L29.1 19.3 Z" class="face" fill="#FFFDF8"/>
+            <path d="M42.5 22.6 L44.4 10.4 L34.9 19.3 Z" class="face" fill="#FFFDF8"/>
+            <circle class="inkf" cx="26.4" cy="34.8" r="2.7" fill="#4a2e1a"/>
+            <circle class="inkf" cx="37.6" cy="34.8" r="2.7" fill="#4a2e1a"/>
+            <path class="inkf" d="M29.8 39.4 L32 42.6 L34.2 39.4 Z" fill="#4a2e1a"/>
+            <path class="ink" d="M27.5 44.2 q2.25 3.9 4.5 0 q2.25 3.9 4.5 0" fill="none" style="stroke-width:1.9"/>
           </g>
         </g>
       </svg>

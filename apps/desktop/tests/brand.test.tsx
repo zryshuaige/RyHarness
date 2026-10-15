@@ -138,7 +138,7 @@ describe('母版唯一性：只有 assets/brand/cat-face*.svg 这一只猫', () 
       return readBrand(mood)
         .split('\n')
         .filter((line) => {
-          return /cx="32" cy="35\.5"|L17 10\.4|L47 9/.test(line)
+          return /cx="32" cy="36"|L19\.6 10\.4|L44\.4 10\.4/.test(line)
         })
         .map((line) => {
           return line.trim()
@@ -146,7 +146,7 @@ describe('母版唯一性：只有 assets/brand/cat-face*.svg 这一只猫', () 
         .join(' ')
     }
     const idle = silhouette('cat-face.svg')
-    expect(squash(idle)).toContain('r="15.2"')
+    expect(squash(idle)).toContain('r="17"')
     expect(squash(silhouette('cat-face-thinking.svg'))).toBe(squash(idle))
     expect(squash(silhouette('cat-face-happy.svg'))).toBe(squash(idle))
     // 此前那只手工猫带胡须/领结，母版里不许再出现这些记号
@@ -166,28 +166,37 @@ describe('母版唯一性：只有 assets/brand/cat-face*.svg 这一只猫', () 
   })
 
   it('单色剪影 icon-mono.svg 的头、耳、五官也都来自同一份母版', () => {
-    const mono = readBrand('icon-mono.svg')
-    // 剪影是单色填充，属性比母版少；只比几何本身（剥掉 class / fill 钩子）。
-    const bare = squash(readBrand('cat-face.svg'))
-      .replaceAll(/ class="[a-z ]*"/g, '')
-      .replaceAll(/ fill="#[0-9a-f]{6}"/gi, '')
+    // 单色版就是母版本身：只把主题钩子换成写死的颜色与描边，不另抄一份几何
+    // （早期 gen-icon 里手抄过一份头与五官，母版一改就跟着跑偏）。
+    const bare = (text: string): string => {
+      return squash(text)
+        .replaceAll(/ class="[a-z ]*"/g, '')
+        .replaceAll(/ fill="#[0-9a-f]{6}"/gi, '')
+        .replaceAll(/ stroke="#[0-9a-f]{6}"/gi, '')
+        .replaceAll(/ style="[^"]*"/g, '')
+        .replaceAll(' stroke-linecap="round"', '')
+    }
+    const mono = bare(readBrand('icon-mono.svg'))
+    const master = bare(readBrand('cat-face.svg'))
     for (const geometry of [
-      '<circle cx="32" cy="35.5" r="15.2"/>',
-      '<path d="M24 26.4 L17 10.4 L34 22 Z"/>',
-      '<path d="M40 26.4 L47 9 L30 21.8 Z"/>',
-      '<circle cx="26.7" cy="35.2" r="2.25"/>',
-      '<circle cx="37.3" cy="35.2" r="2.25"/>',
-      '<path d="M29.9 39.8 L32 42.9 L34.1 39.8 Z"/>',
-      '<path d="M27.1 43.9 q4.9 4.4 9.8 0"',
+      '<circle cx="32" cy="36" r="17"/>',
+      '<path d="M21.5 22.6 L19.6 10.4 L29.1 19.3 Z"/>',
+      '<path d="M42.5 22.6 L44.4 10.4 L34.9 19.3 Z"/>',
+      '<circle cx="26.4" cy="34.8" r="2.7"/>',
+      '<circle cx="37.6" cy="34.8" r="2.7"/>',
+      '<path d="M29.8 39.4 L32 42.6 L34.2 39.4 Z"/>',
+      '<path d="M27.5 44.2 q2.25 3.9 4.5 0 q2.25 3.9 4.5 0"',
     ]) {
       expect(mono, geometry).toContain(geometry)
-      // 同一段几何必须原样出现在母版里（gen-icon 里那份手抄常量不许跑偏）
-      expect(bare, geometry).toContain(geometry)
+      // 同一段几何必须原样出现在母版里
+      expect(master, geometry).toContain(geometry)
     }
+    // 单色版没有底板：深色底上直接可用
+    expect(readBrand('icon-mono.svg')).not.toContain('ryagent-plate')
   })
 
   it('渲染层里再也没有第二处猫的几何（唯一出现处是启动屏那份母版原文）', () => {
-    const ear = 'M24 26.4 L17 10.4 L34 22 Z'
+    const ear = 'M21.5 22.6 L19.6 10.4 L29.1 19.3 Z'
     const offenders: string[] = []
     for (const file of readdirSync(SRC, { recursive: true, encoding: 'utf8' })) {
       if (/\.(png|jpe?g|webp|gif|woff2?)$/.test(file)) continue
@@ -346,10 +355,10 @@ describe('头像规格一致（24 / 32 / 48 / 64px）', () => {
 
   it('24px 下仍然可辨识：猫的五官与首字符都留得住', () => {
     const cat = renderToStaticMarkup(<Avatar avatarKey="cat" name="Ryen" size={24} />)
-    // 母版眼半径 2.25（64 网格）→ 24px 画布上直径约 1.7px，低于 1.5px 就不算「看得见」
-    const eyePx = (2 * 2.25 * 24) / 64
+    // 母版眼半径 2.7（64 网格）→ 24px 画布上直径约 2px，低于 1.5px 就不算「看得见」
+    const eyePx = (2 * 2.7 * 24) / 64
     expect(eyePx).toBeGreaterThanOrEqual(1.5)
-    expect(cat).toContain('cx="26.7" cy="35.2" r="2.25"')
+    expect(cat).toContain('cx="26.4" cy="34.8" r="2.7"')
     const letter = renderToStaticMarkup(<Avatar avatarKey="🐈" name="旧数据" size={24} />)
     expect(letter).toContain(`font-size:${Math.round(24 * AVATAR_SPEC.letterRatio)}px`)
     expect(Math.round(24 * AVATAR_SPEC.letterRatio)).toBeGreaterThanOrEqual(11)

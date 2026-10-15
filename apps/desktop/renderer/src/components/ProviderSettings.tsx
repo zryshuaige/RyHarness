@@ -1,47 +1,65 @@
 /**
- * 「我的」页的模型供应商区块：内置 / 自定义分组列表 + 添加向导（预设网格 → 表单）。
+ * 「我的」页的模型供应商区块：内置 / 自定义分组列表 + 添加向导（预设网格 → 表单）
+ * + 行内编辑。
  *
  * 此前供应商只是几行可展开文字，看不到协议、baseURL，也加不了自己的供应商。
  * 对齐主流产品的形态：每行 = 图标 + 名称 + 徽标（内置或自定义 / 协议 / 免 key）
- * + 右侧模型数；未配置的行内直接填 key；自定义供应商带确认可删。
+ * + 右侧模型数；未配置的行内直接填 key；每行都能「编辑」（改名字 / Base URL /
+ * 模型列表 / 协议）；自定义供应商带确认可删。
  *
- * 与服务端契约（apps/server/src/app.ts）的实际形状：GET /api/providers 目前只回
- * id / displayName / apiKeyConfigured / models，custom / protocol / baseUrl / usedBy
- * 是可选字段——没有就不展示对应徽标，不猜。预设、新增、删除三个接口在后端实现之前回
- * 404，界面要降级得体面：预设网格只剩「自定义」并说明原因，写操作失败给出能照着
- * 做的中文提示而不是 'not found: POST /api/providers'。
+ * 与服务端契约（apps/server/src/routes/providers.ts）的实际形状：GET /api/providers
+ * 带 id / displayName / protocol / baseUrl / custom / apiKeyConfigured / models /
+ * usedBy，凭据只回答"配没配"。写入走 POST /api/providers、PATCH /api/providers/:id、
+ * DELETE /api/providers/:id；写方法缺省一律视为后端未跟上，界面降级得体面：按钮
+ * 禁用并说明原因，而不是点了没反应或弹一句 'not found: POST /api/providers'。
  *
  * 凭据这块讲的是全生命周期：填进去只是「已备」，不测过就不知道这家认不认；所以状态
  * 分三态（未配置凭据 / 凭据已备（未验证）/ 已验证），并提供更换 Key、移除凭据、
  * 测试连接三个出口。免 key 的本地服务（Ollama）不套用这套：它没有 key 可填，改用
- * 探活，探不通就说「未检测到本地服务」，而不是拿一个绿点假装它在。
+ * 探活，探不通就说「未检测到本地服务」，而不是拿一个绿点假装它在。改过 Base URL 之
+ * 后上一次「已验证」就不作数了，绿点会撤掉。
  *
  * 渲染层对 api 只做结构化要求（测试给子集即可）：新方法缺省视为后端未跟上，
  * 添加入口降级为只有「自定义」一格，表单里的保存按钮直接禁用。
  */
 import { useEffect, useId, useRef, useState } from 'react'
-import type { CreateProviderInput, ProviderInfo, ProviderPreset, ProviderVerifyResult } from '../api.ts'
+import type { CreateProviderInput, ProviderInfo, ProviderPreset } from '../api.ts'
 import {
   explainVerifyFailure,
   isKeylessProtocol,
   isLocalService,
   LOCAL_SERVICE_DOWN,
+  modelRemovalHint,
+  type ProviderVerifyResponse,
+  providerByBaseUrl,
+  providerModelIds,
   providerStatus,
   providerStatusText,
   providerUsage,
+  removedModelIds,
 } from '../lib/provider-health.ts'
 import { toast } from '../lib/toast.ts'
 import { ConfirmDialog } from './ConfirmDialog.tsx'
 import { Icon } from './Icon.tsx'
 import { Modal } from './Modal.tsx'
 
+/** 编辑供应商时能改的四个字段（与服务端 PATCH 的白名单一一对应）。 */
+export interface UpdateProviderInput {
+  displayName: string
+  protocol: string
+  baseUrl: string
+  models: string[]
+}
+
 export interface ProviderApi {
   setApiKey(providerId: string, apiKey: string): Promise<{ providerId: string; configured: boolean }>
   providerPresets?(): Promise<{ presets: ProviderPreset[] }>
   createProvider?(input: CreateProviderInput): Promise<{ provider: ProviderInfo }>
+  /** 改名称 / 地址 / 模型列表 / 协议；缺省 = 这个客户端没有编辑能力（后端未跟上）。 */
+  updateProvider?(id: string, patch: UpdateProviderInput): Promise<{ provider: ProviderInfo }>
   deleteProvider?(id: string): Promise<{ deleted: string }>
   /** 测连接；缺省 = 这版服务端没有，界面禁用入口并说明。 */
-  verifyProvider?(id: string): Promise<ProviderVerifyResult>
+  verifyProvider?(id: string): Promise<ProviderVerifyResponse>
   /** 移除已存凭据；缺省同上。服务端回的是 `{ providerId, configured }`，没有 `{ deleted }`。 */
   deleteApiKey?(id: string): Promise<{ providerId: string; configured: boolean }>
 }
@@ -100,11 +118,13 @@ function ProviderItem({
   api,
   onChanged,
   onDelete,
+  onEdit,
 }: {
   provider: ProviderInfo
   api: ProviderApi
   onChanged: () => void
   onDelete: (provider: ProviderInfo) => void
+  onEdit: (provider: ProviderInfo) => void
 }) {
   const [open, setOpen] = useState(false)
   const [key, setKey] = useState('')
@@ -114,6 +134,8 @@ function ProviderItem({
   const [verify, setVerify] = useState<VerifyState>({ kind: 'idle' })
   const [removing, setRemoving] = useState(false)
   const headRef = useRef<HTMLButtonElement>(null)
+  /** 上一次测通过的地址：被编辑换掉之后就不再作数。 */
+  const verifiedBaseUrl = useRef<string | undefined>(undefined)
   const panelId = useId()
   const local = isLocalService(provider)
   const configured = provider.apiKeyConfigured || local
@@ -158,6 +180,7 @@ function ProviderItem({
       .then((result) => {
         if (result.ok) {
           setVerify({ kind: 'ok', latencyMs: result.latencyMs })
+          verifiedBaseUrl.current = provider.baseUrl
           if (local) {
             toast.success(`「${provider.displayName}」本地服务在线（${result.latencyMs}ms）`)
           } else {
@@ -165,8 +188,9 @@ function ProviderItem({
           }
           return
         }
-        // 服务端给了 message 就以它为底，界面上仍然是人话（401 / 连不上 / 限流各有说法）。
-        setVerify({ kind: 'down', reason: explainVerifyFailure(result.message) })
+        // 服务端给了分类就以它的话为准（那边已经写好「现象 → 下一步」）；老服务端
+        // 没给分类时，界面上仍然是人话（401 / 连不上 / 限流各有说法）。
+        setVerify({ kind: 'down', reason: explainVerifyFailure(result.message, result.code) })
       })
       .catch((cause: unknown) => {
         setVerify({
@@ -175,6 +199,13 @@ function ProviderItem({
         })
       })
   }
+
+  // 端点被改过之后，上一次「已验证」说的已经不是这个地址了：绿点得撤掉。
+  useEffect(() => {
+    if (verifiedBaseUrl.current === undefined || verifiedBaseUrl.current === provider.baseUrl) return
+    verifiedBaseUrl.current = undefined
+    setVerify({ kind: 'idle' })
+  }, [provider.baseUrl])
 
   // 本地服务没有「有没有 key」这回事，能不能用只能靠探活：进页面先探一次，
   // 用户随时能手动重探（Ollama 常常是用户启动之后才起来的）。
@@ -186,6 +217,7 @@ function ProviderItem({
       .verifyProvider(provider.id)
       .then((result) => {
         if (cancelled) return
+        if (result.ok) verifiedBaseUrl.current = provider.baseUrl
         setVerify(
           result.ok ? { kind: 'ok', latencyMs: result.latencyMs } : { kind: 'down', reason: LOCAL_SERVICE_DOWN },
         )
@@ -196,7 +228,7 @@ function ProviderItem({
     return () => {
       cancelled = true
     }
-  }, [local, api, provider.id])
+  }, [local, api, provider.id, provider.baseUrl])
 
   const statusLabel =
     status === 'local'
@@ -367,9 +399,26 @@ function ProviderItem({
               <p className="provider-note">Key 只写在本机配置文件（api-keys.json，权限 0600）。</p>
             </>
           )}
-          {provider.custom === true && (
-            <div className="provider-item-actions">
-              {usage.length > 0 ? (
+          {/*
+            编辑与删除放同一行：两个都是"这条路由本身的命运"，与上面的凭据操作分开。
+            编辑对内置条目同样开放——它们删不掉，模型过期时只有这条路能改。
+          */}
+          <div className="provider-item-actions">
+            <button
+              type="button"
+              className="btn btn-mini"
+              disabled={api.updateProvider === undefined}
+              title={
+                api.updateProvider === undefined ? '这个版本的服务端还不能编辑供应商' : '改名称、Base URL 或模型列表'
+              }
+              onClick={() => {
+                onEdit(provider)
+              }}
+            >
+              编辑
+            </button>
+            {provider.custom === true &&
+              (usage.length > 0 ? (
                 // 服务端会回 409，但界面要先把话说在前面：先改绑，再删。
                 <>
                   <button type="button" className="btn btn-mini btn-danger" disabled title="先改绑使用它的 agent 再删">
@@ -395,9 +444,8 @@ function ProviderItem({
                 >
                   删除供应商
                 </button>
-              )}
-            </div>
-          )}
+              ))}
+          </div>
         </div>
       )}
       {removing && (
@@ -437,12 +485,14 @@ function ProviderGroup({
   api,
   onChanged,
   onDelete,
+  onEdit,
 }: {
   label: string
   providers: ProviderInfo[]
   api: ProviderApi
   onChanged: () => void
   onDelete: (provider: ProviderInfo) => void
+  onEdit: (provider: ProviderInfo) => void
 }) {
   if (providers.length === 0) return null
   return (
@@ -450,7 +500,14 @@ function ProviderGroup({
       <p className="provider-group-label">{label}</p>
       {providers.map((provider) => {
         return (
-          <ProviderItem key={provider.id} provider={provider} api={api} onChanged={onChanged} onDelete={onDelete} />
+          <ProviderItem
+            key={provider.id}
+            provider={provider}
+            api={api}
+            onChanged={onChanged}
+            onDelete={onDelete}
+            onEdit={onEdit}
+          />
         )
       })}
     </div>
@@ -469,59 +526,119 @@ function parseModels(text: string): string[] {
     })
 }
 
-/** 添加向导第二步：表单。预设已预填名称 / 协议 / baseURL / 推荐模型。 */
+/** 后端没实现对应写接口时给出的中文说法（各带一句能照着做的替代路径）。 */
+const ADD_UNSUPPORTED =
+  '这个版本的服务端还不能新增供应商：接口没实现。可以先在 data/config/providers.json 里加一条，重启服务端后再回来填 key。'
+const EDIT_UNSUPPORTED =
+  '这个版本的服务端还不能编辑供应商：接口没实现。可以直接改 data/config/providers.json 里这一条，重启服务端后生效。'
+
+/**
+ * 添加向导第二步 / 编辑弹窗：同一张表单，两种模式。
+ *
+ * 编辑模式（provider 有值）改的是「已经存在的那条路由」——以前改地址、改模型、改
+ * 名字只能删了重建，而删除还被 409 挡着；模型列表里删掉的 id 会先在界面提示一遍，
+ * 真有 agent 挂在上面时由服务端 409 点名拦下。
+ */
 function ProviderForm({
   preset,
+  provider,
   api,
   onBack,
-  onAdded,
+  onSaved,
 }: {
   preset: ProviderPreset | undefined
+  /** 编辑模式：改这一条已存在的供应商（缺省 = 新增）。 */
+  provider: ProviderInfo | undefined
   api: ProviderApi
   onBack: () => void
-  onAdded: () => void
+  onSaved: () => void
 }) {
-  const keyless = isKeylessProtocol(preset?.protocol)
-  const [displayName, setDisplayName] = useState(preset?.displayName ?? '')
-  const [protocol, setProtocol] = useState(preset?.protocol ?? 'openai')
-  const [baseUrl, setBaseUrl] = useState(preset?.baseUrl ?? '')
-  const [modelsText, setModelsText] = useState((preset?.models ?? []).join('\n'))
+  const editing = provider !== undefined
+  const keyless = isKeylessProtocol(provider?.protocol ?? preset?.protocol)
+  const [displayName, setDisplayName] = useState(provider?.displayName ?? preset?.displayName ?? '')
+  const [protocol, setProtocol] = useState(provider?.protocol ?? preset?.protocol ?? 'openai')
+  const [baseUrl, setBaseUrl] = useState(provider?.baseUrl ?? preset?.baseUrl ?? '')
+  const [modelsText, setModelsText] = useState(
+    (
+      provider?.models.map((model) => {
+        return model.id
+      }) ??
+      preset?.models ??
+      []
+    ).join('\n'),
+  )
   const [apiKey, setApiKey] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | undefined>(undefined)
+  const errorRef = useRef<HTMLParagraphElement>(null)
   const canSave = displayName.trim().length > 0 && baseUrl.trim().length > 0 && parseModels(modelsText).length > 0
-  /** createProvider 缺省 = 这个客户端没有新增能力（后端未跟上）：按钮禁用并说明，而不是点了没反应。 */
-  const unsupported = api.createProvider === undefined
+  /** 缺省对应的写方法 = 这个客户端没有该能力（后端未跟上）：按钮禁用并说明，而不是点了没反应。 */
+  const unsupported = editing ? api.updateProvider === undefined : api.createProvider === undefined
+  const removed =
+    editing && provider !== undefined ? removedModelIds(providerModelIds(provider), parseModels(modelsText)) : []
+  const removalHint =
+    editing && provider !== undefined
+      ? modelRemovalHint(provider.displayName, removed, providerUsage(provider))
+      : undefined
 
-  const save = (): void => {
-    if (api.createProvider === undefined) return
-    const input: CreateProviderInput = {
-      displayName: displayName.trim(),
-      protocol: protocol.trim().length > 0 ? protocol.trim() : 'openai',
-      baseUrl: baseUrl.trim(),
-      models: parseModels(modelsText),
-    }
-    if (!keyless && apiKey.trim().length > 0) input.apiKey = apiKey.trim()
-    if (preset !== undefined) input.presetId = preset.id
+  // 保存失败时把焦点送到原因上：读屏会念出来，键盘用户也不用回头找红字在哪。
+  useEffect(() => {
+    if (error !== undefined) errorRef.current?.focus()
+  }, [error])
+
+  /** 两种模式共用的尾巴：成功收起弹窗，失败把原因就地显示（输入一律原样保留）。 */
+  const runSave = (request: Promise<unknown>, success: () => void, unsupportedText: string): void => {
     setBusy(true)
     setError(undefined)
-    api
-      .createProvider(input)
+    request
       .then(() => {
-        toast.success(`已添加「${input.displayName}」`)
-        onAdded()
+        success()
       })
       .catch((cause: unknown) => {
-        setError(
-          explainApiError(
-            cause,
-            '这个版本的服务端还不能新增供应商：接口没实现。可以先在 data/config/providers.json 里加一条，重启服务端后再回来填 key。',
-          ).message,
-        )
+        setError(explainApiError(cause, unsupportedText).message)
       })
       .finally(() => {
         setBusy(false)
       })
+  }
+
+  const save = (): void => {
+    const models = parseModels(modelsText)
+    const wantedProtocol = protocol.trim().length > 0 ? protocol.trim() : 'openai'
+    if (provider === undefined) {
+      if (api.createProvider === undefined) return
+      const input: CreateProviderInput = {
+        displayName: displayName.trim(),
+        protocol: wantedProtocol,
+        baseUrl: baseUrl.trim(),
+        models,
+      }
+      if (!keyless && apiKey.trim().length > 0) input.apiKey = apiKey.trim()
+      if (preset !== undefined) input.presetId = preset.id
+      runSave(
+        api.createProvider(input),
+        () => {
+          toast.success(`已添加「${input.displayName}」`)
+          onSaved()
+        },
+        ADD_UNSUPPORTED,
+      )
+      return
+    }
+    if (api.updateProvider === undefined) return
+    runSave(
+      api.updateProvider(provider.id, {
+        displayName: displayName.trim(),
+        protocol: wantedProtocol,
+        baseUrl: baseUrl.trim(),
+        models,
+      }),
+      () => {
+        toast.success(`「${provider.displayName}」已更新`)
+        onSaved()
+      },
+      EDIT_UNSUPPORTED,
+    )
   }
 
   return (
@@ -542,7 +659,7 @@ function ProviderForm({
           onBack()
         }}
       >
-        ‹ 重选供应商
+        {editing ? '‹ 取消编辑' : '‹ 重选供应商'}
       </button>
       <label className="field">
         <span>名称</span>
@@ -585,7 +702,7 @@ function ProviderForm({
           }}
         />
       </label>
-      {!keyless && (
+      {!keyless && !editing && (
         <label className="field">
           <span>API Key（可稍后再填）</span>
           <input
@@ -605,20 +722,29 @@ function ProviderForm({
           </a>
         </p>
       )}
-      <p className="provider-note">模型列表一行一个，也可用逗号分隔；保存后还能逐个补 key。</p>
+      {removalHint !== undefined && <p className="provider-note provider-warn">{removalHint}</p>}
+      <p className="provider-note">
+        {editing
+          ? '模型列表一行一个，也可用逗号分隔；要换 Key 请回到这一行用「更换 Key」。'
+          : '模型列表一行一个，也可用逗号分隔；保存后还能逐个补 key。'}
+      </p>
       {unsupported && (
         <p className="apikey-error" role="alert">
-          这个客户端还没有「新增供应商」的能力，只能手工编辑 data/config/providers.json。
+          {editing
+            ? '这个客户端还没有「编辑供应商」的能力，只能手工改 data/config/providers.json。'
+            : '这个客户端还没有「新增供应商」的能力，只能手工编辑 data/config/providers.json。'}
         </p>
       )}
       {error !== undefined && (
-        <p className="apikey-error" role="alert">
+        // 可聚焦：保存失败后焦点直接落到原因上，键盘用户不必回头找红字。
+        <p className="apikey-error" role="alert" tabIndex={-1} ref={errorRef}>
           {error}
         </p>
       )}
       <div className="modal-actions">
-        <button type="submit" className="btn btn-primary" disabled={busy || !canSave || unsupported}>
-          {busy ? '保存中' : '保存'}
+        {/* 保存中不禁用：disabled 会把焦点从按钮上打掉，键盘用户保存完要重新 Tab 回来。 */}
+        <button type="submit" className="btn btn-primary" disabled={!canSave || unsupported} aria-disabled={busy}>
+          {busy ? '保存中' : editing ? '保存修改' : '保存'}
         </button>
       </div>
     </form>
@@ -632,7 +758,18 @@ function presetSummary(preset: ProviderPreset): string {
 }
 
 /** 添加向导：第一步预设网格（含「自定义」），第二步表单。 */
-function AddProviderModal({ api, onClose, onAdded }: { api: ProviderApi; onClose: () => void; onAdded: () => void }) {
+function AddProviderModal({
+  api,
+  providers,
+  onClose,
+  onAdded,
+}: {
+  api: ProviderApi
+  /** 已有供应商：用来把配过的预设标成「已添加」，而不是让用户再点一次生成重复项。 */
+  providers: ProviderInfo[]
+  onClose: () => void
+  onAdded: () => void
+}) {
   const [presets, setPresets] = useState<ProviderPreset[] | undefined>(undefined)
   const [loadFailed, setLoadFailed] = useState(false)
   const [selected, setSelected] = useState<ProviderPreset | 'custom' | undefined>(undefined)
@@ -669,18 +806,29 @@ function AddProviderModal({ api, onClose, onAdded }: { api: ProviderApi; onClose
           ) : (
             <div className="provider-preset-grid">
               {presets.map((preset) => {
+                // 同一个 baseUrl 只能有一条路由：配过的置灰并说清已加了几个模型，
+                // 免得用户点进去存一存，拿到一条丢品牌图标的 custom-xxxxxxxx。
+                const installed = providerByBaseUrl(providers, preset.baseUrl)
                 return (
                   <button
                     type="button"
                     key={preset.id}
-                    className="provider-preset-tile"
+                    className={`provider-preset-tile${installed === undefined ? '' : ' is-installed'}`}
+                    disabled={installed !== undefined}
+                    title={
+                      installed === undefined
+                        ? undefined
+                        : `已经添加过「${installed.displayName}」，不用重复添加；要改它请到列表里点「编辑」`
+                    }
                     onClick={() => {
                       setSelected(preset)
                     }}
                   >
                     <ProviderIcon id={preset.id} name={preset.displayName} size={40} />
                     <span className="provider-preset-name">{preset.displayName}</span>
-                    <span className="provider-preset-sub">{presetSummary(preset)}</span>
+                    <span className="provider-preset-sub">
+                      {installed === undefined ? presetSummary(preset) : `已添加 · ${installed.models.length} 个模型`}
+                    </span>
                   </button>
                 )
               })}
@@ -706,13 +854,33 @@ function AddProviderModal({ api, onClose, onAdded }: { api: ProviderApi; onClose
       ) : (
         <ProviderForm
           preset={selected === 'custom' ? undefined : selected}
+          provider={undefined}
           api={api}
           onBack={() => {
             setSelected(undefined)
           }}
-          onAdded={onAdded}
+          onSaved={onAdded}
         />
       )}
+    </Modal>
+  )
+}
+
+/** 编辑弹窗：复用添加向导那张表单，只是换成 PATCH。 */
+function EditProviderModal({
+  provider,
+  api,
+  onClose,
+  onSaved,
+}: {
+  provider: ProviderInfo
+  api: ProviderApi
+  onClose: () => void
+  onSaved: () => void
+}) {
+  return (
+    <Modal title={`编辑「${provider.displayName}」`} onClose={onClose}>
+      <ProviderForm preset={undefined} provider={provider} api={api} onBack={onClose} onSaved={onSaved} />
     </Modal>
   )
 }
@@ -728,6 +896,7 @@ export function ProviderSettings({
   onChanged: () => void
 }) {
   const [adding, setAdding] = useState(false)
+  const [editing, setEditing] = useState<ProviderInfo | undefined>(undefined)
   const [deleting, setDeleting] = useState<ProviderInfo | undefined>(undefined)
   const builtin = providers.filter((provider) => {
     return provider.custom !== true
@@ -760,19 +929,41 @@ export function ProviderSettings({
         </p>
       ) : (
         <div className="provider-groups">
-          <ProviderGroup label="内置" providers={builtin} api={api} onChanged={onChanged} onDelete={setDeleting} />
+          <ProviderGroup
+            label="内置"
+            providers={builtin}
+            api={api}
+            onChanged={onChanged}
+            onDelete={setDeleting}
+            onEdit={setEditing}
+          />
           <ProviderGroup
             label="自定义供应商"
             providers={custom}
             api={api}
             onChanged={onChanged}
             onDelete={setDeleting}
+            onEdit={setEditing}
           />
         </div>
+      )}
+      {editing !== undefined && (
+        <EditProviderModal
+          provider={editing}
+          api={api}
+          onClose={() => {
+            setEditing(undefined)
+          }}
+          onSaved={() => {
+            setEditing(undefined)
+            onChanged()
+          }}
+        />
       )}
       {adding && (
         <AddProviderModal
           api={api}
+          providers={providers}
           onClose={() => {
             setAdding(false)
           }}

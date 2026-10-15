@@ -89,8 +89,8 @@ export function bigrams(text: string): string {
   return parts.join(' ')
 }
 
-/** 单条 FTS 删除的参数上限分片。 */
-const FTS_DELETE_CHUNK = 500
+/** 按 rowid 批量改写时的参数上限分片（SQLite 绑定变量有上限）。 */
+const ROWID_CHUNK = 500
 
 /**
  * FTS5 MATCH 查询串：bigram token 逐个加引号，token 内的 `"` 双写。
@@ -187,8 +187,13 @@ export class MemoryStore {
 
   // ---- 检索 ----
 
-  /** FTS5 BM25 top-N（active 记忆，限定空间：agent 私有 + 共享）。 */
-  searchFts(agentId: string, query: string, limit = 10): MemoryRow[] {
+  /**
+   * FTS5 BM25 候选窗口（全库，按 bm25 升序）。
+   *
+   * 窗口是**全局**的：空间归属的过滤放在调用侧（{@link searchFts}），因此同一次
+   * 扇出里多个成员可以共用这一份命中表，不必每个成员各发一次 MATCH。
+   */
+  searchFtsHits(query: string, window = 30): { memory: MemoryRow; score: number }[] {
     // OR 语义：候选事实常比记忆长，全 AND 会零命中；BM25 按命中比例排序。
     const matchQuery = ftsMatchQuery(query)
     if (matchQuery.length === 0) return []
@@ -196,44 +201,68 @@ export class MemoryStore {
       .prepare(
         'SELECT rowid, bm25(memories_fts) AS score FROM memories_fts WHERE memories_fts MATCH ? ORDER BY score LIMIT ?',
       )
-      .all(matchQuery, limit * 3) as { rowid: number }[]
-    const out: MemoryRow[] = []
+      .all(matchQuery, window) as { rowid: number; score: number }[]
+    const out: { memory: MemoryRow; score: number }[] = []
     for (const hit of rowids) {
       const row = this.db.prepare('SELECT * FROM memories WHERE rowid = ?').get(Number(hit.rowid)) as
         | Record<string, unknown>
         | undefined
       if (row === undefined) continue
       const memory = rowToMemory(row)
-      if (memory.status === 'active' && (memory.agentId === agentId || memory.agentId === SHARED_SPACE)) {
-        out.push(memory)
-        if (out.length >= limit) break
-      }
+      if (memory.status !== 'active') continue
+      out.push({ memory, score: Number(hit.score) })
     }
     return out
   }
 
-  /** 拉取某空间全部 active 向量（用于内存余弦；单用户规模 <10k，暴力即可）。返回的是常驻缓存，调用方按只读用。 */
-  listActiveEmbeddings(agentId: string, embeddingModel?: string): MemoryRow[] {
-    const key = `${agentId}|${embeddingModel ?? ''}`
+  /** FTS5 BM25 top-N（active 记忆，限定空间：agent 私有 + 共享）。 */
+  searchFts(agentId: string, query: string, limit = 10): MemoryRow[] {
+    const out: MemoryRow[] = []
+    for (const hit of this.searchFtsHits(query, limit * 3)) {
+      if (hit.memory.agentId !== agentId && hit.memory.agentId !== SHARED_SPACE) continue
+      out.push(hit.memory)
+      if (out.length >= limit) break
+    }
+    return out
+  }
+
+  /**
+   * 某空间的 active 向量（agent 私有空间或共享画像各自一桶）。
+   *
+   * 共享画像单独成桶是给扇出用的：N 个成员召回同一段输入时，共享向量只解码
+   * 一次，而不是每个成员各解一份（1000 条 × 1024 维的库，一次就是几 MB 的
+   * 反序列化）。返回的是缓存内的行，调用方按只读用。
+   */
+  listSpaceEmbeddings(spaceId: string, embeddingModel?: string): MemoryRow[] {
+    const key = `${spaceId}|${embeddingModel ?? ''}`
     const stamp = this.embeddingStamp()
     const cached = this.embeddingIndex.get(key)
     if (cached !== undefined && cached.stamp === stamp) return cached.rows
     const rows = (
       embeddingModel === undefined
         ? this.db
-            .prepare(
-              "SELECT * FROM memories WHERE status = 'active' AND embedding IS NOT NULL AND (agent_id = ? OR agent_id = ?)",
-            )
-            .all(agentId, SHARED_SPACE)
+            .prepare("SELECT * FROM memories WHERE status = 'active' AND embedding IS NOT NULL AND agent_id = ?")
+            .all(spaceId)
         : this.db
             .prepare(
-              "SELECT * FROM memories WHERE status = 'active' AND embedding IS NOT NULL AND embedding_model = ? AND (agent_id = ? OR agent_id = ?)",
+              "SELECT * FROM memories WHERE status = 'active' AND embedding IS NOT NULL AND embedding_model = ? AND agent_id = ?",
             )
-            .all(embeddingModel, agentId, SHARED_SPACE)
+            .all(embeddingModel, spaceId)
     ) as Record<string, unknown>[]
     const out = rows.map(rowToMemory)
     this.embeddingIndex.set(key, { stamp, rows: out })
     return out
+  }
+
+  /**
+   * 拉取某空间的全部 active 向量（私有 + 共享；用于内存余弦，单用户规模 <10k，
+   * 暴力即可）。两个空间桶拼成新数组：调用方按只读用，但别指望两次调用拿到
+   * 同一个数组实例。
+   */
+  listActiveEmbeddings(agentId: string, embeddingModel?: string): MemoryRow[] {
+    const shared = this.listSpaceEmbeddings(SHARED_SPACE, embeddingModel)
+    if (agentId === SHARED_SPACE) return shared
+    return [...this.listSpaceEmbeddings(agentId, embeddingModel), ...shared]
   }
 
   /**
@@ -423,32 +452,25 @@ export class MemoryStore {
    *
    * 归档同步清出 FTS 索引：只改 status 的话索引里全是死行，BM25 候选窗口被
    * 吃光，召回质量随时间单调退化（行数据保留，restore 时重建索引行）。
-   * @returns 归档条数。
+   *
+   * `limit` 缺省是一次归档完（调用方要的是"这批到底归档了多少"）；给出时只归档
+   * 至多 limit 行（`ORDER BY rowid` 推进，下一片自然取到下一批）——巩固任务在
+   * 服务进程的事件循环里跑，整段 UPDATE 会把主循环冻住（实测 1.8s），切片
+   * 后每片之间能正常让出事件循环。
+   * @returns 本次（分片时为该片）归档条数。
    */
-  archiveDormant(dormantAfterMs: number, now = Date.now()): number {
-    const stale = this.db
-      .prepare(
-        `SELECT rowid FROM memories
-       WHERE status = 'active'
+  archiveDormant(dormantAfterMs: number, now = Date.now(), limit?: number): number {
+    const predicate = `status = 'active'
          AND agent_id != ?
          AND access_count = 0
-         AND COALESCE(NULLIF(last_accessed_at, 0), updated_at) < ?`,
-      )
-      .all(SHARED_SPACE, now - dormantAfterMs) as { rowid: number }[]
+         AND COALESCE(NULLIF(last_accessed_at, 0), updated_at) < ?`
+    const args = [SHARED_SPACE, now - dormantAfterMs]
+    if (limit !== undefined) return this.archiveBatch(predicate, args, now, limit)
+    const stale = this.staleRowids(predicate, args)
     const result = this.db
-      .prepare(
-        `UPDATE memories SET status = 'inactive', updated_at = ?
-       WHERE status = 'active'
-         AND agent_id != ?
-         AND access_count = 0
-         AND COALESCE(NULLIF(last_accessed_at, 0), updated_at) < ?`,
-      )
-      .run(now, SHARED_SPACE, now - dormantAfterMs)
-    this.dropFtsRows(
-      stale.map((row) => {
-        return Number(row.rowid)
-      }),
-    )
+      .prepare(`UPDATE memories SET status = 'inactive', updated_at = ? WHERE ${predicate}`)
+      .run(now, ...args)
+    this.dropFtsRows(stale)
     this.invalidateEmbeddingIndex()
     return Number(result.changes)
   }
@@ -457,46 +479,70 @@ export class MemoryStore {
    * 归档陈旧软删链：superseded 且已超过保留期的历史版本 → inactive。
    * 当前 active 记忆的直接前身保留（软删链末端的可追溯性），更早的中间版本
    * 归档；行本身不删，`supersedes_id` 指针仍可追溯。FTS 索引同步清理（同 archiveDormant）。
-   * @returns 归档条数。
+   *
+   * `limit` 的分片语义同 {@link archiveDormant}。归档本身不改变"谁被判定为陈旧"
+   * （条件只看 status/时间与软删链指针），因此切片不会漏行也不会重行。
+   * @returns 本次（分片时为该片）归档条数。
    */
-  archiveColdSuperseded(maxAgeMs: number, now = Date.now()): number {
-    const stale = this.db
-      .prepare(
-        `SELECT rowid FROM memories
-       WHERE status = 'superseded'
+  archiveColdSuperseded(maxAgeMs: number, now = Date.now(), limit?: number): number {
+    const predicate = `status = 'superseded'
          AND updated_at < ?
          AND id NOT IN (
            SELECT y.supersedes_id FROM memories y
            WHERE y.supersedes_id IS NOT NULL
              AND NOT EXISTS (SELECT 1 FROM memories z WHERE z.supersedes_id = y.id)
-         )`,
-      )
-      .all(now - maxAgeMs) as { rowid: number }[]
+         )`
+    const args = [now - maxAgeMs]
+    if (limit !== undefined) return this.archiveBatch(predicate, args, now, limit)
+    const stale = this.staleRowids(predicate, args)
     const result = this.db
-      .prepare(
-        `UPDATE memories SET status = 'inactive', updated_at = ?
-       WHERE status = 'superseded'
-         AND updated_at < ?
-         AND id NOT IN (
-           SELECT y.supersedes_id FROM memories y
-           WHERE y.supersedes_id IS NOT NULL
-             AND NOT EXISTS (SELECT 1 FROM memories z WHERE z.supersedes_id = y.id)
-         )`,
-      )
-      .run(now, now - maxAgeMs)
-    this.dropFtsRows(
-      stale.map((row) => {
-        return Number(row.rowid)
-      }),
-    )
+      .prepare(`UPDATE memories SET status = 'inactive', updated_at = ? WHERE ${predicate}`)
+      .run(now, ...args)
+    this.dropFtsRows(stale)
+    this.invalidateEmbeddingIndex()
+    return Number(result.changes)
+  }
+
+  /** 命中归档条件的 rowid（按 rowid 推进，切片可重复调用）。 */
+  private staleRowids(predicate: string, args: readonly (string | number)[]): number[] {
+    const rows = this.db.prepare(`SELECT rowid FROM memories WHERE ${predicate} ORDER BY rowid`).all(...args) as {
+      rowid: number
+    }[]
+    return rows.map((row) => {
+      return Number(row.rowid)
+    })
+  }
+
+  /**
+   * 分片归档：只动本片至多 `limit` 行（UPDATE ... WHERE rowid IN），
+   * FTS 行同片清出。返回本片归档条数——调用方按「返回数 < limit」判断扫完。
+   */
+  private archiveBatch(predicate: string, args: readonly (string | number)[], now: number, limit: number): number {
+    if (limit <= 0) return 0
+    const rows = this.db
+      .prepare(`SELECT rowid FROM memories WHERE ${predicate} ORDER BY rowid LIMIT ?`)
+      .all(...args, Math.min(limit, ROWID_CHUNK)) as { rowid: number }[]
+    const rowids = rows.map((row) => {
+      return Number(row.rowid)
+    })
+    if (rowids.length === 0) return 0
+    const placeholders = rowids
+      .map(() => {
+        return '?'
+      })
+      .join(',')
+    const result = this.db
+      .prepare(`UPDATE memories SET status = 'inactive', updated_at = ? WHERE rowid IN (${placeholders})`)
+      .run(now, ...rowids)
+    this.dropFtsRows(rowids)
     this.invalidateEmbeddingIndex()
     return Number(result.changes)
   }
 
   /** 批量删 FTS 索引行（分片，避免 IN 参数超上限）。 */
   private dropFtsRows(rowids: readonly number[]): void {
-    for (let start = 0; start < rowids.length; start += FTS_DELETE_CHUNK) {
-      const chunk = rowids.slice(start, start + FTS_DELETE_CHUNK)
+    for (let start = 0; start < rowids.length; start += ROWID_CHUNK) {
+      const chunk = rowids.slice(start, start + ROWID_CHUNK)
       this.db
         .prepare(
           `DELETE FROM memories_fts WHERE rowid IN (${chunk

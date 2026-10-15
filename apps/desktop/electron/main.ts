@@ -15,11 +15,12 @@
  * 因此开发运行（`electron .`）与安装版显示的是同一个名字和版本号。
  */
 
+import { randomBytes } from 'node:crypto'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { createServer as createNetServer } from 'node:net'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { RyAgentServer } from '@ryagent/server'
+import { configureSecretStore, RyAgentServer } from '@ryagent/server'
 import {
   app,
   BrowserWindow,
@@ -29,6 +30,7 @@ import {
   type MenuItemConstructorOptions,
   Notification,
   nativeImage,
+  safeStorage,
   screen,
   shell,
   Tray,
@@ -39,12 +41,31 @@ import { RENDERER_MOUNT, RendererAssets } from './renderer-assets.ts'
 const here = dirname(fileURLToPath(import.meta.url))
 
 /**
- * 应用图标：窗口标题栏、任务栏与托盘共用这一个路径。
+ * 应用图标按尺寸分级取用。每一档都是同一份矢量母版 assets/brand/cat-face.svg 的
+ * **独立**导出：小尺寸档做过光学补偿（加粗五官、必要时删掉细节），不是拿 256 档
+ * 降采样——16px 上母版的五官会一起糊掉，降采样只会把糊的结果缩小。档位表与每档的
+ * 补偿参数记在 assets/brand/tiers.json，由 `pnpm gen:icon` 一并生成。
  *
- * 位图是矢量母版 assets/brand/icon.svg（几何橘猫，全应用只有这一只）的导出物，
- * 由 `pnpm gen:icon` 生成；改品牌请改 assets/brand/ 再重新导出，不要在这里换图。
+ * 托盘只有 16/24 两个物理尺寸，直接喂对应档位；窗口与任务栏用 256 档。
+ * 改品牌请改 assets/brand/ 再重新导出，不要在这里换图。
  */
-const APP_ICON = join(here, '../assets/icon-256.png')
+const ICON_TIER = {
+  tray: 'icon-16.png',
+  trayHiDpi: 'icon-24.png',
+  window: 'icon-256.png',
+} as const
+
+const appIcon = (tier: keyof typeof ICON_TIER): string => {
+  return join(here, '../assets', ICON_TIER[tier])
+}
+
+/**
+ * 托盘用哪一档位图。HiDPI 屏（scaleFactor ≥ 1.5）给 24 档：系统按 2 倍密度取像素，
+ * 16 档被拉上去只会发虚；其余给 16 档，1:1 投放就是它自己的像素。
+ */
+export function trayIconTier(scaleFactor: number): 'tray' | 'trayHiDpi' {
+  return scaleFactor >= 1.5 ? 'trayHiDpi' : 'tray'
+}
 
 // ---- 端口策略 ----
 
@@ -110,6 +131,23 @@ export function backendPortFromEnv(env: Record<string, string | undefined> = pro
   const port = Number(raw)
   return Number.isInteger(port) && port >= 0 && port <= 65_535 ? port : DEFAULT_BACKEND_PORT
 }
+
+// ---- API 一次性 token ----
+
+/**
+ * 本次启动的 API token（256 位随机，base64url）。
+ *
+ * 后端固定监听 32100，且工具链里就有 shellExec：没有 token 的话，本机任何一个
+ * 进程都能直接驱动助手去执行命令。每次启动换一个，猜中与复用都无从谈起；
+ * 它只走注入通道（见 pushApiBase），不落盘、不进命令行——命令行在本机是全局
+ * 可见的，放进去等于把 token 公开。
+ */
+export function generateApiToken(): string {
+  return randomBytes(32).toString('base64url')
+}
+
+/** 本次启动的 token（main() 里生成一次，渲染层与主进程自己共用）。 */
+let apiToken: string | undefined
 
 // ---- 启动计时 ----
 
@@ -505,7 +543,7 @@ function createWindow(pageUrl: string): BrowserWindow {
     minHeight: MIN_HEIGHT,
     backgroundColor: '#FAF7F2',
     title: 'RyAgent',
-    icon: APP_ICON,
+    icon: appIcon('window'),
     // 首帧画完再显示，避免加载期的白/空窗口闪烁（加载期的骨架由渲染层自己画）。
     show: false,
     // macOS 的交通灯留在系统内嵌位置（渲染层同样让出 40px 顶条，两端布局一致）；
@@ -590,14 +628,26 @@ function whenLoaded(window: BrowserWindow): Promise<void> {
   })
 }
 
-/** 后端就绪后把 API 地址推给渲染层（contextIsolation 下不用 preload 注入）。
+/**
+ * 后端就绪后把 API 地址与 token 推给渲染层（contextIsolation 下不用 preload 注入）。
  *  页面还在加载时先等 did-finish-load——否则脚本会落在旧的 about:blank 文档上。
- *  推的是**实际绑定到的**地址（端口回退随机时与配置的固定端口不同）。 */
-function pushApiBase(window: BrowserWindow, apiBase: string): void {
+ *  推的是**实际绑定到的**地址（端口回退随机时与配置的固定端口不同）。
+ *
+ *  渲染层契约（apps/desktop/renderer/src/lib/boot.ts 消费）：
+ *  - `window.__RYAGENT_API_BASE__` / `ryagent:api-base` 事件（detail = 地址字符串）；
+ *  - `window.__RYAGENT_API_TOKEN__` / `ryagent:api-token` 事件（detail = token 字符串）；
+ *  - 请求带上 `Authorization: Bearer <token>`，WS 用 `?token=<token>`。
+ *  两个事件分开而不是把 detail 改成对象：事件名与旧的地址通道一一对应，
+ *  只加一条不改旧的，渲染层什么时候接上都接得上。
+ */
+function pushApiBase(window: BrowserWindow, apiBase: string, token: string | undefined): void {
   const payload = JSON.stringify(apiBase)
+  const tokenPayload = JSON.stringify(token ?? '')
   const script =
     `window.__RYAGENT_API_BASE__=${payload};` +
-    `window.dispatchEvent(new CustomEvent('ryagent:api-base',{detail:${payload}}));`
+    `window.dispatchEvent(new CustomEvent('ryagent:api-base',{detail:${payload}}));` +
+    `window.__RYAGENT_API_TOKEN__=${tokenPayload};` +
+    `window.dispatchEvent(new CustomEvent('ryagent:api-token',{detail:${tokenPayload}}));`
   const send = (): void => {
     if (window.isDestroyed() || window.webContents.isDestroyed()) return
     window.webContents.executeJavaScript(script).catch((error: unknown) => {
@@ -635,8 +685,13 @@ let presence: PresenceMonitor | undefined
 export const DEMO_TITLE_PREFIX = '示例'
 /** 首启只跑一次的标记：示例被用户删掉后不该在下次启动时又长回来。 */
 const FIRST_LAUNCH_MARKER = 'first-launch-seeded'
-/** 内置总管的名字：托盘「新对话」据此在通讯录里找到它。 */
-const RYEN_NAME = 'Ryen'
+/**
+ * 托盘「新对话」派发给渲染层的事件名。
+ *
+ * 与 renderer/src/App.tsx 里的 NEW_CHAT_EVENT 是同一个字符串：主进程与渲染层
+ * 各自打包、不共享模块，所以这里只靠名字对齐——改一边必须改另一边。
+ */
+const NEW_CHAT_EVENT = 'ryagent:new-chat'
 /** 新回复的通知正文长度上限（超了通知面板会自己截断，这里先截干净）。 */
 const NOTIFY_BODY_LIMIT = 160
 
@@ -716,10 +771,12 @@ function buildTrayMenu(): Menu {
 
 /** 建托盘：图标 + 菜单 + 点击回到主窗口。图标读不出来就不建（应用退回到「关窗即退」）。 */
 function createTray(): void {
-  const image = nativeImage.createFromPath(APP_ICON).resize({ width: 16, height: 16 })
+  // 托盘不吃矢量：直接用 16/24 档那份已经做过光学补偿的位图，不再从大图缩。
+  const file = appIcon(trayIconTier(screen.getPrimaryDisplay().scaleFactor))
+  const image = nativeImage.createFromPath(file)
   if (image.isEmpty()) {
     // 空图标在部分平台上会让 Tray 抛错，把整个主进程带下去；宁可不常驻。
-    console.error(`[ryagent] tray icon missing: ${APP_ICON}`)
+    console.error(`[ryagent] tray icon missing: ${file}`)
     return
   }
   tray = new Tray(image)
@@ -777,13 +834,14 @@ const DISCOVER_INTERVAL_MS = 5000
 /** WS 断线重连退避（ms）。 */
 const RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000]
 
-/** 把 http(s) 基地址换成 WS 订阅地址。 */
-export function websocketUrl(baseUrl: string, conversationId: string): string {
+/** 把 http(s) 基地址换成 WS 订阅地址。浏览器 WS 不能带自定义头，token 走查询串。 */
+export function websocketUrl(baseUrl: string, conversationId: string, token?: string): string {
   const url = new URL(baseUrl)
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
   url.pathname = '/ws'
   url.search = ''
   url.searchParams.set('conversationId', conversationId)
+  if (token !== undefined && token.length > 0) url.searchParams.set('token', token)
   return url.toString()
 }
 
@@ -829,6 +887,8 @@ export class PresenceMonitor {
   constructor(
     private readonly options: {
       baseUrl: string
+      /** API token：常驻监听自己也要过同一道闸，否则 401 后托盘/通知全线哑掉。 */
+      token?: string
       onState: (state: PresenceState) => void
       onReply: (reply: { agentName: string; text: string }) => void
       isFocused: () => boolean
@@ -867,7 +927,9 @@ export class PresenceMonitor {
   private async discover(): Promise<void> {
     if (this.stopped) return
     try {
-      const response = await fetch(`${this.options.baseUrl}/api/conversations`)
+      const response = await fetch(`${this.options.baseUrl}/api/conversations`, {
+        headers: this.options.token === undefined ? {} : { authorization: `Bearer ${this.options.token}` },
+      })
       if (!response.ok) return
       const body = (await response.json()) as { conversations?: { id?: unknown }[] }
       for (const conversation of body.conversations ?? []) {
@@ -880,7 +942,7 @@ export class PresenceMonitor {
   }
 
   private subscribe(conversationId: string): void {
-    const url = websocketUrl(this.options.baseUrl, conversationId)
+    const url = websocketUrl(this.options.baseUrl, conversationId, this.options.token)
     const socket: MinimalSocket | WebSocket = this.options.createSocket?.(url) ?? new WebSocket(url)
     this.sockets.set(conversationId, socket)
     socket.onmessage = (event: { data: unknown }) => {
@@ -947,11 +1009,14 @@ export class PresenceMonitor {
 }
 
 /**
- * 托盘「新对话」：切到通讯录，点 Ryen 的「发消息」，走应用自己的开聊流程。
+ * 托盘「新对话」：把窗口带回欢迎页，让用户自己选跟 Ryen 聊还是开个小队。
  *
- * 主进程没有渲染层状态句柄（preload 桥里没有「新会话」这个动作），与其在主
- * 进程另建一条建会话的通道、再想办法让渲染层选中它，不如驱动 UI 走它自己的
- * 路径：会话的复用、创建与选中全由渲染层完成，只有入口由托盘发起。
+ * 此前这段脚本替用户做了决定——切通讯录、点 Ryen 的「发消息」，于是「开个小队」
+ * 从托盘出发这条路根本不存在，文案里说的「一起商量」只在首屏成立。渲染层现在
+ * 监听 NEW_CHAT_EVENT 把自己切回无选中会话的欢迎页，上面就是去向二选一。
+ *
+ * 主进程仍然不持有渲染层状态（preload 桥里没有「新会话」动作），复用/创建/选中
+ * 全程由渲染层完成；这里只派发事件。会话是否复用由页面决定。
  */
 function startNewChat(): void {
   showMainWindow()
@@ -962,31 +1027,22 @@ function startNewChat(): void {
   })
 }
 
-/** 在渲染层里执行的「新对话」脚本：等通讯录渲染出来再点（切页是 React 异步更新）。 */
+/**
+ * 在渲染层里执行的「新对话」脚本：反复派发事件直到欢迎页真的在屏上。
+ *
+ * React 可能还没挂上监听（窗口刚恢复、executeJavaScript 抢跑），所以派发要重试；
+ * 判据用「欢迎页是否已渲染」这个 DOM 事实，而不是发完就算成功。
+ */
 export const NEW_CHAT_SCRIPT = `(() => {
-  const tab = [...document.querySelectorAll('.rail-tab')].find((node) => {
-    return (node.textContent ?? '').trim().startsWith('通讯录');
-  });
-  tab?.click();
+  let tries = 0;
   return new Promise((resolve) => {
-    let tries = 0;
     const timer = setInterval(() => {
       tries += 1;
-      const card = [...document.querySelectorAll('.contact-card')].find((node) => {
-        return (node.querySelector('h3')?.textContent ?? '').trim().startsWith(${JSON.stringify(RYEN_NAME)});
-      });
-      const button = [...(card?.querySelectorAll('button') ?? [])].find((node) => {
-        return (node.textContent ?? '').trim() === '发消息';
-      });
-      if (button !== undefined) {
+      window.dispatchEvent(new CustomEvent(${JSON.stringify(NEW_CHAT_EVENT)}));
+      const landed = document.querySelector('.welcome') !== null;
+      if (landed || tries >= 20) {
         clearInterval(timer);
-        button.click();
-        resolve(true);
-        return;
-      }
-      if (tries >= 20) {
-        clearInterval(timer);
-        resolve(false);
+        resolve(landed);
       }
     }, 150);
   });
@@ -1115,12 +1171,13 @@ function seedFirstLaunchOnce(server: RyAgentServer): void {
 }
 
 /** 常驻能力：托盘 + 在场监听 + 通知。 */
-function startResidency(baseUrl: string): void {
+function startResidency(baseUrl: string, token: string | undefined): void {
   createTray()
   // 窗口已经开着且在前台时，不能从「未聚焦」起步，否则第一条回复会对着用户弹通知。
   if (mainWindow !== undefined && !mainWindow.isDestroyed()) windowFocused = mainWindow.isFocused()
   presence = new PresenceMonitor({
     baseUrl,
+    token,
     isFocused: () => {
       return windowFocused
     },
@@ -1147,6 +1204,26 @@ async function main(): Promise<void> {
   bootTrace.mark('app-ready')
   // Windows 的系统通知按 AUMID 归属应用；不设的话任务栏/通知里显示的是 electron.app.Electron。
   app.setAppUserModelId('com.ryagent.desktop')
+  // 凭据落盘用系统密钥库加密（必须在任何读写 api-keys.json 之前钉住）。
+  // safeStorage 在 app ready 之后才保证可用；isEncryptionAvailable() 为假时
+  // 交给 @ryagent/server 的明文降级路径，它会在日志里说明降级原因。
+  configureSecretStore(
+    safeStorage.isEncryptionAvailable()
+      ? {
+          id: 'safeStorage',
+          seal: (plain) => {
+            return safeStorage.encryptString(plain).toString('base64')
+          },
+          open: (sealed) => {
+            return safeStorage.decryptString(Buffer.from(sealed, 'base64'))
+          },
+        }
+      : undefined,
+  )
+  // 本次启动的 API token：后端强制校验，渲染层与常驻监听都带着它。
+  // RYAGENT_API_TOKEN 只给自动化冒烟测试用（release.yml 要在进程外访问 API，
+  // 不能靠猜随机 token）；正常启动一律随机生成。
+  apiToken = process.env.RYAGENT_API_TOKEN ?? generateApiToken()
   loadDotEnvIntoProcess()
   registerIpcHandlers()
   applyAppMenu()
@@ -1174,6 +1251,7 @@ async function main(): Promise<void> {
       port: choice.port,
       host: BACKEND_HOST,
       dataDir: process.env.RYAGENT_DATA_DIR ?? join(app.getPath('userData'), 'ryagent-data'),
+      authToken: apiToken,
     })
   }
 
@@ -1185,8 +1263,8 @@ async function main(): Promise<void> {
     bootTrace.mark('backend-ready')
     const captureUrl =
       assets !== undefined
-        ? `${assets.url}${RENDERER_MOUNT}?api=${encodeURIComponent(server.url)}`
-        : `${devServerUrl}?api=${encodeURIComponent(server.url)}`
+        ? `${assets.url}${RENDERER_MOUNT}?api=${encodeURIComponent(server.url)}&token=${encodeURIComponent(apiToken ?? '')}`
+        : `${devServerUrl}?api=${encodeURIComponent(server.url)}&token=${encodeURIComponent(apiToken ?? '')}`
     await runCapture(server, join(here, '..'), async () => {
       const win = createWindow(captureUrl)
       await whenLoaded(win)
@@ -1214,9 +1292,9 @@ async function main(): Promise<void> {
   seedFirstLaunchOnce(readyServer)
   // 后端就绪：API 地址推给渲染层（窗口可能还在加载；渲染层另有全局变量兜底，
   // 事件早于监听注册也不会丢）。
-  pushApiBase(mainWindow, readyServer.url)
+  pushApiBase(mainWindow, readyServer.url, apiToken)
   // 常驻：托盘 + 在场监听 + 失焦通知 + 关窗收进托盘。
-  startResidency(readyServer.url)
+  startResidency(readyServer.url, apiToken)
 
   app.on('second-instance', () => {
     // 第二实例已退出，这里把首实例窗口拉到前台。
@@ -1225,7 +1303,7 @@ async function main(): Promise<void> {
   app.on('activate', () => {
     // macOS 点击 Dock 图标：复用已有 server 实例，只在窗口全关时重建窗口。
     if (BrowserWindow.getAllWindows().length === 0) {
-      pushApiBase(showMainWindowAndReturn(), readyServer.url)
+      pushApiBase(showMainWindowAndReturn(), readyServer.url, apiToken)
     } else {
       showMainWindow()
     }

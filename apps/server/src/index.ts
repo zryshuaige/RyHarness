@@ -11,10 +11,16 @@ export { RyAgentServer } from './app.ts'
 export { EventHub } from './bus.ts'
 export type { ProviderConfig, ProviderPreset, ProviderProtocol, ProvidersConfigFile } from './config.ts'
 export {
+  configureSecretStore,
   DEFAULT_PROVIDERS,
+  loadApiKeys,
   loadProvidersConfig,
   PROVIDER_PRESETS,
   providerKeyConfigured,
+  type SafeStorageLike,
+  type SecretCodec,
+  saveApiKey,
+  secretStoreCipher,
   toAdapterConfig,
   writeProvidersConfig,
 } from './config.ts'

@@ -1,5 +1,5 @@
 /**
- * SQLite 会话存储：Agent 定义、会话、消息、调度事件的 CRUD 与分页查询。
+ * SQLite 会话存储：Agent 定义、会话、消息、调度事件的 CRUD、分页查询与消息全文索引。
  *
  * 单写者模型：一个 SessionStore 实例拥有其 DatabaseSync 句柄；不做跨进程
  * 并发写。所有时间戳为 Unix 毫秒。
@@ -8,6 +8,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { DatabaseSync, type StatementSync } from 'node:sqlite'
+import { bigrams, ftsMatchQuery, messageSearchText } from './fts.ts'
 import { migrate, SCHEMA_VERSION } from './schema.ts'
 import type {
   Conversation,
@@ -52,6 +53,33 @@ export interface MessagePage {
   /** 只取 seq 小于该值的记录（向过去翻页）。 */
   beforeSeq?: number
 }
+
+/** 关键词搜索参数。 */
+export interface MessageSearchOptions {
+  /** 限定会话（缺省 = 全部会话）。 */
+  conversationId?: string
+  /** 返回条数上限（默认 50）。 */
+  limit?: number
+  /** BM25 候选窗口（默认 {@link MESSAGE_SEARCH_WINDOW}）：过滤后仍要凑够 limit 条。 */
+  window?: number
+}
+
+/** 一条关键词命中（只带定位与展示需要的字段，不含完整 content_blocks）。 */
+export interface MessageSearchHit {
+  messageId: string
+  conversationId: string
+  seq: number
+  senderType: SenderType
+  senderId?: string
+  createdAt: number
+  /** 命中行的可搜索正文（建索引时的抽取结果，调用侧据此截片段）。 */
+  text: string
+  /** BM25 相关度（越小越相关，与 SQLite 的 bm25() 口径一致）。 */
+  score: number
+}
+
+/** 关键词搜索的默认 BM25 候选窗口。 */
+export const MESSAGE_SEARCH_WINDOW = 200
 
 /** 删除一个 Agent 时各处的级联清理条数（供 API 回执与测试断言）。 */
 export interface DeleteAgentResult {
@@ -313,6 +341,9 @@ export class SessionStore {
 
   /** 删除会话（消息与调度事件由外键级联删除）。 */
   deleteConversation(id: string): void {
+    // FTS 表不在外键树里（它只按 rowid 关联 messages）：不显式清就留下孤儿索引行，
+    // 它们照样占 BM25 候选窗口，搜出来的却是已经删掉的消息。
+    this.stmt('DELETE FROM messages_fts WHERE rowid IN (SELECT seq FROM messages WHERE conversation_id = ?)').run(id)
     this.stmt('DELETE FROM conversations WHERE id = ?').run(id)
   }
 
@@ -434,7 +465,66 @@ export class SessionStore {
     )
     message.seq = Number(result.lastInsertRowid)
     this.touchConversation(input.conversationId, now)
+    this.indexMessage(message.seq, input.contentBlocks)
     return message
+  }
+
+  /** 给一条消息写全文索引（无正文的消息不占索引行，与迁移补索引同口径）。 */
+  private indexMessage(seq: number, contentBlocks: unknown[]): void {
+    const text = messageSearchText(contentBlocks)
+    if (text.length === 0) return
+    this.stmt('INSERT INTO messages_fts (rowid, content) VALUES (?, ?)').run(seq, bigrams(text))
+  }
+
+  /**
+   * 消息全文搜索（FTS5 BM25）。
+   *
+   * 取代"每个会话倒序翻页 + 内存子串匹配"：那套做法每次搜索都要把整库消息
+   * 拉出来 JSON.parse 一遍，会话多起来就是全库同步扫描。命中按 BM25 相关度
+   * 升序（越小越相关）返回，调用方要时间序就自己再排。
+   */
+  searchMessages(query: string, options: MessageSearchOptions = {}): MessageSearchHit[] {
+    const limit = Math.max(1, options.limit ?? 50)
+    const window = Math.max(limit, options.window ?? MESSAGE_SEARCH_WINDOW)
+    const matchQuery = ftsMatchQuery(query)
+    if (matchQuery.length === 0) return []
+    const rows = (
+      options.conversationId === undefined
+        ? this.stmt(
+            'SELECT rowid, bm25(messages_fts) AS score FROM messages_fts WHERE messages_fts MATCH ? ORDER BY score LIMIT ?',
+          ).all(matchQuery, window)
+        : this.stmt(
+            `SELECT messages_fts.rowid AS rowid, bm25(messages_fts) AS score FROM messages_fts
+               JOIN messages m ON m.seq = messages_fts.rowid
+              WHERE messages_fts MATCH ? AND m.conversation_id = ?
+              ORDER BY score LIMIT ?`,
+          ).all(matchQuery, options.conversationId, window)
+    ) as { rowid: number; score: number }[]
+    const out: MessageSearchHit[] = []
+    for (const hit of rows) {
+      const row = this.stmt('SELECT * FROM messages WHERE seq = ?').get(Number(hit.rowid)) as
+        | Record<string, unknown>
+        | undefined
+      // 索引与消息行不该脱节；真脱节（外部改库）就跳过，不让搜索抛错。
+      if (row === undefined) continue
+      out.push({
+        messageId: String(row.id),
+        conversationId: String(row.conversation_id),
+        seq: Number(row.seq),
+        senderType: String(row.sender_type) as SenderType,
+        ...(row.sender_id === null || row.sender_id === undefined ? {} : { senderId: String(row.sender_id) }),
+        createdAt: Number(row.created_at),
+        text: messageSearchText(parseJsonArray(String(row.content_blocks))),
+        score: Number(hit.score),
+      })
+      if (out.length >= limit) break
+    }
+    return out
+  }
+
+  /** 全文索引行数（观测用：写消息会涨、删会话会降）。 */
+  messageIndexSize(): number {
+    return Number((this.stmt('SELECT COUNT(*) AS count FROM messages_fts').get() as { count: number }).count)
   }
 
   /**

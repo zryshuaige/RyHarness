@@ -103,7 +103,8 @@ ryagent.db              SQLite：agents / conversations / messages / dispatch_ev
                         长期记忆 / playbook / 反馈……（WAL，删库即彻底重来）
 conversation-state.json 会话界面态：改名、置顶、静音、群成员
 config/providers.json   供应商与模型路由（无明文 key）
-config/api-keys.json    明文 API key，仅本人读写（0600）
+config/api-keys.json    API key：桌面端经系统密钥库（Electron safeStorage）加密，
+                        独立开发进程退回明文，仅本人读写（0600）
 workspace/              fs_read / fs_write / file_produce 的根，产物卡片里的文件也在这
 ```
 
@@ -111,6 +112,15 @@ workspace/              fs_read / fs_write / file_produce 的根，产物卡片�
 那个 `config/api-keys.json`）。两者都**不进数据库、不进日志、不随安装包分发**。备份
 数据目录前记得先把 `api-keys.json` 单独拿出来——它是可以重新粘贴的，`ryagent.db`
 里沉淀的记忆不是。
+
+> 桌面端把 `api-keys.json` 交给 Electron `safeStorage` 加密（密钥由 Windows DPAPI
+> / macOS Keychain 持有）：文件被拷走也解不开。代价是**加密后的凭据跟着系统账户走**——
+> 换机器、重装系统或换账户后解不开（启动日志会明确提示"N 个已存 API key 无法解密"），
+> 在设置面板里重新粘贴一次即可。
+>
+> 独立启动后端（`pnpm --filter @ryagent/server dev`）、CI 与测试没有 Electron，
+> `safeStorage` 不可用时**明确降级**为明文 + 0600 文件，并在日志里打一行说明，不会
+> 静默假装已经加密。
 
 > 换机器 / 重装：整个 `ryagent-data` 拷过去即可；只想保留记忆与手册的话，拷
 > `ryagent.db` 也够（`config/` 会按默认配置重新生成）。
@@ -159,6 +169,38 @@ Get-FileHash -Algorithm SHA256 '.\RyAgent Setup 0.1.0.exe'
 
 长期方案是买一张代码签名证书（OV 起，EV 起更稳）并配 `CSC_LINK` / `CSC_KEY_PASSWORD`
 构建；本仓库目前没有签名材料，所以选择把校验步骤写在这里而不是藏起来。
+
+### 本地 API 的一次性 token
+
+桌面版启动时，后端在**固定端口 32100** 上开一套 HTTP + WS API——而工具白名单里
+就有「执行命令」。只靠回环地址不够：同一台机器上的任何进程（甚至用户自己装的
+小工具）都能直接连过来发指令。所以主进程每次启动生成一枚 256 位随机 token：
+
+- 后端在 **HTTP 中间件与 WebSocket upgrade 两处都校验**，缺失或不符一律 401
+  （WS 会回一帧完整的 `HTTP/1.1 401` 再断开，而不是静默掐断）。
+- token 只经启动通道注入渲染层（`window.__RYAGENT_API_TOKEN__` /
+  `ryagent:api-token` 事件），**不落盘、不进命令行、不进日志**。
+- 渲染层请求带 `Authorization: Bearer <token>`，WS 连 `?token=<token>`
+  （浏览器 WS 不能自定义请求头）。
+
+用 curl 直接打后端时带上它即可：`curl -H "Authorization: Bearer $TOKEN" …`。
+独立启动后端（`pnpm --filter @ryagent/server dev`）默认**不**鉴权（开发态没有渲染层
+要对接），需要时设 `RYAGENT_API_TOKEN=<任意串>` 打开；那条路径同样会在日志里喊一声。
+
+### 已知漏洞与缓解措施
+
+| 项 | 状态 | 缓解 |
+| --- | --- | --- |
+| Electron 37.10.2：11 条 high（Chromium 层：沙箱绕过、UAF、协议处理器跨源…） | **已修** | 升到 **44.7.2**（当前最新稳定版），`pnpm audit --audit-level=high` 归零 |
+| extract-zip 2.0.1：2 条 high（符号链接路径穿越，任意文件写） | **已修** | 随 Electron 升级改用 `@electron-internal/extract-zip`，不再进入依赖图 |
+| `@dicebear/initials` / `sprintf-js`：moderate | **接受** | DiceBear 只在渲染层画头像（数据来自内置模板，不接受外部输入）；sprintf-js 来自构建期依赖，不进安装包 |
+
+- **审计是硬门禁**：`.github/workflows/ci.yml` 与 `release.yml` 都跑
+  `pnpm audit --audit-level=high` 且**没有** `continue-on-error`——新引入的 high/critical
+  会让 CI 与发版一起变红。曾经的「软门禁（先报告、不拦截）」已经连同那条 CVE 一起
+  结束，不再是待办状态。
+- Electron 只跟最新稳定版：上游安全公告修在哪个版本，我们就在下一个发版跟进到
+  哪个版本，不长期停留在已停止支持的分支上。
 
 ## 测试与构建
 

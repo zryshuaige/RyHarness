@@ -257,6 +257,90 @@ describe('MemoryStore', () => {
     s.close()
   })
 
+  it('归档分片：按 limit 一片一片搬，整轮结果与一次性归档一致（FTS 同步清）', () => {
+    const s = store()
+    const ids: string[] = []
+    for (let i = 0; i < 7; i++) {
+      const row = s.insert({ agentId: 'a1', kind: 'event', content: `旧事件 ${i}` })
+      s.backdate(row.id, Date.now() - 300 * 86_400_000)
+      ids.push(row.id)
+    }
+    const hot = s.insert({ agentId: 'a1', kind: 'preference', content: '稳定偏好' })
+    s.touchAccess([hot.id])
+
+    // 一片 3 行：前两片各搬 3 行，第三片搬 1 行后返回 0（扫完了）。
+    let archived = 0
+    const sizes: number[] = []
+    for (let i = 0; i < 10; i++) {
+      const chunk = s.archiveDormant(90 * 86_400_000, Date.now(), 3)
+      sizes.push(chunk)
+      archived += chunk
+      if (chunk < 3) break
+    }
+    expect(sizes).toEqual([3, 3, 1]) // 第三片不足片长 = 扫完了
+    expect(archived).toBe(ids.length)
+    expect(
+      s
+        .listArchived()
+        .map((row) => {
+          return row.id
+        })
+        .sort(),
+    ).toEqual([...ids].sort())
+    // 分片归档同样清索引：逐片清，不留死行挤占 BM25 窗口。
+    expect(s.ftsIndexSize()).toBe(1)
+    expect(s.searchFts('a1', '旧事件')).toEqual([])
+    expect(s.get(hot.id)!.status).toBe('active')
+    s.close()
+  })
+
+  it('冷软删链归档分片：末代保留的语义不变，陈旧的中间版本照样全搬走', () => {
+    const s = store()
+    const v1 = s.insert({ agentId: 'a1', kind: 'fact', content: '住在北京' })
+    s.supersede(v1.id)
+    const v2 = s.insert({ agentId: 'a1', kind: 'fact', content: '住在北京海淀', supersedesId: v1.id })
+    s.supersede(v2.id)
+    const v3 = s.insert({ agentId: 'a1', kind: 'fact', content: '住在北京海淀区', supersedesId: v2.id })
+    for (const row of [v1, v2, v3]) s.backdate(row.id, Date.now() - 300 * 86_400_000)
+
+    let archived = 0
+    for (;;) {
+      const chunk = s.archiveColdSuperseded(180 * 86_400_000, Date.now(), 1)
+      archived += chunk
+      if (chunk < 1) break
+    }
+    expect(archived).toBe(1)
+    expect(s.get(v1.id)!.status).toBe('inactive')
+    expect(s.get(v2.id)!.status).toBe('superseded') // 链尾可追溯
+    expect(s.get(v3.id)!.status).toBe('active')
+    s.close()
+  })
+
+  it('归档分片与一次性归档口径一致（同一批行，谁都不多谁都不少）', () => {
+    const build = (s: MemoryStore): void => {
+      for (let i = 0; i < 5; i++) {
+        const row = s.insert({ agentId: 'a1', kind: 'event', content: `陈旧 ${i}` })
+        s.backdate(row.id, Date.now() - 300 * 86_400_000)
+      }
+    }
+    const chunked = store()
+    build(chunked)
+    let total = 0
+    for (;;) {
+      const chunk = chunked.archiveDormant(90 * 86_400_000, Date.now(), 2)
+      total += chunk
+      if (chunk < 2) break
+    }
+    const oneShot = store()
+    build(oneShot)
+    const single = oneShot.archiveDormant(90 * 86_400_000)
+
+    expect(total).toBe(single)
+    expect(chunked.stats().byStatus).toEqual(oneShot.stats().byStatus)
+    chunked.close()
+    oneShot.close()
+  })
+
   it('v4 迁移：存量库里归档/软删残留的 FTS 行一次清干净', () => {
     const path = storePath()
     const s = new MemoryStore(path)
@@ -298,7 +382,11 @@ describe('MemoryStore', () => {
     })
     const cached = s.listActiveEmbeddings('a1', 'm')
     expect(cached.map((row) => row.content)).toEqual(['甲', '乙'])
-    expect(s.listActiveEmbeddings('a1', 'm')).toBe(cached)
+    // 缓存的落点是"空间桶"：行对象复用（不再全表读 + 重新解码 BLOB），
+    // 拼装的数组本身每次新建（私有 + 共享两桶拼起来）。
+    const spaceCached = s.listSpaceEmbeddings('a1', 'm')
+    expect(s.listSpaceEmbeddings('a1', 'm')).toBe(spaceCached)
+    expect(s.listActiveEmbeddings('a1', 'm')[0]).toBe(spaceCached[0])
     // 命中计数就地同步：每轮 recall 都 touchAccess，若因此整体失效缓存等于没加
     s.touchAccess([first.id])
     expect(s.listActiveEmbeddings('a1', 'm')[0]!.accessCount).toBe(1)

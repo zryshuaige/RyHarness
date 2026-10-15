@@ -12,11 +12,15 @@ import {
   hasUsableProvider,
   isLocalService,
   isProviderUsable,
+  modelRemovalHint,
+  providerByBaseUrl,
   providerModelIds,
   providerStatus,
   providerStatusText,
   providersByReadiness,
   providerUsage,
+  removedModelIds,
+  sameBaseUrl,
 } from '../renderer/src/lib/provider-health.ts'
 
 function provider(overrides: Partial<ProviderInfo> & { id: string }): ProviderInfo {
@@ -94,5 +98,66 @@ describe('错误文案', () => {
     expect(providerUsage(provider({ id: 'x' }))).toEqual([])
     expect(providerUsage(provider({ id: 'x', usedBy: [{ agentId: 'a', agentName: '小译' }] }))).toHaveLength(1)
     expect(providerModelIds(undefined)).toEqual([])
+  })
+})
+
+describe('服务端给了诊断分类时', () => {
+  it('以服务端的话为准：「还没填 API Key」不会被改写成「凭据被拒绝」', () => {
+    const server = { message: '还没填 API Key：先在这行里粘贴这家服务的 Key，再回来测一次。', code: 'no-key' }
+    expect(explainVerifyFailure(server.message, server.code)).toBe(server.message)
+    expect(explainVerifyFailure(server.message, server.code)).not.toContain('凭据被供应商拒绝')
+  })
+
+  it('服务端没给话时按分类兜底（老版本只回 code 的情形）', () => {
+    expect(explainVerifyFailure('', 'rate-limited')).toContain('限流')
+    expect(explainVerifyFailure('   ', 'dns')).toContain('域名解析')
+    expect(explainVerifyFailure(undefined, 'service-down')).toContain('服务没启动')
+  })
+
+  it('没给 code 的老服务端：内部路由路径与网络错误码不原样弹给用户', () => {
+    expect(explainVerifyFailure('not found: POST /api/providers')).toContain('测试连接')
+    expect(explainVerifyFailure('not found: POST /api/providers')).not.toContain('POST')
+    expect(explainVerifyFailure('HTTP 404')).toContain('测试连接')
+    expect(explainVerifyFailure('getaddrinfo ENOTFOUND api.example.com')).toContain('域名解析')
+    expect(explainVerifyFailure('connect ECONNREFUSED 127.0.0.1:9000')).toContain('服务没启动')
+  })
+})
+
+/** 添加向导认重复项：同一个地址只能有一条路由。 */
+describe('预设去重与删模型提示', () => {
+  const list = [
+    provider({ id: 'siliconflow', baseUrl: 'https://api.siliconflow.cn/v1' }),
+    provider({ id: 'ollama', protocol: 'ollama', baseUrl: 'http://127.0.0.1:11434/v1' }),
+  ]
+
+  it('按 baseUrl 认出已经配过的供应商（忽略大小写与尾部斜杠）', () => {
+    expect(providerByBaseUrl(list, 'https://api.siliconflow.cn/v1')?.id).toBe('siliconflow')
+    expect(providerByBaseUrl(list, 'https://API.SiliconFlow.cn/v1/')?.id).toBe('siliconflow')
+    expect(providerByBaseUrl(list, 'https://api.deepseek.com/v1')).toBeUndefined()
+    expect(sameBaseUrl('http://a.dev/v1', 'HTTP://A.DEV/v1/')).toBe(true)
+    // 没读到 baseUrl 的条目不参与判重（猜一个反而会误伤）。
+    expect(providerByBaseUrl([provider({ id: 'x' })], 'https://api.deepseek.com/v1')).toBeUndefined()
+  })
+
+  it('删掉哪些模型 id：只报真正少了的那些', () => {
+    expect(removedModelIds(['a', 'b', 'c'], ['c', 'b'])).toEqual(['a'])
+    expect(removedModelIds(['a'], ['a', 'b'])).toEqual([])
+    expect(modelRemovalHint('X', [], [])).toBeUndefined()
+  })
+
+  it('删模型的提醒点名正在用它的 agent，并说清下一步', () => {
+    const hint = modelRemovalHint(
+      '私有网关',
+      ['m-in-use'],
+      [
+        { agentId: 'a', agentName: '小译' },
+        { agentId: 'b', agentName: '阿码' },
+      ],
+    )
+    expect(hint).toContain('m-in-use')
+    expect(hint).toContain('小译、阿码')
+    expect(hint).toContain('通讯录')
+    // 没人用也要提醒一句：改的是别人将来会建的 agent 的依赖。
+    expect(modelRemovalHint('私有网关', ['m'], [])).toContain('m')
   })
 })

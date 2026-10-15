@@ -3,11 +3,13 @@
  *
  * 首启时写入内置默认条目（SiliconFlow）；apiKey 一律走 apiKeyEnv
  * 引用，配置文件不存明文 key。用户自己加的供应商（POST /api/providers）
- * 写同一份文件，明文 key 另存 config/api-keys.json（0600）。
+ * 写同一份文件，应用内 key 另存 config/api-keys.json（0600，桌面端用 Electron
+ * safeStorage 交给系统密钥库加密，见 {@link configureSecretStore}）。
  * @module @ryagent/server/config
  */
 
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import type { OpenAiAdapterConfig, OpenAiProviderConfig } from '@ryagent/llm-openai'
 
@@ -187,6 +189,174 @@ export function providersConfigPath(dataDir: string): string {
   return join(dataDir, 'config', 'providers.json')
 }
 
+/** 应用内凭据文件的路径（dataDir/config/api-keys.json）。 */
+function apiKeysPath(dataDir: string): string {
+  return join(dataDir, 'config', 'api-keys.json')
+}
+
+/** 凭据文件 v2 的标记字段。 */
+const API_KEYS_SCHEMA = 'ryagent/api-keys@2'
+
+/**
+ * 凭据加密器：把 key 变成落盘的那一串，以及原样读回来。
+ *
+ * 桌面端是 Electron safeStorage（密钥由系统密钥库/DPAPI 持有，文件本身即使被
+ * 拷走也解不开）；独立开发进程、CI 与测试没有 Electron，退回明文 + 0600 并打
+ * 一声日志——这是明确的降级路径，不是静默失败。
+ */
+export interface SecretCodec {
+  /** 落盘格式标记，也用于判断一份旧文件能不能直接读。 */
+  readonly id: 'safeStorage' | 'plaintext'
+  seal(plain: string): string
+  open(sealed: string): string
+}
+
+/** Electron safeStorage 的最小形态（便于注入替身）。 */
+export interface SafeStorageLike {
+  isEncryptionAvailable(): boolean
+  encryptString(plain: string): Buffer
+  decryptString(sealed: Buffer): string
+}
+
+/** 明文 + 0600 的降级实现：字段原样透传。 */
+const PLAINTEXT_CODEC: SecretCodec = {
+  id: 'plaintext',
+  seal: (plain) => {
+    return plain
+  },
+  open: (sealed) => {
+    return sealed
+  },
+}
+
+function safeStorageCodec(storage: SafeStorageLike): SecretCodec {
+  return {
+    id: 'safeStorage',
+    seal: (plain) => {
+      return storage.encryptString(plain).toString('base64')
+    },
+    open: (sealed) => {
+      return storage.decryptString(Buffer.from(sealed, 'base64'))
+    },
+  }
+}
+
+/**
+ * 探测 Electron safeStorage。
+ *
+ * 在 Electron 主进程里 `require('electron')` 拿到的是运行时模块；在普通 Node
+ * 下它解析到 npm 包本身（一个路径字符串，没有 safeStorage），因此探测失败会
+ * 自然降级，不需要判断自己是不是 Electron。
+ */
+function detectSafeStorage(): SafeStorageLike | undefined {
+  try {
+    const electron = createRequire(import.meta.url)('electron') as { safeStorage?: SafeStorageLike }
+    const storage = electron.safeStorage
+    if (storage === undefined || typeof storage.isEncryptionAvailable !== 'function') return undefined
+    // app 还没 ready 时部分平台读密钥库会抛；不可用就明文，不阻塞启动。
+    return storage.isEncryptionAvailable() ? storage : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** 自动装配：有系统密钥库就用它，没有就明文降级。 */
+function detectCodec(): SecretCodec {
+  const storage = detectSafeStorage()
+  return storage === undefined ? PLAINTEXT_CODEC : safeStorageCodec(storage)
+}
+
+let activeSecretCodec: SecretCodec | undefined
+
+/** 当前凭据存储用的加密方式（'safeStorage' | 'plaintext'）：设置页与日志都要如实显示。 */
+export function secretStoreCipher(): SecretCodec['id'] {
+  return currentCodec().id
+}
+
+/**
+ * 显式指定凭据加密器；传 undefined 恢复自动探测。
+ *
+ * 主进程在 app ready 后调一次（把 safeStorage 显式钉住，省掉隐式探测的时序
+ * 假设）；测试注入可预测的替身。必须是**任何读写凭据之前**调用。
+ */
+export function configureSecretStore(codec: SecretCodec | undefined): void {
+  activeSecretCodec = codec
+}
+
+function currentCodec(): SecretCodec {
+  activeSecretCodec ??= detectCodec()
+  return activeSecretCodec
+}
+
+/** v2 信封的形状守卫。 */
+function isEnvelope(record: Record<string, unknown>): boolean {
+  return record.$schema === API_KEYS_SCHEMA && typeof record.keys === 'object' && record.keys !== null
+}
+
+/**
+ * 读凭据：v1 明文与 v2 信封都吃，坏文件按"没有凭据"起（不阻塞启动）。
+ * 解不开的条目单独计数并提示重填——换系统账户后 safeStorage 解不出来是常态，
+ * 那时把整份文件静默当成空，等于告诉用户"你没配过 key"。
+ */
+function readApiKeyEntries(dataDir: string): Record<string, string> {
+  const path = apiKeysPath(dataDir)
+  if (!existsSync(path)) return {}
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(readFileSync(path, 'utf8'))
+  } catch {
+    return {}
+  }
+  if (typeof parsed !== 'object' || parsed === null) return {}
+  const record = parsed as Record<string, unknown>
+  const envelope = isEnvelope(record)
+  const payload = (envelope ? record.keys : record) as Record<string, unknown>
+  const cipher = envelope ? record.cipher : 'plaintext'
+  const codec = currentCodec()
+  const keys: Record<string, string> = {}
+  let unreadable = 0
+  for (const [providerId, value] of Object.entries(payload)) {
+    if (typeof value !== 'string' || value.length === 0) continue
+    // v1 文件与 cipher=plaintext 的信封都直接就是明文，不走当前的 codec：
+    // 那份密文是写它的那台机器的密钥，加密方式一变就再也解不开了。
+    if (cipher !== 'safeStorage') {
+      keys[providerId] = value
+      continue
+    }
+    // 当前环境根本没有系统密钥库：解不开就是解不开，绝不能把密文当 key 递出去
+    // （那会变成"带着一段 base64 去请求供应商"，报出来的错完全指不到病根）。
+    if (codec.id !== 'safeStorage') {
+      unreadable += 1
+      continue
+    }
+    try {
+      keys[providerId] = codec.open(value)
+    } catch {
+      unreadable += 1
+    }
+  }
+  if (unreadable > 0) {
+    console.warn(
+      `@ryagent/server: ${unreadable} 个已存 API key 无法解密（可能换了系统账户或当前没有可用的系统密钥库），请在设置里重新填写`,
+    )
+  }
+  return keys
+}
+
+/** 写凭据：整体加密成 v2 信封（顺带把 v1 明文文件升级掉）。 */
+function writeApiKeyEntries(dataDir: string, keys: Record<string, string>): void {
+  const codec = currentCodec()
+  if (codec.id === 'plaintext') {
+    console.warn('@ryagent/server: safeStorage 不可用，API key 以明文写入 0600 文件（仅开发环境）')
+  }
+  const sealed = Object.fromEntries(
+    Object.entries(keys).map((entry) => {
+      return [entry[0], codec.seal(entry[1])]
+    }),
+  )
+  writePrivateJson(apiKeysPath(dataDir), { $schema: API_KEYS_SCHEMA, cipher: codec.id, keys: sealed })
+}
+
 /** 读取 providers.json；不存在则写入默认配置后返回。 */
 export function loadProvidersConfig(path: string): ProvidersConfigFile {
   if (!existsSync(path)) {
@@ -209,33 +379,29 @@ export function loadProvidersConfig(path: string): ProvidersConfigFile {
 /**
  * 应用内配置的 API key 存储：config/api-keys.json（0600）。
  *
- * providers.json 坚持只存 apiKeyEnv 引用、不落明文；但桌面应用要让用户
- * 首启就能粘贴 key 用起来，所以明文 key 单独放一个 0600 的文件，且**只**在
- * 进程内合并进适配器配置，不回显给前端。
+ * providers.json 坚持只存 apiKeyEnv 引用、不落明文；但桌面应用要让用户首启就能
+ * 粘贴 key 用起来，所以 key 单独放一个 0600 的文件，且**只**在进程内合并进适配器
+ * 配置，不回显给前端。
+ *
+ * 文件有两代格式，读写都兼容：
+ * - v1（历史）：扁平 `{ "<providerId>": "<明文 key>" }`；
+ * - v2（当前）：`{ "$schema": "ryagent/api-keys@2", "cipher": …, "keys": { … } }`，
+ *   `keys` 里放密文。cipher 记的是**写这一版时**用的加密方式——换机器、换系统
+ *   账户后解不开时只丢那一版，并提示用户重填，而不是把整份凭据当成不存在。
+ * 写任何一次都顺手把 v1 升成 v2。
  */
 export function loadApiKeys(dataDir: string): Record<string, string> {
-  const path = join(dataDir, 'config', 'api-keys.json')
-  if (!existsSync(path)) return {}
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'))
-    if (typeof parsed !== 'object' || parsed === null) return {}
-    const entries = Object.entries(parsed as Record<string, unknown>).filter((entry): entry is [string, string] => {
-      return typeof entry[1] === 'string' && entry[1].length > 0
-    })
-    return Object.fromEntries(entries)
-  } catch {
-    return {}
-  }
+  return readApiKeyEntries(dataDir)
 }
 
 /** 原子写入某个供应商的 key；返回是否写入成功（供应商未知时 false）。空串=删除。 */
 export function saveApiKey(dataDir: string, providerId: string, key: string): boolean {
   const config = loadProvidersConfig(providersConfigPath(dataDir))
   if (config.providers[providerId] === undefined) return false
-  const keys = loadApiKeys(dataDir)
+  const keys = readApiKeyEntries(dataDir)
   if (key.length === 0) delete keys[providerId]
   else keys[providerId] = key
-  writePrivateJson(join(dataDir, 'config', 'api-keys.json'), keys)
+  writeApiKeyEntries(dataDir, keys)
   return true
 }
 
@@ -244,10 +410,10 @@ export function saveApiKey(dataDir: string, providerId: string, key: string): bo
  * 删供应商时用它：先删 key 再删路由才不会半路失败留下孤儿 key。
  */
 export function deleteApiKey(dataDir: string, providerId: string): void {
-  const keys = loadApiKeys(dataDir)
+  const keys = readApiKeyEntries(dataDir)
   if (keys[providerId] === undefined) return
   delete keys[providerId]
-  writePrivateJson(join(dataDir, 'config', 'api-keys.json'), keys)
+  writeApiKeyEntries(dataDir, keys)
 }
 
 /**

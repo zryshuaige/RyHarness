@@ -69,6 +69,16 @@
   --press-scale: .97;
 
   --chat-col: 768px;
+  /* 横向 gutter（内容区左右安全边距）的唯一真源：消息列、输入卡、断线提示条、
+     聊天顶栏与页面滚动区全都取这一个值。它们此前各写各的（消息列 32px、输入卡与
+     顶栏 20px），同一条纵向边线上于是差出 12px，输入卡还因此比消息列宽 24px
+     （窄窗未触到 max-width 时，差值全部落在左右两边）。 */
+  --gutter-x: var(--space-8);
+  /* 列表栏宽的降级阶梯：1200px 以下聊天区才是重灾区（1024px 窗口里 72+300+280
+     之外只剩 372px 给消息列），先把列表让出去，右栏的收窄/收起仍由用户自己决定。 */
+  --list-panel-w: 300px;
+  --list-panel-w-md: 240px;
+  --list-panel-w-sm: 200px;
   /* 气泡操作条的外置通道宽度，跟消息列一起自适应（cqw = .chat-col 宽度的 1%）。
      118px 是天花板（两枚反馈 + 复制共三枚 28px 按钮加呼吸）；100px 是它排进
      外侧留白的门票——气泡最宽 75%，agent 行左边还占着 40px 头像 + 8px 间隙，
@@ -324,12 +334,43 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
 }
 .rail-icon-btn:hover { background: var(--hover-bg); color: var(--text-primary); }
 
-/* 列表栏（300px）：与内容区靠 --bg-app 的底色差分层，不再叠描边 */
+/* 列表栏：与内容区靠 --bg-app 的底色差分层，不再叠描边。
+   宽度走 token 而不是裸 300px——窄窗口的降级阶梯在下面两条 @media 里改同一个变量。 */
 .list-panel {
-  width: 300px; flex-shrink: 0; background: var(--bg-surface);
-  display: flex; flex-direction: column; min-height: 0;
+  width: var(--list-panel-w); flex-shrink: 0; background: var(--bg-surface);
+  display: flex; flex-direction: column; min-height: 0; position: relative;
+  transition: width var(--dur-in) var(--ease-out);
 }
+/* 窄窗口降级：聊天区在 1024px 窗口里原本只剩 372px（72+300+280 之外全没了），
+   列表先让出宽度。收起是另一条路（.is-collapsed），两者都在下面的 @media 里生效。 */
+@media (max-width: 1199px) {
+  .list-panel { width: var(--list-panel-w-md); }
+}
+@media (max-width: 1040px) {
+  .list-panel { width: var(--list-panel-w-sm); }
+}
+/* 手动收起 = 收成一条 44px 窄边，与右栏同一档：宽度归零会把展开键一起裁掉，
+   列表从此再也展不开。内容退场走 visibility，延时与 width 过渡等长，
+   它才跟得上宽度滑出去。 */
+.list-panel.is-collapsed { width: var(--panel-collapsed-w); overflow: hidden; }
+.list-panel.is-collapsed .list-panel-header,
+.list-panel.is-collapsed .conversation-list { visibility: hidden; transition: visibility 0s linear var(--dur-in); }
 .list-panel-header { padding: var(--space-3) var(--space-3) var(--space-2); }
+/* 折叠键：必须是 .list-panel 的直接子节点（App.tsx 里列表栏是
+   <aside class="list-panel"><ConversationList/></aside>，而 ConversationList 返回片段，
+   所以键放在片段开头即落在 .list-panel 上）——不能塞进 .list-panel-header，
+   收起态只藏 header 与列表，键被一起藏掉就再也展不开。
+   绝对定位到搜索框右侧的 30px，搜索框用 :has 让出这段：键不存在时这条也不生效。 */
+.list-panel-toggle {
+  position: absolute; top: var(--space-3); right: var(--space-3);
+  width: 30px; height: 30px; border: none; border-radius: var(--radius-sm);
+  background: transparent; cursor: pointer; color: var(--text-tertiary);
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: background var(--dur-hover) var(--ease-out), color var(--dur-hover) var(--ease-out);
+}
+.list-panel-toggle:hover { background: var(--hover-bg); color: var(--amber-text); }
+.list-panel:has(.list-panel-toggle) .search-box { padding-right: 40px; }
+.list-panel.is-collapsed .list-panel-toggle { right: auto; left: 7px; }
 .search-box-wrap { position: relative; display: block; }
 .search-box-icon {
   position: absolute; left: 11px; top: 50%; transform: translateY(-50%);
@@ -372,6 +413,17 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
 .conversation-item:hover { background: var(--hover-bg); }
 .conversation-item.is-active { background: var(--amber-primary-soft); }
 .conversation-item.is-active::before { opacity: 1; transform: scaleY(1); }
+/* 窗口化列表里行进场不能重播。会话列表是窗口化的（lib/windowed.ts），行滚出窗口
+   再滚回来会重新挂载，挂在 .conversation-item 上的 item-in 每次重挂都从头播一遍——
+   滚动时整列看起来像在逐条淡入。所以滚动容器挂 data-windowed="true" 把默认动画关掉，
+   只留组件显式标记的首帧行（.is-animated）播一次：那一批是整列错落进场，
+   之后滚进来的行静默出现。两条选择器比基线规则多一层 class/属性，特异性必然更高，
+   不依赖源码顺序。 */
+.conversation-list[data-windowed='true'] .conversation-item { animation: none; }
+.conversation-list[data-windowed='true'] .conversation-item.is-animated {
+  animation: item-in 260ms var(--ease-out) backwards;
+  animation-delay: calc(min(var(--i, 0), 8) * 30ms);
+}
 .conversation-item-body { flex: 1; min-width: 0; }
 .conversation-item-top { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-2); }
 .conversation-item-top strong { font-size: var(--fs-md); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -469,16 +521,18 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
 .chat-view { flex: 1; display: flex; flex-direction: column; min-width: 0; background: var(--bg-app); }
 .chat-header {
   display: flex; align-items: center; gap: var(--space-3);
-  padding: var(--space-3) var(--space-5);
+  padding: var(--space-3) var(--gutter-x);
   background: var(--bg-surface); border-bottom: 1px solid var(--divider);
 }
 .chat-header-info { display: flex; flex-direction: column; min-width: 0; }
 .chat-header-info strong { font-size: var(--fs-md); letter-spacing: -0.01em; }
 .chat-header-info small { color: var(--text-secondary); font-size: var(--fs-xs); }
 
+/* 消息列与输入卡共用的左右留白。两者必须取同一个 --gutter-x：一边 32px 一边 20px
+   时，未触到 max-width 的窄窗上整列差出 12px，输入卡还比消息列宽 24px。 */
 .chat-scroll {
   flex: 1; overflow-y: auto; overflow-x: hidden;
-  padding: var(--space-6) var(--space-8);
+  padding: var(--space-6) var(--gutter-x);
   background: var(--chat-bg-tint);
   /* 不设 scroll-behavior：流式跟随必须即时；「跳至最新」用 JS smooth。 */
 }
@@ -531,7 +585,7 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
 .bubble-name { font-size: var(--fs-xs); color: var(--text-secondary); margin: 0 0 4px 2px; }
 .bubble-text { margin: 0; white-space: pre-wrap; word-break: break-word; font-size: var(--fs-body); line-height: 1.65; }
 .bubble-text + .bubble-text, .tool-row + .bubble-text, .bubble-text + .tool-row { margin-top: 6px; }
-.bubble-text a { color: var(--amber-text); text-decoration: underline; text-underline-offset: 2px; }
+.bubble-text a, .bubble-md a { color: var(--amber-text); text-decoration: underline; text-underline-offset: 2px; }
 .bubble-cursor { animation: blink .9s step-start infinite; color: var(--amber-text); }
 
 /* 消息 hover 操作条：整体外置到气泡外的留白通道，永不覆盖正文。
@@ -657,9 +711,10 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
 .jump-latest:active { transform: translateX(-50%) scale(var(--press-scale)); }
 .jump-icon { transform: rotate(90deg); }
 
-/* 输入区：吸底卡片，卡片档阴影 */
+/* 输入区：吸底卡片。横向留白与 .chat-scroll 同源（--gutter-x）——两侧 gutter 不等，
+   输入卡就会比消息列窄一截、且左右缘错开。 */
 .chat-input-wrap {
-  position: relative; padding: var(--space-3) var(--space-5) var(--space-5);
+  position: relative; padding: var(--space-3) var(--gutter-x) var(--space-5);
   background: transparent;
 }
 .chat-input-col {
@@ -814,12 +869,12 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
 .page { flex: 1; display: flex; flex-direction: column; min-width: 0; background: var(--bg-app); overflow: hidden; }
 .page-header {
   display: flex; align-items: center; gap: var(--space-3);
-  padding: var(--space-4) var(--space-8); background: var(--bg-surface);
+  padding: var(--space-4) var(--gutter-x); background: var(--bg-surface);
   border-bottom: 1px solid var(--divider);
 }
 .page-header h2 { margin: 0; font-size: var(--fs-title); letter-spacing: -0.01em; }
 .page-header .page-actions { margin-left: auto; display: flex; gap: var(--space-2); }
-.page-scroll { flex: 1; overflow-y: auto; padding: var(--space-6) var(--space-8); background: var(--chat-bg-tint); }
+.page-scroll { flex: 1; overflow-y: auto; padding: var(--space-6) var(--gutter-x); background: var(--chat-bg-tint); }
 .page-scroll-col { max-width: 960px; margin: 0 auto; }
 .section-title { color: var(--text-secondary); font-size: var(--fs-sm); font-weight: 600; margin: var(--space-2) 0 var(--space-3); }
 
@@ -1157,7 +1212,7 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
 /* 断线重连提示条（固定在聊天区顶部，不随消息滚动） */
 .conn-banner {
   display: flex; align-items: center; justify-content: center; gap: 6px;
-  margin: var(--space-2) var(--space-8) 0; padding: 7px var(--space-3);
+  margin: var(--space-2) var(--gutter-x) 0; padding: 7px var(--space-3);
   background: color-mix(in srgb, var(--amber-primary) 14%, transparent);
   border-radius: var(--radius-pill); color: var(--amber-text);
   font-size: var(--fs-sm);
@@ -1171,28 +1226,74 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
 }
 .conn-banner-close:hover { color: var(--danger); }
 
-/* Markdown 渲染块（消息完成后） */
+/* Markdown 渲染块（消息完成后）
+   层级是一套：标题按深度逐级缩字号、缩上边距，浅层标题才需要跟上一段拉开距离；
+   嵌套清单逐级收；表格自己横向滚。所有颜色走既有 token，不新增裸色值。 */
 .bubble-md { margin: 0; word-break: break-word; font-size: var(--fs-body); line-height: 1.65; }
 .bubble-md > :first-child { margin-top: 0; }
 .bubble-md > :last-child { margin-bottom: 0; }
 .bubble-md p { margin: 6px 0; }
 .bubble-md h1, .bubble-md h2, .bubble-md h3,
-.bubble-md h4, .bubble-md h5, .bubble-md h6 { margin: 12px 0 6px; line-height: 1.4; font-weight: 700; }
-.bubble-md h1 { font-size: var(--fs-title); }
-.bubble-md h2 { font-size: var(--fs-md); }
-.bubble-md h3, .bubble-md h4 { font-size: var(--fs-body); }
-.bubble-md h5, .bubble-md h6 { font-size: var(--fs-base); }
-.bubble-md ul, .bubble-md ol { margin: 6px 0; padding-left: 22px; }
+.bubble-md h4, .bubble-md h5, .bubble-md h6 {
+  margin-bottom: var(--space-2); line-height: 1.4;
+  font-weight: 700; color: var(--text-primary);
+}
+.bubble-md h1 { font-size: var(--fs-title); letter-spacing: -0.01em; margin-top: var(--space-6); }
+.bubble-md h2 { font-size: var(--fs-md); letter-spacing: -0.01em; margin-top: var(--space-5); }
+.bubble-md h3 { font-size: var(--fs-body); margin-top: var(--space-4); }
+.bubble-md h4 { font-size: var(--fs-base); font-weight: 600; margin-top: var(--space-3); }
+/* 五级往下已经不再靠字号分层：改用次级色，让它读起来像小节标签而不是又一段标题 */
+.bubble-md h5, .bubble-md h6 { font-size: var(--fs-base); font-weight: 600; color: var(--text-secondary); margin-top: var(--space-3); }
+/* 列表：嵌套逐级收 8px（浏览器默认一缩就是 40px，在气泡里直接顶到正文上沿） */
+.bubble-md ul, .bubble-md ol { margin: 6px 0; padding-left: var(--space-6); }
+.bubble-md li ul, .bubble-md li ol { margin: var(--space-1) 0; padding-left: var(--space-5); }
 .bubble-md li { margin: 2px 0; }
 .bubble-md li > p { margin: 0; }
+.bubble-md li > :last-child { margin-bottom: 0; }
+/* 标记压次级色：项目符号与序号不该比条目本身更重 */
+.bubble-md li::marker { color: var(--text-tertiary); }
 .bubble-md blockquote {
-  margin: 6px 0; padding: 2px 12px;
+  margin: var(--space-3) 0; padding: var(--space-1) var(--space-3);
   border-left: 3px solid var(--amber-text); color: var(--text-secondary);
 }
-.bubble-md table { border-collapse: collapse; margin: 6px 0; font-size: var(--fs-sm); }
-.bubble-md th, .bubble-md td { border: 1px solid var(--divider); padding: 4px 10px; }
+.bubble-md blockquote > :last-child { margin-bottom: 0; }
+/* 表格：Markdown 直接吐 <table>，外面没有可滚的壳（渲染器不加包装节点），
+   所以表格自身就是滚动容器——宽表在窄列里横向滚，而不是把气泡撑破；
+   .chat-scroll 是 overflow-x: hidden，撑破的话整块会被裁掉一截。 */
+.bubble-md table {
+  display: block; width: max-content; max-width: 100%; overflow-x: auto;
+  border-collapse: collapse; margin: var(--space-3) 0; font-size: var(--fs-sm);
+}
+.bubble-md th, .bubble-md td {
+  border: 1px solid var(--edge); padding: 5px var(--space-3);
+  text-align: left; vertical-align: top;
+}
+.bubble-md th { background: var(--bg-subtle); font-weight: 600; white-space: nowrap; }
+.bubble-md td > :last-child, .bubble-md th > :last-child { margin-bottom: 0; }
 .bubble-md img { max-width: 100%; border-radius: var(--radius-sm); }
-.bubble-md hr { border: none; border-top: 1px solid var(--divider); margin: 10px 0; }
+.bubble-md hr { border: none; border-top: 1px solid var(--divider); margin: var(--space-5) 0; }
+/* 行内代码：围栏代码那一块由 styles-content.css 的 .md-code 复位，这里只管行内的
+   （:not(.md-code *) 把围栏代码排除掉，特异性也随之高于 .md-code code）。 */
+.bubble-md code:not(.md-code *) {
+  font-family: var(--font-mono); font-size: .92em;
+  background: var(--bg-subtle); color: var(--text-primary);
+  border-radius: var(--radius-xs); padding: 1px 5px;
+}
+/* 链接交互态：hover 加深并把下划线提亮，键盘焦点走全局焦点环 */
+.bubble-md a:hover { color: var(--amber-primary-hover); text-decoration-color: currentColor; }
+.bubble-md a:focus-visible {
+  outline: 2px solid var(--focus-outline); outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+/* 自己的气泡是琥珀渐变：按白底定的底色与描边要跟着翻过来，否则引用块与表格
+   在琥珀底上糊成一片。取值沿用本文件既有的自气泡底色，不引入新色。 */
+.bubble-row.from-user .bubble-bubble .bubble-md blockquote,
+.bubble-row.from-user .bubble-bubble .bubble-md th,
+.bubble-row.from-user .bubble-bubble .bubble-md code:not(.md-code *) { background: rgba(255, 251, 235, .55); }
+.bubble-row.from-user .bubble-bubble .bubble-md blockquote { border-left-color: var(--amber-on-primary); }
+.bubble-row.from-user .bubble-bubble .bubble-md th,
+.bubble-row.from-user .bubble-bubble .bubble-md td,
+.bubble-row.from-user .bubble-bubble .bubble-md hr { border-color: rgba(61, 46, 18, .18); }
 
 /* 图标系统（Lucide）：尺寸阶梯由组件内联 size 给出，CSS 负责对齐与防挤压 */
 .icon { display: inline-block; vertical-align: -2px; flex-shrink: 0; }

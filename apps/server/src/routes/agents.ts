@@ -61,27 +61,32 @@ export function registerAgentRoutes(router: Router, deps: AgentRoutes): void {
     const templateKey = strField(body, 'templateKey')
     // 白名单校验失败抛 HttpRequestError，由 dispatch 统一回 400。
     const overrides = agentFieldOverrides(body)
-    try {
-      // 不写死供应商与模型：新建 agent 默认跟随配置里第一个已配凭据的
-      // 供应商，写死 SiliconFlow + DeepSeek 会让"配置了别家服务商"的
-      // 用户建出来的 agent 直接不可用。
-      const fallback = resolveSidecarLlm(deps.providers)
-      const definition: AgentDefinition =
-        templateKey !== undefined
-          ? instantiateTemplate(templateKey, overrides)
-          : {
-              id: strField(body, 'id') ?? crypto.randomUUID(),
-              name: overrides.name ?? '未命名 Agent',
-              systemPrompt: overrides.systemPrompt ?? '你是一个乐于助人的助手。',
-              provider: overrides.provider ?? fallback?.providerId ?? '',
-              model: overrides.model ?? fallback?.model ?? '',
-              tools: overrides.tools ?? [],
-            }
-      const stored = store.upsertAgent({ ...definition, isBuiltin: false })
-      json(res, 201, { agent: stored })
-    } catch (error) {
-      json(res, 400, { error: error instanceof Error ? error.message : String(error) })
+    // 不写死供应商与模型：新建 agent 默认跟随配置里第一个已配凭据的
+    // 供应商，写死 SiliconFlow + DeepSeek 会让"配置了别家服务商"的
+    // 用户建出来的 agent 直接不可用。
+    // 模板不存在是**调用方**的错（400），但落库失败不是（500）——所以只把
+    // instantiateTemplate 包起来，不整段 catch：那正是此前把数据库写失败也
+    // 报成 400 的根源。
+    const fallback = resolveSidecarLlm(deps.providers)
+    let definition: AgentDefinition
+    if (templateKey !== undefined) {
+      try {
+        definition = instantiateTemplate(templateKey, overrides)
+      } catch (error) {
+        throw new HttpRequestError(400, error instanceof Error ? error.message : String(error))
+      }
+    } else {
+      definition = {
+        id: strField(body, 'id') ?? crypto.randomUUID(),
+        name: overrides.name ?? '未命名 Agent',
+        systemPrompt: overrides.systemPrompt ?? '你是一个乐于助人的助手。',
+        provider: overrides.provider ?? fallback?.providerId ?? '',
+        model: overrides.model ?? fallback?.model ?? '',
+        tools: overrides.tools ?? [],
+      }
     }
+    const stored = store.upsertAgent({ ...definition, isBuiltin: false })
+    json(res, 201, { agent: stored })
   })
 
   router.patch('/api/agents/:id', async (req, res) => {

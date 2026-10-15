@@ -23,6 +23,12 @@
 
 所有成员共享群历史：协调器格式化为 `名字: 内容` 前缀行（工具结果与 system 消息跳过），`buildGroupContext` 按字符预算（默认 30k，token 的近似）**从最旧**裁剪。调度器无状态，每 turn 独立。
 
+## 扇出
+
+入口一次 @ 多个成员时并发起跑（`fanoutConcurrency`，默认 3），事件按 @ 出现顺序增量转发，结果也按 @ 顺序提交——并发只影响"谁先出字"，不影响消息顺序。
+
+扇出内的**记忆召回按同一段输入共享一次**：N 个成员拿到的是同一个 prompt，于是它们的长记忆召回本该是同一次（同一段输入对同一空间的召回结果相同）。调度器用一次 `FanoutMemory` 视图包住本轮扇出：记忆钩子实现了 `recallMany(agentIds, inputText)`（@ryagent/memory 的 `MemoryService` 实现了）就走批量召回，否则退化为并发 `recall`（记忆侧的 embedding 在途合并仍会把网络往返压成一次）。接力链与单 @ 目标不走这条路径（每轮输入都不同，没有可共享的东西）。
+
 ## 与协调器的分工
 
 调度器只产出事件（`dispatch` / `text-delta` / `tool-call-start` / `tool-result` / `agent-message` / `turn-done` / `error`），不碰存储；`@ryagent/session` 的 `SessionCoordinator` 负责落库（dispatch_events、messages、错误 system 消息）。

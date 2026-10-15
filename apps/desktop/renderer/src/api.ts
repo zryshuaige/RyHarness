@@ -75,6 +75,15 @@ export interface ConversationPatch {
   title?: string
   pinned?: boolean
   muted?: boolean
+  /** 群成员名单（换人）。服务端要求非空、且每个 agent 都存在；单聊改多成员会被 400。 */
+  memberAgentIds?: string[]
+  /**
+   * 群调度员。**服务端当前不落这个字段**（PATCH 的 patchable 只有
+   * title/pinned/muted/memberAgentIds，见 apps/server/src/routes/conversations.ts），
+   * 发过去会被原样忽略。调用方要按服务端回包里的 conversation.dispatcherAgentId
+   * 判真值，别把「发出去了」当成「改成了」。
+   */
+  dispatcherAgentId?: string
 }
 
 /** 供应商预设（/api/provider-presets）：添加供应商向导的可选项。 */
@@ -374,6 +383,20 @@ export class ApiClient {
     return this.request(`/api/conversations/${conversationId}`, { method: 'PATCH', body: JSON.stringify(patch) })
   }
 
+  /**
+   * 改群设置（群名 / 成员 / 调度员）。
+   *
+   * 与 patchConversation 分开是因为「发出去」和「成了」在这里不是一回事：服务端
+   * 当前只落 title 与 memberAgentIds，dispatcherAgentId 会被忽略。所以回包里的
+   * conversation 才是真值——调用方拿它跟用户要的调度员比对，别自己宣布成功。
+   */
+  patchGroup(
+    conversationId: string,
+    input: { title?: string; memberAgentIds?: string[]; dispatcherAgentId?: string },
+  ): Promise<{ conversation: Conversation }> {
+    return this.patchConversation(conversationId, input)
+  }
+
   /** 全文搜索：搜会话名之外还搜消息正文，命中按会话分组回。 */
   searchMessages(params: { q: string; conversationId?: string }): Promise<{ results: SearchResultRow[] }> {
     const query = new URLSearchParams()
@@ -586,6 +609,36 @@ export class ApiClient {
   listUsageRows(conversationId: string, limit: number = USAGE_PAGE_LIMIT): Promise<{ messages: MessageUsageRow[] }> {
     return this.request(`/api/conversations/${conversationId}/messages?limit=${Math.trunc(limit)}`)
   }
+
+  /**
+   * 用量账单（GET /api/usage）：按会话与按供应商两维聚合的累计 token。
+   *
+   * 两个维度由服务端从**同一批消息**算出，合计恒等于 totals——渲染层不再逐会话
+   * 翻消息自己加总（那会让两栏各算各的，加总对不上）。`since`（Unix 毫秒）把窗口
+   * 收到该时刻之后，换模型前后比花销看的就是这个增量。
+   */
+  usage(since?: number): Promise<UsageReport> {
+    const query = since === undefined ? '' : `?since=${Math.trunc(since)}`
+    return this.request(`/api/usage${query}`)
+  }
+
+  /**
+   * 记忆库整体健康度（GET /api/memory/health）：总数 / 已归档 / 缺向量 / 各空间
+   * 分布 / 存储体积 / embedding 状态 / 最近一次召回，一次请求拿全。
+   * 记忆系统关闭时服务端回 `{enabled:false}`（面板每次打开都拉，不该因此报错）。
+   */
+  memoryHealth(): Promise<MemoryHealthReport> {
+    return this.request('/api/memory/health')
+  }
+
+  /**
+   * 进化管线指标（GET /api/evolve/stats）：最近 limit 轮（新的在前）+ 各类轮次合计。
+   * 进化在服务端是后台异步跑的，坏掉时界面上没有任何提示——这是唯一的观测面。
+   */
+  evolveStats(limit?: number): Promise<EvolveStatsReport> {
+    const query = limit === undefined ? '' : `?limit=${Math.trunc(limit)}`
+    return this.request(`/api/evolve/stats${query}`)
+  }
 }
 
 /** 用量账单单会话拉取的消息条数上限（与服务端 MAX_MESSAGE_PAGE 对齐）。 */
@@ -653,3 +706,109 @@ export function messageText(row: MessageRow): string {
     })
     .join('\n')
 }
+
+// ---- 观测面：用量账单 / 记忆健康度 / 进化指标（GET /api/usage、/api/memory/health、
+// /api/evolve/stats）三块面板的真实数据面。形状与 apps/server 对应路由的返回体
+// 一一对齐；服务端关闭某子系统时回 {enabled:false} 而不是报错，面板据此说明原因。 ----
+
+/** GET /api/usage 里按会话聚合的一行。 */
+export interface ConversationUsageRow {
+  conversationId: string
+  title: string
+  kind: Conversation['kind']
+  input: number
+  output: number
+  total: number
+  /** 带 usage 的消息条数（= 模型调用次数）。 */
+  messages: number
+}
+
+/** 供应商桶里的一个发言 agent（显示名由服务端从 agents 表取回）。 */
+export interface ProviderAgentUsage {
+  agentId: string
+  name: string
+  total: number
+}
+
+/** GET /api/usage 里按供应商聚合的一行（agents 按花费倒序）。 */
+export interface ProviderUsageRow {
+  provider: string
+  displayName: string
+  input: number
+  output: number
+  total: number
+  agents: ProviderAgentUsage[]
+}
+
+/** GET /api/usage 的返回体：两个维度来自同一批消息，合计恒等于 totals。 */
+export interface UsageReport {
+  byConversation: ConversationUsageRow[]
+  byProvider: ProviderUsageRow[]
+  totals: { input: number; output: number; total: number }
+}
+
+/** 最近一次召回（GET /api/memory/health 的 lastRecall）。 */
+export interface MemoryRecall {
+  conversationId: string
+  /** 注入那一轮的记忆条数。 */
+  items: number
+  /** 那一轮的召回耗时（毫秒）。 */
+  ms: number
+  /** 该轮结束时刻（Unix 毫秒）。 */
+  at: number
+}
+
+/** GET /api/memory/health：记忆系统关闭时只有 enabled:false。 */
+export type MemoryHealthReport =
+  | { enabled: false }
+  | {
+      enabled: true
+      /** 记忆总行数（含归档与软删链）。 */
+      total: number
+      /** 已归档条数。 */
+      archived: number
+      /** 缺当前 embedding 向量的条数（active + inactive）。 */
+      missingVectors: number
+      /** 各空间（agent 私有 + 共享画像）的记忆条数。 */
+      bySpace: Record<string, number>
+      /** 记忆库文件占用字节（含 WAL）。 */
+      dbBytes: number
+      embeddings: { label: string; model: string; dim?: number }
+      lastRecall?: MemoryRecall
+    }
+
+/** 进化轮次种类：对话轮计分 / 反馈归因 / 定期巩固。 */
+export type EvolveRoundKind = 'turn' | 'feedback' | 'consolidate'
+
+/** 一轮进化工作的记账（耗时 + 处理条数 + 成败）。 */
+export interface EvolutionRoundMetrics {
+  kind: EvolveRoundKind
+  startedAt: number
+  durationMs: number
+  /** 处理条目数：轮=计分/写库条目，consolidate=扫描的向量与记忆行。 */
+  processed: number
+  ok: boolean
+  error?: string
+}
+
+/** 累计口径（按种类分列）。 */
+export interface RoundTotals {
+  rounds: number
+  failures: number
+  durationMs: number
+  processed: number
+}
+
+/** GET /api/evolve/stats：进化系统关闭时只有 enabled:false。 */
+export type EvolveStatsReport =
+  | { enabled: false }
+  | {
+      enabled: true
+      last?: EvolutionRoundMetrics
+      /** 最近若干轮，新的在前。 */
+      rounds: EvolutionRoundMetrics[]
+      totals: RoundTotals
+      byKind: Record<EvolveRoundKind, RoundTotals>
+      /** 因环形缓冲上限被丢弃的轮数。 */
+      droppedTurns?: number
+    }

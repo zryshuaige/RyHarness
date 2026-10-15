@@ -22,6 +22,21 @@ export type MessagePart =
   | { kind: 'tool'; callId: string; name: string; arguments: string; status: 'running' | 'done'; isError?: boolean }
   | { kind: 'file'; callId: string; name: string; size: number; mime: string }
 
+/**
+ * 用户消息的送达状态。
+ *
+ * 本地插入的用户气泡与"服务端收下了"是两件事：回执没回来之前它只是屏幕上的一行字。
+ * 把这个区别留在 store 里（而不是各自记一份 ref），重发、切换会话、重连补齐之后
+ * 才不会出现"发失败的气泡长得跟已送达一模一样"。
+ */
+export type MessageDelivery =
+  /** 已发出，服务端尚未确认。 */
+  | 'pending'
+  /** 服务端已收下（202 回执）。 */
+  | 'sent'
+  /** 发出失败，消息没到服务端。 */
+  | 'failed'
+
 export interface UiMessage {
   /** React key：流式期间分配后保持不变，message-done 也不换（避免整泡 remount）。 */
   key: string
@@ -36,6 +51,8 @@ export interface UiMessage {
   parts: MessagePart[]
   /** 已完整落库（message-done）。 */
   done: boolean
+  /** 用户消息的送达状态；agent 消息与历史消息不带（历史天然已落库）。 */
+  delivery?: MessageDelivery
   /**
    * 内容版本号：store 每次改动该消息的 parts/done 自增，供 memo 比较器 O(1) 判断。
    * 由 store 维护；历史消息（ChatView 的 fromHistory）没有此字段，按 0 处理。
@@ -495,8 +512,13 @@ export class ChatStore {
     }
   }
 
-  /** 本地插入用户消息（发送即上屏，不等 WS）。附件按 file 部件上屏，与产物卡片同一条渲染通道。 */
-  addUserMessage(text: string, turnIndex: number, attachments: readonly MessageAttachment[] = []): void {
+  /**
+   * 本地插入用户消息（发送即上屏，不等 WS）。附件按 file 部件上屏，与产物卡片同一条渲染通道。
+   *
+   * 返回这条消息的 key：送达状态要等 HTTP 回执（202 / 失败）才知道，发起方拿着 key
+   * 回填 {@link MessageDelivery}，UI 才能把"没发出去"和"已送达"画成两样。
+   */
+  addUserMessage(text: string, turnIndex: number, attachments: readonly MessageAttachment[] = []): string {
     // 重发即视为新一轮：清掉上一条错误横幅。
     const messages = this.snapshot.messages
     const stamp = Date.now()
@@ -518,10 +540,35 @@ export class ChatStore {
       turnIndex,
       parts,
       done: true,
+      delivery: 'pending',
       version: 0,
     }
     this.trackKey(message.key)
     this.emit({ messages: [...messages, message], clearError: true })
+    return message.key
+  }
+
+  /**
+   * 回填一条用户消息的送达状态（202 回来时 / 发失败时 / 重发时）。
+   *
+   * 只认用户消息：历史消息从库里读出来就已送达（没有该字段，按 sent 算），agent
+   * 消息不经过这条通道。状态没变则不 emit——回执与重试常常在同一次交互里连着到，
+   * 为一个等于的字段重绘整条流是白花。
+   */
+  setUserMessageDelivery(key: string, delivery: MessageDelivery): void {
+    const index = this.snapshot.messages.findIndex((message) => {
+      return message.key === key
+    })
+    const message = this.snapshot.messages[index]
+    if (index < 0 || message === undefined || message.senderType !== 'user') return
+    if ((message.delivery ?? 'sent') === delivery) return
+    this.emit({
+      messages: replaceAt(this.snapshot.messages, index, {
+        ...message,
+        delivery,
+        version: (message.version ?? 0) + 1,
+      }),
+    })
   }
 
   /** 登记一条在册消息 key，并守住 {@link MAX_LIVE_KEYS} 上界。 */

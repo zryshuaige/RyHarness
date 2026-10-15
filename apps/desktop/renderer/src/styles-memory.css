@@ -51,7 +51,9 @@
 .usage-ledger { margin-top: var(--space-2); }
 .usage-total { margin: 0; color: var(--text-primary); font-size: var(--fs-sm); font-weight: 600; }
 .usage-scope { display: block; margin-top: 2px; color: var(--text-tertiary); font-size: var(--fs-xs); font-weight: 400; }
-.usage-tabs { display: flex; gap: var(--space-1); margin: var(--space-3) 0 var(--space-2); }
+.usage-tabs { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-1); margin: var(--space-3) 0 var(--space-2); }
+.usage-tab-group { display: flex; gap: var(--space-1); }
+.usage-tab-sep { width: 1px; height: 14px; margin: 0 var(--space-1); background: var(--divider); }
 .usage-tab {
   padding: 3px 10px; border: 1px solid var(--edge); border-radius: var(--radius-pill);
   background: var(--bg-elevated); color: var(--text-secondary); cursor: pointer; font-size: var(--fs-xs);
@@ -69,6 +71,24 @@
 .usage-sub { flex: 1; min-width: 0; color: var(--text-tertiary); font-size: var(--fs-xs); }
 .usage-total-num { flex-shrink: 0; font-variant-numeric: tabular-nums; font-weight: 600; }
 .usage-more { margin: var(--space-2) 0 0; color: var(--text-tertiary); font-size: var(--fs-xs); }
+
+/* 进化指标（PlaybookPanel.tsx）：回答「它到底有没有在学、学得怎么样」。 */
+.evolve-stats { margin-bottom: var(--space-4); padding: var(--space-3); border: 1px solid var(--divider); border-radius: var(--radius-md); background: var(--bg-subtle); }
+.evolve-stats.is-off { color: var(--text-tertiary); font-size: var(--fs-sm); }
+.evolve-stats-title { display: flex; align-items: baseline; gap: var(--space-2); margin: 0 0 var(--space-2); color: var(--text-secondary); font-size: var(--fs-sm); font-weight: 600; }
+.evolve-stats-scope { color: var(--text-tertiary); font-size: var(--fs-xs); font-weight: 400; }
+.evolve-stats-total { margin: 0; color: var(--text-primary); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+.evolve-stats-kinds { display: flex; flex-wrap: wrap; gap: var(--space-1); margin: var(--space-2) 0 0; padding: 0; list-style: none; }
+.evolve-kind { display: inline-flex; align-items: baseline; gap: 6px; padding: 2px 8px; border-radius: var(--radius-pill); background: var(--bg-elevated); font-size: var(--fs-xs); }
+.evolve-kind-name { color: var(--text-secondary); font-weight: 600; }
+.evolve-kind-num { color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+.evolve-rounds { list-style: none; margin: var(--space-2) 0 0; padding: 0; }
+.evolve-round { display: flex; align-items: baseline; gap: var(--space-2); padding: 3px 0; font-size: var(--fs-xs); }
+.evolve-round-kind { flex-shrink: 0; color: var(--text-secondary); font-weight: 600; }
+.evolve-round-num { flex: 1; min-width: 0; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+.evolve-round-at { flex-shrink: 0; color: var(--text-tertiary); }
+.evolve-round.is-failed .evolve-round-at { color: var(--danger); }
+.evolve-stats-foot { margin: var(--space-2) 0 0; color: var(--text-tertiary); font-size: var(--fs-xs); line-height: 1.5; }
 
 /* 经验溯源：条目内联展开的证据链 */
 .entry-explain { display: inline-flex; flex-direction: column; align-items: flex-start; }
