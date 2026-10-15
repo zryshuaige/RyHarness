@@ -5,10 +5,14 @@
  * 为止，不真的向任何供应商发请求。
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import type { IncomingMessage, ServerResponse } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { RyAgentServer } from '@ryagent/server'
+import { loadProvidersConfig, type ProvidersConfigFile, RyAgentServer } from '@ryagent/server'
+import { SessionStore } from '@ryagent/session'
 import { afterEach, describe, expect, it } from 'vitest'
+import { Router } from '../src/router.ts'
+import { registerProviderRoutes } from '../src/routes/providers.ts'
 
 const tmpDirs: string[] = []
 
@@ -752,5 +756,151 @@ describe('内置供应商视图', () => {
     } finally {
       await server.close()
     }
+  })
+})
+
+/**
+ * 热注册失败时的回滚。
+ *
+ * providers.json 是先写完、热注册后做的，而 `LlmRuntime` 的 `replace()` 会在候选集
+ * 撞名 / 名称非法 / 注册已释放时抛。只抛不退回，磁盘就留下一份**从未验证过能否注册**
+ * 的路由集合：界面上这次编辑明明"没生效"，下一次启动却带着它起来炸。
+ *
+ * 这里直接把路由挂到一个会抛的 refreshProviders 上（真服务器里那次抛来自适配器注册
+ * 的校验），断言两件事：providers.json 退回原样，且失败不会被报成成功。
+ */
+describe('热注册失败：落盘一起退回', () => {
+  /** 能被 Router 读 body 的假请求（异步可迭代即可）。 */
+  function fakeRequest(method: string, payload?: unknown): IncomingMessage {
+    const chunks = payload === undefined ? [] : [Buffer.from(JSON.stringify(payload))]
+    return {
+      method,
+      headers: {},
+      async *[Symbol.asyncIterator]() {
+        for (const chunk of chunks) yield chunk
+      },
+    } as unknown as IncomingMessage
+  }
+
+  /** 只记状态码与响应体的假响应。 */
+  function fakeResponse(): { res: ServerResponse; status: () => number; body: () => string } {
+    let status = 0
+    let text = ''
+    const res = {
+      writeHead(code: number) {
+        status = code
+        return res
+      },
+      end(payload?: string) {
+        text = payload ?? ''
+        return res
+      },
+    } as unknown as ServerResponse
+    return {
+      res,
+      status: () => {
+        return status
+      },
+      body: () => {
+        return text
+      },
+    }
+  }
+
+  /** 起一份只含一条内置路由的配置与临时数据目录。 */
+  function fixture(prefix: string): { dataDir: string; providers: ProvidersConfigFile; store: SessionStore } {
+    const dataDir = tempDataDir(prefix)
+    mkdirSync(join(dataDir, 'config'), { recursive: true })
+    writeFileSync(
+      join(dataDir, 'config', 'providers.json'),
+      JSON.stringify({
+        providers: {
+          siliconflow: {
+            baseURL: 'https://api.siliconflow.cn/v1',
+            protocol: 'openai',
+            displayName: 'SiliconFlow',
+            models: [{ id: 'Qwen/Qwen2.5-7B-Instruct' }],
+          },
+        },
+      }),
+    )
+    return {
+      dataDir,
+      providers: loadProvidersConfig(join(dataDir, 'config', 'providers.json')),
+      store: new SessionStore(':memory:'),
+    }
+  }
+
+  it('PATCH 热注册抛了：providers.json 退回原样，内存也退回原样', async () => {
+    const { dataDir, providers, store } = fixture('rollback-patch')
+    const registered: string[][] = []
+    const router = new Router()
+    registerProviderRoutes(router, {
+      store,
+      dataDir,
+      providers,
+      verifyTimeoutMs: 8000,
+      refreshProviders: (next) => {
+        registered.push(Object.keys(next.providers))
+        // 第一次（改名的这次）抛；回滚那次放行，替身要能退回去。
+        if (registered.length === 1) throw new Error('route already registered')
+        for (const [id, provider] of Object.entries(next.providers)) providers.providers[id] = provider
+      },
+    })
+    const configPath = join(dataDir, 'config', 'providers.json')
+    const before = readFileSync(configPath, 'utf8')
+
+    const out = fakeResponse()
+    // dispatch 只把 HttpRequestError 转成 4xx；注册失败是普通 Error，会往上冒——
+    // 真服务器顶层再转 500。无论如何它不能被吞成一个 200。
+    await expect(
+      router.dispatch(fakeRequest('PATCH', { displayName: '改个名' }), out.res, '/api/providers/siliconflow'),
+    ).rejects.toThrow('route already registered')
+    expect(out.status()).toBe(0)
+
+    // 磁盘退回：没有留下那份从未验证过能否注册的路由集合。
+    // 比内容不比字节——写回走的是 writePrivateJson，行尾格式与手写的种子文件未必一致。
+    expect(readJsonFile(configPath)).toEqual(JSON.parse(before))
+    // 内存也退回：路由集合回到改动前那一份。
+    expect(registered).toHaveLength(2)
+    expect(registered[1]).toEqual(['siliconflow'])
+    expect(providers.providers.siliconflow?.displayName).toBe('SiliconFlow')
+  })
+
+  it('POST 热注册抛了：providers.json 与凭据都不留残骸', async () => {
+    const { dataDir, providers, store } = fixture('rollback-post')
+    const router = new Router()
+    let calls = 0
+    registerProviderRoutes(router, {
+      store,
+      dataDir,
+      providers,
+      verifyTimeoutMs: 8000,
+      refreshProviders: () => {
+        calls += 1
+        if (calls === 1) throw new Error('route already registered')
+      },
+    })
+    const configPath = join(dataDir, 'config', 'providers.json')
+    const keysPath = join(dataDir, 'config', 'api-keys.json')
+    const before = readFileSync(configPath, 'utf8')
+
+    await expect(
+      router.dispatch(
+        fakeRequest('POST', {
+          displayName: 'DeepSeek',
+          protocol: 'openai',
+          baseUrl: 'https://api.deepseek.com/v1',
+          models: ['deepseek-chat'],
+          apiKey: 'sk-test-key',
+        }),
+        fakeResponse().res,
+        '/api/providers',
+      ),
+    ).rejects.toThrow('route already registered')
+
+    expect(readJsonFile(configPath)).toEqual(JSON.parse(before))
+    // 凭据也不能留下孤儿条目：它指向一条已经不存在的路由（文件本身仍在，只是空了）。
+    expect(readApiKeys(keysPath)).toEqual({})
   })
 })

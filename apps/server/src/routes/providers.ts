@@ -447,6 +447,52 @@ async function verifyProvider(provider: ProviderConfig, verifyTimeoutMs: number)
 export function registerProviderRoutes(router: Router, deps: ProviderRoutes): void {
   const { store, dataDir, refreshProviders, verifyTimeoutMs } = deps
 
+  /**
+   * 换掉整份供应商配置：落盘 → 热注册，**热注册失败则把落盘一起退回**。
+   *
+   * 热注册底下的 `replace()` 是原子的——候选集先整体校验，撞名 / 名称非法 / 注册已
+   * 释放都抛，内存里的路由原封不动。但 providers.json 是先写完的：只抛不退回，磁盘
+   * 就留下一份**从未验证过能否注册**的路由集合，而界面上这次编辑明明"没生效"。那份
+   * 配置会在下一次启动才炸，且炸在用户什么都没做的那一次启动上。
+   *
+   * 落盘顺序不能调换：新增供应商的 `saveApiKey` 只肯给 providers.json 里已存在的
+   * 供应商写 key（config.ts 的 saveApiKey），所以两步落盘必须由调用方按顺序塞进
+   * persist，而不是各写各的。
+   */
+  const applyProviderConfig = (options: {
+    /** 热注册失败时退回的那份配置。 */
+    previous: ProvidersConfigFile
+    /** 要落盘并注册的新配置。 */
+    next: ProvidersConfigFile
+    /** 落盘。默认只写 providers.json。 */
+    persist?: () => void
+    /** 热注册失败时把落盘也退回（新增供应商要把刚写的凭据摘掉，不留孤儿 key）。 */
+    rollbackPersist?: () => void
+  }): void => {
+    const { previous, next } = options
+    const persist =
+      options.persist ??
+      ((): void => {
+        writeProvidersConfig(dataDir, next)
+      })
+    // 落盘抛了就是磁盘与内存都没动，天然一致，直接往上抛。
+    persist()
+    try {
+      refreshProviders(mergeApiKeys(next, loadApiKeys(dataDir)))
+    } catch (cause) {
+      // 退回不吞异常：热注册已经失败过一次，真退不回去也要让用户知道磁盘没能还原，
+      // 而不是把一次"配置没改成"报成成功。
+      options.rollbackPersist?.()
+      writeProvidersConfig(dataDir, previous)
+      refreshProviders(mergeApiKeys(previous, loadApiKeys(dataDir)))
+      throw cause
+    }
+  }
+  /** 落盘/注册失败时要退回的那份配置：providers 映射必须浅拷，deps.providers 是活对象。 */
+  const snapshot = (): ProvidersConfigFile => {
+    return { ...deps.providers, providers: { ...deps.providers.providers } }
+  }
+
   router.get('/api/providers', async (_req, res) => {
     const agents = store.listAgents()
     json(res, 200, {
@@ -502,10 +548,19 @@ export function registerProviderRoutes(router: Router, deps: ProviderRoutes): vo
       ...(input.presetId === undefined ? {} : { presetId: input.presetId }),
     }
     next.providers[providerId] = provider
-    writeProvidersConfig(dataDir, next)
-    // key 先落盘再热注册：热注册读的是合并后的内存配置。
-    if (input.apiKey !== undefined) saveApiKey(dataDir, providerId, input.apiKey)
-    refreshProviders(mergeApiKeys(next, loadApiKeys(dataDir)))
+    // 路由先落盘（saveApiKey 只肯给 providers.json 里已有的供应商写 key），再写凭据，
+    // 最后热注册——热注册读的就是合并后的内存配置。
+    applyProviderConfig({
+      previous: snapshot(),
+      next,
+      persist: () => {
+        writeProvidersConfig(dataDir, next)
+        if (input.apiKey !== undefined) saveApiKey(dataDir, providerId, input.apiKey)
+      },
+      rollbackPersist: () => {
+        if (input.apiKey !== undefined) deleteApiKey(dataDir, providerId)
+      },
+    })
     json(res, 201, { provider: providerInfo(providerId, deps.providers.providers[providerId] as ProviderConfig, []) })
   })
 
@@ -573,8 +628,7 @@ export function registerProviderRoutes(router: Router, deps: ProviderRoutes): vo
         return previousModels.get(modelId) ?? { id: modelId }
       }),
     }
-    writeProvidersConfig(dataDir, next)
-    refreshProviders(mergeApiKeys(next, loadApiKeys(dataDir)))
+    applyProviderConfig({ previous: snapshot(), next })
     json(res, 200, {
       provider: providerInfo(
         providerId,
@@ -628,10 +682,9 @@ export function registerProviderRoutes(router: Router, deps: ProviderRoutes): vo
       providers: { ...deps.providers.providers },
     }
     delete next.providers[providerId]
-    // key 先清（不留孤儿 key 在 0600 文件里），再落盘路由。
+    // 凭据先清（不留孤儿 key 在 0600 文件里），再落盘路由。
     deleteApiKey(dataDir, providerId)
-    writeProvidersConfig(dataDir, next)
-    refreshProviders(mergeApiKeys(next, loadApiKeys(dataDir)))
+    applyProviderConfig({ previous: snapshot(), next })
     json(res, 200, { deleted: providerId })
   })
 }

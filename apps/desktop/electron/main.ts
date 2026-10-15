@@ -553,9 +553,14 @@ function createWindow(pageUrl: string): BrowserWindow {
     // Windows/Linux 默认收起菜单（Alt 唤出），macOS 保留常驻应用菜单。
     autoHideMenuBar: true,
     webPreferences: {
-      preload: join(here, 'preload.mjs'),
+      preload: join(here, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
+      // Electron 20 起默认就是 true，写出来是因为它和上一行是同一组约束：
+      // sandbox 只按 CommonJS 装载 preload，所以产物必须是 .cjs（tsdown.config.mjs
+      // 为此把它单独构建了一次）。谁把 sandbox 关掉或把 preload 换成 ESM，桥都会
+      // 静默消失且渲染层零报错——这一行把那条隐式依赖变成显式的。
+      sandbox: true,
     },
   })
   window.once('ready-to-show', () => {

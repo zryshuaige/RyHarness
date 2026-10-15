@@ -7,7 +7,7 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { HashEmbeddings, MemoryService, NullEmbeddings } from '@ryagent/memory'
+import { HashEmbeddings, MemoryService, NullEmbeddings, SHARED_SPACE } from '@ryagent/memory'
 import { RyAgentServer } from '@ryagent/server'
 import { afterEach, describe, expect, it } from 'vitest'
 
@@ -197,6 +197,77 @@ describe('重建向量索引', () => {
       const res = await postJson(server.url, '/api/memory/reembed')
       expect(res.status).toBe(409)
       expect(String(res.body.error)).toContain('embeddings are not configured')
+    } finally {
+      await server.close()
+    }
+  })
+})
+
+/**
+ * 对外一律不序列化向量。
+ *
+ * store 的原始行带着 embedding（Float32Array），直接 JSON.stringify 会变成
+ * {"0":0.0123,"1":…,"1023":-0.008} 这样一坨「下标→数值」：一条 1024 维记忆就是
+ * 几千个字段，几页记忆轻松到 MB 级，而这些数字对渲染层毫无用处——它们是检索的
+ * 内部状态。投影（@ryagent/memory 的 toPublicMemories）是唯一的出包口径。
+ */
+describe('记忆出包不带 embedding', () => {
+  const PUBLIC_FIELDS = ['accessCount', 'agentId', 'content', 'createdAt', 'id', 'kind', 'updatedAt'].sort()
+
+  it('GET /api/agents/:id/memories 的私有空间与共享画像都过投影', async () => {
+    const { server, memory } = await startWithMemory('project-agent')
+    try {
+      memory.store.insert({ agentId: 'ryen', kind: 'fact', content: '用户养了一只橘猫叫布丁' })
+      memory.store.insert({ agentId: SHARED_SPACE, kind: 'profile', content: '用户偏好简洁的回答' })
+      // 回填向量：插入本身不带向量，没有这一步这条断言只是"没有可漏的东西"。
+      expect((await postJson(server.url, '/api/memory/reembed')).body.reembedded).toBe(2)
+      expect(
+        memory.store.listActiveForAgent('ryen').every((row) => {
+          return row.embedding !== null
+        }),
+      ).toBe(true)
+
+      const res = await getJson(server.url, '/api/agents/ryen/memories')
+      expect(res.status).toBe(200)
+      const { agent, shared } = res.body as { agent: Record<string, unknown>[]; shared: Record<string, unknown>[] }
+      expect(agent.length).toBeGreaterThan(0)
+      expect(shared.length).toBeGreaterThan(0)
+      for (const row of [...agent, ...shared]) {
+        expect(Object.keys(row).sort()).toEqual(PUBLIC_FIELDS)
+        expect(row.embedding).toBeUndefined()
+        expect(row.dim).toBeUndefined()
+        expect(row.embeddingModel).toBeUndefined()
+      }
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('序列化后的响应体里不出现向量下标字段', async () => {
+    const { server, memory } = await startWithMemory('project-payload')
+    try {
+      memory.store.insert({ agentId: 'ryen', kind: 'fact', content: '用户住在北京，喜欢用 TypeScript' })
+      await postJson(server.url, '/api/memory/reembed')
+      const raw = await fetch(`${server.url}/api/agents/ryen/memories`)
+      const text = await raw.text()
+      // 真漏了会看到 embedding:{"0":…} 这种形状。
+      expect(text).not.toContain('"embedding"')
+      expect(text.length).toBeLessThan(10_000)
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('GET /api/memory/archived 与上面走同一份投影（口径只有一处）', async () => {
+    const { server, memory } = await startWithMemory('project-archived')
+    try {
+      archiveDormant(memory, 'ryen', '很久以前的旧约定', 90)
+      const res = await getJson(server.url, '/api/memory/archived')
+      const items = res.body.items as Record<string, unknown>[]
+      expect(items.length).toBeGreaterThan(0)
+      for (const row of items) {
+        expect(Object.keys(row).sort()).toEqual(PUBLIC_FIELDS)
+      }
     } finally {
       await server.close()
     }

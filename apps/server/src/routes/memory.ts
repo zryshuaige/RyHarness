@@ -5,7 +5,7 @@
 
 import { readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import type { MemoryRow, MemoryService } from '@ryagent/memory'
+import { type MemoryService, toPublicMemories } from '@ryagent/memory'
 import type { SessionStore } from '@ryagent/session'
 import { json, type Router, strField } from '../router.ts'
 import type { Telemetry } from '../telemetry.ts'
@@ -66,35 +66,6 @@ const HEALTH_COUNT_LIMIT = 10_000
 const RECALL_SCAN_LIMIT = 200
 /** 计入存储体积的库文件后缀：主库 + WAL（已提交但尚未 checkpoint 的页）。 */
 const DATABASE_FILE_SUFFIXES = ['.db', '.db-wal']
-
-/**
- * 记忆的对外形状（渲染层 MemoryRow）。
- *
- * 只挑展示与恢复需要的字段：MemoryRow 上的 `embedding` 是 Float32Array，
- * 直接序列化会变成 `{"0":…,"1":…}` 的一坨数字——归档列表是全量返回的，带着
- * 向量既把响应撑大，又把检索内部状态泄给前端。
- */
-function publicMemoryRow(row: MemoryRow): {
-  id: string
-  agentId: string
-  kind: MemoryRow['kind']
-  content: string
-  createdAt: number
-  updatedAt: number
-  accessCount: number
-  sourceConversationId?: string
-} {
-  return {
-    id: row.id,
-    agentId: row.agentId,
-    kind: row.kind,
-    content: row.content,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-    accessCount: row.accessCount,
-    ...(row.sourceConversationId === undefined ? {} : { sourceConversationId: row.sourceConversationId }),
-  }
-}
 
 /**
  * 「最近学到 N 条」：近 24 小时内新增的 active 记忆数（各 agent 私有空间 +
@@ -190,9 +161,12 @@ export function registerMemoryRoutes(router: Router, deps: MemoryRoutes): void {
       json(res, 200, { agent: [], shared: [] })
       return
     }
+    // 出包前一律过 toPublicMemories：store 的原始行带着 embedding（Float32Array），
+    // 直接序列化会变成几千个「下标→数值」字段——既把响应撑到 MB 级，又把检索的
+    // 内部状态泄给前端。归档列表与这里必须走同一道投影。
     json(res, 200, {
-      agent: service.store.listActiveForAgent(req.params.id as string),
-      shared: service.store.listSharedProfile(),
+      agent: toPublicMemories(service.store.listActiveForAgent(req.params.id as string)),
+      shared: toPublicMemories(service.store.listSharedProfile()),
     })
   })
 
@@ -285,7 +259,7 @@ export function registerMemoryRoutes(router: Router, deps: MemoryRoutes): void {
       json(res, 200, { items: [] })
       return
     }
-    json(res, 200, { items: service.store.listArchived().map(publicMemoryRow) })
+    json(res, 200, { items: toPublicMemories(service.store.listArchived()) })
   })
 
   /** 恢复一条归档记忆：回到 active，重新参与检索与注入。 */

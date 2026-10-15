@@ -23,7 +23,7 @@
  * 添加入口降级为只有「自定义」一格，表单里的保存按钮直接禁用。
  */
 import { useEffect, useId, useRef, useState } from 'react'
-import type { CreateProviderInput, ProviderInfo, ProviderPreset } from '../api.ts'
+import type { CreateProviderInput, ProviderInfo, ProviderPreset, UpdateProviderInput } from '../api.ts'
 import {
   explainVerifyFailure,
   isKeylessProtocol,
@@ -43,13 +43,13 @@ import { ConfirmDialog } from './ConfirmDialog.tsx'
 import { Icon } from './Icon.tsx'
 import { Modal } from './Modal.tsx'
 
-/** 编辑供应商时能改的四个字段（与服务端 PATCH 的白名单一一对应）。 */
-export interface UpdateProviderInput {
-  displayName: string
-  protocol: string
-  baseUrl: string
-  models: string[]
-}
+/**
+ * 编辑供应商时能改的四个字段（与服务端 PATCH 的白名单一一对应）。
+ *
+ * 定义在 api.ts——它是随请求发出去的线格式，与 CreateProviderInput 同源；
+ * 这里转出去是为了让引用方从本组件取类型，不必再引一次 api。
+ */
+export type { UpdateProviderInput }
 
 export interface ProviderApi {
   setApiKey(providerId: string, apiKey: string): Promise<{ providerId: string; configured: boolean }>

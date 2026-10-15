@@ -524,3 +524,74 @@ describe('列表的样式契约：内联不许抢走样式表那一层', () => {
     expect(container.querySelector('.conversation-more')?.getAttribute('style')).toBeNull()
   })
 })
+
+describe('窗口化列表的行进场动画', () => {
+  /** 造 n 条会话（列表是窗口化的，条数要多才谈得上"滚进滚出"）。 */
+  function manyConversations(count: number): Conversation[] {
+    return Array.from({ length: count }, (_unused, index) => {
+      return {
+        id: `c${index}`,
+        kind: 'direct',
+        title: `会话 ${index}`,
+        memberAgentIds: ['ryen'],
+        lastReadSeq: 0,
+        createdAt: 1,
+        updatedAt: index,
+      }
+    })
+  }
+
+  const scroller = (): HTMLElement => {
+    return container.querySelector<HTMLElement>('.conversation-list')!
+  }
+
+  it('滚动容器挂 data-windowed="true"：样式表据此关掉行的默认进场动画', async () => {
+    await renderList(undefined, { conversations: manyConversations(30) })
+    expect(scroller().dataset.windowed).toBe('true')
+  })
+
+  it('首帧那一批行补 .is-animated 放行一次动画', async () => {
+    await renderList(undefined, { conversations: manyConversations(30) })
+    const items = [...container.querySelectorAll('.conversation-item')]
+    expect(items.length).toBeGreaterThan(0)
+    // 首帧全列都是这一批，都该播一次错落进场。
+    expect(
+      items.every((node) => {
+        return node.classList.contains('is-animated')
+      }),
+    ).toBe(true)
+  })
+
+  it('滚进来的新行不带 .is-animated：行重挂一次就得重播一遍，整列会看起来在逐条淡入', async () => {
+    const list = manyConversations(400)
+    await renderList(undefined, { conversations: list })
+    const firstBatch = new Set(
+      [...container.querySelectorAll('.conversation-item.is-animated')].map((node) => {
+        return node.textContent
+      }),
+    )
+    expect(firstBatch.size).toBeGreaterThan(0)
+
+    // 把滚动容器滚到底：窗口下移，重挂的是此前没渲染过的行。
+    await act(async () => {
+      scroller().scrollTop = 30_000
+      scroller().dispatchEvent(new Event('scroll'))
+      await new Promise((resolve) => {
+        requestAnimationFrame(() => {
+          resolve(undefined)
+        })
+      })
+    })
+
+    const afterScroll = [...container.querySelectorAll('.conversation-item')]
+    expect(afterScroll.length).toBeGreaterThan(0)
+    // 滚进来的是新行：一条都不该带首帧标记，否则每次滚动都重播进场动画。
+    expect(
+      afterScroll.filter((node) => {
+        return node.classList.contains('is-animated')
+      }),
+    ).toHaveLength(0)
+    // 首帧那批此刻已滚出窗口，但标记不是"当前可见才有效"——动画只此一次。
+    expect(firstBatch.size).toBeGreaterThan(0)
+  })
+})

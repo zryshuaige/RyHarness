@@ -415,6 +415,19 @@ export function ConversationList({
     scrollRef,
   })
   const rows = windowSlice(filtered, windowed, ROW_ESTIMATE_PX)
+  // 首帧那一批行的 id：只有它们播进场动画。窗口化之后行会反复挂载，挂在
+  // .conversation-item 上的 item-in 每次重挂都从头播一遍——滚动时整列看起来像在
+  // 逐条淡入。样式表据此约定：滚动容器挂 data-windowed="true" 关掉默认动画，只给
+  // 这批行补 .is-animated 放行一次（那批是整列错落进场，之后滚进来的行静默出现）。
+  // 首帧取的是首次非空窗口；此后哪怕滚回顶部也不再补，动画只此一次。
+  const animatedRef = useRef<Set<string> | undefined>(undefined)
+  if (animatedRef.current === undefined && rows.visible.length > 0) {
+    animatedRef.current = new Set(
+      rows.visible.map((conversation) => {
+        return conversation.id
+      }),
+    )
+  }
 
   return (
     <>
@@ -443,7 +456,9 @@ export function ConversationList({
           </p>
         )}
       </div>
-      <div className="conversation-list" ref={scrollRef}>
+      {/* data-windowed：告诉样式表「这列是窗口化的」，让它把行进场的默认动画关掉，
+          只对组件显式标记的 .is-animated 首帧行放行。少了它，滚动时整列逐条重播。 */}
+      <div className="conversation-list" data-windowed="true" ref={scrollRef}>
         {searching ? (
           groups.length === 0 ? (
             <div className="empty-state empty-state-inline">
@@ -495,7 +510,9 @@ export function ConversationList({
               <div
                 key={conversation.id}
                 // 行是布局容器：行尾要放操作按钮，而 button 里嵌 button 是无效 HTML。
-                className={`conversation-item ${conversation.id === activeId ? 'is-active' : ''}`}
+                className={`conversation-item ${conversation.id === activeId ? 'is-active' : ''} ${
+                  animatedRef.current?.has(conversation.id) === true ? 'is-animated' : ''
+                }`}
                 // stagger 的 --i 是「这条会话在列表里的位置」：给整表下标，窗口化之后
                 // 同一个会话滚进滚出也不会换值（样式表把延迟封顶在 8 档，不会久等）。
                 style={stagger(windowed.start + index)}

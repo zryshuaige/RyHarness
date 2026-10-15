@@ -106,6 +106,20 @@ export interface CreateProviderInput {
   presetId?: string
 }
 
+/**
+ * 改供应商（PATCH /api/providers/:id）。
+ *
+ * 字段与 POST 的入参一致，但凭据与 custom/presetId **不在白名单里**：前两个是归属
+ * 标记（改了就等于伪造一条新的），凭据另有 settings 路由管。服务端对同名 baseUrl
+ * 与「删掉仍被 agent 引用的模型」回 409。
+ */
+export interface UpdateProviderInput {
+  displayName: string
+  protocol: string
+  baseUrl: string
+  models: string[]
+}
+
 export interface Conversation {
   id: string
   kind: 'direct' | 'group'
@@ -281,6 +295,75 @@ export function resolveApiBase(): string {
   return readApiBaseFromLocation() ?? DEFAULT_API_BASE
 }
 
+// ---- 本次启动的 API token（主进程生成，渲染层每个请求都要带上） ----
+//
+// 后端强制校验：Electron 启动时主进程生成一个随机 token 交给 RyAgentServer，
+// 服务端对每个 HTTP 请求与 WS upgrade 都比对一次（缺 token 一律 401）。所以这不是
+// 「带上更安全」，而是**不带就整个应用不可用**：渲染层拿不到会话列表、连不上 WS。
+//
+// 取值三条路，与 boot.ts 里 API 地址的三条路一一对应：URL query（?token=，
+// 主进程已就绪）、窗口全局变量 __RYAGENT_API_TOKEN__、ryagent:api-token 事件
+// （窗口先行、后端并行启动时事件晚于监听注册）。
+const API_TOKEN_EVENT = 'ryagent:api-token'
+const API_TOKEN_GLOBAL = '__RYAGENT_API_TOKEN__'
+
+/** 当前 token（空串 = 本次启动未启用鉴权，浏览器直连开发即是）。 */
+let apiToken = ''
+const tokenListeners = new Set<(token: string) => void>()
+
+/** 从窗口 URL query 读主进程注入的 token（?token=…）；没有则返回 undefined。 */
+export function readApiTokenFromLocation(): string | undefined {
+  const fromQuery = new URLSearchParams(window.location.search).get('token')
+  return fromQuery !== null && fromQuery.length > 0 ? fromQuery : undefined
+}
+
+/** 当前生效的 token；请求与 WS 建链时现读（token 可能晚于客户端构造才到）。 */
+export function currentApiToken(): string {
+  return apiToken
+}
+
+/** 记下 token 并通知在听的客户端。空串表示「本次启动不鉴权」。 */
+export function setApiToken(token: string): void {
+  apiToken = token
+  for (const listener of tokenListeners) listener(token)
+}
+
+/** 订阅 token 变化（组件据此在 token 到位后重试此前 401 的动作）。 */
+export function onApiToken(listener: (token: string) => void): () => void {
+  tokenListeners.add(listener)
+  return () => {
+    tokenListeners.delete(listener)
+  }
+}
+
+function globalApiToken(): string | undefined {
+  const value = (window as unknown as Record<string, unknown>)[API_TOKEN_GLOBAL]
+  return typeof value === 'string' && value.length > 0 ? value : undefined
+}
+
+/**
+ * 接上主进程的 token 下发通道。渲染层入口调一次即可（幂等）。
+ *
+ * 三条取值路按「越确定越优先」排：query（主进程加载 URL 时就带上了）> 事件
+ * （窗口先行、后端并行启动）> 全局变量（事件早于监听注册时的兜底）。
+ * 先扫一遍 query 与全局变量再挂监听——事件可能在监听注册之前就派发过了。
+ */
+let tokenSyncStarted = false
+export function startApiTokenSync(): void {
+  const fromQuery = readApiTokenFromLocation()
+  if (fromQuery !== undefined) setApiToken(fromQuery)
+  if (!tokenSyncStarted) {
+    tokenSyncStarted = true
+    window.addEventListener(API_TOKEN_EVENT, (event) => {
+      const detail = (event as CustomEvent<unknown>).detail
+      if (typeof detail !== 'string') return
+      setApiToken(detail)
+    })
+  }
+  const global = globalApiToken()
+  if (global !== undefined) setApiToken(global)
+}
+
 export class ApiClient {
   constructor(readonly base: string) {}
 
@@ -293,7 +376,12 @@ export class ApiClient {
   private async request<T>(path: string, init?: RequestInit): Promise<T> {
     const response = await fetch(`${this.base}${path}`, {
       ...init,
-      headers: { 'content-type': 'application/json', ...init?.headers },
+      // token 现读而非构造时取：窗口先于后端起来时，客户端早于 token 到达就建好了。
+      headers: {
+        'content-type': 'application/json',
+        ...(apiToken.length === 0 ? {} : { authorization: `Bearer ${apiToken}` }),
+        ...init?.headers,
+      },
     })
     const body = (await response.json().catch(() => {
       return {}
@@ -376,6 +464,20 @@ export class ApiClient {
   /** 删除自定义供应商（内置供应商后端会拒绝）；未实现时 404。 */
   deleteProvider(id: string): Promise<{ deleted: string }> {
     return this.request(`/api/providers/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  }
+
+  /**
+   * 改供应商：名称 / 协议 / Base URL / 模型列表，改完热注册，不用重启。
+   *
+   * 回包里的 provider 是服务端重算的真值（含新的 usedBy），调用方据此重拉清单。
+   * 409 有两种：baseUrl 撞上另一条路由，或删掉的模型仍被某个 agent 引用——都带着
+   * 中文说明直接弹给用户即可。
+   */
+  updateProvider(id: string, patch: UpdateProviderInput): Promise<{ provider: ProviderInfo }> {
+    return this.request(`/api/providers/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    })
   }
 
   /** 改会话元信息（重命名 / 置顶 / 静音）。 */
@@ -551,7 +653,12 @@ export class ApiClient {
 
     const connect = (): void => {
       if (closed) return
-      const ws = new WebSocket(url)
+      // 浏览器 WS 不能带自定义头，token 只能走查询串（服务端 presentedToken 也收头，
+      // 这里与主进程自己的 websocketUrl 保持同一条路）。重连时现读：token 可能比
+      // 第一次连接晚到，那时服务端会以 401 拒掉 upgrade，不带上就永远连不上。
+      const wsUrl =
+        apiToken.length === 0 ? url : `${url}${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(apiToken)}`
+      const ws = new WebSocket(wsUrl)
       socket = ws
       ws.onmessage = (message) => {
         const event = JSON.parse(String(message.data)) as StampedWsEvent
