@@ -3,6 +3,8 @@
  * @module @ryagent/session/types
  */
 
+import type { AgentPersona } from './persona.ts'
+
 /** 持久化的 Agent 定义（与 @ryagent/agent 的 AgentDefinition 同构，常用字段展开便于 SQL 查询）。 */
 export interface StoredAgent {
   id: string
@@ -14,6 +16,11 @@ export interface StoredAgent {
   temperature?: number
   /** 工具名白名单。 */
   tools: string[]
+  /**
+   * 人格（性格四维 / 生日 / 口头禅 / 形象 / 音色 / 亲密度）。
+   * 读出来一定是完整的一份：存量 agent 的 persona 列是 NULL，存储层按默认值补齐。
+   */
+  persona: AgentPersona
   isBuiltin: boolean
   createdAt: number
   updatedAt: number

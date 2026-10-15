@@ -11,7 +11,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import { bigrams, messageSearchText } from './fts.ts'
 
 /** 当前 schema 版本；每次变更表结构时 +1 并追加迁移函数。 */
-export const SCHEMA_VERSION = 5
+export const SCHEMA_VERSION = 6
 
 /** 版本 1：初始表结构。 */
 function migrateV1(db: DatabaseSync): void {
@@ -109,6 +109,17 @@ function migrateV5(db: DatabaseSync): void {
   }
 }
 
+/**
+ * 版本 6：agents 增加 persona 列——性格四维、生日、口头禅、形象、音色、亲密度。
+ *
+ * 一列 JSON 而不是十几个标量：人格是一个整体（读出来要么是它、要么是默认值），
+ * 且字段还会长（新增维度不该再写一次 ALTER TABLE）。存量行 persona 为 NULL，
+ * 存储层按 {@link PERSONA_DEFAULTS} 补齐——旧 agent 打开即有默认人格，不必回填。
+ */
+function migrateV6(db: DatabaseSync): void {
+  db.exec('ALTER TABLE agents ADD COLUMN persona TEXT')
+}
+
 /** 迁移里解析 content_blocks（脏数据按空数组处理，不让一条坏行废掉迁移）。 */
 function parseBlocks(value: string): unknown[] {
   try {
@@ -126,6 +137,7 @@ export const MIGRATIONS: Readonly<Record<number, (db: DatabaseSync) => void>> = 
   3: migrateV3,
   4: migrateV4,
   5: migrateV5,
+  6: migrateV6,
 }
 
 function userVersion(db: DatabaseSync): number {

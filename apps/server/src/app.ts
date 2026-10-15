@@ -5,7 +5,7 @@
  * 本文件只做**组合根与生命周期**：cordis Context → LlmRuntime + OpenAI 适配器
  * （providers.json）→ SessionStore（SQLite）→ 工具 → 种子 Ryen →
  * SessionCoordinator + EventHub → HTTP/WS 出口。路由按域拆在 `routes/` 下
- * （会话 / agent / 供应商 / 设置 / 记忆 / 进化 / 遥测 / 用量），turn 调度与事件翻译
+ * （会话 / agent / 供应商 / 设置 / 记忆 / 进化 / 主动消息 / 遥测 / 用量），turn 调度与事件翻译
  * 留在本文件——它们跨越多个域，不属于任何单一域。
  * @module @ryagent/server/app
  */
@@ -45,11 +45,14 @@ import {
   toAdapterConfig,
 } from './config.ts'
 import type { WsEvent } from './events.ts'
+import type { ProactiveSnapshot } from './proactive.ts'
+import { ProactiveDigest } from './proactive.ts'
 import { HttpRequestError, json, Router } from './router.ts'
 import { registerAgentRoutes } from './routes/agents.ts'
 import { type ConversationState, registerConversationRoutes, type TurnConversation } from './routes/conversations.ts'
 import { type ConsolidationRun, registerEvolveRoutes } from './routes/evolve.ts'
 import { registerMemoryRoutes } from './routes/memory.ts'
+import { registerProactiveRoutes } from './routes/proactive.ts'
 import { registerProviderRoutes } from './routes/providers.ts'
 import { registerSettingsRoutes } from './routes/settings.ts'
 import { registerTelemetryRoutes } from './routes/telemetry.ts'
@@ -153,6 +156,16 @@ export interface FailureDescription {
 }
 
 /**
+ * 巩固记账：最近一轮的结果与时刻。
+ *
+ * 组合根与主动消息调度器共用这一份（两者都由 create() 组装，直接互相持有会绕成
+ * 一个循环初始化）。主动消息报的是「真跑出来的那些数字」，不另记一份账。
+ */
+export interface ConsolidationLog {
+  last?: { result: Awaited<ReturnType<EvolveService['runUntilIdle']>>; at: number }
+}
+
+/**
  * 把抛出的东西翻译成 HTTP 边缘的错误形状。
  *
  * - `HttpRequestError`：调用方自己抛的 4xx，状态与机器码都是它定的。
@@ -202,6 +215,18 @@ export interface ServerOptions {
   evolution?: AgentEvolutionHooks | null
   /** 巩固调度间隔毫秒；0/undefined = 关闭（默认 6 小时）。 */
   consolidationIntervalMs?: number
+  /**
+   * 主动消息（每日回顾）：默认开。`false` = 整体关闭，连启动那一次也不发；
+   * `true`/省略 = 按 <dataDir>/proactive.json 的设置（默认开）。
+   */
+  proactive?: boolean
+  /**
+   * 主动消息的检查间隔毫秒；0 = 不起定时器（只保留启动那一次），省略 = 默认 30 分钟。
+   * 测试用小值把每日检查拉成毫秒级。
+   */
+  proactiveIntervalMs?: number
+  /** 主动消息的发送时刻（本地小时 0-23）；落盘设置优先。默认 9 点。 */
+  proactiveHour?: number
   /** WS 心跳间隔毫秒（默认 30s；测试可调小）。两次未 pong 即断开。 */
   wsHeartbeatMs?: number
   /** 优雅停机等待在途 turn 的超时毫秒（默认 10s）。 */
@@ -312,6 +337,10 @@ export class RyAgentServer {
     private readonly verifyTimeoutMs: number,
     /** API token；undefined = 不鉴权（仅独立开发进程与测试）。 */
     private readonly authToken: string | undefined,
+    /** 巩固记账（组合根与主动消息调度器共用一份，见 {@link ConsolidationLog}）。 */
+    private readonly consolidationLog: ConsolidationLog,
+    /** 主动消息调度器（每日回顾：定时器、设置与「今天发过没有」都在它那里）。 */
+    private readonly proactiveDigest: ProactiveDigest,
   ) {}
 
   /** 第二次及以后的 close() 直接复用首次的停机 Promise（幂等）。 */
@@ -470,6 +499,25 @@ export class RyAgentServer {
       ...(evolutionOption === undefined ? {} : { evolution: evolutionOption }),
     })
     const hub = new EventHub()
+    // 巩固记账与主动消息调度器由组合根共享：回顾里报的合并条数必须来自真跑出来的那
+    // 一轮，而不是另记一份会漂移的账。
+    const consolidationLog: ConsolidationLog = {}
+    const proactiveDigest = new ProactiveDigest({
+      store,
+      memoryService,
+      evolutionService,
+      dataDir,
+      lastConsolidation: () => {
+        return consolidationLog.last
+      },
+      initial: {
+        // 只有显式关掉才带 enabled：省略时由调度器回落读落盘设置，用户在设置里
+        // 关掉的，重启不能又自己打开。
+        ...(options.proactive === false ? { enabled: false } : {}),
+        ...(options.proactiveHour === undefined ? {} : { hour: options.proactiveHour }),
+      },
+      intervalMs: options.proactiveIntervalMs,
+    })
     const server = new RyAgentServer(
       store,
       coordinator,
@@ -489,6 +537,8 @@ export class RyAgentServer {
       telemetry,
       options.verifyTimeoutMs ?? DEFAULT_VERIFY_TIMEOUT_MS,
       authToken === undefined || authToken.length === 0 ? undefined : authToken,
+      consolidationLog,
+      proactiveDigest,
     )
     server.loadConversationStates()
     if (options.mountLlm === undefined) {
@@ -506,6 +556,9 @@ export class RyAgentServer {
       })
     })
     server.attachWs()
+    // 启动那一次的主动消息排在 listen 之前：桌面端是先起服务再开窗口，渲染层的
+    // 第一次 `GET /api/conversations` 就该看见这条回顾，而不是等下一轮刷新才冒出来。
+    proactiveDigest.start()
     await new Promise<void>((resolve) => {
       server.http.listen(options.port ?? DEFAULT_PORT, options.host ?? DEFAULT_HOST, resolve)
     })
@@ -560,6 +613,9 @@ export class RyAgentServer {
     try {
       const result = await service.runUntilIdle()
       this.lastConsolidatedAt = Date.now()
+      // 主动消息的回顾要用「真跑出来的这一轮」：合并了多少条、归档了多少条都从这里
+      // 取，不另记一份账。
+      this.consolidationLog.last = { result, at: this.lastConsolidatedAt }
       return { ok: true, result }
     } catch (error) {
       console.warn(`@ryagent/server: consolidation failed: ${error instanceof Error ? error.message : String(error)}`)
@@ -615,6 +671,7 @@ export class RyAgentServer {
   private async doClose(): Promise<void> {
     if (this.heartbeat !== undefined) clearInterval(this.heartbeat)
     if (this.consolidationTimer !== undefined) clearInterval(this.consolidationTimer)
+    this.proactiveDigest.close()
     const pending = [...this.turnChains.values()]
     if (pending.length > 0) {
       let timer: ReturnType<typeof setTimeout> | undefined
@@ -837,7 +894,14 @@ export class RyAgentServer {
       workspaceRoot: this.workspaceRoot,
     })
 
-    registerTelemetryRoutes(router, { telemetry: this.telemetry })
+    registerProactiveRoutes(router, { proactive: this.proactiveDigest })
+
+    registerTelemetryRoutes(router, {
+      telemetry: this.telemetry,
+      proactive: () => {
+        return this.proactiveDigest.snapshot()
+      },
+    })
 
     registerUsageRoutes(router, {
       store,

@@ -42,6 +42,15 @@ export interface ConversationApi {
 }
 
 /**
+ * 会话行：存储的会话 + 服务端附带的「Ryen 主动找过你」标记。
+ *
+ * `proactive` 由 GET /api/conversations 附带（内容块里有主动消息的标记块）。api.ts
+ * 的 Conversation 还没声明这一维，这里就地加——行上要多一个「主动」角标，就得有一处
+ * 承认它存在。
+ */
+export type ConversationRow = Conversation & { proactive?: boolean }
+
+/**
  * 没有注入 api 时用的真客户端。
  * 会话列表挂在壳里、壳自己持有 ApiClient，但这一层不该反过来依赖壳传参——
  * 没有它，搜索/置顶/静音/删除会静默变成没接线的死界面。
@@ -330,7 +339,7 @@ export function ConversationList({
     )
   }
   /** 本地覆盖叠在宿主给的数据上：置顶/静音不必等一次整表刷新才显形。 */
-  const visible = conversations
+  const visible: ConversationRow[] = conversations
     .filter((conversation) => {
       return !removed.includes(conversation.id)
     })
@@ -531,6 +540,13 @@ export function ConversationList({
                     <div className="conversation-item-top">
                       <strong>
                         {(conversation.pinned ?? false) && <span className="badge conversation-item-flag">置顶</span>}
+                        {/* 主动消息的角标：点这一行就进那个会话，看到的是它自己开口说的回顾，
+                            不是用户问出来的对话。 */}
+                        {conversation.proactive === true && (
+                          <span className="badge conversation-item-flag" data-proactive="true">
+                            主动
+                          </span>
+                        )}
                         {conversation.title || nameOf(conversation.memberAgentIds[0] ?? '')}
                       </strong>
                       <time>{formatTime(conversation.updatedAt)}</time>

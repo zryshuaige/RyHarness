@@ -54,6 +54,13 @@ const LOCAL_DATA_NOTE =
 export const DEMO_CONVERSATION_PREFIX = '示例'
 
 /**
+ * 会话行 + 服务端附带的「Ryen 主动找过你」标记（GET /api/conversations 的 proactive）。
+ * api.ts 的 Conversation 还没声明这一维，这里就地承认它：首屏的最近会话里要能一眼
+ * 分出哪一条是它自己开口说的。
+ */
+export type ConversationRow = Conversation & { proactive?: boolean }
+
+/**
  * 欢迎主页：聊天 tab 无选中会话时的首屏。
  *
  * 首屏的排布按「开口 > 找回 > 才开始学产品」分层：问候 → 去向 → 输入框 → 最近会话
@@ -85,7 +92,7 @@ export function WelcomeHome({
   const [deletedIds, setDeletedIds] = useState<ReadonlySet<string>>(() => {
     return new Set()
   })
-  const recent = conversations
+  const recent: ConversationRow[] = conversations
     .filter((conversation) => {
       return !deletedIds.has(conversation.id)
     })
@@ -245,6 +252,11 @@ export function WelcomeHome({
             >
               {avatarOf(conversation)}
               <span className="welcome-recent-name">
+                {conversation.proactive === true && (
+                  <span className="badge" data-proactive="true">
+                    主动
+                  </span>
+                )}
                 {conversation.title || nameOf(conversation.memberAgentIds[0] ?? '')}
               </span>
               <span className="welcome-recent-preview">{conversation.lastMessagePreview ?? ''}</span>

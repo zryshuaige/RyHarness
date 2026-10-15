@@ -13,6 +13,7 @@ import { extname, join } from 'node:path'
 import type { Conversation, SessionStore, StoredMessage } from '@ryagent/session'
 import { ARTIFACTS_DIR, guessMime } from '@ryagent/tools'
 import type { WsEvent } from '../events.ts'
+import { PROACTIVE_BLOCK_TYPE } from '../proactive.ts'
 import { HttpRequestError, json, type Router, strField } from '../router.ts'
 
 /** 投递一轮对话所需的会话形状（组合根的调度链按它排程）。 */
@@ -81,6 +82,24 @@ const MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 const MAX_UPLOAD_NAME_LENGTH = 200
 /** 同名去重的后缀尝试次数。 */
 const MAX_UPLOAD_NAME_ATTEMPTS = 1000
+
+/**
+ * 「Ryen 主动找过你」的判定：回看该会话最近这么多条消息里有没有标记块。
+ *
+ * 列表接口不读消息正文，只回看**最近**的一段：主动消息是每天至多一条、且必然落在
+ * 最近的位置，回看 20 条足够命中；真被刷屏冲掉也只是角标不再提示，那条消息本身还在。
+ * 代价是每个会话一次带索引的小查询，与这个接口本来就有的每会话两个子查询同量级。
+ */
+const PROACTIVE_FLAG_SCAN_LIMIT = 20
+
+/** 这条消息是不是 Ryen 主动发来的（内容块里有标记块）。 */
+function hasProactiveMessage(store: SessionStore, conversationId: string): boolean {
+  return store.listMessages(conversationId, { limit: PROACTIVE_FLAG_SCAN_LIMIT }).some((message) => {
+    return message.contentBlocks.some((block) => {
+      return (block as { type?: unknown }).type === PROACTIVE_BLOCK_TYPE
+    })
+  })
+}
 
 /** 把界面态覆盖叠加到存储的会话行上。 */
 function conversationView(conversation: Conversation, state: ConversationState | undefined): ConversationView {
@@ -434,7 +453,14 @@ export function registerConversationRoutes(router: Router, deps: ConversationRou
 
   router.get('/api/conversations', async (_req, res) => {
     const conversations = store.listConversationsWithPreview()
-    json(res, 200, { conversations: conversations.map((row) => viewOf(row)) })
+    json(res, 200, {
+      // proactive=true 表示「Ryen 在这个会话里主动找过你」（见 hasProactiveMessage）：
+      // 列表行据此给一个「主动」角标，用户点进去就知道这条不是他问出来的。
+      conversations: conversations.map((row) => {
+        const view = viewOf(row)
+        return hasProactiveMessage(store, view.id) ? { ...view, proactive: true } : view
+      }),
+    })
   })
 
   /**

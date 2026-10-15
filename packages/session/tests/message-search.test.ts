@@ -145,7 +145,9 @@ describe('SessionStore 消息全文索引', () => {
        VALUES ('m2','c1','agent','a1',?, '[]', 0, 1)`,
     ).run(JSON.stringify([{ type: 'tool_call', id: 't1', name: 'fs_read', arguments: '{}' }]))
 
-    MIGRATIONS[SCHEMA_VERSION]?.(db)
+    // 明确跑 v5 这一步补索引：SCHEMA_VERSION 已经往前走了，用它索引会跑到
+    // 与本用例无关的迁移上。
+    MIGRATIONS[5]?.(db)
     const rows = db
       .prepare(
         'SELECT m.id AS id FROM messages_fts JOIN messages m ON m.seq = messages_fts.rowid WHERE messages_fts MATCH ?',
@@ -159,7 +161,7 @@ describe('SessionStore 消息全文索引', () => {
 
   it('迁移幂等：已是当前版本时不再跑补索引', () => {
     const store = new SessionStore(':memory:')
-    expect(SCHEMA_VERSION).toBe(5)
+    expect(SCHEMA_VERSION).toBe(6)
     expect(store.messageIndexSize()).toBe(0)
     store.close()
   })

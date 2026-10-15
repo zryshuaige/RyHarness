@@ -7,6 +7,8 @@
 import { randomUUID } from 'node:crypto'
 import type { AgentDefinition } from '@ryagent/agent'
 import { RYEN_TEMPLATE } from '@ryagent/agent'
+import type { AgentPersona } from '@ryagent/session'
+import { normalizePersona } from '@ryagent/session'
 
 /** 一个可实例化的 agent 模板。 */
 export interface AgentTemplate {
@@ -17,6 +19,8 @@ export interface AgentTemplate {
   defaultTools: string[]
   defaultModel: string
   avatar?: string
+  /** 模板自带的性格（性格四维 / 生日 / 口头禅 / 形象 / 音色）。 */
+  persona: AgentPersona
 }
 
 /**
@@ -30,6 +34,10 @@ export interface AgentTemplate {
  * 默认工具一律**不含 shell_exec**：能执行任意命令是最高一档的能力，不该在用户
  * 还没意识到「这只小动物能在我的电脑上敲命令」时就默认打开（提示注入可直接
  * 升级成任意代码执行）。要用就在 agent 编辑里显式勾选。
+ *
+ * 人格（{@link AgentTemplate.persona}）逐个模板手写，且互相不重叠：性格四维、
+ * 生日、口头禅、形象、音色各自不同。模板之间"同一段话改几个字"会让五个助理
+ * 说话像一个人——那正是人格系统要消掉的东西。
  */
 export const AGENT_TEMPLATES: Readonly<Record<string, AgentTemplate>> = {
   general: {
@@ -40,6 +48,17 @@ export const AGENT_TEMPLATES: Readonly<Record<string, AgentTemplate>> = {
     defaultTools: ['fs_read', 'fs_write', 'file_produce'],
     defaultModel: 'deepseek-ai/DeepSeek-V3',
     avatar: 'cat',
+    persona: {
+      extroversion: 72,
+      rigor: 78,
+      humor: 45,
+      initiative: 85,
+      birthday: '03-14',
+      catchphrase: '交给我，先去办。',
+      affinity: 10,
+      voiceId: 'siliconflow:warm-female',
+      appearance: '一只橘色虎斑猫，永远端坐在窗台，尾巴卷着一只保温杯。',
+    },
   },
   coding: {
     key: 'coding',
@@ -53,6 +72,17 @@ export const AGENT_TEMPLATES: Readonly<Record<string, AgentTemplate>> = {
     defaultTools: ['fs_read', 'fs_write', 'file_produce'],
     defaultModel: 'deepseek-ai/DeepSeek-V3',
     avatar: 'db:dylan:nightowl',
+    persona: {
+      extroversion: 18,
+      rigor: 88,
+      humor: 22,
+      initiative: 62,
+      birthday: '11-11',
+      catchphrase: '改完了，跑一遍。',
+      affinity: 10,
+      voiceId: 'siliconflow:steady-male',
+      appearance: '灰色猫头鹰，羽色像老显示器的荧光，睁眼是两行终端光标。',
+    },
   },
   writing: {
     key: 'writing',
@@ -66,6 +96,17 @@ export const AGENT_TEMPLATES: Readonly<Record<string, AgentTemplate>> = {
     defaultTools: ['file_produce'],
     defaultModel: 'deepseek-ai/DeepSeek-V3',
     avatar: 'db:dylan:scribe',
+    persona: {
+      extroversion: 55,
+      rigor: 70,
+      humor: 62,
+      initiative: 50,
+      birthday: '05-20',
+      catchphrase: '先给你成稿。',
+      affinity: 10,
+      voiceId: 'elevenlabs:gentle-female',
+      appearance: '毛色像旧宣纸的狐狸，尾巴是一支蘸饱了墨的笔。',
+    },
   },
   translation: {
     key: 'translation',
@@ -79,6 +120,17 @@ export const AGENT_TEMPLATES: Readonly<Record<string, AgentTemplate>> = {
     defaultTools: [],
     defaultModel: 'deepseek-ai/DeepSeek-V3',
     avatar: 'db:dylan:ferryman',
+    persona: {
+      extroversion: 45,
+      rigor: 76,
+      humor: 30,
+      initiative: 40,
+      birthday: '09-09',
+      catchphrase: '意思先对齐。',
+      affinity: 10,
+      voiceId: 'openai:alloy',
+      appearance: '圆滚滚的水獭，随身带一叠单词卡片，泡澡盆里泡着译文。',
+    },
   },
   'file-organizer': {
     key: 'file-organizer',
@@ -92,6 +144,17 @@ export const AGENT_TEMPLATES: Readonly<Record<string, AgentTemplate>> = {
     defaultTools: ['fs_read', 'fs_write'],
     defaultModel: 'deepseek-ai/DeepSeek-V3',
     avatar: 'db:mascot:hoarder',
+    persona: {
+      extroversion: 38,
+      rigor: 82,
+      humor: 35,
+      initiative: 55,
+      birthday: '10-10',
+      catchphrase: '先问一句再动手。',
+      affinity: 10,
+      voiceId: 'openai:shimmer',
+      appearance: '囤了一屋子松果的小松鼠，围裙上印满文件夹的压痕。',
+    },
   },
 }
 
@@ -129,6 +192,7 @@ export function ensureSeedAgents(
     provider: string
     model: string
     tools: string[]
+    persona?: Partial<AgentPersona>
     isBuiltin: boolean
   }) => void,
 ): void {
@@ -140,6 +204,8 @@ export function ensureSeedAgents(
     provider: RYEN_TEMPLATE.provider,
     model: RYEN_TEMPLATE.model as string,
     tools: [...RYEN_TEMPLATE.tools],
+    // Ryen 用 general 模板的人格：它是这个家的总管，温暖干练、爱张罗。
+    persona: AGENT_TEMPLATES.general!.persona,
     isBuiltin: true,
   })
   for (const teammate of STARTER_TEAMMATES) {
@@ -154,21 +220,25 @@ export function ensureSeedAgents(
       provider: DEFAULT_PROVIDER,
       model: template.defaultModel,
       tools: [...template.defaultTools],
+      persona: template.persona,
       isBuiltin: true,
     })
   }
 }
 
+/** 从模板实例化出的 agent 定义：AgentDefinition + 人格（运行时类型不含 persona）。 */
+export type InstantiatedAgent = AgentDefinition & { persona: AgentPersona }
+
 /**
  * 从模板实例化一个用户 agent 定义。
  * @param templateKey - {@link AGENT_TEMPLATES} 的键。
- * @param overrides - 用户自定义字段（name/systemPrompt/tools/model/provider）。
- * @returns 新的 AgentDefinition（新 UUID，isBuiltin: false）。
+ * @param overrides - 用户自定义字段（name/systemPrompt/tools/model/provider/persona）。
+ * @returns 新的 AgentDefinition（新 UUID，isBuiltin: false）与模板自带的人格。
  */
 export function instantiateTemplate(
   templateKey: string,
-  overrides: Partial<Omit<AgentDefinition, 'id' | 'isBuiltin'>> = {},
-): AgentDefinition {
+  overrides: Partial<Omit<AgentDefinition, 'id' | 'isBuiltin'>> & { persona?: Partial<AgentPersona> } = {},
+): InstantiatedAgent {
   const template = AGENT_TEMPLATES[templateKey]
   if (template === undefined) throw new Error(`unknown agent template "${templateKey}"`)
   return {
@@ -181,6 +251,8 @@ export function instantiateTemplate(
     provider: overrides.provider ?? DEFAULT_PROVIDER,
     model: overrides.model ?? template.defaultModel,
     tools: overrides.tools ?? [...template.defaultTools],
+    // 人格按字段覆盖模板：用户调过的四个维度不该被模板默认值盖回去。
+    persona: normalizePersona({ ...template.persona, ...overrides.persona }),
     isBuiltin: false,
   }
 }

@@ -93,6 +93,48 @@ function fakeSweep(options: {
   }
 }
 
+/**
+ * 主循环探针：在巩固分片期间反复抢时间片，记录每次它跑起来时这一轮的状态。
+ *
+ * Node 的 immediate 队列是 FIFO，且每执行完一个回调都会排空微任务，所以巩固
+ * 每片之间的让出点（服务侧每片前的 `setImmediate`）与这里的探针严格交替执行——
+ * 这与墙钟无关。用 0ms 定时器就不行：整轮跑得足够快时事件循环一次都不会回到
+ * timers 阶段，定时器一次都不触发，那是纯调度竞态，而不是"主循环还活着"的证据
+ * （真退回同步跑完整个 P0 冻结的话，探针只会跑一次、且看到整轮已收尾）。
+ */
+interface LoopTurn {
+  /** 那一刻整轮巩固是否已经收尾（lastConsolidation 只在整轮结束时落定）。 */
+  roundDone: boolean
+  /** 那一刻已经发起过的归档调用数（切片推进程度的可观察量）。 */
+  archiveCalls: number
+}
+
+function probeMainLoop(
+  service: EvolveService,
+  sweep: { archiveCalls: unknown[] },
+): {
+  turns: LoopTurn[]
+  stop: () => void
+} {
+  const turns: LoopTurn[] = []
+  let running = true
+  const tick = () => {
+    if (!running) return
+    turns.push({
+      roundDone: service.lastConsolidationResult() !== undefined,
+      archiveCalls: sweep.archiveCalls.length,
+    })
+    setImmediate(tick)
+  }
+  setImmediate(tick)
+  return {
+    turns,
+    stop: () => {
+      running = false
+    },
+  }
+}
+
 /** n 行互异向量（one-hot，任意两行余弦为 0）：判重需要 n(n-1)/2 次比较。 */
 function distinctRows(n: number): FakeRow[] {
   return Array.from({ length: n }, (_, i) => {
@@ -122,14 +164,17 @@ describe('巩固分片：主循环不再被冻住', () => {
     expect(first.scannedMemories).toBeLessThanOrEqual(20)
     expect(syncMs).toBeLessThan(200) // 主线程没有被这轮判重占住
 
-    // 2) 巩固期间事件循环仍在处理别的定时器（真正的不冻证据）。
-    let ticks = 0
-    const timer = setInterval(() => {
-      ticks += 1
-    }, 0)
+    // 2) 巩固期间主循环反复把时间片交还给别的宏任务（真正的不冻证据）：
+    //    探针拿到过不止一次时间片，且每一次都发生在这一轮收尾之前。
+    const probe = probeMainLoop(s, sweep)
     await s.flush()
-    clearInterval(timer)
-    expect(ticks).toBeGreaterThan(0)
+    probe.stop()
+    expect(probe.turns.length).toBeGreaterThan(1)
+    expect(
+      probe.turns.some((turn) => {
+        return turn.roundDone
+      }),
+    ).toBe(false)
 
     // 3) 跑完之后再跑一轮：幂等，没有任何新的合并/归档动作。
     const second = await s.runUntilIdle()
@@ -188,7 +233,8 @@ describe('巩固归档：整段 UPDATE 也要切片，主循环不再被冻 1.8s
 
   it('归档按片推进：runOnce 一片就返回，runUntilIdle 等到整轮搬完', async () => {
     const rows = dormantRows(500)
-    const s = service({ limits: { consolidationSliceUnits: 50, consolidationArchiveChunkRows: 25 } })
+    // 片长 10 < 归档相位自身的 22 步：归档本身就是分片跑的，"按片推进"才成立。
+    const s = service({ limits: { consolidationSliceUnits: 10, consolidationArchiveChunkRows: 25 } })
     const sweep = fakeSweep({ rows })
     s.attachMemorySweep(sweep)
 
@@ -197,14 +243,18 @@ describe('巩固归档：整段 UPDATE 也要切片，主循环不再被冻 1.8s
     expect(first.archivedDormant).toBeLessThanOrEqual(25)
     expect(first.pending).toBe(true)
 
-    let ticks = 0
-    const timer = setInterval(() => {
-      ticks += 1
-    }, 0)
+    const probe = probeMainLoop(s, sweep)
     const done = await s.runUntilIdle()
-    clearInterval(timer)
+    probe.stop()
 
-    expect(ticks).toBeGreaterThan(0) // 归档期间主循环仍在跑
+    // 主循环在归档还没搬完时就反复抢到过时间片（不是跑完了才醒）。
+    expect(probe.turns.length).toBeGreaterThan(1)
+    expect(
+      probe.turns.some((turn) => {
+        return turn.roundDone
+      }),
+    ).toBe(false)
+    expect(Math.max(...probe.turns.map((turn) => turn.archiveCalls))).toBeLessThan(sweep.archiveCalls.length)
     expect(done.pending).toBe(false)
     expect(done.archivedDormant).toBe(500)
     expect(sweep.archived).toHaveLength(500)

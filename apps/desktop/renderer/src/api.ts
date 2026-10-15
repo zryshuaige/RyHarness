@@ -5,6 +5,34 @@
 
 // ---- 服务端形状 ----
 
+/** 人格四维 + 生日/口头禅/形象/音色/亲密度（服务端 @ryagent/session 的 AgentPersona）。 */
+export interface AgentPersona {
+  /** 外向 0-100。 */
+  extroversion: number
+  /** 严谨 0-100。 */
+  rigor: number
+  /** 幽默 0-100。 */
+  humor: number
+  /** 主动 0-100。 */
+  initiative: number
+  /** 生日（MM-DD 或 YYYY-MM-DD，纯展示）。 */
+  birthday?: string
+  catchphrase: string
+  /** 亲密度 0-100：随互动增长，影响称呼与主动性。 */
+  affinity: number
+  /** 音色 id（GET /api/agent-voices 的清单之一）。 */
+  voiceId: string
+  /** 一句话形象描述。 */
+  appearance: string
+}
+
+/** 一个音色预设（目前只有 id 与显示名，声音尚未接入）。 */
+export interface VoicePreset {
+  id: string
+  name: string
+  provider: string
+}
+
 export interface AgentDef {
   id: string
   name: string
@@ -14,6 +42,8 @@ export interface AgentDef {
   model: string
   temperature?: number
   tools: string[]
+  /** 人格；缺省（旧服务端）时按默认人格渲染。 */
+  persona?: AgentPersona
   isBuiltin: boolean
 }
 
@@ -25,6 +55,8 @@ export interface AgentTemplate {
   defaultTools: string[]
   defaultModel: string
   avatar?: string
+  /** 模板自带的性格。 */
+  persona?: AgentPersona
 }
 
 export interface ProviderInfo {
@@ -404,6 +436,19 @@ export class ApiClient {
 
   deleteAgent(id: string): Promise<{ deleted: string }> {
     return this.request(`/api/agents/${id}`, { method: 'DELETE' })
+  }
+
+  /**
+   * 点赞/点踩：亲密度按同一套规则增长。
+   * 回包里的 agent 是更新后的真值，调用方据此刷新界面上的亲密度。
+   */
+  bumpAgentAffinity(id: string, signal: 'thumb_up' | 'thumb_down'): Promise<{ agent: AgentDef }> {
+    return this.request(`/api/agents/${id}/affinity`, { method: 'POST', body: JSON.stringify({ signal }) })
+  }
+
+  /** 音色目录（只有 id 与显示名：声音尚未接入，取不到时下拉退到渲染层内置清单）。 */
+  agentVoices(): Promise<{ voices: VoicePreset[] }> {
+    return this.request('/api/agent-voices')
   }
 
   deleteConversation(id: string): Promise<{ deleted: string }> {

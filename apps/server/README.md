@@ -9,7 +9,7 @@ pnpm dev          # 等价于 tsx src/main.ts（在 apps/server 目录）
 
 - 默认监听 `127.0.0.1:32100`（仅本机，安全边界依赖 OS 账户）。
 - **Origin 白名单**：HTTP 与 WS upgrade 只放行空 Origin（Electron file://、curl/Node 客户端）或回环源（127.0.0.1 / localhost / ::1）；其余源 HTTP 回 403、WS 拒绝升级。
-- 数据目录 `<dataDir>/`（默认 `<cwd>/data`，已 gitignore）：`ryagent.db`（SQLite）、`config/providers.json`（首启写入内置 SiliconFlow 条目，key 走 `SILICONFLOW_API_KEY` 环境变量，配置文件不存明文）、`config/api-keys.json`（应用内配置的明文 key，0600）、`workspace/`（工具工作区与产物目录）。两个配置文件都按 0600 原子写入（先 `.tmp` 再 rename）。
+- 数据目录 `<dataDir>/`（默认 `<cwd>/data`，已 gitignore）：`ryagent.db`（SQLite）、`config/providers.json`（首启写入内置 SiliconFlow 条目，key 走 `SILICONFLOW_API_KEY` 环境变量，配置文件不存明文）、`config/api-keys.json`（应用内配置的明文 key，0600）、`proactive.json`（主动消息开关与每日发送时刻）、`conversation-state.json`（置顶/静音/改名等界面态）、`workspace/`（工具工作区与产物目录）。配置文件都按 0600 原子写入（先 `.tmp` 再 rename）。
 - 首启种子：内置 Ryen 保证存在于 agents 表。
 - 优雅停机：`RyAgentServer.close()` 幂等（重复调用复用同一停机流程）；先等在途 turn 完成（默认 10s 超时兜底，`shutdownTimeoutMs` 可调），再断 WS 客户端、关 HTTP server、关 SQLite；独立模式 SIGINT/SIGTERM 自动触发。
 
@@ -31,7 +31,7 @@ pnpm dev          # 等价于 tsx src/main.ts（在 apps/server 目录）
 
 | 方法与路径 | 说明 |
 |---|---|
-| `GET /api/conversations` | 按 updatedAt 倒序；每项附 `lastMessagePreview`（前 120 字符）与 `unreadCount`（seq > lastReadSeq 且非用户发送、含文本块的消息条数）。 |
+| `GET /api/conversations` | 按 updatedAt 倒序；每项附 `lastMessagePreview`（前 120 字符）与 `unreadCount`（seq > lastReadSeq 且非用户发送、含文本块的消息条数）。有主动消息落过的会话另附 `proactive:true`（列表行的"主动"角标，见「主动消息」一节）。 |
 | `POST /api/conversations` | `{"kind":"direct","agentId"}` 或 `{"kind":"group","memberAgentIds":[...],"dispatcherAgentId?","title?"}`（dispatcher 默认 `ryen`；成员须已存在，且**dispatcher 必须在 memberAgentIds 里**，否则 **400** 不建群）。 |
 | `GET /api/conversations/:id` | 详情。 |
 | `DELETE /api/conversations/:id` | 删除；消息与调度事件级联清除。 |
@@ -60,12 +60,26 @@ pnpm dev          # 等价于 tsx src/main.ts（在 apps/server 目录）
 | `GET /api/evolve/stats?limit=<n>` | 进化管线可观测性：最近 `limit` 轮（新的在前）+ 各类轮次合计与耗时。进化在服务端是后台异步跑的（反思/归因/巩固都不在用户那一轮的关键路径上），出错时界面上没有任何提示——这个端点是那条唯一的观测面。进化系统关闭回 **200** `{enabled:false}`。 |
 | `GET /api/evolve/entries/:id/explain` | 单条 playbook 条目的证据链（条目本体 + 溯源的教训/对话/记忆 + 一句人话摘要），回答"它凭什么这么说"。未知 id 回 **404**，进化系统关闭回 **409**。 |
 
+### 主动消息（每日回顾）
+
+agent 每天至多主动说一次：把**确实发生过**的变化（手册新增的条目、新记住的事、上一轮巩固合并/归档了多少、哪个会话还没看）写成一条 assistant 消息，落在用户与 Ryen 的单聊里。
+
+- **触发**：服务启动后一次（当天还没发过时），之后每天一次；默认发送时刻是本地 9 点（错过就在当天后面的检查里补发），检查间隔 30 分钟。判重按**本地日期**，同一天反复检查也只发一次。
+- **内容只来自真实数据**：没有可说的事就**安静**——不发消息，也不凭空建一个空会话。手册里的种子条目不算"学到的"（否则每次启动都会报一次假新闻）。
+- **落库形状**：`senderType:'agent'`、`senderId:'ryen'`，`contentBlocks` 为 `[{type:'proactive'},{type:'text',…}]`。标记块独立于正文：正文照常喂给模型与全文索引，渲染层凭这个块给"Ryen 主动找你"标识。`GET /api/conversations` 在有主动消息的会话上附 `proactive:true`（列表行的"主动"角标）。
+- **默认开启**，用户可关：设置写在 `<dataDir>/proactive.json`（`{"enabled":true,"hour":9}`），重启后仍生效。
+
+| 方法与路径 | 说明 |
+|---|---|
+| `GET /api/proactive` | `{ enabled, hour, intervalMs, lastSentAt?, lastSentDay?, sentToday, conversationId? }`：`sentToday` 是判重的真值（重启后回到 false），`lastSentAt`/`lastSentDay` 回答"上次主动消息是什么时候发的"。同一份快照也挂在 `GET /api/telemetry` 的 `proactive` 字段上。 |
+| `PATCH /api/proactive` | body `{ enabled?: boolean, hour?: number }`（`hour` 为本地小时 0-23）→ **200** 改完之后的完整快照。只认这两个键：未知键、非布尔 `enabled`、越界或非整数的 `hour` 一律回 **400**（悄悄忽略后回一份"看起来对"的值等于没关）。 |
+
 ### 用量 & 运行时可观测性
 
 | 方法与路径 | 说明 |
 |---|---|
 | `GET /api/usage?since=<毫秒时间戳>` | token 账单的**两个维度**：`{ byConversation:[{conversationId,title,kind,input,output,total,messages}], byProvider:[{provider,displayName,input,output,total,agents:[{agentId,name,total}]}], totals:{input,output,total} }`。数据来自 `messages.usage`（每条 assistant 消息挂一次模型调用的开销）与 `agents.provider`，两个维度从同一批消息算出，因此 `Σ byConversation == Σ byProvider == totals`；`totalTokens` 缺失时按 `input+output` 兜底。只回有消耗的会话/供应商（空账本回空数组），两维都按花费倒序。供应商 `displayName` 取自 `GET /api/providers` 的同一份配置；发言 agent 已被删除时归到 `provider:"unknown"`（显示名"未知供应商"），花费不从账单里消失。`?since=` 缺省或空串 = 不限（`{input:0,output:0,total:0}` 空账本），非数字/负数或任何未知查询参数回 **400**。 |
-| `GET /api/telemetry?limit=<n>` | 运行时可观测性：`{ turns, requests, capacity }`，两类都是环形缓冲（各 `capacity=200`）按时间倒序。轮次项含 `firstTokenMs`（首 token 延迟）、`totalMs`、`memoryRecallMs`/`memoryItems`（该轮的召回计量）、`status`。**只含方法/路径/状态码/耗时等计量数字，不含查询串、消息正文与凭据**（快照要原样发给渲染层，搜索词与正文会随 query 进来）。 |
+| `GET /api/telemetry?limit=<n>` | 运行时可观测性：`{ turns, requests, capacity, proactive }`，两类环形缓冲（各 `capacity=200`）按时间倒序。轮次项含 `firstTokenMs`（首 token 延迟）、`totalMs`、`memoryRecallMs`/`memoryItems`（该轮的召回计量）、`status`。**只含方法/路径/状态码/耗时等计量数字，不含查询串、消息正文与凭据**（快照要原样发给渲染层，搜索词与正文会随 query 进来）。`proactive` 与 `GET /api/proactive` 同源，见上一节。 |
 
 ### Providers & 文件
 
@@ -104,7 +118,9 @@ pnpm dev          # 等价于 tsx src/main.ts（在 apps/server 目录）
 - `mountLlm(ctx)`：替换默认 OpenAI 适配器挂载（测试注入 mock）；
 - `providersConfig`：内存覆盖 providers.json；
 - `llm`（只读）：`LlmRuntime`，用于查已注册的供应商路由与模型目录；
-- `port: 0` 取随机端口（`server.url` 读实际地址）。
+- `port: 0` 取随机端口（`server.url` 读实际地址）；
+- `consolidationIntervalMs`：巩固周期（默认 6 小时，0 = 关闭）；
+- `proactive: false`：关掉主动消息（默认开，见「主动消息」一节）；`proactiveHour` 覆盖每日发送时刻，`proactiveIntervalMs: 0` 只保留启动那一次（测试用小值把每日检查拉成毫秒级）。
 
 供应商的热注册：服务自己 `registerAdapter` 并持有句柄（重复 `registerAdapter` 会撞 `DUPLICATE_ADAPTER`），增删供应商时原地换适配器配置内容并 `replace` 路由集合——在途 turn 不受影响，每个请求在发出那一刻现读配置。
 
@@ -120,5 +136,6 @@ pnpm dev          # 等价于 tsx src/main.ts（在 apps/server 目录）
 - `tests/memory-admin.test.ts`：已归档列表、恢复（含 FTS 索引回来）、重建向量索引与"纯 FTS5 时 409"。
 - `tests/evolve-observability.test.ts`：`GET /api/evolve/stats` 与 `/explain`，以及巩固走 `runUntilIdle`（分片任务不能拿第一片当整轮结果）。
 - `tests/telemetry.test.ts`：环形缓冲与单轮累计器的语义；端到端一轮真实对话后遥测里有完整轮次计量、请求计时不含查询串与正文；多会话并发时召回计量各归各的轮次。
+- `tests/proactive.test.ts`：主动消息的一天一次（假时钟跨天）、关闭后不发（含设置落盘与重启）、没有内容就安静（连空会话都不建）、文案里的数字与真实数据对得上、`GET/PATCH /api/proactive` 与遥测里的观测字段。
 - `tests/usage-health.test.ts`：`GET /api/memory/health`（总数/归档/缺向量/各空间/体积/embedding 状态、重建向量后缺向量清零、纯 FTS5 降级、记忆关闭回 `{enabled:false}`、一轮真实对话后的 `lastRecall`、未知参数 400）与 `GET /api/usage`（两维聚合口径与合计自洽、`totalTokens` 缺失兜底、`?since=` 过滤与空参数、非法参数 400、空账本、agent 已删除归未知供应商、界面态改名后的标题）。
 - `tests/seed.test.ts`：内置模板与首启种子。

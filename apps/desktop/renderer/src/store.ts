@@ -11,7 +11,7 @@
  *    整棵子树（重新 lex、DOM 重建、滚动跳变）。
  */
 import { useSyncExternalStore } from 'react'
-import type { WsEvent } from './api.ts'
+import type { MessageRow, WsEvent } from './api.ts'
 // 启动埋点挂在这个模块上：它是渲染层入口（App.tsx）一定会加载的第一个自有模块，
 // 埋点因此从应用启动的第一行代码就开始计，不需要改入口文件。
 import './lib/boot-trace.ts'
@@ -51,6 +51,12 @@ export interface UiMessage {
   parts: MessagePart[]
   /** 已完整落库（message-done）。 */
   done: boolean
+  /**
+   * 这条是 agent 主动发来的（服务端每日的回顾，见 apps/server/src/proactive.ts），
+   * 不是用户问出来的。UI 据此加「主动找你」的标识——它与用户消息长得一样，就等于
+   * 「我什么时候问过这句」这件事在界面上消失了。
+   */
+  proactive?: boolean
   /** 用户消息的送达状态；agent 消息与历史消息不带（历史天然已落库）。 */
   delivery?: MessageDelivery
   /**
@@ -92,6 +98,21 @@ export function composeMessageText(text: string, attachments: readonly MessageAt
       return line.length > 0
     })
     .join('\n')
+}
+
+/**
+ * 主动消息的内容块标记（与服务端 apps/server/src/proactive.ts 同一约定）。
+ *
+ * 服务端把它作为独立于 text 的一个块写进消息：正文仍是干净的全文（模型那边只取
+ * text 块），而渲染层凭这个块认出「这条是它自己主动说的」。
+ */
+export const PROACTIVE_BLOCK_TYPE = 'proactive'
+
+/** 这条历史消息是不是 Ryen 主动发来的（服务端每日的回顾）。 */
+export function isProactiveRow(row: MessageRow): boolean {
+  return row.contentBlocks.some((block) => {
+    return block.type === PROACTIVE_BLOCK_TYPE
+  })
 }
 
 export interface RelayItem {

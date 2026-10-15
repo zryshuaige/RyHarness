@@ -1,10 +1,10 @@
 import { rmSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
-import type { StoredAgent } from '@ryagent/session'
+import type { AgentInput } from '@ryagent/session'
 import { migrate, SCHEMA_VERSION, SessionStore } from '@ryagent/session'
 import { describe, expect, it } from 'vitest'
 
-function sampleAgent(id: string): Omit<StoredAgent, 'isBuiltin' | 'createdAt' | 'updatedAt'> {
+function sampleAgent(id: string): AgentInput {
   return {
     id,
     name: id,

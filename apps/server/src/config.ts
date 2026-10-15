@@ -294,67 +294,148 @@ function isEnvelope(record: Record<string, unknown>): boolean {
 }
 
 /**
+ * v2 信封里逐条自带的密文（同一份文件里两种 cipher 并存时用）。
+ *
+ * 条目写成裸字符串表示"与文件级 cipher 相同"，写成对象表示自己带 cipher。信封的
+ * `$schema` 仍是 @2——对象形态是字符串形态的超集，旧读法把不认识的值跳过即可，
+ * 换版本号反而会让只认 @2 的读法把整份文件当成 v1 明文，那比混写糟糕得多。
+ */
+interface SealedEntry {
+  cipher: SecretCodec['id']
+  value: string
+}
+
+function isSealedEntry(value: unknown): value is SealedEntry {
+  if (typeof value !== 'object' || value === null) return false
+  const record = value as Record<string, unknown>
+  return (record.cipher === 'safeStorage' || record.cipher === 'plaintext') && typeof record.value === 'string'
+}
+
+/** 一次读取的结果：解得开的与解不开的分开装，写回时各归各位。 */
+interface StoredKeys {
+  /** 当前环境解得开的 key（明文，只在进程内用）。 */
+  keys: Record<string, string>
+  /**
+   * 解不开、但仍属于用户的密文条目。
+   *
+   * 换机器、换系统账户、密钥库暂时不可用时密文救不回来——可"这一轮解不开"不等于
+   * "这个 key 没了"。把它们原样带回写盘，用户下一次保存别的 key 才不会顺手抹掉
+   * 上一版加密时配好的凭据：那才是真正的静默丢失。
+   */
+  sealed: Record<string, SealedEntry>
+}
+
+function tryOpen(codec: SecretCodec, sealed: string): string | undefined {
+  try {
+    return codec.open(sealed)
+  } catch {
+    return undefined
+  }
+}
+
+/** 同一路径只提醒一次：设置页每存一次 key 都会走到读/写路径，日志不必刷屏。 */
+const warnedPaths = new Set<string>()
+
+function warnOnce(key: string, message: () => string): void {
+  if (warnedPaths.has(key)) return
+  warnedPaths.add(key)
+  console.warn(message())
+}
+
+/**
  * 读凭据：v1 明文与 v2 信封都吃，坏文件按"没有凭据"起（不阻塞启动）。
- * 解不开的条目单独计数并提示重填——换系统账户后 safeStorage 解不出来是常态，
+ * 解不开的条目单独带出并提示重填——换系统账户后 safeStorage 解不出来是常态，
  * 那时把整份文件静默当成空，等于告诉用户"你没配过 key"。
  */
-function readApiKeyEntries(dataDir: string): Record<string, string> {
+function readApiKeyFile(dataDir: string): StoredKeys {
+  const stored: StoredKeys = { keys: {}, sealed: {} }
   const path = apiKeysPath(dataDir)
-  if (!existsSync(path)) return {}
+  if (!existsSync(path)) return stored
   let parsed: unknown
   try {
     parsed = JSON.parse(readFileSync(path, 'utf8'))
   } catch {
-    return {}
+    return stored
   }
-  if (typeof parsed !== 'object' || parsed === null) return {}
+  if (typeof parsed !== 'object' || parsed === null) return stored
   const record = parsed as Record<string, unknown>
   const envelope = isEnvelope(record)
   const payload = (envelope ? record.keys : record) as Record<string, unknown>
-  const cipher = envelope ? record.cipher : 'plaintext'
+  const fileCipher: SecretCodec['id'] = record.cipher === 'safeStorage' ? 'safeStorage' : 'plaintext'
   const codec = currentCodec()
-  const keys: Record<string, string> = {}
-  let unreadable = 0
-  for (const [providerId, value] of Object.entries(payload)) {
-    if (typeof value !== 'string' || value.length === 0) continue
+  // 降级路径在读的时候就要说清楚：否则用户要等到哪天翻到这份文件，才知道自己
+  // 的 key 是明文躺在盘上。
+  if (codec.id === 'plaintext') {
+    warnOnce(`${path}#read`, () => {
+      return `@ryagent/server: 没有可用的系统密钥库（Electron safeStorage），${path} 里的 API key 只能以明文保存（0600，仅开发环境可用）`
+    })
+  }
+  const unreadable: string[] = []
+  for (const [providerId, entry] of Object.entries(payload)) {
+    const sealed = isSealedEntry(entry) ? entry : { cipher: fileCipher, value: entry }
+    if (typeof sealed.value !== 'string' || sealed.value.length === 0) continue
     // v1 文件与 cipher=plaintext 的信封都直接就是明文，不走当前的 codec：
     // 那份密文是写它的那台机器的密钥，加密方式一变就再也解不开了。
-    if (cipher !== 'safeStorage') {
-      keys[providerId] = value
+    if (sealed.cipher !== 'safeStorage') {
+      stored.keys[providerId] = sealed.value
       continue
     }
     // 当前环境根本没有系统密钥库：解不开就是解不开，绝不能把密文当 key 递出去
-    // （那会变成"带着一段 base64 去请求供应商"，报出来的错完全指不到病根）。
-    if (codec.id !== 'safeStorage') {
-      unreadable += 1
+    // （那会变成"带着一段 base64 去请求供应商"，报出来的错完全指不到病根）——
+    // 但密文本身要原样留着，等回到能解密的环境。
+    const plain = codec.id === 'safeStorage' ? tryOpen(codec, sealed.value) : undefined
+    if (plain === undefined) {
+      stored.sealed[providerId] = { cipher: 'safeStorage', value: sealed.value }
+      unreadable.push(providerId)
       continue
     }
-    try {
-      keys[providerId] = codec.open(value)
-    } catch {
-      unreadable += 1
-    }
+    stored.keys[providerId] = plain
   }
-  if (unreadable > 0) {
+  if (unreadable.length > 0) {
     console.warn(
-      `@ryagent/server: ${unreadable} 个已存 API key 无法解密（可能换了系统账户或当前没有可用的系统密钥库），请在设置里重新填写`,
+      `@ryagent/server: ${path} 里 ${unreadable.length} 个已存 API key（${unreadable.join('、')}）当前解不开：` +
+        '本机没有可用的系统密钥库，或换过系统账户。请在设置里重新填写；' +
+        '在能解开之前它们原样留在盘上，不会被其它 key 的保存覆盖掉。',
     )
   }
-  return keys
+  return stored
 }
 
-/** 写凭据：整体加密成 v2 信封（顺带把 v1 明文文件升级掉）。 */
-function writeApiKeyEntries(dataDir: string, keys: Record<string, string>): void {
+/**
+ * 写凭据：整体加密成 v2 信封（顺带把 v1 明文文件升级掉）。
+ *
+ * `stored.sealed` 里解不开的条目原样带走：降级路径最危险的不是"这轮用不了"，
+ * 而是因为这轮用不了就把用户配好的凭据从盘上抹掉。
+ */
+function writeApiKeyEntries(dataDir: string, stored: StoredKeys): void {
   const codec = currentCodec()
-  if (codec.id === 'plaintext') {
-    console.warn('@ryagent/server: safeStorage 不可用，API key 以明文写入 0600 文件（仅开发环境）')
+  const path = apiKeysPath(dataDir)
+  const entries = new Map<string, SealedEntry>()
+  for (const [providerId, entry] of Object.entries(stored.sealed)) {
+    // 只有同一个 cipher 才谈得上"重新封装"：明文 codec 去 open 一段密文只会把它
+    // 原样当明文存回去，那比留着密文危险得多。
+    const plain = entry.cipher === codec.id ? tryOpen(codec, entry.value) : undefined
+    entries.set(providerId, plain === undefined ? entry : { cipher: codec.id, value: codec.seal(plain) })
   }
-  const sealed = Object.fromEntries(
-    Object.entries(keys).map((entry) => {
-      return [entry[0], codec.seal(entry[1])]
-    }),
-  )
-  writePrivateJson(apiKeysPath(dataDir), { $schema: API_KEYS_SCHEMA, cipher: codec.id, keys: sealed })
+  for (const [providerId, plain] of Object.entries(stored.keys)) {
+    entries.set(providerId, { cipher: codec.id, value: codec.seal(plain) })
+  }
+  const carried = [...entries.values()].filter((entry) => {
+    return entry.cipher !== codec.id
+  })
+  if (codec.id === 'plaintext') {
+    warnOnce(`${path}#write`, () => {
+      return (
+        `@ryagent/server: safeStorage 不可用，API key 以明文写入 ${path}（0600，仅开发环境）` +
+        (carried.length > 0 ? `；另有 ${carried.length} 个密钥库密文条目原样保留` : '')
+      )
+    })
+  }
+  const keys: Record<string, string | SealedEntry> = {}
+  for (const [providerId, entry] of entries) {
+    keys[providerId] = entry.cipher === codec.id ? entry.value : entry
+  }
+  writePrivateJson(path, { $schema: API_KEYS_SCHEMA, cipher: codec.id, keys })
 }
 
 /** 读取 providers.json；不存在则写入默认配置后返回。 */
@@ -389,31 +470,39 @@ export function loadProvidersConfig(path: string): ProvidersConfigFile {
  *   `keys` 里放密文。cipher 记的是**写这一版时**用的加密方式——换机器、换系统
  *   账户后解不开时只丢那一版，并提示用户重填，而不是把整份凭据当成不存在。
  * 写任何一次都顺手把 v1 升成 v2。
+ *
+ * 「解不开」只影响本轮的可用性，不影响用户已经配好的东西：解不开的密文会原样
+ * 带回下一次写入（条目自带 cipher），既不会被别的 key 覆盖掉，也能在回到能解密
+ * 的环境后直接读回来。
  */
 export function loadApiKeys(dataDir: string): Record<string, string> {
-  return readApiKeyEntries(dataDir)
+  return readApiKeyFile(dataDir).keys
 }
 
 /** 原子写入某个供应商的 key；返回是否写入成功（供应商未知时 false）。空串=删除。 */
 export function saveApiKey(dataDir: string, providerId: string, key: string): boolean {
   const config = loadProvidersConfig(providersConfigPath(dataDir))
   if (config.providers[providerId] === undefined) return false
-  const keys = readApiKeyEntries(dataDir)
-  if (key.length === 0) delete keys[providerId]
-  else keys[providerId] = key
-  writeApiKeyEntries(dataDir, keys)
+  const stored = readApiKeyFile(dataDir)
+  if (key.length === 0) delete stored.keys[providerId]
+  else stored.keys[providerId] = key
+  // 用户显式改了这一条：旧密文（含当前解不开的那份）随之作废。
+  delete stored.sealed[providerId]
+  writeApiKeyEntries(dataDir, stored)
   return true
 }
 
 /**
  * 删掉某个供应商的 key，不要求它还在 providers.json 里。
  * 删供应商时用它：先删 key 再删路由才不会半路失败留下孤儿 key。
+ * 当前环境解不开的密文也照删——"删不掉"不该由这一层来替用户决定。
  */
 export function deleteApiKey(dataDir: string, providerId: string): void {
-  const keys = readApiKeyEntries(dataDir)
-  if (keys[providerId] === undefined) return
-  delete keys[providerId]
-  writeApiKeyEntries(dataDir, keys)
+  const stored = readApiKeyFile(dataDir)
+  if (stored.keys[providerId] === undefined && stored.sealed[providerId] === undefined) return
+  delete stored.keys[providerId]
+  delete stored.sealed[providerId]
+  writeApiKeyEntries(dataDir, stored)
 }
 
 /**

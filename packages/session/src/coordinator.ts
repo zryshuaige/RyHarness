@@ -45,8 +45,19 @@ import type {
   TokenUsage,
   ToolCallId,
 } from '@ryagent/llm'
+import { composePersonaPrompt } from './persona.ts'
 import type { SessionStore } from './store.ts'
-import type { StoredMessage, StoredUsage } from './types.ts'
+import type { StoredAgent, StoredMessage, StoredUsage } from './types.ts'
+
+/**
+ * 把 agent 定义换成"带人格"的运行态：systemPrompt = 原人设 + 人格段落。
+ *
+ * 只在这里拼一次：单聊、群聊、以及编辑器里那段预览文字都指向
+ * {@link composePersonaPrompt}，所以"预览看到的"与"模型收到的"是同一段。
+ */
+function personaAgent(agent: StoredAgent): AgentDefinition {
+  return { ...agent, systemPrompt: composePersonaPrompt(agent.systemPrompt, agent.persona) }
+}
 
 /** 协调器构造参数。 */
 export interface CoordinatorOptions {
@@ -352,8 +363,11 @@ export class SessionCoordinator {
     context: RunContext,
   ): AsyncGenerator<AgentLoopEvent> {
     const { store, llm, tools } = this.options
-    const agent = store.getAgent(agentId)
-    if (agent === undefined) throw new Error(`@ryagent/session: unknown agent "${agentId}"`)
+    const stored = store.getAgent(agentId)
+    if (stored === undefined) throw new Error(`@ryagent/session: unknown agent "${agentId}"`)
+    // 人格在这一刻才拼进系统提示：库里的 systemPrompt 保持"用户写的原话"，
+    // 拼出来的版本只在本次调用里用，编辑器预览与实际发送因此永远一致。
+    const agent = personaAgent(stored)
     const conversation = store.getConversation(conversationId)
     if (conversation === undefined) throw new Error(`@ryagent/session: unknown conversation "${conversationId}"`)
 
@@ -432,6 +446,11 @@ export class SessionCoordinator {
         turnIndex,
       })
     }
+
+    // 亲密度按"完成了一轮对话"增长：只有真的接住了话才算互动，中途报错的一轮
+    // 不给分。落库发生在本轮系统提示拼接之后，所以这一轮生效的是新亲密度之前
+    // 的档位——下一轮才换称呼，不会在同一段对话里前后不一致。
+    if (lastAssistant !== undefined) store.bumpAgentAffinity(agentId, { turns: 1 })
   }
 
   /**
@@ -453,7 +472,7 @@ export class SessionCoordinator {
     const members: AgentDefinition[] = []
     for (const id of conversation.memberAgentIds) {
       const agent = store.getAgent(id)
-      if (agent !== undefined) members.push(agent)
+      if (agent !== undefined) members.push(personaAgent(agent))
     }
     if (members.length === 0) throw new Error(`@ryagent/session: group "${conversationId}" has no resolvable members`)
     const dispatcherId = conversation.dispatcherAgentId ?? members[0]!.id
@@ -485,6 +504,8 @@ export class SessionCoordinator {
 
     const usage = new TurnUsage()
     let lastAssistant: StoredMessage | undefined
+    /** 本轮真的发言过的成员：亲密度按人给一次，而不是按他说了几句给几次。 */
+    const speakers = new Set<string>()
     const dispatcher = new GroupDispatcher({
       llm: observeUsage(llm, (call) => {
         usage.add(call)
@@ -525,6 +546,7 @@ export class SessionCoordinator {
               turnIndex,
             })
             lastAssistant = row
+            speakers.add(event.agentId)
             // 群聊的循环由调度器创建，usage 只能按"这条发言之前发生的调用"
             // 归集；入口扇出并行时多名成员的用量会并到先提交的那条消息上，
             // 总额仍与实际开销一致。
@@ -557,6 +579,8 @@ export class SessionCoordinator {
       // 失败或被取消的那次调用没有产出发言，其用量挂到本轮最后一条发言上，
       // 保证会话累计口径完整。
       this.settleUsage(lastAssistant, usage.takeCall(), usage, turnIndex, context)
+      // 亲密度：群聊里按"这一轮说过话的人"各加一次，没发言的成员不加。
+      for (const speaker of speakers) store.bumpAgentAffinity(speaker, { turns: 1 })
     }
   }
 

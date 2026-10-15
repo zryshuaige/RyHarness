@@ -1,6 +1,18 @@
 import { type CSSProperties, useState } from 'react'
-import type { AgentDef, AgentTemplate, ProviderInfo } from '../api.ts'
+import type { AgentDef, AgentPersona, AgentTemplate, ProviderInfo } from '../api.ts'
 import { agentById } from '../lib/agents.ts'
+import {
+  affinityTier,
+  clampTrait,
+  composePersonaPrompt,
+  normalizePersona,
+  personaSummary,
+  suggestTemperature,
+  TRAIT_META,
+  traitBand,
+  VOICE_PRESETS,
+  voiceName,
+} from '../lib/persona.ts'
 import {
   explainModelMismatch,
   firstUsableProviderId,

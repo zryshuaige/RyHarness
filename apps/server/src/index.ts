@@ -13,6 +13,7 @@ export type { ProviderConfig, ProviderPreset, ProviderProtocol, ProvidersConfigF
 export {
   configureSecretStore,
   DEFAULT_PROVIDERS,
+  deleteApiKey,
   loadApiKeys,
   loadProvidersConfig,
   PROVIDER_PRESETS,
@@ -25,6 +26,8 @@ export {
   writeProvidersConfig,
 } from './config.ts'
 export type { StampedWsEvent, WsEvent } from './events.ts'
+export type { ProactiveRun, ProactiveSettings, ProactiveSnapshot } from './proactive.ts'
+export { composeProactiveMessage, localDayKey, PROACTIVE_AGENT_ID, PROACTIVE_BLOCK_TYPE } from './proactive.ts'
 export type { MemoryHealthReport, MemoryRecall } from './routes/memory.ts'
 export type { ProviderUsage } from './routes/providers.ts'
 export type {

@@ -7,7 +7,7 @@ import { explainTurnError, type TurnErrorTarget } from '../lib/turn-errors.ts'
 import { LEAVE_MS, prefersReducedMotion, useLeaving } from '../lib/useLeaving.ts'
 import { DEFAULT_OVERSCAN, FALLBACK_VIEWPORT_ROWS, visibleRange, windowSlice } from '../lib/windowed.ts'
 import type { ChatStore, MessageAttachment, UiMessage } from '../store.ts'
-import { composeMessageText, useChat } from '../store.ts'
+import { composeMessageText, isProactiveRow, useChat } from '../store.ts'
 import { Cat } from './Cat.tsx'
 import { ChatInput } from './ChatInput.tsx'
 import { Icon } from './Icon.tsx'
@@ -38,6 +38,8 @@ export function fromHistory(rows: MessageRow[], nameOf: (id: string) => string):
       seq: row.seq,
       createdAt: row.createdAt,
       done: true,
+      // 主动消息（服务端每日的回顾）：多带一个标记，气泡上方才有「主动找你」那一行。
+      ...(isProactiveRow(row) ? { proactive: true } : {}),
       parts: isTool
         ? [
             {
@@ -957,6 +959,13 @@ export function ChatView({
               <RelayChain relays={snapshot.relays} turnIndex={turn.turnIndex} nameOf={nameOf} avatarOf={avatarOf} />
               {turn.messages.map((message, index) => (
                 <Fragment key={message.key}>
+                  {/* 主动消息的标识：这条是它自己开口说的，不是用户问出来的。
+                      放在气泡上方而不是气泡里——气泡里再插一行字，气泡就不是它本来的样子了。 */}
+                  {message.proactive === true && (
+                    <p className="chat-hint" data-proactive="true">
+                      <Icon name="sun" size={12} /> Ryen 主动找你
+                    </p>
+                  )}
                   <MessageBubble
                     message={message}
                     fileUrl={fileUrl}

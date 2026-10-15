@@ -9,6 +9,8 @@
 import { randomUUID } from 'node:crypto'
 import { DatabaseSync, type StatementSync } from 'node:sqlite'
 import { bigrams, ftsMatchQuery, messageSearchText } from './fts.ts'
+import type { AffinityEvent, AgentPersona } from './persona.ts'
+import { nextAffinity, normalizePersona, serializePersona } from './persona.ts'
 import { migrate, SCHEMA_VERSION } from './schema.ts'
 import type {
   Conversation,
@@ -21,8 +23,16 @@ import type {
   UsageTotals,
 } from './types.ts'
 
-/** 创建/更新 Agent 定义的输入。 */
-export type AgentInput = Omit<StoredAgent, 'isBuiltin' | 'createdAt' | 'updatedAt'> & { isBuiltin?: boolean }
+/**
+ * 创建/更新 Agent 定义的输入。
+ *
+ * persona 可选且可只给部分字段：调用方（种子、模板实例化、旧测试）不必为了
+ * 存一个 agent 先拼一整个人格，缺的部分由 {@link normalizePersona} 补默认值。
+ */
+export type AgentInput = Omit<StoredAgent, 'isBuiltin' | 'createdAt' | 'updatedAt' | 'persona'> & {
+  isBuiltin?: boolean
+  persona?: Partial<AgentPersona>
+}
 
 /** 创建会话的输入。 */
 export interface ConversationInput {
@@ -109,6 +119,16 @@ function parseJsonArray(value: string): unknown[] {
   return Array.isArray(parsed) ? parsed : []
 }
 
+/** persona 列解析：NULL（v6 之前）或脏 JSON 都返回 undefined，交给归一走默认值。 */
+function parseJsonValue(value: unknown): unknown {
+  if (typeof value !== 'string' || value.length === 0) return undefined
+  try {
+    return JSON.parse(value) as unknown
+  } catch {
+    return undefined
+  }
+}
+
 /** usage 列是 JSON 文本；脏数据（手工改库/旧版本）一律按无用量处理。 */
 function parseUsage(value: unknown): StoredUsage | undefined {
   if (typeof value !== 'string' || value.length === 0) return undefined
@@ -189,12 +209,12 @@ export class SessionStore {
     const now = Date.now()
     const existing = this.getAgent(input.id)
     this.stmt(`
-      INSERT INTO agents (id, name, avatar, system_prompt, provider, model, temperature, tools, is_builtin, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO agents (id, name, avatar, system_prompt, provider, model, temperature, tools, persona, is_builtin, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (id) DO UPDATE SET
         name = excluded.name, avatar = excluded.avatar, system_prompt = excluded.system_prompt,
         provider = excluded.provider, model = excluded.model, temperature = excluded.temperature,
-        tools = excluded.tools, updated_at = excluded.updated_at
+        tools = excluded.tools, persona = excluded.persona, updated_at = excluded.updated_at
     `).run(
       input.id,
       input.name,
@@ -204,6 +224,11 @@ export class SessionStore {
       input.model,
       input.temperature ?? null,
       JSON.stringify(input.tools),
+      // 未给 persona 时沿用库里的那份：亲密度是互动累积出来的，一条不带 persona
+      // 的 PATCH（只改模型名）不该把它清零。给了就补齐缺的字段再归一。
+      serializePersona(
+        normalizePersona(input.persona === undefined ? existing?.persona : { ...existing?.persona, ...input.persona }),
+      ),
       input.isBuiltin === true ? 1 : 0,
       existing?.createdAt ?? now,
       now,
@@ -211,6 +236,26 @@ export class SessionStore {
     const stored = this.getAgent(input.id)
     if (stored === undefined) throw new Error(`@ryagent/session: upsert of agent "${input.id}" did not persist`)
     return stored
+  }
+
+  /**
+   * 亲密度推进一轮互动（对话轮数 / 点赞 / 点踩）。
+   *
+   * 增长规则只有 {@link nextAffinity} 一处定义；这里只负责读—算—写，顺带刷
+   * updatedAt 让通讯录按"最近变过的"排。不存在的 agent 返回 undefined（调用方
+   * 多半刚删过它，不该为此抛错）。
+   */
+  bumpAgentAffinity(id: string, event: AffinityEvent): StoredAgent | undefined {
+    const existing = this.getAgent(id)
+    if (existing === undefined) return undefined
+    const affinity = nextAffinity(existing.persona.affinity, event)
+    if (affinity === existing.persona.affinity) return existing
+    this.stmt('UPDATE agents SET persona = ?, updated_at = ? WHERE id = ?').run(
+      serializePersona({ ...existing.persona, affinity }),
+      Date.now(),
+      id,
+    )
+    return this.getAgent(id)
   }
 
   /** 读取一个 Agent 定义；不存在返回 undefined。 */
@@ -237,6 +282,8 @@ export class SessionStore {
       model: String(row.model),
       ...(row.temperature === null || row.temperature === undefined ? {} : { temperature: Number(row.temperature) }),
       tools: parseJsonArray(String(row.tools)) as string[],
+      // persona 列可能是 NULL（v6 之前的行）或脏 JSON：一律走归一，读出来必是完整一份。
+      persona: normalizePersona(parseJsonValue(row.persona)),
       isBuiltin: Number(row.is_builtin) === 1,
       createdAt: Number(row.created_at),
       updatedAt: Number(row.updated_at),

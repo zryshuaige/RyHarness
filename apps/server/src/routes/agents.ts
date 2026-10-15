@@ -4,7 +4,8 @@
  */
 
 import type { AgentDefinition } from '@ryagent/agent'
-import type { SessionStore } from '@ryagent/session'
+import type { AgentPersona, SessionStore } from '@ryagent/session'
+import { VOICE_PRESETS } from '@ryagent/session'
 import type { ProvidersConfigFile } from '../config.ts'
 import { resolveSidecarLlm } from '../config.ts'
 import { HttpRequestError, json, type Router, strField } from '../router.ts'
@@ -18,8 +19,10 @@ export interface AgentRoutes {
 }
 
 /** POST/PATCH 共用的 agent 字段白名单校验：类型不符抛 400，未知键丢弃。 */
-function agentFieldOverrides(body: unknown): Partial<Omit<AgentDefinition, 'id' | 'isBuiltin'>> {
-  const overrides: Partial<Omit<AgentDefinition, 'id' | 'isBuiltin'>> = {}
+function agentFieldOverrides(
+  body: unknown,
+): Partial<Omit<AgentDefinition, 'id' | 'isBuiltin'>> & { persona?: Partial<AgentPersona> } {
+  const overrides: Partial<Omit<AgentDefinition, 'id' | 'isBuiltin'>> & { persona?: Partial<AgentPersona> } = {}
   if (typeof body !== 'object' || body === null) return overrides
   const record = body as Record<string, unknown>
   for (const key of ['name', 'avatar', 'systemPrompt', 'provider', 'model'] as const) {
@@ -45,7 +48,34 @@ function agentFieldOverrides(body: unknown): Partial<Omit<AgentDefinition, 'id' 
     }
     overrides.tools = record.tools as string[]
   }
+  if (record.persona !== undefined) {
+    overrides.persona = personaOverrides(record.persona)
+  }
   return overrides
+}
+
+/** 人格字段：按 partial 收，类型不对抛 400。归一在存储层做（缺字段按旧值/默认值补）。 */
+function personaOverrides(value: unknown): Partial<AgentPersona> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new HttpRequestError(400, 'field "persona" must be an object')
+  }
+  const record = value as Record<string, unknown>
+  const persona: Partial<AgentPersona> = {}
+  for (const key of ['extroversion', 'rigor', 'humor', 'initiative', 'affinity'] as const) {
+    const trait = record[key]
+    if (trait === undefined) continue
+    if (typeof trait !== 'number' || !Number.isFinite(trait)) {
+      throw new HttpRequestError(400, `persona.${key} must be a finite number`)
+    }
+    persona[key] = trait
+  }
+  for (const key of ['birthday', 'catchphrase', 'appearance', 'voiceId'] as const) {
+    const field = record[key]
+    if (field === undefined) continue
+    if (typeof field !== 'string') throw new HttpRequestError(400, `persona.${key} must be a string`)
+    persona[key] = field
+  }
+  return persona
 }
 
 /** Agent 定义与模板清单的路由。 */
@@ -69,9 +99,13 @@ export function registerAgentRoutes(router: Router, deps: AgentRoutes): void {
     // 报成 400 的根源。
     const fallback = resolveSidecarLlm(deps.providers)
     let definition: AgentDefinition
+    let persona: Partial<AgentPersona> | undefined = overrides.persona
     if (templateKey !== undefined) {
       try {
-        definition = instantiateTemplate(templateKey, overrides)
+        const instantiated = instantiateTemplate(templateKey, overrides)
+        definition = instantiated
+        persona =
+          overrides.persona === undefined ? instantiated.persona : { ...instantiated.persona, ...overrides.persona }
       } catch (error) {
         throw new HttpRequestError(400, error instanceof Error ? error.message : String(error))
       }
@@ -85,7 +119,11 @@ export function registerAgentRoutes(router: Router, deps: AgentRoutes): void {
         tools: overrides.tools ?? [],
       }
     }
-    const stored = store.upsertAgent({ ...definition, isBuiltin: false })
+    const stored = store.upsertAgent({
+      ...definition,
+      ...(persona === undefined ? {} : { persona }),
+      isBuiltin: false,
+    })
     json(res, 201, { agent: stored })
   })
 
@@ -96,6 +134,7 @@ export function registerAgentRoutes(router: Router, deps: AgentRoutes): void {
       return
     }
     // 与 POST 同款白名单：类型不符 400（dispatch 统一捕获），未知键丢弃。
+    // persona 只在 body 给了时才写：不给就得原样留着旧值（含亲密度）。
     const overrides = agentFieldOverrides(await req.body())
     const merged: AgentDefinition = {
       ...existing,
@@ -103,7 +142,33 @@ export function registerAgentRoutes(router: Router, deps: AgentRoutes): void {
       id: existing.id,
       isBuiltin: existing.isBuiltin,
     }
-    json(res, 200, { agent: store.upsertAgent(merged) })
+    json(res, 200, {
+      agent: store.upsertAgent({
+        ...merged,
+        ...(overrides.persona === undefined ? {} : { persona: { ...existing.persona, ...overrides.persona } }),
+      }),
+    })
+  })
+
+  /**
+   * 点赞/点踩：亲密度按同一套规则增长（对话轮数由协调器算，点赞走这里）。
+   * 回包是更新后的 agent——界面据此刷新卡片上的亲密度，不用再拉一次列表。
+   */
+  router.post('/api/agents/:id/affinity', async (req, res) => {
+    const body = await req.body()
+    const signal = strField(body, 'signal')
+    if (signal !== 'thumb_up' && signal !== 'thumb_down') {
+      json(res, 400, { error: 'signal(thumb_up|thumb_down) is required' })
+      return
+    }
+    const agent = store.bumpAgentAffinity(req.params.id as string, {
+      ...(signal === 'thumb_up' ? { likes: 1 } : { dislikes: 1 }),
+    })
+    if (agent === undefined) {
+      json(res, 404, { error: `agent not found: ${req.params.id}` })
+      return
+    }
+    json(res, 200, { agent })
   })
 
   router.delete('/api/agents/:id', async (req, res) => {
@@ -123,5 +188,13 @@ export function registerAgentRoutes(router: Router, deps: AgentRoutes): void {
 
   router.get('/api/agent-templates', async (_req, res) => {
     json(res, 200, { templates: Object.values(AGENT_TEMPLATES) })
+  })
+
+  /**
+   * 音色目录：目前只有 id 与显示名（还没有任何 TTS 调用路径，界面如实说明）。
+   * 编辑器用它渲染下拉，服务端校验 persona.voiceId 也认这份清单。
+   */
+  router.get('/api/agent-voices', async (_req, res) => {
+    json(res, 200, { voices: VOICE_PRESETS })
   })
 }
