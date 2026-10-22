@@ -1,7 +1,7 @@
 import { rmSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
-import type { AgentInput } from '@ryagent/session'
-import { migrate, SCHEMA_VERSION, SessionStore } from '@ryagent/session'
+import type { AgentInput } from '@ryharness/session'
+import { migrate, SCHEMA_VERSION, SessionStore } from '@ryharness/session'
 import { describe, expect, it } from 'vitest'
 
 function sampleAgent(id: string): AgentInput {
@@ -44,6 +44,16 @@ describe('SessionStore', () => {
     expect(updated.updatedAt).toBeGreaterThanOrEqual(created.updatedAt)
     expect(store.listAgents()).toHaveLength(1)
     expect(store.getAgent('missing')).toBeUndefined()
+    store.close()
+  })
+
+  it('思考档位存下来也读得回去（不落库的话用户设的强度重启就没了）', () => {
+    const store = new SessionStore(':memory:')
+    store.upsertAgent({ ...sampleAgent('a1'), reasoningEffort: 'high' })
+    expect(store.getAgent('a1')?.reasoningEffort).toBe('high')
+    // 没配的那条留空 = 用模型默认，不能被写成空串。
+    store.upsertAgent(sampleAgent('a2'))
+    expect(store.getAgent('a2')?.reasoningEffort).toBeUndefined()
     store.close()
   })
 
@@ -205,9 +215,9 @@ describe('SessionStore', () => {
   })
 
   it('deleteAgent 级联清理记忆、playbook、教训与反馈，并摘出会话成员身份', async () => {
-    const { MemoryStore, SHARED_SPACE } = await import('@ryagent/memory')
-    const { EvolveStore } = await import('@ryagent/evolve')
-    const path = `${process.env.TEMP ?? '/tmp'}/ryagent-cascade-${Date.now()}.db`
+    const { MemoryStore, SHARED_SPACE } = await import('@ryharness/memory')
+    const { EvolveStore } = await import('@ryharness/evolve')
+    const path = `${process.env.TEMP ?? '/tmp'}/ryharness-cascade-${Date.now()}.db`
     const store = new SessionStore(path)
     // 记忆/进化与 session 共用同一个 SQLite 文件，各自持有一个连接。
     const memories = new MemoryStore(path)
@@ -254,7 +264,7 @@ describe('SessionStore', () => {
   })
 
   it('persists to a file and reloads (file-backed databases)', () => {
-    const path = `${process.env.TEMP ?? '/tmp'}/ryagent-session-test-${Date.now()}.db`
+    const path = `${process.env.TEMP ?? '/tmp'}/ryharness-session-test-${Date.now()}.db`
     const store = new SessionStore(path)
     store.upsertAgent(sampleAgent('persisted'))
     const conversation = store.createConversation({ kind: 'direct', memberAgentIds: ['persisted'] })

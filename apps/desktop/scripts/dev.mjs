@@ -29,7 +29,7 @@ const electron = spawn('pnpm', ['run', 'start'], {
   cwd: here,
   stdio: 'inherit',
   shell: true,
-  env: { ...process.env, RYAGENT_DEV_SERVER_URL: 'http://localhost:5173' },
+  env: { ...process.env, RYHARNESS_DEV_SERVER_URL: 'http://localhost:5173' },
 })
 electron.on('exit', async () => {
   await vite.close()

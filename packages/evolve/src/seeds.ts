@@ -1,7 +1,7 @@
 /**
  * 冷启动种子：每个内置模板带 2–3 条经验手册条目（ACE 冷启动），
  * 用户 agent 创建时按模板播种（seedIfEmpty，幂等）。
- * @module @ryagent/evolve/seeds
+ * @module @ryharness/evolve/seeds
  */
 
 import type { PlaybookSection } from './schema.ts'

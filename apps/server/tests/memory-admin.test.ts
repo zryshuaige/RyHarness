@@ -7,8 +7,8 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { HashEmbeddings, MemoryService, NullEmbeddings, SHARED_SPACE } from '@ryagent/memory'
-import { RyAgentServer } from '@ryagent/server'
+import { HashEmbeddings, MemoryService, NullEmbeddings, SHARED_SPACE } from '@ryharness/memory'
+import { RyHarnessServer } from '@ryharness/server'
 import { afterEach, describe, expect, it } from 'vitest'
 
 const tmpDirs: string[] = []
@@ -55,11 +55,11 @@ async function postJson(
 async function startWithMemory(
   prefix: string,
   embeddings: HashEmbeddings | NullEmbeddings = new HashEmbeddings(),
-): Promise<{ server: RyAgentServer; memory: MemoryService }> {
-  const dataDir = mkdtempSync(join(tmpdir(), `ryagent-memory-${prefix}-`))
+): Promise<{ server: RyHarnessServer; memory: MemoryService }> {
+  const dataDir = mkdtempSync(join(tmpdir(), `ryharness-memory-${prefix}-`))
   tmpDirs.push(dataDir)
-  const memory = new MemoryService({ dbPath: join(dataDir, 'ryagent.db'), embeddings })
-  const server = await RyAgentServer.create({ port: 0, dataDir, memory })
+  const memory = new MemoryService({ dbPath: join(dataDir, 'ryharness.db'), embeddings })
+  const server = await RyHarnessServer.create({ port: 0, dataDir, memory })
   return { server, memory }
 }
 
@@ -148,9 +148,9 @@ describe('记忆归档分区', () => {
   })
 
   it('记忆系统关闭：归档列表回空，恢复/重建回 409（面板不该因此报错）', async () => {
-    const server = await RyAgentServer.create({
+    const server = await RyHarnessServer.create({
       port: 0,
-      dataDir: mkdtempSync(join(tmpdir(), 'ryagent-memory-off-')),
+      dataDir: mkdtempSync(join(tmpdir(), 'ryharness-memory-off-')),
       memory: null,
     })
     tmpDirs.push(server.dataDir)
@@ -209,7 +209,7 @@ describe('重建向量索引', () => {
  * store 的原始行带着 embedding（Float32Array），直接 JSON.stringify 会变成
  * {"0":0.0123,"1":…,"1023":-0.008} 这样一坨「下标→数值」：一条 1024 维记忆就是
  * 几千个字段，几页记忆轻松到 MB 级，而这些数字对渲染层毫无用处——它们是检索的
- * 内部状态。投影（@ryagent/memory 的 toPublicMemories）是唯一的出包口径。
+ * 内部状态。投影（@ryharness/memory 的 toPublicMemories）是唯一的出包口径。
  */
 describe('记忆出包不带 embedding', () => {
   const PUBLIC_FIELDS = ['accessCount', 'agentId', 'content', 'createdAt', 'id', 'kind', 'updatedAt'].sort()

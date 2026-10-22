@@ -1,11 +1,11 @@
 /**
  * 自我进化路由：反馈闭环、经验手册、巩固触发，以及可观测性
  * （进化轮次指标 / 单条 playbook 条目的证据链）。
- * @module @ryagent/server/routes/evolve
+ * @module @ryharness/server/routes/evolve
  */
 
-import type { EvolveService } from '@ryagent/evolve'
-import type { SessionStore } from '@ryagent/session'
+import type { EvolveService } from '@ryharness/evolve'
+import type { SessionStore } from '@ryharness/session'
 import { json, type Router, strField } from '../router.ts'
 
 /** 巩固一跑的结论（runUntilIdle 的口径：整轮跑完，不是第一片）。 */
@@ -30,7 +30,14 @@ export function registerEvolveRoutes(router: Router, deps: EvolveRoutes): void {
     return deps.evolutionService
   }
 
-  /** 用户反馈：👎 即时反思 + 归因 harmful；👍 归因 helpful。 */
+  /**
+   * 用户反馈：👎 即时反思 + 归因 harmful；👍 归因 helpful。
+   *
+   * 防刷：同一消息（messageId）同一信号重复提交时幂等返回（recorded:false），
+   * 不再写进化事件、也不再动亲密度。亲密度 bump 内联在这里做——反馈被接受
+   * 才涨（渲染层因此不再单独调 /api/agents/:id/affinity）；回包带上更新后的
+   * agent，界面据此刷新卡片，不用再拉一次列表。
+   */
   router.post('/api/feedback', async (req, res) => {
     const service = evolutionService()
     if (service === undefined) {
@@ -45,14 +52,21 @@ export function registerEvolveRoutes(router: Router, deps: EvolveRoutes): void {
       json(res, 400, { error: 'conversationId, agentId and signal(thumb_up|thumb_down) are required' })
       return
     }
+    const messageId = strField(body, 'messageId')
+    if (messageId !== undefined && store.hasFeedback(messageId, signal)) {
+      json(res, 200, { recorded: false, duplicate: true })
+      return
+    }
+    const agent = store.bumpAgentAffinity(agentId, signal === 'thumb_up' ? { likes: 1 } : { dislikes: 1 })
     service.recordFeedback({
       agentId,
       conversationId,
       signal,
       userText: strField(body, 'userText'),
       assistantText: strField(body, 'assistantText'),
+      messageId,
     })
-    json(res, 200, { recorded: true })
+    json(res, 200, { recorded: true, ...(agent === undefined ? {} : { agent }) })
   })
 
   /** 某 agent 的经验手册：playbook 条目（含 deprecated）+ 待验证教训。 */

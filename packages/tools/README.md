@@ -1,12 +1,21 @@
-# @ryagent/tools
+# @ryharness/tools
 
-基础工具集，实现 `@ryagent/agent` 的 `Tool` 抽象：
+基础工具集，实现 `@ryharness/agent` 的 `Tool` 抽象：
 
 - **fs_read / fs_write**：工作区限定，自动建父目录，读截断 64k 字符。
 - **shell_exec**：工作区根目录执行命令。Windows 优先 Git Bash（`GIT_BASH_PATH` / 常见安装路径探测），退回 cmd.exe；POSIX 用 /bin/sh。用 `execFile` 直 spawn 解释器（不经 cmd 字符串拼接，规避 Windows 路径空格引号问题）；默认超时 30s（SIGKILL），输出截断 32k 字符；取消信号交给 spawn，按进程树收尾（Windows 上 `taskkill /T`）；命令命中敏感路径直接拒绝；错误与超时返回 `isError` 结果而非抛异常。
-- **file_produce**：内容落成工作区 `.ryagent-artifacts/` 产物文件，返回**产物卡片** `{ path, name, size, mime }`——"发文件"能力的内核，UI 据此渲染文件消息。MIME 按扩展名推断，可显式覆盖。
+- **file_produce**：内容落成工作区 `.ryharness-artifacts/` 产物文件，返回**产物卡片** `{ path, name, size, mime }`——"发文件"能力的内核，UI 据此渲染文件消息。MIME 按扩展名推断，可显式覆盖。
 
 路径逃逸、缺参数、命令失败一律映射为 `{ isError: true }` 结果，由 AgentLoop 以 tool 消息形式回给模型。
+
+## 工具注册表（`ctx.tools`）
+
+`ToolRegistry` 是 cordis 服务，挂载方式 `await ctx.plugin(ToolRegistry)`；插件在 apply 里 `ctx.tools.register(tool)` 即完成注册：
+
+- 注册是一个 **effect**：`register()` 返回精确的 disposer，插件 fiber 卸载时 cordis 自动执行它——工具随插件消失，不靠调用方记得清理。
+- 同名重复注册直接抛错并点名工具（后来的静默覆盖会让模型调用到与白名单无关的实现）。
+- `list()` 按注册顺序返回，`get(name)` 按名查找。
+- `SessionCoordinator` / `AgentLoop` 拿的就是这个注册表：agent 定义里的工具名白名单在**每一轮**按名解析，插件热重挂后下一轮立刻生效。
 
 ## 工作区边界与符号链接语义
 
@@ -14,6 +23,8 @@
 
 1. **词法层** `resolveInWorkspace`：把入参 resolve 到工作区根之下，`..`、根外绝对路径、盘符切换一律拒绝（抛 `PathEscapeError`，被工具入口映射成 `isError` 结果）。
 2. **真实路径层**：工作区里一个指向外部的符号链接 / Windows junction，词法层完全看不出来，却能让模型读到（或写穿）工作区外的一切。因此每次读写前还要解析一次真实路径，与**工作区根的真实路径**比较。
+
+合并后的那一步导出为 `resolveTarget(root, path)`：服务端 `GET /api/files/:name/info` 与 `/raw`（产物内嵌预览）也走它，于是「模型读得到」与「界面读得到」对同一条边界有同一个答案，不必再写一份弱化版。
 
 真实路径解析有两条必须遵守的约定：
 
@@ -27,7 +38,7 @@
 - 逃逸信息里同时给出词法路径与解析出的真实路径，便于定位是哪个链接作怪。
 - Windows / macOS 文件名大小写不敏感，路径比较按小写进行。
 
-已知缺口：`file_produce` 只走词法层（固定子目录 + 只允许叶子名，不允许路径分隔符），若工作区里的 `.ryagent-artifacts` 本身是一个指向外部的链接，产物会落到链接指向处。
+已知缺口：`file_produce` 只走词法层（固定子目录 + 只允许叶子名，不允许路径分隔符），若工作区里的 `.ryharness-artifacts` 本身是一个指向外部的链接，产物会落到链接指向处。
 
 ## shell_exec 敏感路径闸
 
@@ -44,4 +55,4 @@
 
 策略是**进程级**的：`shellGuardPolicy()` 读当前快照，`setShellGuardPolicy(policy)` 整体替换（不是增量合并，缺省项回到默认值），只能由宿主在启动配置时调用。工具入参里刻意没有"跳过检查"的开关——模型能改的开关等于没有闸，一句"先放行再读"就绕过去了。
 
-闸的射程要说清楚：它挡的是"模型顺手 `cat ~/.ssh/id_rsa`"这类直白动作，**不是沙箱**。变量间接（`P=~/.ssh/id_rsa; cat $P`）、base64、`find -name` 都在射程之外；`shell_exec` 的 `cwd` 只是工作区根，命令能访问当前用户有权访问的任何路径。真正的边界是 fs 工具的工作区限定、每会话工具配额（`@ryagent/agent` 的 `SessionQuota`，shell 次数 / 写入字节数）和操作系统账号权限。
+闸的射程要说清楚：它挡的是"模型顺手 `cat ~/.ssh/id_rsa`"这类直白动作，**不是沙箱**。变量间接（`P=~/.ssh/id_rsa; cat $P`）、base64、`find -name` 都在射程之外；`shell_exec` 的 `cwd` 只是工作区根，命令能访问当前用户有权访问的任何路径。真正的边界是 fs 工具的工作区限定、每会话工具配额（`@ryharness/agent` 的 `SessionQuota`，shell 次数 / 写入字节数）和操作系统账号权限。

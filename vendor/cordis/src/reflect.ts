@@ -1,5 +1,5 @@
-import { defineProperty, isNullable } from '@ryagent/cosmokit'
-import type { Dict } from '@ryagent/cosmokit'
+import { defineProperty, isNullable } from '@ryharness/cosmokit'
+import type { Dict } from '@ryharness/cosmokit'
 import { Context } from './context.ts'
 import { getTraceable, symbols, withProps } from './utils.ts'
 import { Fiber, FiberState } from './fiber.ts'

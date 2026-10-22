@@ -11,7 +11,10 @@
  * resolveBackendPort）：Chromium 的 HTTP 缓存与 V8 代码缓存都按 origin 索引，
  * 端口每次都变（此前的 port 0）等于每次冷启动把整份缓存归零。
  *
- * 独立的端口（而不是挂在 @ryagent/server 的 http 上）是为了让窗口能与后端
+ * 端口固定也就意味着这个地址是**猜得到的**：任意网页都能拿它当 iframe 套自己
+ * 的页面（点击劫持）。因此所有响应都统一带防嵌套的头，见 {@link securityHeaders}。
+ *
+ * 独立的端口（而不是挂在 @ryharness/server 的 http 上）是为了让窗口能与后端
  * **并行**启动：资源服务可以立刻就绪，窗口先渲染骨架，后端就绪后把 API 地址
  * 推给渲染层（见 main.ts）。
  */
@@ -19,6 +22,7 @@ import { createHash } from 'node:crypto'
 import { createReadStream, readFileSync, type Stats, statSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { join, resolve, sep } from 'node:path'
+import { createGzip } from 'node:zlib'
 
 /** 渲染层挂载路径（主进程 loadURL(`${url}/app`)）。 */
 export const RENDERER_MOUNT = '/app'
@@ -30,6 +34,11 @@ const IMMUTABLE = 'public, max-age=31536000, immutable'
 
 /** vite 的产物名尾段是 base64url 内容 hash（如 index-B6_i5xWc.js）。 */
 const HASHED_NAME = /-[A-Za-z0-9_-]{8,}\.[a-z0-9]+$/
+
+/** 可压缩的文本产物。回环传输本身不是瓶颈，但少 1/3 的字节就少一次整块复制与解析前的等待。 */
+const COMPRESSIBLE = new Set(['.html', '.js', '.mjs', '.css', '.json', '.svg', '.map'])
+/** 低于这个体积不必压：gzip 头 + 额外一次内存复制的开销会比省下的字节更贵。 */
+const GZIP_MIN_BYTES = 1024
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -47,6 +56,32 @@ const MIME_TYPES: Record<string, string> = {
   '.woff': 'font/woff',
   '.woff2': 'font/woff2',
   '.map': 'application/json; charset=utf-8',
+}
+
+/**
+ * 防嵌套响应头：这个资源服务跑在**固定**回环端口上（DEFAULT_ASSETS_PORT =
+ * DEFAULT_BACKEND_PORT + 1），而固定端口是任何网页都能猜到的。
+ *
+ * 危害形态是点击劫持：网页 A 用 `<iframe src="http://127.0.0.1:32101/app">` 把
+ * RyHarness 真界面套进自己的页面——假页面里那个输入框是真的，用户敲进去的提示词
+ * 会真的发给本地 agent（其中带 shellExec 权限的那种）。用户以为在跟别的站点
+ * 说话，其实在跟本地 agent 说话。
+ *
+ * 两条头各挡一半浏览器：X-Frame-Options 是老机制（IE/旧 Chromium 都认），
+ * CSP 的 frame-ancestors 是现代机制（认 XFO 的引擎不一定认它，反之亦然），
+ * 两个都发才能覆盖全部引擎。
+ *
+ * 注意 frame-ancestors **不能**写进 index.html 的 meta CSP：meta 形式的那条
+ * directive 会被浏览器直接忽略（只有响应头里的才生效），写了等于没写。
+ *
+ * 抽成纯函数是为了能直接单测「每条响应都带这两条头」——漏一条就等于给
+ * 「猜路径」开了个口子，而 404 页面同样能被套进 iframe。
+ */
+export function securityHeaders(): Record<string, string> {
+  return {
+    'x-frame-options': 'DENY',
+    'content-security-policy': "frame-ancestors 'none'",
+  }
 }
 
 function mimeOf(path: string): string {
@@ -185,15 +220,20 @@ export class RendererAssets {
 
   /** 处理一个请求；不属于本服务的路径一律回 404（不留悬挂响应）。 */
   private handle(req: IncomingMessage, res: ServerResponse): void {
+    // 防嵌套的头必须**每条响应**都带：200/304/400/403/404/405 一条不漏。
+    // 漏掉的那些同样是可被 iframe 套住的文档（404 页面尤其容易被忽略）。
+    const security = securityHeaders()
     if (req.method !== 'GET' && req.method !== 'HEAD') {
-      res.writeHead(405, { allow: 'GET, HEAD', 'content-type': 'text/plain; charset=utf-8' }).end('method not allowed')
+      res
+        .writeHead(405, { ...security, allow: 'GET, HEAD', 'content-type': 'text/plain; charset=utf-8' })
+        .end('method not allowed')
       return
     }
     let pathname: string
     try {
       pathname = decodeURIComponent(new URL(req.url ?? '/', 'http://127.0.0.1').pathname)
     } catch {
-      res.writeHead(400).end()
+      res.writeHead(400, { ...security }).end()
       return
     }
     // 构建产物用绝对路径引用 /assets/…（vite 默认 base '/'），故两者都伺服。
@@ -204,24 +244,24 @@ export class RendererAssets {
     else {
       // 直接 return 会让 socket 一直挂着直到对端超时：浏览器看到的是"加载卡住"
       // 而不是明确的 404，排障时无从判断是路径错了还是服务没起来。
-      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('not found')
+      res.writeHead(404, { ...security, 'content-type': 'text/plain; charset=utf-8' }).end('not found')
       return
     }
     // 防目录穿越：解析后必须仍在 dist 根内。
     const target = resolve(join(this.root, relative))
     if (target !== this.root && !target.startsWith(this.root + sep)) {
-      res.writeHead(403).end()
+      res.writeHead(403, { ...security }).end()
       return
     }
     let stat: Stats
     try {
       stat = statSync(target)
     } catch {
-      res.writeHead(404).end('not found')
+      res.writeHead(404, { ...security }).end('not found')
       return
     }
     if (!stat.isFile()) {
-      res.writeHead(404).end('not found')
+      res.writeHead(404, { ...security }).end('not found')
       return
     }
     // index.html 与 public 原样拷贝的文件内容会随版本变（no-cache，每次回源校验）；
@@ -229,15 +269,26 @@ export class RendererAssets {
     const immutable = isImmutable(relative)
     const cacheControl = immutable ? IMMUTABLE : REVALIDATE
     const etag = immutable ? this.etagOf(target) : undefined
-    if (etag !== undefined && ifNoneMatchHit(req.headers['if-none-match'], etag)) {
-      res.writeHead(304, { etag, 'cache-control': cacheControl }).end()
+    /**
+     * gzip：只给文本产物，且只在对端声明接受时。
+     * 编码不同就是不同实体，因此 ETag 分成两个变体（`"…"` / `"…-gzip"`），
+     * 否则一份被缓存住的 gzip 响应可能被当成同一份 identity 实体回出来。
+     */
+    const dot = target.lastIndexOf('.')
+    const ext = dot === -1 ? '' : target.slice(dot).toLowerCase()
+    const gzipAccepted = /\bgzip\b/.test(String(req.headers['accept-encoding'] ?? ''))
+    const useGzip = gzipAccepted && COMPRESSIBLE.has(ext) && stat.size >= GZIP_MIN_BYTES
+    const entityTag = etag === undefined ? undefined : useGzip ? `${etag.slice(0, -1)}-gzip"` : etag
+    if (entityTag !== undefined && ifNoneMatchHit(req.headers['if-none-match'], entityTag)) {
+      res.writeHead(304, { ...security, etag: entityTag, 'cache-control': cacheControl }).end()
       return
     }
     res.writeHead(200, {
+      ...security,
       'content-type': mimeOf(target),
-      'content-length': String(stat.size),
+      ...(useGzip ? { 'content-encoding': 'gzip', vary: 'accept-encoding' } : { 'content-length': String(stat.size) }),
       'cache-control': cacheControl,
-      ...(etag === undefined ? {} : { etag }),
+      ...(entityTag === undefined ? {} : { etag: entityTag }),
       'last-modified': stat.mtime.toUTCString(),
     })
     if (req.method === 'HEAD') {
@@ -253,6 +304,17 @@ export class RendererAssets {
     res.on('close', () => {
       stream.destroy()
     })
-    stream.pipe(res)
+    if (!useGzip) {
+      stream.pipe(res)
+      return
+    }
+    const gzip = createGzip()
+    gzip.on('error', () => {
+      res.destroy()
+    })
+    res.on('close', () => {
+      gzip.destroy()
+    })
+    stream.pipe(gzip).pipe(res)
   }
 }

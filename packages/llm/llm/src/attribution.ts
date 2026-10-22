@@ -4,7 +4,7 @@
  * `.agents/notes/implemented/architecture/2026-06-21-mandatory-app-attribution-headers.md`.
  *
  * App-attribution vocabulary for provider requests.
- * @module @ryagent/llm/attribution
+ * @module @ryharness/llm/attribution
  */
 
 import { createRequire } from 'node:module'
@@ -38,9 +38,9 @@ export interface AppIdentity {
  * can suppress attribution entirely.
  */
 export const APP_IDENTITY: AppIdentity = {
-  product: 'ryagent',
+  product: 'ryharness',
   version,
-  url: 'https://github.com/ryagent/ryagent',
+  url: 'https://github.com/ryharness/ryharness',
 }
 
 /**

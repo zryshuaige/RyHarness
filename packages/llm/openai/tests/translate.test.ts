@@ -1,5 +1,5 @@
-import type { StreamChunk } from '@ryagent/llm'
-import { mapFinishReason, mapUsage, translateChunks } from '@ryagent/llm-openai'
+import type { StreamChunk } from '@ryharness/llm'
+import { mapFinishReason, mapUsage, translateChunks } from '@ryharness/llm-openai'
 import { describe, expect, it } from 'vitest'
 
 async function* events(payloads: string[]): AsyncIterable<string> {
@@ -48,6 +48,42 @@ describe('translateChunks', () => {
           reasoningTokens: 2,
         },
       },
+      { type: 'finish', reason: { kind: 'stop' } },
+    ])
+  })
+
+  it('ignores the spec-mandated `usage: null` on non-terminal chunks (DeepSeek dialect)', async () => {
+    const chunks = await collect([
+      chunk({ id: '1', choices: [{ index: 0, delta: { role: 'assistant', content: 'Hi' } }], usage: null }),
+      chunk({ id: '1', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: null }),
+    ])
+    expect(chunks).toEqual([
+      { type: 'block-start', index: 0, blockType: 'text' },
+      { type: 'text-delta', index: 0, text: 'Hi' },
+      { type: 'block-end', index: 0, block: { type: 'text', text: 'Hi' } },
+      { type: 'finish', reason: { kind: 'stop' } },
+    ])
+  })
+
+  it('assembles reasoning_content into a reasoning block ahead of visible text', async () => {
+    const chunks = await collect([
+      chunk({ choices: [{ index: 0, delta: { role: 'assistant', reasoning_content: '想一下' } }] }),
+      chunk({ choices: [{ index: 0, delta: { reasoning_content: '……' } }] }),
+      chunk({ choices: [{ index: 0, delta: { content: '答案' } }] }),
+      chunk({
+        choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 5, completion_tokens: 4, total_tokens: 9 },
+      }),
+    ])
+    expect(chunks).toEqual([
+      { type: 'block-start', index: 0, blockType: 'reasoning' },
+      { type: 'reasoning-delta', index: 0, text: '想一下' },
+      { type: 'reasoning-delta', index: 0, text: '……' },
+      { type: 'block-start', index: 1, blockType: 'text' },
+      { type: 'text-delta', index: 1, text: '答案' },
+      { type: 'block-end', index: 0, block: { type: 'reasoning', text: '想一下……' } },
+      { type: 'block-end', index: 1, block: { type: 'text', text: '答案' } },
+      { type: 'usage', usage: { inputTokens: 5, outputTokens: 4, totalTokens: 9 } },
       { type: 'finish', reason: { kind: 'stop' } },
     ])
   })

@@ -3,22 +3,36 @@
  *
  * 此前未匹配路径直接 return，socket 一直挂到对端超时：浏览器看到的是"加载卡住"
  * 而不是明确的 404，排障时分不清是路径错了还是服务没起来。写方法同理。
+ *
+ * 顺带钉住 public/ 原样拷贝那一份的缓存口径：品牌资产（cat.png / favicon-*.png）就走
+ * 这条路，它们没有内容 hash，因此必须是 no-cache，否则升级后标签页仍吃旧图标。
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { RENDERER_MOUNT, RendererAssets } from '../electron/renderer-assets.ts'
+
+const DESKTOP = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const tiers = JSON.parse(readFileSync(join(DESKTOP, 'assets/brand/tiers.json'), 'utf8')) as {
+  brand: string
+  favicon: string
+}
 
 const tmpDirs: string[] = []
 const started: RendererAssets[] = []
 
 async function startAssets(): Promise<RendererAssets> {
-  const root = mkdtempSync(join(tmpdir(), 'ryagent-assets-gate-'))
+  const root = mkdtempSync(join(tmpdir(), 'ryharness-assets-gate-'))
   tmpDirs.push(root)
   mkdirSync(join(root, 'assets'), { recursive: true })
   writeFileSync(join(root, 'index.html'), '<!doctype html><title>ok</title>', 'utf8')
   writeFileSync(join(root, 'assets', 'index-B6_i5xWc.js'), 'export const a = 1\n', 'utf8')
+  // public/ 原样拷贝的品牌资产：真实文件名、真实字节
+  for (const name of [tiers.brand, tiers.favicon]) {
+    copyFileSync(join(DESKTOP, 'renderer/public', name), join(root, name))
+  }
   const assets = await RendererAssets.start(root, { port: 0 })
   started.push(assets)
   return assets
@@ -57,6 +71,17 @@ describe('资源服务的未路由路径', () => {
     const assets = await startAssets()
     expect((await fetch(`${assets.url}${RENDERER_MOUNT}`)).status).toBe(200)
     expect((await fetch(`${assets.url}/assets/index-B6_i5xWc.js`)).status).toBe(200)
+  })
+
+  it('public/ 里的品牌资产在挂载点上真的能取到，且走 no-cache', async () => {
+    const assets = await startAssets()
+    for (const name of [tiers.brand, tiers.favicon]) {
+      const res = await fetch(`${assets.url}${RENDERER_MOUNT}/${name}`)
+      expect(res.status, name).toBe(200)
+      // public 原样拷贝的文件名里没有内容 hash：永久缓存会把升级后的图标卡在旧版
+      expect(res.headers.get('cache-control'), name).toBe('no-cache')
+      expect(res.headers.get('content-type'), name).toBe('image/png')
+    }
   })
 
   it('文件被删后回 404（不抛未捕获异常）', async () => {

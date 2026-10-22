@@ -3,11 +3,11 @@
  * 默认实现走 OpenAI 兼容 chat/completions + JSON 结构化输出；测试注入脚本化
  * mock。baseURL/key/model 全部来自调用方配置（providers.json），这里不内置
  * 任何供应商默认值——用户换供应商，记忆管线必须跟着换。
- * @module @ryagent/memory/llm
+ * @module @ryharness/memory/llm
  */
 
-import { HarnessError } from '@ryagent/llm'
-import { ChatJsonClient } from '@ryagent/util-llm-json'
+import { HarnessError } from '@ryharness/llm'
+import { ChatJsonClient } from '@ryharness/util-llm-json'
 
 /** 候选事实（抽取阶段输出）：scope 决定写入共享画像还是 agent 私有空间。 */
 export interface CandidateFact {

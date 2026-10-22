@@ -81,3 +81,76 @@
   transition: color var(--dur-hover) var(--ease-out);
 }
 .attach-remove:hover { color: var(--danger); }
+/* ---- 产物内嵌预览 ----
+   预览框走「文档阅读」的路子：中性底、整块可滚的内容区、动作集中在标题栏右侧。
+   颜色一律走 token——预览里出现的是用户自己的产物，不能因为它偏暖就被涂成琥珀。 */
+.attach-preview-mask {
+  position: fixed; inset: 0; z-index: var(--z-modal);
+  display: flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--bg-app) 62%, rgba(20, 12, 4, .5));
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  animation: fade-in 160ms var(--ease-out);
+}
+.attach-preview {
+  display: flex; flex-direction: column;
+  width: min(1080px, 92vw); max-height: 88vh;
+  background: var(--bg-elevated); border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-3); overflow: hidden;
+  animation: modal-in var(--dur-in) var(--ease-out);
+}
+.attach-preview-head {
+  display: flex; align-items: center; gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  box-shadow: inset 0 -1px 0 var(--divider);
+}
+.attach-preview-title { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.attach-preview-title strong {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--fs-md); color: var(--text-primary);
+}
+.attach-preview-title small { color: var(--text-secondary); font-size: var(--fs-xs); }
+.attach-preview-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.attach-preview-actions a, .attach-preview-actions button {
+  border: none; background: var(--amber-primary-soft); color: var(--amber-text);
+  padding: 4px 12px; border-radius: var(--radius-sm); cursor: pointer;
+  font-family: inherit; font-size: var(--fs-sm); font-weight: 600; text-decoration: none;
+  transition: background var(--dur-hover) var(--ease-out), transform var(--dur-press) var(--ease-out);
+}
+.attach-preview-actions a:hover, .attach-preview-actions button:hover { background: var(--amber-200); }
+.attach-preview-actions button:active { transform: scale(var(--press-scale)); }
+.attach-preview-close {
+  border: none; background: none; cursor: pointer; color: var(--text-secondary);
+  width: 28px; height: 28px; border-radius: var(--radius-sm);
+  display: inline-flex; align-items: center; justify-content: center; line-height: 0;
+  transition: background var(--dur-hover) var(--ease-out), color var(--dur-hover) var(--ease-out);
+}
+.attach-preview-close:hover { background: var(--hover-bg); color: var(--text-primary); }
+.attach-preview-hint { margin: 0; padding: var(--space-2) var(--space-5); font-size: var(--fs-xs); color: var(--amber-text); }
+.attach-preview-body { flex: 1; min-height: 0; overflow: auto; padding: var(--space-5); }
+.attach-preview-img { display: block; max-width: 100%; margin: 0 auto; border-radius: var(--radius-sm); }
+/* PDF 交给 Chromium 自带的阅读器，所以这里给满高：内嵌成功时它要占满整块内容区，
+   失败时（没有 PDF 插件的环境）至少不是一条两像素高的缝。 */
+.attach-preview-pdf { display: block; width: 100%; height: 100%; min-height: 60vh; border: none; }
+.attach-preview-md { max-width: 72ch; margin: 0 auto; }
+/* HTML 走 iframe，所以这一支要一个有高度的滚动容器：`<pre>` 那支是内容撑开的，
+   页面则要一块视口，自己在里面滚，否则 100vh 的产物会被外层滚动条切成两半。 */
+.attach-preview-html { display: flex; flex-direction: column; gap: var(--space-3); height: 100%; }
+.attach-preview-html-bar { justify-content: flex-end; }
+.attach-preview-frame {
+  flex: 1; width: 100%; min-height: 60vh; background: var(--bg-app);
+  border: 1px solid var(--divider); border-radius: var(--radius-sm);
+}
+.attach-preview-code {
+  margin: 0; font-family: var(--font-mono); font-size: var(--fs-sm); line-height: 1.6;
+  white-space: pre-wrap; word-break: break-word; color: var(--text-primary);
+}
+.attach-preview-none {
+  margin: 0 auto; max-width: 46ch; text-align: center; line-height: 1.8;
+  color: var(--text-secondary); display: flex; flex-direction: column; gap: var(--space-3);
+  align-items: center; justify-content: center; min-height: 40vh;
+}
+.attach-preview-none button {
+  border: none; background: var(--amber-primary-soft); color: var(--amber-text);
+  padding: 4px 12px; border-radius: var(--radius-sm); cursor: pointer;
+  font-family: inherit; font-size: var(--fs-sm); font-weight: 600;
+}

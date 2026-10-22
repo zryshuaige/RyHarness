@@ -3,7 +3,7 @@
  * model, reasoning effort, and sampling values are request-header state that
  * can affect cache reuse; request waterfalls replace them and the loop logs
  * changed snapshots instead of allowing silent per-call drift.
- * @module @ryagent/llm/call-config
+ * @module @ryharness/llm/call-config
  */
 
 import type { ReasoningEffortId } from './brand.ts'

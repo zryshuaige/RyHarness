@@ -4,8 +4,10 @@
  * 人格不是又一个自由文本框：四维各自分档（0-100），每档有一句中文描述，
  * 描述直接进系统提示（见 {@link composePersonaPrompt}）。用户改一个滑杆，
  * 就能在预览里看见它拼进提示词的那一行——人格"看得见因果"。
- * @module @ryagent/session/persona
+ * @module @ryharness/session/persona
  */
+
+import { VOICE_PROFILES, voiceProfile } from '@ryharness/voice'
 
 /** 性格四维的键，顺序即展示与拼接顺序。 */
 export const TRAIT_KEYS = ['extroversion', 'rigor', 'humor', 'initiative'] as const
@@ -29,7 +31,10 @@ export interface AgentPersona {
   catchphrase: string
   /** 亲密度 0-100：随互动自然增长，影响称呼与主动性（不是用户可填的字段）。 */
   affinity: number
-  /** 音色 id，取值见 {@link VOICE_PRESETS}；仅登记，尚未接入语音合成。 */
+  /**
+   * 音色 id，取值见 {@link VOICE_PRESETS}（即 @ryharness/voice 的实测目录）。
+   * {@link NO_VOICE_ID} 是「不朗读」的特例，不是某一条真实音色。
+   */
   voiceId: string
   /** 一句话形象描述（长什么样、什么动物）。 */
   appearance: string
@@ -125,31 +130,59 @@ export function clampTrait(value: unknown): number {
   return Math.min(100, Math.max(0, Math.round(value)))
 }
 
-/** 一个可选音色（供应商 TTS 预设名）。 */
+/** 「不朗读」：不是一条真实音色，而是 persona 上的关闭态。 */
+export const NO_VOICE_ID = 'none'
+
+/**
+ * 旧库里的音色 id → @ryharness/voice 目录 id。
+ *
+ * 旧清单里的 id 是 TTS 尚未接入时登记的占位名，用户库里可能已经存着它们。映射只做
+ * **有真实对应**的那几条：SiliconFlow 的两种气质各落到同厂的 CosyVoice2 预置
+ * 说话人；本地 Qwen3 落到系统语音（同样是本机发音、不花额度）。openai / elevenlabs
+ * 在本产品里从来没有可调用的引擎，硬编一个替代音色等于替用户改掉他选的那位，
+ * 因此归入未知、由 {@link normalizeVoiceId} 回落到 {@link NO_VOICE_ID}。
+ */
+const LEGACY_VOICE_IDS: Readonly<Record<string, string>> = {
+  'siliconflow:warm-female': 'sf-cosyvoice2-claire',
+  'siliconflow:steady-male': 'sf-cosyvoice2-alex',
+  'local:qwen3-tts': 'system-huihui',
+}
+
+/** 一个可选音色（由 @ryharness/voice 的目录派生，外加「不朗读」）。 */
 export interface VoicePreset {
   id: string
   /** 界面显示名。 */
   name: string
-  /** 这套预设属于哪家的 TTS（只登记，尚未接入调用）。 */
+  /** 这条音色跑在哪个引擎上（`none` 表示不朗读）。 */
   provider: string
 }
 
 /**
- * 音色目录：只登记 id 与显示名。
+ * 音色目录：`none` + @ryharness/voice 的实测清单。
  *
- * 目前**没有**任何 TTS 调用路径（见 apps/server 与 @ryagent/llm 都没有语音接口），
- * 所以这里只是给"这个助理该是什么声音"留一个可选择的位置；界面必须如实说明
- * 尚未接入，不得暗示能播。
+ * 旧接口 `/api/agent-voices` 仍从这里出数据；新界面走 `/api/voice/catalog`
+ * （带引擎可用性）。两处同源，不会出现「旧接口能选、新接口不认」的分叉。
  */
 export const VOICE_PRESETS: readonly VoicePreset[] = [
-  { id: 'none', name: '暂不设定', provider: 'none' },
-  { id: 'siliconflow:warm-female', name: '暖橘女声（SiliconFlow）', provider: 'siliconflow' },
-  { id: 'siliconflow:steady-male', name: '沉稳男声（SiliconFlow）', provider: 'siliconflow' },
-  { id: 'openai:alloy', name: 'Alloy（OpenAI）', provider: 'openai' },
-  { id: 'openai:shimmer', name: 'Shimmer（OpenAI）', provider: 'openai' },
-  { id: 'elevenlabs:gentle-female', name: '柔和女声（ElevenLabs）', provider: 'elevenlabs' },
-  { id: 'local:qwen3-tts', name: '本地 Qwen3-TTS（Ollama）', provider: 'local' },
+  { id: NO_VOICE_ID, name: '不朗读', provider: 'none' },
+  ...VOICE_PROFILES.map((profile) => {
+    return { id: profile.id, name: profile.name, provider: profile.engine }
+  }),
 ] as const
+
+/**
+ * 把一个任意来源的音色值归一到目录 id。
+ *
+ * 旧值优先走 {@link LEGACY_VOICE_IDS}；目录里没有、映射里也没有的一律回落到
+ * {@link NO_VOICE_ID}。这个函数**绝不抛错**——它守着「旧库里的值不能让助理保存
+ * 失败」这条底线。
+ */
+export function normalizeVoiceId(value: unknown): string {
+  const id = typeof value === 'string' ? value.trim() : ''
+  if (id === NO_VOICE_ID) return NO_VOICE_ID
+  if (voiceProfile(id) !== undefined) return id
+  return LEGACY_VOICE_IDS[id] ?? NO_VOICE_ID
+}
 
 /** 音色显示名；未知 id 回落到"未知音色"而不是静默显示空串。 */
 export function voiceName(voiceId: string): string {
@@ -160,11 +193,7 @@ export function voiceName(voiceId: string): string {
   )
 }
 
-/**
- * 人格字段的默认值：旧 agent（无 persona 列）读出来就是这一份。
- *
- * 放在音色目录之后：默认音色就是目录里的第一项，声明顺序跟着依赖走。
- */
+/** 人格字段的默认值：旧 agent（无 persona 列）读出来就是这一份。 */
 export const PERSONA_DEFAULTS: AgentPersona = {
   extroversion: 50,
   rigor: 60,
@@ -172,7 +201,7 @@ export const PERSONA_DEFAULTS: AgentPersona = {
   initiative: 50,
   catchphrase: '',
   affinity: 0,
-  voiceId: VOICE_PRESETS[0]!.id,
+  voiceId: NO_VOICE_ID,
   appearance: '',
 }
 
@@ -230,8 +259,26 @@ export function affinityTier(affinity: number): AffinityTier {
   return AFFINITY_TIERS[AFFINITY_TIERS.length - 1]!
 }
 
-/** 每次对话轮次涨的亲密度。 */
-export const AFFINITY_TURN_GAIN = 2
+/**
+ * 每一轮对话涨多少亲密度（按当前分数分段）。
+ *
+ * 节奏是照"首场会话里就要有质变"标定的。此前每轮固定 +2、档位切在 20/45/70，于是
+ * 3–8 轮的首次会话永远跨不过第一档：用户只看到数字在爬，跨档事件（弹一句关系提示、
+ * 称呼换掉）从不发生——而那件事才是养成关系的反馈，攒到第十轮才有等于没有。
+ *
+ * 现在前两档给得足（0→24 两轮跨过初识），之后逐档变慢：越熟越不容易"再进一步"，
+ * 十轮上下到顶。首场会话（3–8 轮）至少跨一次档，长会话也不会几天就顶格。
+ *
+ * 档位边界（{@link AFFINITY_TIERS} 的 20/45/70）不动：渲染层那份是手抄的，改边界要
+ * 两边一起改，否则用户在编辑器看到的档位与模型真正收到的称呼就悄悄分叉了。
+ */
+export function affinityTurnGain(affinity: number): number {
+  const score = clampTrait(affinity)
+  if (score < 20) return 12
+  if (score < 45) return 7
+  if (score < 70) return 5
+  return 3
+}
 /** 用户点赞（👍）涨的亲密度。 */
 export const AFFINITY_LIKE_GAIN = 5
 /** 用户点踩（👎）掉的亲密度。 */
@@ -251,12 +298,12 @@ export interface AffinityEvent {
  * 亲密度增长：轮次与点赞累加，点踩扣分，结果夹在 0-100。
  *
  * 纯函数（不读时钟、不查库）：协调器在每轮发言落库后按轮次加，点赞/点踩由
- * POST /api/agents/:id/affinity 传入同一套规则——「聊得越多越熟」这条规律
+ * POST /api/feedback 传入同一套规则（接受反馈后内联 bump）——「聊得越多越熟」这条规律
  * 只有一处定义，改文案不会让两个入口算出不同的亲密度。
  */
 export function nextAffinity(affinity: number, event: AffinityEvent): number {
   const delta =
-    (event.turns ?? 0) * AFFINITY_TURN_GAIN +
+    (event.turns ?? 0) * affinityTurnGain(affinity) +
     (event.likes ?? 0) * AFFINITY_LIKE_GAIN -
     (event.dislikes ?? 0) * AFFINITY_DISLIKE_LOSS
   return clampTrait(affinity + delta)
@@ -281,6 +328,33 @@ export function suggestTemperature(persona: AgentPersona): number {
 }
 
 /**
+ * 生日归一：只保留月日（`MM-DD`）。
+ *
+ * 生日不需要年份，而日期控件（`<input type="date">`）要完整日期——中间用 2000
+ * 当占位年。旧数据里可能是 `YYYY-MM-DD`（手敲的），这里统一砍成 `MM-DD`，
+ * 于是提示词、右栏、卡片看到的都是同一个样子。
+ */
+export function normalizeBirthday(value: string): string | undefined {
+  const trimmed = value.trim()
+  if (trimmed.length === 0) return undefined
+  const md = /^(\d{1,2})-(\d{1,2})$/.exec(trimmed)
+  if (md) {
+    const month = Number(md[1])
+    const day = Number(md[2])
+    if (month < 1 || month > 12 || day < 1 || day > 31) return undefined
+    return `${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+  }
+  const ymd = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed)
+  if (ymd) {
+    const month = Number(ymd[2])
+    const day = Number(ymd[3])
+    if (month < 1 || month > 12 || day < 1 || day > 31) return undefined
+    return `${ymd[2]}-${ymd[3]}`
+  }
+  return undefined
+}
+
+/**
  * 归一人格：任何来源（数据库 JSON、API body、模板）都要过这一道。
  *
  * 未知/缺失的字段落到 {@link PERSONA_DEFAULTS}，数值夹紧取整，字符串去空白后
@@ -292,23 +366,20 @@ export function normalizePersona(value: unknown): AgentPersona {
     const raw = record[key]
     return typeof raw === 'string' ? raw.trim() : ''
   }
-  const birthday = text('birthday')
+  const birthday = normalizeBirthday(text('birthday'))
   const catchphrase = text('catchphrase')
   const appearance = text('appearance')
-  const voiceId = text('voiceId')
   return {
     extroversion: clampTrait(record.extroversion ?? PERSONA_DEFAULTS.extroversion),
     rigor: clampTrait(record.rigor ?? PERSONA_DEFAULTS.rigor),
     humor: clampTrait(record.humor ?? PERSONA_DEFAULTS.humor),
     initiative: clampTrait(record.initiative ?? PERSONA_DEFAULTS.initiative),
-    ...(birthday.length === 0 ? {} : { birthday }),
+    ...(birthday === undefined ? {} : { birthday }),
     catchphrase,
     affinity: clampTrait(record.affinity ?? PERSONA_DEFAULTS.affinity),
-    voiceId: VOICE_PRESETS.some((preset) => {
-      return preset.id === voiceId
-    })
-      ? voiceId
-      : PERSONA_DEFAULTS.voiceId,
+    // 旧 id 在这里平滑迁移（见 normalizeVoiceId），未知值回落「不朗读」；不让旧值
+    // 成为保存失败的理由。
+    voiceId: normalizeVoiceId(record.voiceId),
     appearance,
   }
 }

@@ -3,10 +3,10 @@
  * descriptors carried on decorated class prototypes. Strict reflection and the
  * RPC carrier remain a Typert compiler / Gateway responsibility this repo does
  * not implement.
- * @module @ryagent/typert-protocol
+ * @module @ryharness/typert-protocol
  */
 
-import { type Context, Service } from '@ryagent/cordis'
+import { type Context, Service } from '@ryharness/cordis'
 
 export { RemoteError } from './remote-error.ts'
 export type { RemoteErrorCode, RemoteErrorDetailsMap } from './types.ts'
@@ -57,7 +57,7 @@ interface RemoteMethodDescriptorV1 {
   readonly methods: readonly StoredRemoteMethod[]
 }
 
-const REMOTE_METHOD_DESCRIPTOR = '@ryagent/typert-protocol/remote-methods'
+const REMOTE_METHOD_DESCRIPTOR = '@ryharness/typert-protocol/remote-methods'
 
 /**
  * Bind one visible Service field to a Cordis key and Remote namespace.

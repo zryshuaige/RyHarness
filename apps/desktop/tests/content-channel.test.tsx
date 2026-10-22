@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentDef, ApiClient, Conversation, MessageRow, WsEvent } from '../renderer/src/api.ts'
 import { ChatView, toBase64 } from '../renderer/src/components/ChatView.tsx'
 import { LEAVE_MS } from '../renderer/src/lib/useLeaving.ts'
-import { ChatStore } from '../renderer/src/store.ts'
+import { bucketOf, ChatStore, type ConversationBucket } from '../renderer/src/store.ts'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -60,6 +60,7 @@ const conversation: Conversation = {
 let container: HTMLDivElement
 let root: ReturnType<typeof createRoot> | undefined
 let store: ChatStore
+let bucket: ConversationBucket
 let push: (event: WsEvent) => void
 let posted: { conversationId: string; text: string }[]
 
@@ -109,7 +110,7 @@ function fakeApi(): ApiClient {
 async function render(): Promise<void> {
   await act(async () => {
     root = createRoot(container)
-    root.render(<ChatView api={fakeApi()} conversation={conversation} agents={[agent]} store={store} />)
+    root.render(<ChatView api={fakeApi()} conversation={conversation} agents={[agent]} bucket={bucket} />)
     await Promise.resolve()
   })
 }
@@ -140,6 +141,7 @@ beforeEach(() => {
   container = document.createElement('div')
   document.body.appendChild(container)
   store = new ChatStore()
+  bucket = bucketOf(store)
   posted = []
 })
 
@@ -156,7 +158,7 @@ afterEach(() => {
 describe('排队期间输入不被吞', () => {
   it('queued 状态下 textarea 仍可写可发', async () => {
     await render()
-    emit({ type: 'queued', conversationId: 'c1', senderId: 'user', turnIndex: 1 })
+    emit({ type: 'queued', conversationId: 'c1', senderId: 'user' })
     expect(store.getSnapshot().queueing).toBe(true)
 
     const textarea = container.querySelector('textarea')!
@@ -265,7 +267,9 @@ describe('附件通道接线', () => {
       vi.advanceTimersByTime(10)
       await Promise.resolve()
     })
-    expect(container.querySelector('.attach-item.is-error')?.textContent).toContain('not found')
+    // 服务端英文原话不上屏：附件行说的是「本机服务没这个接口」这一句。
+    expect(container.querySelector('.attach-item.is-error')?.textContent).toContain('本机服务没有这个接口')
+    expect(container.querySelector('.attach-item.is-error')?.textContent).not.toContain('not found')
 
     const textarea = container.querySelector('textarea')!
     typeInto(textarea, '先不管附件')

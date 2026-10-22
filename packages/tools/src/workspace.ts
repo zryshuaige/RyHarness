@@ -1,6 +1,6 @@
 /**
  * 工作区路径安全：所有 fs 类工具的路径必须解析到工作区根目录之内。
- * @module @ryagent/tools/workspace
+ * @module @ryharness/tools/workspace
  */
 
 import { resolve, sep } from 'node:path'

@@ -1,14 +1,21 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { ApiClient, EvolveRoundKind, EvolveStatsReport, PlaybookEntryRow, ReflectionRow } from '../api.ts'
+import { errorDetail, humanError } from '../lib/error-text.ts'
+import { humanDuration } from '../lib/humanize.ts'
 import { toast } from '../lib/toast.ts'
+import { AsyncState } from './AsyncState.tsx'
 import { EntryExplain } from './GroupEvolution.tsx'
-import { Icon } from './Icon.tsx'
 import { Modal } from './Modal.tsx'
 import { PanelSkeleton } from './Skeleton.tsx'
 
-function reason(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
+/**
+ * 教训转正所需的命中次数。
+ *
+ * 真源是服务端的 `CONVERT_HIT_THRESHOLD`（packages/evolve/src/schema.ts）。这里
+ * 不 import 那个包：渲染层要打进浏览器，而 evolve 的入口把 SQLite 拖了进来——
+ * 与 lib/persona.ts 对 @ryharness/session 做的同一个取舍。两边改动要一起改。
+ */
+const CONVERT_HIT_THRESHOLD = 2
 
 const SECTION_LABELS: Record<PlaybookEntryRow['section'], string> = {
   strategy: '策略',
@@ -17,11 +24,15 @@ const SECTION_LABELS: Record<PlaybookEntryRow['section'], string> = {
   tooling: '工具用法',
 }
 const SECTION_ORDER: PlaybookEntryRow['section'][] = ['strategy', 'pitfall', 'preference', 'tooling']
+/**
+ * 来源徽章从「谁写的」的角度写，不是从「流水线走到哪一站」的角度。
+ * `策展`/`转正`/`种子` 是内部管道的说法，用户既不参与也没有对应的心智模型。
+ */
 const SOURCE_LABELS: Record<PlaybookEntryRow['source'], string> = {
-  curator: '策展',
-  reflection: '转正',
-  seed: '种子',
-  manual: '手动',
+  curator: '整理得出',
+  reflection: '上次复盘',
+  seed: '预置',
+  manual: '你加的',
 }
 
 function formatDate(ts: number): string {
@@ -59,35 +70,68 @@ export interface EvolveStatsApi {
  * 手册与反思区块回答的是「学到了什么」，这块回答「还在不在学」——进化在服务端是
  * 后台异步跑的（反思、归因、巩固都不在用户那一轮的关键路径上），此前出问题时界面
  * 上没有任何提示。这里直接读 GET /api/evolve/stats：累计轮数、平均耗时、处理条数、
- * 失败轮数，外加最近几轮逐条列出。没有它时整块不渲染（而不是画一屏 0）。
+ * 失败轮数，外加最近几轮逐条列出。
+ *
+ * 四种状态各说各的话：还在读 = 骨架；读失败 = 错误条 + 重试；服务端没这个能力 /
+ * 子系统关着 = 「未启用」；读到真值才画数字。此前「读失败」与「未启用」都整块消失，
+ * 用户既不知道在不在学，也不知道是没开还是坏了。
  *
  * 口径是**全进程**的（服务端只有一份进化记账，不按 agent 分），而手册本身是某个
  * agent 的——所以标题旁写明「全部 agent」，别让人把这里的轮数当成这个 agent 单独的。
  */
 export function EvolveStatsBlock({ api }: { api: EvolveStatsApi }) {
   const [stats, setStats] = useState<EvolveStatsReport | undefined>(undefined)
+  const [loadError, setLoadError] = useState<string | undefined>(undefined)
+  const [loading, setLoading] = useState(true)
 
-  useEffect(() => {
-    if (api.evolveStats === undefined) return
-    let alive = true
+  const load = useCallback(() => {
+    if (api.evolveStats === undefined) {
+      setStats(undefined)
+      setLoadError(undefined)
+      setLoading(false)
+      return
+    }
+    setLoading(true)
+    setLoadError(undefined)
     api.evolveStats(EVOLVE_ROUND_ROWS).then(
       (next) => {
-        if (alive) setStats(next)
+        setStats(next)
+        setLoadError(undefined)
+        setLoading(false)
       },
-      () => {
-        // 读不出来就不显示这一块：留着半截数字比不显示更容易被当成真的。
-        if (alive) setStats(undefined)
+      (error: unknown) => {
+        setStats(undefined)
+        // 原文：这一处只进 AsyncState 折起来的「详情」。
+        setLoadError(errorDetail(error) ?? '未知原因')
+        setLoading(false)
       },
     )
-    return () => {
-      alive = false
-    }
   }, [api])
+  useEffect(load, [load])
 
-  if (stats === undefined) return null
-  if (!stats.enabled) {
+  // 端点不存在 = 这版服务端没有进化统计，属于「未启用」，不是故障。
+  if (api.evolveStats === undefined) {
     return <p className="evolve-stats is-off">进化系统未启用，这一块暂时没有记录。</p>
   }
+  return (
+    <AsyncState
+      loading={loading}
+      error={loadError === undefined ? undefined : '进化统计没读出来，可能是本机服务暂时不可用。'}
+      detail={loadError}
+      onRetry={load}
+      skeleton={<PanelSkeleton rows={2} />}
+    >
+      {stats === undefined ? null : stats.enabled ? (
+        <EvolveStatsReady stats={stats} />
+      ) : (
+        <p className="evolve-stats is-off">进化系统未启用，这一块暂时没有记录。</p>
+      )}
+    </AsyncState>
+  )
+}
+
+/** 读到真值之后的统计块（只在 enabled=true 时渲染）。 */
+function EvolveStatsReady({ stats }: { stats: Extract<EvolveStatsReport, { enabled: true }> }) {
   const { totals } = stats
   const avgMs = totals.rounds === 0 ? 0 : Math.round(totals.durationMs / totals.rounds)
   const last = stats.rounds[0]
@@ -104,7 +148,7 @@ export function EvolveStatsBlock({ api }: { api: EvolveStatsApi }) {
         <span className="evolve-stats-scope">全部 agent · 本次运行</span>
       </p>
       <p className="evolve-stats-total">
-        累计 {totals.rounds} 轮 · 平均 {avgMs}ms · 处理 {totals.processed} 条
+        累计 {totals.rounds} 轮 · 平均 {humanDuration(avgMs)} · 处理 {totals.processed} 条
         {totals.failures > 0 ? ` · 失败 ${totals.failures} 轮` : ''}
       </p>
       <ul className="evolve-stats-kinds">
@@ -127,10 +171,10 @@ export function EvolveStatsBlock({ api }: { api: EvolveStatsApi }) {
               <li key={`${round.startedAt}-${index}`} className={round.ok ? 'evolve-round' : 'evolve-round is-failed'}>
                 <span className="evolve-round-kind">{ROUND_LABELS[round.kind]}</span>
                 <span className="evolve-round-num">
-                  {round.durationMs}ms · 处理 {round.processed} 条
+                  {humanDuration(round.durationMs)} · 处理 {round.processed} 条
                 </span>
-                <span className="evolve-round-at">
-                  {round.ok ? ago(round.startedAt) : `失败：${round.error ?? '未知原因'}`}
+                <span className="evolve-round-at" title={round.error}>
+                  {round.ok ? ago(round.startedAt) : `失败：${humanError(round.error, '这一轮没跑完')}`}
                 </span>
               </li>
             )
@@ -172,22 +216,47 @@ export function PlaybookPanel({
       })
       .catch((error: unknown) => {
         // 读不出来就说读不出来：静默清空会让「加载失败」长成「手册还是空的」。
+        // 这一条**没有**折叠的详情位（原实现是把原文直接拼在冒号后面），所以整句
+        // 走人话层：认出服务端字面量时说清原因，认不出时给一句可照做的兜底。
         setData({ entries: [], reflections: [] })
-        setLoadError(reason(error))
+        setLoadError(`经验手册没读出来：${humanError(error, '再试一次；一直这样就重启应用')}`)
       })
   }, [api, agentId])
   useEffect(reload, [reload])
 
-  const toggle = async (entry: PlaybookEntryRow): Promise<void> => {
-    const next = entry.status === 'active' ? 'deprecated' : 'active'
+  const applyStatus = async (
+    entry: PlaybookEntryRow,
+    next: 'active' | 'deprecated',
+    message: string,
+    allowUndo: boolean,
+  ): Promise<void> => {
     try {
       await api.setPlaybookStatus(entry.id, next)
     } catch (error) {
-      toast.error(`${next === 'active' ? '恢复' : '停用'}这条经验失败：${reason(error)}`)
+      toast.error(
+        `${next === 'active' ? '恢复' : '停用'}这条经验失败：${humanError(error, '这条经验没能改回来，再点一次')}`,
+      )
       return
     }
-    toast.success(next === 'active' ? '已恢复，不再忽略这条经验' : '已停用，它不会再被注入提示')
+    toast.success(
+      message,
+      allowUndo
+        ? {
+            action: {
+              label: '撤销',
+              run: () => {
+                void applyStatus(entry, entry.status, '已撤销', false)
+              },
+            },
+          }
+        : undefined,
+    )
     reload()
+  }
+
+  const toggle = (entry: PlaybookEntryRow): void => {
+    const next = entry.status === 'active' ? 'deprecated' : 'active'
+    void applyStatus(entry, next, next === 'active' ? '已恢复，不再忽略这条经验' : '已停用，它不会再被注入提示', true)
   }
 
   const net = (entry: PlaybookEntryRow): number => {
@@ -202,7 +271,7 @@ export function PlaybookPanel({
         <>
           {loadError !== undefined && (
             <p className="apikey-error" role="alert">
-              经验手册没读出来：{loadError}
+              {loadError}
               <button
                 type="button"
                 className="btn btn-mini"
@@ -217,14 +286,15 @@ export function PlaybookPanel({
           <EvolveStatsBlock api={api} />
           {data.reflections.length > 0 && (
             <>
-              <p className="section-title">反思中的教训（待验证，命中 {2} 次转正）</p>
+              {/* 门槛取自服务端常量，不写死：写死的那个 2 早晚会和实现对不上。 */}
+              <p className="section-title">待验证的教训（命中 {CONVERT_HIT_THRESHOLD} 次后转正）</p>
               <ul className="memory-list">
                 {data.reflections.map((reflection) => (
                   <li key={reflection.id} className="memory-row">
                     <span className="memory-kind kind-event">教训</span>
                     <span className="memory-content">{reflection.lesson}</span>
                     <span className="memory-meta">
-                      命中 {reflection.hitCount}/2 · {formatDate(reflection.createdAt)}
+                      命中 {reflection.hitCount}/{CONVERT_HIT_THRESHOLD} · {formatDate(reflection.createdAt)}
                     </span>
                   </li>
                 ))}
@@ -256,20 +326,26 @@ export function PlaybookPanel({
                         <div>{entry.content}</div>
                         <EntryExplain api={api} entry={entry} />
                       </div>
-                      <span className={`pb-count ${net(entry) >= 0 ? 'pos' : 'neg'}`} title="helpful - harmful">
-                        +{entry.helpful}/-{entry.harmful}
+                      <span
+                        className={`pb-count ${net(entry) >= 0 ? 'pos' : 'neg'}`}
+                        title="这条经验被标记有用/没用的次数"
+                      >
+                        有用 {entry.helpful} · 没用 {entry.harmful}
                       </span>
                       <span className="memory-meta">{SOURCE_LABELS[entry.source]}</span>
                       <button
                         type="button"
-                        className="memory-delete"
-                        title={entry.status === 'active' ? '停用（软删）' : '恢复'}
+                        className="btn btn-mini memory-delete"
+                        style={{ width: 'auto', height: 'auto', padding: '2px 8px', whiteSpace: 'nowrap' }}
+                        title={
+                          entry.status === 'active' ? '停用这条经验：它不会再被注入提示' : '恢复这条经验：重新参与提示'
+                        }
                         aria-label={`${entry.content.slice(0, 20)}：${entry.status === 'active' ? '停用' : '恢复'}`}
                         onClick={() => {
-                          void toggle(entry)
+                          toggle(entry)
                         }}
                       >
-                        <Icon name={entry.status === 'active' ? 'x' : 'check'} size={11} />
+                        {entry.status === 'active' ? '停用' : '恢复'}
                       </button>
                     </li>
                   ))}
@@ -278,7 +354,7 @@ export function PlaybookPanel({
             )
           })}
           {loadError === undefined && data.entries.length === 0 && data.reflections.length === 0 && (
-            <p className="panel-empty">手册还是空的——多聊几轮，我会从轨迹里沉淀经验。</p>
+            <p className="panel-empty">还没有经验。</p>
           )}
         </>
       )}

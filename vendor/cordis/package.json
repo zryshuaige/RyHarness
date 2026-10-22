@@ -1,5 +1,5 @@
 {
-  "name": "@ryagent/cordis",
+  "name": "@ryharness/cordis",
   "version": "0.1.0",
   "type": "module",
   "license": "MIT",
@@ -17,7 +17,7 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@ryagent/cosmokit": "workspace:*",
+    "@ryharness/cosmokit": "workspace:*",
     "@standard-schema/spec": "^1.1.0"
   },
   "devDependencies": {

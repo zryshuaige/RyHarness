@@ -5,11 +5,18 @@ import type {
   AgentMemoryHooks,
   Tool,
   ToolResult,
-} from '@ryagent/agent'
-import { ABORTED_CODE, type AbortedError, AgentLoop, isAbortedError, trimHistoryToBudget } from '@ryagent/agent'
-import { brandString } from '@ryagent/brand'
-import type { GenerateOptions, LlmRuntime, Message, StreamChunk, ToolCallId } from '@ryagent/llm'
-import { createAssistantMessage, createToolResultMessage, createUserMessage } from '@ryagent/llm'
+} from '@ryharness/agent'
+import {
+  ABORTED_CODE,
+  type AbortedError,
+  AgentLoop,
+  DEFAULT_TOOL_CONCURRENCY,
+  isAbortedError,
+  trimHistoryToBudget,
+} from '@ryharness/agent'
+import { brandString } from '@ryharness/brand'
+import type { GenerateOptions, LlmRuntime, Message, StreamChunk, ToolCallId } from '@ryharness/llm'
+import { createAssistantMessage, createToolResultMessage, createUserMessage } from '@ryharness/llm'
 import { describe, expect, it } from 'vitest'
 
 const DEFINITION: AgentDefinition = {
@@ -25,7 +32,7 @@ const DEFINITION: AgentDefinition = {
 function mockLlm(scripted: StreamChunk[][]): { llm: LlmRuntime; requests: GenerateOptions[] } {
   const requests: GenerateOptions[] = []
   let call = 0
-  const llm = {
+  const partial = {
     stream(options: GenerateOptions) {
       requests.push(options)
       const chunks = scripted[call++] ?? []
@@ -34,7 +41,25 @@ function mockLlm(scripted: StreamChunk[][]): { llm: LlmRuntime; requests: Genera
       })()
     },
   } as unknown as LlmRuntime
-  return { llm, requests }
+  return { llm: partial, requests }
+}
+
+/**
+ * 只实现 stream 的假运行时，并把每次请求的 system 抓出来。
+ *
+ * 用 Pick 出来的形状做单向断言而不是 `as unknown as`：LlmRuntime 是这个形状的
+ * 可赋值超集，下转合法，也就不会像双重断言那样一次抹掉两侧的类型。
+ */
+function systemSpy(inner: LlmRuntime, onStream?: () => void): { llm: LlmRuntime; systems: string[] } {
+  const systems: string[] = []
+  const partial: Pick<LlmRuntime, 'stream'> = {
+    stream(options: GenerateOptions) {
+      systems.push(options.system ?? '')
+      onStream?.()
+      return inner.stream(options)
+    },
+  }
+  return { llm: partial as LlmRuntime, systems }
 }
 
 function toolCallChunks(calls: { id: string; name: string; args: string }[]): StreamChunk[] {
@@ -131,40 +156,164 @@ describe('AgentLoop 工具调用并行', () => {
   })
 })
 
-describe('AgentLoop 记忆召回与进化编译并行', () => {
-  it('recall 与 compile 同时发起，不串行叠加延迟', async () => {
-    const log: string[] = []
+describe('AgentLoop 工具并发上限', () => {
+  /** 记录并发峰值（active 的最大同时存活数）的假工具。 */
+  function peakTool(name: string, probe: { active: number; peak: number }, ms: number): Tool {
+    return {
+      name,
+      description: `测试工具 ${name}`,
+      parameters: { type: 'object', properties: {} },
+      async execute(): Promise<ToolResult> {
+        probe.active += 1
+        probe.peak = Math.max(probe.peak, probe.active)
+        await delay(ms)
+        probe.active -= 1
+        return { content: name }
+      },
+    }
+  }
+
+  it('一批调用的并发峰值不超过默认上限，结果仍按 call 顺序回填', async () => {
+    const probe = { active: 0, peak: 0 }
+    const names = ['t1', 't2', 't3', 't4', 't5', 't6', 't7', 't8']
+    const { llm } = mockLlm([
+      toolCallChunks(
+        names.map((name, index) => {
+          return { id: `c${index + 1}`, name, args: '{}' }
+        }),
+      ),
+      DONE,
+    ])
+    const loop = new AgentLoop({
+      definition: { ...DEFINITION, tools: names },
+      llm,
+      tools: names.map((name) => {
+        return peakTool(name, probe, 20)
+      }),
+    })
+    const events = await collect(loop.run({ text: 'hi' }, { workspaceRoot: process.cwd() }))
+    // 8 个慢工具足以吃满上限：峰值恰好等于默认并发度 4，而不是 8 路全并发。
+    expect(probe.peak).toBeLessThanOrEqual(DEFAULT_TOOL_CONCURRENCY)
+    expect(probe.peak).toBe(4)
+    const order = events
+      .filter((event) => {
+        return event.type === 'tool-result'
+      })
+      .map((event) => {
+        return event.type === 'tool-result' ? event.name : ''
+      })
+    expect(order).toEqual(names)
+    expect(events.at(-1)).toMatchObject({ type: 'done', steps: 2 })
+  })
+
+  it('单个工具抛错被兜成错误结果，不影响同批其他工具的收集与顺序', async () => {
+    const names = ['ok1', 'boom', 'ok2']
+    const boom: Tool = {
+      name: 'boom',
+      description: '抛错的工具',
+      parameters: { type: 'object', properties: {} },
+      async execute(): Promise<ToolResult> {
+        throw new Error('boom')
+      },
+    }
+    const { llm } = mockLlm([
+      toolCallChunks(
+        names.map((name, index) => {
+          return { id: `c${index + 1}`, name, args: '{}' }
+        }),
+      ),
+      DONE,
+    ])
+    const loop = new AgentLoop({
+      definition: { ...DEFINITION, tools: names },
+      llm,
+      tools: [loggingTool('ok1', [], 15), boom, loggingTool('ok2', [], 0)],
+    })
+    const events = await collect(loop.run({ text: 'hi' }, { workspaceRoot: process.cwd() }))
+    const results = events.filter((event) => {
+      return event.type === 'tool-result'
+    })
+    expect(
+      results.map((event) => {
+        return event.type === 'tool-result' ? event.name : ''
+      }),
+    ).toEqual(names)
+    const failed = results.map((event) => {
+      return event.type === 'tool-result' ? event : undefined
+    })[1]
+    expect(failed?.isError).toBe(true)
+    expect(events.at(-1)).toMatchObject({ type: 'done', steps: 2 })
+  })
+})
+
+describe('AgentLoop 记忆召回不进首 token 关键路径', () => {
+  it('有同步召回时：模型请求在异步 recall 结束之前就已发出', async () => {
+    let asyncRecallDone = false
     const memory: AgentMemoryHooks = {
-      async recall() {
-        log.push('recall:start')
-        await delay(10)
-        log.push('recall:end')
+      recallSync() {
         return '[记忆] 画像'
+      },
+      async recall() {
+        await delay(30)
+        asyncRecallDone = true
+        return '[记忆] async'
+      },
+      async recallRefine() {
+        return true
+      },
+      enqueueExtraction() {},
+    }
+    const base = mockLlm([[...DONE]])
+    let streamedBeforeAsyncRecall = false
+    const spy = systemSpy(base.llm, () => {
+      streamedBeforeAsyncRecall = !asyncRecallDone
+    })
+    const loop = new AgentLoop({ definition: DEFINITION, llm: spy.llm, tools: [], memory })
+    await collect(loop.run({ text: 'hi' }, { workspaceRoot: process.cwd() }))
+    expect(streamedBeforeAsyncRecall).toBe(true)
+    expect(spy.systems[0]).toContain('[记忆] 画像')
+  })
+
+  it('同步召回与进化编译都进 system prompt', async () => {
+    const memory: AgentMemoryHooks = {
+      recallSync() {
+        return '[记忆] 画像'
+      },
+      recall() {
+        return Promise.reject(new Error('不该走到 await 路径'))
       },
       enqueueExtraction() {},
     }
     const evolution: AgentEvolutionHooks = {
       async compile() {
-        log.push('compile:start')
-        await delay(10)
-        log.push('compile:end')
+        await delay(1)
         return { text: '[经验手册]', playbookEntryIds: ['e1'], reflectionIds: [] }
       },
       enqueueTurn() {},
     }
-    let system = ''
-    const inner = mockLlm([[...DONE]])
-    const llm = {
-      stream(options: GenerateOptions) {
-        system = options.system ?? ''
-        return inner.llm.stream(options)
-      },
-    } as unknown as LlmRuntime
-    const loop = new AgentLoop({ definition: DEFINITION, llm, tools: [], memory, evolution })
+    const spy = systemSpy(mockLlm([[...DONE]]).llm)
+    const loop = new AgentLoop({ definition: DEFINITION, llm: spy.llm, tools: [], memory, evolution })
     await collect(loop.run({ text: 'hi' }, { workspaceRoot: process.cwd() }))
-    expect(log.slice(0, 2).sort()).toEqual(['compile:start', 'recall:start'])
-    expect(system).toContain('[记忆] 画像')
-    expect(system).toContain('[经验手册]')
+    expect(spy.systems[0]).toContain('[记忆] 画像')
+    expect(spy.systems[0]).toContain('[经验手册]')
+  })
+
+  it('没有同步入口的旧绑定对象仍走 await 路径并静默降级', async () => {
+    const log: string[] = []
+    const memory: AgentMemoryHooks = {
+      async recall() {
+        log.push('recall:start')
+        await delay(5)
+        log.push('recall:end')
+        return '[记忆] 画像'
+      },
+      enqueueExtraction() {},
+    }
+    const spy = systemSpy(mockLlm([[...DONE]]).llm)
+    const loop = new AgentLoop({ definition: DEFINITION, llm: spy.llm, tools: [], memory })
+    await collect(loop.run({ text: 'hi' }, { workspaceRoot: process.cwd() }))
+    expect(log).toEqual(['recall:start', 'recall:end'])
+    expect(spy.systems[0]).toContain('[记忆] 画像')
   })
 
   it('一侧故障仍然静默降级', async () => {
@@ -191,7 +340,7 @@ describe('AgentLoop 历史预算裁剪', () => {
       createUserMessage({ content: [{ type: 'text', text: '最新' }], source: { kind: 'user' } }),
     ]
     const { llm, requests } = mockLlm([[...DONE]])
-    const loop = new AgentLoop({ definition: DEFINITION, llm, tools: [], history, historyBudgetChars: 200 })
+    const loop = new AgentLoop({ definition: DEFINITION, llm, tools: [], history, historyBudgetTokens: 200 })
     await collect(loop.run({ text: '本轮' }, { workspaceRoot: process.cwd() }))
     const texts = (requests[0]?.messages ?? []).map((message) => {
       return JSON.stringify(message.content)

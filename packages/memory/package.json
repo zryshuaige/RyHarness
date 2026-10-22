@@ -1,5 +1,5 @@
 {
-  "name": "@ryagent/memory",
+  "name": "@ryharness/memory",
   "version": "0.1.0",
   "type": "module",
   "license": "MIT",
@@ -17,7 +17,7 @@
     "build": "tsdown"
   },
   "dependencies": {
-    "@ryagent/llm": "workspace:*",
-    "@ryagent/util-llm-json": "workspace:*"
+    "@ryharness/llm": "workspace:*",
+    "@ryharness/util-llm-json": "workspace:*"
   }
 }

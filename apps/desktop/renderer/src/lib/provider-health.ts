@@ -11,8 +11,16 @@
  * - ready：凭据已备但没验过——key 存下来了，不等于这家供应商认；
  * - verified：测过连接且通过；
  * - local：免 key 的本地服务（Ollama 这类），能不能用取决于探活。
+ *
+ * 「测过没有」不留在设置页的组件 state 里：模块级的 {@link providerHealth} 缓存
+ * 才是真源，这样设置页之外的供应商下拉（新建 agent 的表单）也能按"这家刚测过没有"
+ * 排序，而那些页面从没打开过设置页。
  */
 import type { ProviderInfo, ProviderVerifyResult } from '../api.ts'
+import { humanError } from './error-text.ts'
+import type { DiscoveredModel } from './model-catalog.ts'
+
+export type { DiscoveredModel }
 
 /** 供应商的使用者（GET /api/providers 每项的 usedBy）。 */
 export interface ProviderUsage {
@@ -66,9 +74,7 @@ export function hasUsableProvider(providers: ProviderInfo[]): boolean {
 
 /** 该提醒补 key 的供应商：跳过免 key 的本地服务，它没有 key 可填。 */
 export function firstProviderMissingKey(providers: ProviderInfo[]): ProviderInfo | undefined {
-  return providers.find((provider) => {
-    return !isLocalService(provider) && !provider.apiKeyConfigured
-  })
+  return missingKeyProviders(providers)[0]
 }
 
 /** 新建 agent 时的默认供应商：第一个配好凭据或免 key 的。 */
@@ -77,14 +83,113 @@ export function firstUsableProviderId(providers: ProviderInfo[]): string | undef
 }
 
 /**
+ * 一次探测记下的健康结论。
+ *
+ * 存在模块级而不是组件 state 里：设置页之外的下拉（新建 agent 的供应商选择）也
+ * 要按"这家刚测过没有"排序，而那些页面根本没打开过设置页。
+ */
+export interface ProviderHealth {
+  /** 与服务端同一套取值（见 {@link ProviderFailureCode}）。 */
+  code: ProviderFailureCode
+  latencyMs: number
+  /** 记下这条结论的时刻（Date.now）。 */
+  at: number
+}
+
+/**
+ * 结论的有效期。取十分钟：换 key / 改地址会立刻作废（见 forgetProviderHealth），
+ * 剩下的失效只可能来自"供应商那边变了"，十分钟足够旧，绿点也不会每分钟闪一次。
+ */
+const PROVIDER_HEALTH_TTL_MS = 10 * 60_000
+
+/** 免 key 的本地服务重新探活的间隔：Ollama 常常是用户启动之后才起来的。 */
+export const PROVIDER_HEALTH_POLL_MS = 60_000
+
+const healthCache = new Map<string, ProviderHealth>()
+
+/**
+ * 记下一次探测结论（verify / 探活都往这里写）。
+ *
+ * 只记**有 code 的**结论：老服务端可能只回 ok + 中文话，那种结果照样按 ok 记，
+ * 但不猜它的失败分类——排序靠的是分类，不是中文原文里的关键词。
+ */
+export function rememberProviderHealth(
+  providerId: string,
+  result: { ok: boolean; code?: ProviderFailureCode; latencyMs?: number },
+): void {
+  healthCache.set(providerId, {
+    code: result.ok ? 'ok' : (result.code ?? 'error'),
+    latencyMs: result.latencyMs ?? 0,
+    at: Date.now(),
+  })
+}
+
+/** 这家刚测过没有（超期的结论当作没测过：宁可不显示，也不显示一个过期的绿点）。 */
+export function providerHealth(providerId: string): ProviderHealth | undefined {
+  const health = healthCache.get(providerId)
+  if (health === undefined) return undefined
+  return Date.now() - health.at <= PROVIDER_HEALTH_TTL_MS ? health : undefined
+}
+
+/** 结论作废：换了 key、改了地址、删了供应商之后，上一次的绿点说的已经不是现在这家。 */
+export function forgetProviderHealth(providerId: string): void {
+  healthCache.delete(providerId)
+}
+
+/** 清空全部结论（测试之间隔离用；正常运行没人调）。 */
+export function clearProviderHealth(): void {
+  healthCache.clear()
+}
+
+/**
+ * 下拉里的排序权重：刚验过的最前，能用的其次，此刻被限流的降权（等一分钟就好，
+ * 不该挡在别家前面），没凭据的垫底但仍然可选。
+ */
+function readinessRank(provider: ProviderInfo): number {
+  const health = providerHealth(provider.id)
+  if (health?.code === 'rate-limited') return 0
+  if (health?.code === 'ok') return 3
+  return isProviderUsable(provider) ? 2 : -1
+}
+
+/**
  * 下拉里的排序：可用的在前，没配 key 的降权到后面但仍然可选。
  * 「降权」是排序 + 标注，不是禁用——用户有时就是想先建好 agent 再去补 key。
+ *
+ * 同权重内保持传入顺序（稳定排序）：清单顺序本身就是内置优先的手工编排，不该被
+ * 排序偷偷打乱。
  */
 export function providersByReadiness(providers: ProviderInfo[]): ProviderInfo[] {
   return [...providers].sort((a, b) => {
-    const diff = Number(isProviderUsable(b)) - Number(isProviderUsable(a))
-    return diff !== 0 ? diff : 0
+    return readinessRank(b) - readinessRank(a)
   })
+}
+
+/** 还没配凭据的云端供应商（免 key 的本地服务不算：它没有 key 可填）。 */
+export function missingKeyProviders(providers: ProviderInfo[]): ProviderInfo[] {
+  return providers.filter((provider) => {
+    return !isLocalService(provider) && !provider.apiKeyConfigured
+  })
+}
+
+/**
+ * 「一个能用的模型来源都没有」时的话：把可选的几条路一次说清。
+ *
+ * 此前只点名缺 key 的第一家，于是本地用户（已经装了 Ollama、压根没有 key 可填）
+ * 也被推去申请云端 key。补 key、装本地服务、换一家云端是三条并列的路，文案就该
+ * 三条都给——只给一条，用户会以为那条是唯一的路。
+ */
+export function missingProviderHint(providers: ProviderInfo[]): string | undefined {
+  if (hasUsableProvider(providers)) return undefined
+  const names = missingKeyProviders(providers).map((provider) => {
+    return provider.displayName
+  })
+  const routes = [
+    names.length > 0 ? `给「${names.join('、')}」填一个 API Key` : '添加一家云端服务商并填 API Key',
+    '添加 Ollama（本地）这样的免 key 服务',
+    '换一个云端服务商',
+  ]
+  return `还没有能用的模型来源，任选一条路：${routes.join('；')}。不必三条都做。`
 }
 
 /** 正在使用这家供应商的 agent（缺省 = 没人用，后端未下发 usedBy 时不编）。 */
@@ -129,6 +234,23 @@ export type ProviderFailureCode =
 /** verify 的回执：与 api.ts 的 ProviderVerifyResult 同形，多一个服务端给的分类。 */
 export interface ProviderVerifyResponse extends ProviderVerifyResult {
   code?: ProviderFailureCode
+  /**
+   * 探测顺带回的模型目录（服务端解析 `/v1/models` / Ollama tags 得到）。
+   *
+   * 老服务端没有这个字段，所以是可选的：有就填模型列表，没有就退回手输。
+   */
+  discovered?: DiscoveredModel[]
+}
+
+/** POST /api/providers/discover 的回执：对一份还没保存的供应商草稿问出来的目录。 */
+export interface ProviderDiscoveryResponse {
+  ok: boolean
+  code?: ProviderFailureCode
+  /** 失败时是服务端给的中文下一步（同 verify）。 */
+  message?: string
+  latencyMs?: number
+  /** 端点自己报告的模型；只含它真报出来的字段。 */
+  models?: DiscoveredModel[]
 }
 
 /** 分类 → 一句能照着做的话（服务端没回话时的兜底；两端口径一致）。 */
@@ -155,6 +277,9 @@ export const FAILURE_TEXT: Record<ProviderFailureCode, string> = {
  *
  * 所以：认得 code 就以服务端的话为准（只为它空着时兜底），不认得 code（老服务端）
  * 才走模式匹配，并且永远不把内部路由路径、网络错误码原样弹给用户。
+ *
+ * 走到最后一条（什么都没匹配上）时也不递原文，交给 lib/error-text.ts：认得出的
+ * 服务端字面量在那里有中文，认不出的给一句兜底。原话由调用点折进「详情」。
  */
 export function explainVerifyFailure(raw: string | undefined, code?: string): string {
   const text = (raw ?? '').trim()
@@ -183,7 +308,7 @@ export function explainVerifyFailure(raw: string | undefined, code?: string): st
   if (/not found|404/.test(lower)) {
     return FAILURE_TEXT['not-found']
   }
-  return `连接失败：${text}`
+  return `连接失败：${humanError(text, '供应商没给出原因，可以稍后再试一次。')}`
 }
 
 /** 两个 Base URL 是否指向同一家服务（忽略大小写与尾部斜杠；与服务端同款判重）。 */

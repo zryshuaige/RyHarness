@@ -5,10 +5,10 @@
  * agents.provider（发言 agent 绑定的供应商路由）。**按会话**与**按供应商**两维
  * 从同一批消息算出，两栏的合计必须能对上——对不上时用户没法判断是数据错了还是
  * 自己看错了。
- * @module @ryagent/server/routes/usage
+ * @module @ryharness/server/routes/usage
  */
 
-import type { Conversation, SessionStore, StoredMessage } from '@ryagent/session'
+import type { Conversation, SessionStore, StoredMessage } from '@ryharness/session'
 import type { ProvidersConfigFile } from '../config.ts'
 import { HttpRequestError, json, type Router } from '../router.ts'
 import type { ConversationState } from './conversations.ts'

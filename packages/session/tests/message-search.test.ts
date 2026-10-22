@@ -7,8 +7,8 @@
  */
 
 import { DatabaseSync } from 'node:sqlite'
-import type { MessageInput } from '@ryagent/session'
-import { MIGRATIONS, SCHEMA_VERSION, SessionStore } from '@ryagent/session'
+import type { MessageInput } from '@ryharness/session'
+import { MIGRATIONS, SessionStore } from '@ryharness/session'
 import { describe, expect, it } from 'vitest'
 
 /** 建一个带两条会话的库：a/b 在 direct，c 在 group。 */
@@ -161,7 +161,7 @@ describe('SessionStore 消息全文索引', () => {
 
   it('迁移幂等：已是当前版本时不再跑补索引', () => {
     const store = new SessionStore(':memory:')
-    expect(SCHEMA_VERSION).toBe(6)
+    // 这条真正要断的是「新库没有补索引可跑」；版本号钉在这里只会随下一次迁移变红。
     expect(store.messageIndexSize()).toBe(0)
     store.close()
   })

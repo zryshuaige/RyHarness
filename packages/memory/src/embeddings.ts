@@ -5,7 +5,7 @@
  * 向量必须带模型溯源：同一段文本在不同模型下是不同向量，混库后维度不符会
  * 让余弦静默塌成 -1（检索质量无声下降）。`model` 是向量身份的一部分，
  * 存储层按 (hash, model) 缓存并在检索时按模型过滤。
- * @module @ryagent/memory/embeddings
+ * @module @ryharness/memory/embeddings
  */
 
 /** 统一接口：批量嵌入；不可用时 embed 返回 null（走纯 FTS5 路径）。 */

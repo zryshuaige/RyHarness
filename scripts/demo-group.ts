@@ -13,12 +13,12 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { AgentDefinition } from '@ryagent/agent'
-import { Context } from '@ryagent/cordis'
-import type { GroupEvent } from '@ryagent/group'
-import type { GenerateOptions, StreamChunk } from '@ryagent/llm'
-import LlmRuntime, { LlmAdapter } from '@ryagent/llm'
-import { SessionCoordinator, SessionStore } from '@ryagent/session'
+import type { AgentDefinition } from '@ryharness/agent'
+import { Context } from '@ryharness/cordis'
+import type { GroupEvent } from '@ryharness/group'
+import type { GenerateOptions, StreamChunk } from '@ryharness/llm'
+import LlmRuntime, { LlmAdapter } from '@ryharness/llm'
+import { SessionCoordinator, SessionStore } from '@ryharness/session'
 
 /** 按调用顺序消费脚本回复的假适配器。 */
 class MockAdapter extends LlmAdapter {
@@ -101,7 +101,7 @@ async function drain(events: AsyncGenerator<GroupEvent>): Promise<GroupEvent[]> 
   return out
 }
 
-const tmpRoot = mkdtempSync(join(tmpdir(), 'ryagent-demo-group-'))
+const tmpRoot = mkdtempSync(join(tmpdir(), 'ryharness-demo-group-'))
 
 try {
   // ---- 场景 a：调度员接力链 ----

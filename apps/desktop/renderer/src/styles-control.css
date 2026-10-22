@@ -1,0 +1,93 @@
+/* ============================================================
+   自绘下拉（components/Select.tsx）
+   边距 / 圆角 / 抬升 / 焦点全部吃既有 token：换主题不需要在这里补任何一条。
+   ============================================================ */
+
+/* .field 是 flex 列，宽度靠这条铺满；长选项撑不开布局这件事由「触发器有 min-width: 0
+   + 弹层浮在视口上」共同保证（与音色那一格并排的试听键因此不会被挤出字段）。 */
+.select { display: block; width: 100%; min-width: 0; }
+
+/* 皮肤与 .field input 同源（同底色、同圆角、同内描边），只是右边多一块自绘的箭头：
+   系统箭头在暗色下是一枚亮白控件，与自绘语言正面冲突。 */
+.select-trigger {
+  display: flex; align-items: center; gap: var(--space-2);
+  width: 100%; min-width: 0; cursor: pointer; text-align: left;
+  border: none; border-radius: var(--radius-md);
+  padding: 10px var(--space-3); padding-right: var(--space-6);
+  font-size: var(--fs-base); font-weight: 400; color: var(--text-primary);
+  background: var(--bg-subtle); box-shadow: var(--ring-edge);
+  transition: box-shadow var(--dur-hover) var(--ease-out), background var(--dur-hover) var(--ease-out);
+}
+.select-trigger:hover:not(:disabled) { background: var(--bg-surface); }
+.select-trigger:disabled { cursor: not-allowed; color: var(--text-disabled); }
+.select-trigger[aria-expanded='true'] {
+  background: var(--bg-surface);
+  box-shadow: inset 0 0 0 1px var(--amber-text), var(--focus-ring);
+}
+
+/* 选项名可能很长（模型 id + 上下文长度）。触发器里省略、弹层里看全：两处都要，
+   少任何一处都会让用户面对一个装不下的框。 */
+.select-value {
+  flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+
+/* 箭头由两条边框画出来，不引图标字体也不写死颜色：色随 currentColor 走，
+   展开时转 180°，方向由 aria-expanded 给，不另设一个状态变量。 */
+.select-caret {
+  flex: none; width: 7px; height: 7px; align-self: center;
+  border-right: 2px solid var(--text-secondary); border-bottom: 2px solid var(--text-secondary);
+  transform: rotate(45deg) translate(-2px, -2px);
+  transition: transform var(--dur-hover) var(--ease-out);
+}
+.select-trigger[aria-expanded='true'] .select-caret {
+  transform: rotate(225deg) translate(-1px, -1px);
+}
+
+/* 弹层浮在视口上（fixed + portal）：祖先的 overflow、transform、圆角一律碰不到它，
+   这正是原生 <select> 那块系统弹层做不到的事。max-height 由 JS 按可用空间给，
+   内部滚动——贴窗口底部时向上翻，永远不越界。
+   层级取 --z-modal：它必须高过 .modal-mask（弹窗里也要能开），而同一 z-index 下
+   后挂载的节点压在先挂载的之上，所以浮在 body 末尾的弹层正好盖在遮罩之上、
+   又低于 --z-toast 的轻提示。 */
+.select-popover {
+  position: fixed; z-index: var(--z-modal);
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--bg-elevated); border: none;
+  border-radius: var(--radius-md); box-shadow: var(--shadow-3);
+  animation: select-in var(--dur-in) var(--ease-out);
+}
+/* 只淡入不位移：向上翻时位移方向要跟着变，一个方向的开场动画总有一半是反的。 */
+@keyframes select-in {
+  from { opacity: 0; transform: scale(.97); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.select-search {
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: var(--space-2); border-bottom: 1px solid var(--divider);
+  color: var(--text-secondary);
+}
+.select-search-input {
+  flex: 1; min-width: 0; border: none; background: transparent;
+  font-size: var(--fs-sm); color: var(--text-primary); outline: none;
+}
+.select-search-input::placeholder { color: var(--text-tertiary); }
+
+.select-list { overflow-y: auto; overscroll-behavior: contain; padding: var(--space-1); min-height: 0; }
+.select-group {
+  padding: var(--space-2) var(--space-3) var(--space-1);
+  font-size: var(--fs-xs); font-weight: 600; color: var(--text-secondary);
+}
+.select-option {
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: 7px var(--space-3); border-radius: var(--radius-sm);
+  font-size: var(--fs-base); cursor: pointer;
+}
+.select-option-label { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.select-option.is-active { background: var(--amber-primary-soft); }
+.select-option[aria-selected='true'] { color: var(--amber-text); }
+.select-empty { margin: 0; padding: var(--space-3); font-size: var(--fs-sm); color: var(--text-secondary); }
+
+@media (prefers-reduced-motion: reduce) {
+  .select-popover { animation: none; }
+}

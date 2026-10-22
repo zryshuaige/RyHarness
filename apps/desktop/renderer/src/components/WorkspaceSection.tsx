@@ -8,6 +8,7 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { copyText, openInFileManager } from '../lib/desktop.ts'
+import { humanError } from '../lib/error-text.ts'
 import { toast } from '../lib/toast.ts'
 import { Icon } from './Icon.tsx'
 
@@ -28,7 +29,7 @@ export function WorkspaceSection({ api }: { api: WorkspaceApi }) {
       })
       .catch((cause: unknown) => {
         if (cancelled) return
-        setError(`读不到工作区路径：${cause instanceof Error ? cause.message : String(cause)}`)
+        setError(`读不到工作区路径：${humanError(cause, '本机服务还没报出工作区在哪，重启应用再试')}`)
       })
     return () => {
       cancelled = true
@@ -54,7 +55,7 @@ export function WorkspaceSection({ api }: { api: WorkspaceApi }) {
     <div className="me-row workspace-row">
       <div className="me-row-body">
         <div className="me-row-title">
-          <Icon name="file" size={15} /> 工作区
+          <Icon name="file" size={16} /> 工作区
         </div>
         <div className="me-row-sub">agent 读写文件、产出产物的默认目录——它就在本机，不联网</div>
         {error !== undefined ? (

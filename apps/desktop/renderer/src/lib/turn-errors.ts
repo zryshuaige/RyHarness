@@ -3,7 +3,7 @@
  *
  * 内核 {@link HarnessError} 的 code 是给程序路由的稳定标识，message 是给排障看的
  * 原文——直接把它们甩进红条，用户看到的是「no adapter registered for provider
- * "siliconflow"」和「needs its API key in the RYAGENT_KEY_SILICONFLOW environment
+ * "siliconflow"」和「needs its API key in the RYHARNESS_KEY_SILICONFLOW environment
  * variable」这类他既看不懂、也根本没法照做的信息（桌面应用里根本没有环境变量
  * 可设，key 是在「我的 → 模型供应商」里填的）。
  *
@@ -51,6 +51,14 @@ const retry: TurnErrorAction = { label: '重试这一轮', target: 'retry' }
  * 不是供应商的原始措辞。
  */
 const BY_CODE: Record<string, TurnErrorExplanation> = {
+  // 用户自己点的「停止」不是故障。此前这一码不在表里，于是点一次停止就会看到
+  // 「这一轮没跑起来…还是不行就把下面这句报给开发者」，还会被要求去重试——和
+  // 同一屏上「已停止生成」那句话自相矛盾。electron/main.ts 也早就特意把
+  // ABORTED 排除在通知之外，翻译层漏了同一条判断。
+  ABORTED: {
+    title: '已停止生成',
+    hint: '这一轮是你主动停的，说出来的部分已经留在会话里了。',
+  },
   MISSING_CREDENTIAL: {
     title: '这家模型服务还没配 API Key',
     hint: '在「我的 → 模型供应商」里选它、填上 Key，之后再重试这一轮。',
@@ -184,12 +192,28 @@ function detailOf(message: string): string | undefined {
  * @param message 原始报错文本；仅当 code 与特征串都没命中时才原样递出。
  */
 export function explainTurnError(code: string | undefined, message: string): TurnErrorExplanation {
+  return explainKnownTurnError(code, message) ?? unknownTurnError(message)
+}
+
+/**
+ * 同上，但**认不出就返回 undefined**，不给兜底标题。
+ *
+ * 界面还有第二个消费方：REST 失败的解释层（lib/error-text.ts）。它要的是"这句失败
+ * 能不能被翻译"，不能被翻译时该退回调用点自己给的兜底句，而不是套上「这一轮没跑
+ * 起来」——那是在一句根本没跑起来的对话失败上说的，套过去就是编诊断。
+ */
+export function explainKnownTurnError(code: string | undefined, message: string): TurnErrorExplanation | undefined {
   const normalized = (code ?? '').trim().toUpperCase()
   const known = BY_CODE[normalized]
   if (known !== undefined) return known
   for (const candidate of BY_MESSAGE) {
     if (candidate.match.test(message)) return candidate.explanation
   }
+  return undefined
+}
+
+/** 兜底标题：这一轮没跑起来，原文折进 detail，重试是唯一能给的建议。 */
+function unknownTurnError(message: string): TurnErrorExplanation {
   const detail = detailOf(message)
   return {
     title: '这一轮没跑起来',

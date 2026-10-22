@@ -3,11 +3,11 @@
  *
  * baseURL/key/model 全部来自调用方配置（providers.json 的默认 provider），
  * 这里不内置任何供应商默认值。
- * @module @ryagent/evolve/llm
+ * @module @ryharness/evolve/llm
  */
 
-import { HarnessError } from '@ryagent/llm'
-import { ChatJsonClient } from '@ryagent/util-llm-json'
+import { HarnessError } from '@ryharness/llm'
+import { ChatJsonClient } from '@ryharness/util-llm-json'
 import type { PlaybookSection } from './schema.ts'
 
 /** 一轮对话的轨迹摘要（进化管线的输入）。 */

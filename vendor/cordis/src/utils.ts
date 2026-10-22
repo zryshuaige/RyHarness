@@ -1,4 +1,4 @@
-import { defineProperty } from '@ryagent/cosmokit'
+import { defineProperty } from '@ryharness/cosmokit'
 import type { Context, Service } from './index.ts'
 
 /** Ordered collection of disposable values with O(1) deletion by value. */

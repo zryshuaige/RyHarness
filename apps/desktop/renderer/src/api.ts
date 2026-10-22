@@ -3,9 +3,64 @@
  * API 地址从窗口 URL query（?api=...，主进程注入）读取。
  */
 
+import type {
+  ConversationUsageRow,
+  PluginView,
+  ProviderAgentUsage,
+  ProviderUsageRow,
+  StampedWsEvent,
+  TodoGroup,
+  TodoItem,
+  UsageReport,
+  VibeOutputView,
+  VibeProjectView,
+  VibeQuestionView,
+  VibeSessionView,
+  WsEvent,
+} from '@ryharness/server'
+/**
+ * discover 的回执类型借 lib/provider-health.ts 那一份，而不是在这里另抄：同一个
+ * 契约两处各写一遍，服务端加字段时渲染层就会出现「两处形状不同」的静默分叉。
+ * 类型导入在转译期整条擦除，provider-health.ts 不会因此被打进渲染层 bundle。
+ */
+import { humanError } from './lib/error-text.ts'
+import type { ProviderDiscoveryResponse } from './lib/provider-health.ts'
+
+/**
+ * ApiRequestError 的兜底句：只有这一层才知道"调用点在做什么"，所以它给不出更贴切
+ * 的话（调用点自己会给一句，见 lib/error-text.ts 的 humanError）。这一句存在的意义
+ * 是**不让英文原话回到界面**——哪怕调用点忘了包装，冒出来的也还是一句中文。
+ */
+const REST_HINT = '这次操作没能完成，再试一次。'
+
+/**
+ * 契约单一真源：WS 事件与用量账单的形状只在服务端定义（apps/server 的 events.ts /
+ * routes/usage.ts），渲染层做**纯类型**导入，不再整段手抄。StampedWsEvent 是服务端
+ * 为每条事件附的每会话单调递增 seq（客户端据此检测断线期间的缺口）。
+ *
+ * 手抄的代价是静默的：服务端改一个字段名，渲染层 tsc 全绿，只在运行时读到
+ * undefined。纯类型导入在 Vite/esbuild 转译期被整条擦除，服务端代码不会因此
+ * 被打进渲染层 bundle（renderer/vite.config.ts 无需加 alias）。
+ */
+export type {
+  ConversationUsageRow,
+  PluginView,
+  ProviderAgentUsage,
+  ProviderUsageRow,
+  StampedWsEvent,
+  TodoGroup,
+  TodoItem,
+  UsageReport,
+  VibeOutputView,
+  VibeProjectView,
+  VibeQuestionView,
+  VibeSessionView,
+  WsEvent,
+}
+
 // ---- 服务端形状 ----
 
-/** 人格四维 + 生日/口头禅/形象/音色/亲密度（服务端 @ryagent/session 的 AgentPersona）。 */
+/** 人格四维 + 生日/口头禅/形象/音色/亲密度（服务端 @ryharness/session 的 AgentPersona）。 */
 export interface AgentPersona {
   /** 外向 0-100。 */
   extroversion: number
@@ -20,17 +75,19 @@ export interface AgentPersona {
   catchphrase: string
   /** 亲密度 0-100：随互动增长，影响称呼与主动性。 */
   affinity: number
-  /** 音色 id（GET /api/agent-voices 的清单之一）。 */
+  /** 音色 id（GET /api/voice/catalog 的 profiles 之一；`none` = 不朗读）。 */
   voiceId: string
   /** 一句话形象描述。 */
   appearance: string
 }
 
-/** 一个音色预设（目前只有 id 与显示名，声音尚未接入）。 */
-export interface VoicePreset {
-  id: string
+/** 产物预览的元数据（GET /api/files/:name/info）。 */
+export interface ArtifactInfo {
   name: string
-  provider: string
+  /** 工作区内的绝对路径：「用系统程序打开 / 复制路径」两个动作的唯一原料。 */
+  path: string
+  size: number
+  mime: string
 }
 
 export interface AgentDef {
@@ -41,6 +98,8 @@ export interface AgentDef {
   provider: string
   model: string
   temperature?: number
+  /** 思考强度档位（low / medium / high / off）；缺省 = 模型自己的默认。 */
+  reasoningEffort?: string
   tools: string[]
   /** 人格；缺省（旧服务端）时按默认人格渲染。 */
   persona?: AgentPersona
@@ -73,6 +132,13 @@ export interface ProviderInfo {
   /** 接入协议（openai / anthropic / ollama …），徽标展示用。 */
   protocol?: string
   baseUrl?: string
+  /**
+   * 这条路由支持哪些思考强度档位（`low` / `medium` / `high`）。
+   *
+   * 缺省或空数组 = 该路由不认思考参数，UI 就不给选择器——给一个选了会被端点
+   * 静默忽略的控件，比没有更糟。
+   */
+  reasoningEfforts?: string[]
   /** 正在使用它的 agent：删除前要先把它们改绑（缺省 = 没人用）。 */
   usedBy?: { agentId: string; agentName: string }[]
 }
@@ -215,6 +281,17 @@ export interface MemoryStats {
   byStatus?: Record<string, number>
 }
 
+/**
+ * 本机用户的资料。`avatar` 是头像风格 key，空串表示还没挑过。
+ *
+ * 它同时被界面与内核读（服务端把它拼成系统提示里的身份句），所以真源在服务端：
+ * 渲染层拿一份副本是为了显示，不允许自己存第二份。
+ */
+export interface UserProfile {
+  name: string
+  avatar: string
+}
+
 /** 长期记忆行。 */
 export interface MemoryRow {
   id: string
@@ -249,49 +326,6 @@ export interface ReflectionRow {
   hitCount: number
   createdAt: number
 }
-
-/** WS 事件（apps/server README 契约）；服务端为每个事件附每会话单调递增 seq。 */
-export type WsEvent =
-  | { type: 'message-start'; conversationId: string; senderId: string; senderName: string; turnIndex: number }
-  | { type: 'text-delta'; conversationId: string; senderId: string; text: string }
-  | {
-      type: 'tool-call-start'
-      conversationId: string
-      senderId: string
-      callId: string
-      name: string
-      arguments: string
-    }
-  | {
-      type: 'tool-result'
-      conversationId: string
-      senderId: string
-      callId: string
-      name: string
-      isError: boolean
-      content: string
-    }
-  | {
-      type: 'produce-card'
-      conversationId: string
-      senderId: string
-      callId: string
-      card: { path: string; name: string; size: number; mime: string }
-    }
-  | { type: 'dispatch'; conversationId: string; fromAgent?: string; toAgent: string; reason: string; turnIndex: number }
-  | {
-      type: 'message-done'
-      conversationId: string
-      senderId: string
-      turnIndex: number
-      /** 本轮累计 token 用量；供应商未回报时缺省。 */
-      usage?: TurnUsage
-    }
-  | { type: 'error'; conversationId: string; message: string; code: string }
-  | { type: 'queued'; conversationId: string; senderId: 'user'; turnIndex: number }
-
-/** 服务端实际下发的事件：带每会话单调递增 seq（客户端用于缺口检测）。 */
-export type StampedWsEvent = WsEvent & { seq?: number }
 
 /** WS 连接状态（断线重连提示用）。 */
 export type WsConnectionStatus = 'open' | 'reconnecting'
@@ -329,15 +363,15 @@ export function resolveApiBase(): string {
 
 // ---- 本次启动的 API token（主进程生成，渲染层每个请求都要带上） ----
 //
-// 后端强制校验：Electron 启动时主进程生成一个随机 token 交给 RyAgentServer，
+// 后端强制校验：Electron 启动时主进程生成一个随机 token 交给 RyHarnessServer，
 // 服务端对每个 HTTP 请求与 WS upgrade 都比对一次（缺 token 一律 401）。所以这不是
 // 「带上更安全」，而是**不带就整个应用不可用**：渲染层拿不到会话列表、连不上 WS。
 //
 // 取值三条路，与 boot.ts 里 API 地址的三条路一一对应：URL query（?token=，
-// 主进程已就绪）、窗口全局变量 __RYAGENT_API_TOKEN__、ryagent:api-token 事件
+// 主进程已就绪）、窗口全局变量 __RYHARNESS_API_TOKEN__、ryharness:api-token 事件
 // （窗口先行、后端并行启动时事件晚于监听注册）。
-const API_TOKEN_EVENT = 'ryagent:api-token'
-const API_TOKEN_GLOBAL = '__RYAGENT_API_TOKEN__'
+const API_TOKEN_EVENT = 'ryharness:api-token'
+const API_TOKEN_GLOBAL = '__RYHARNESS_API_TOKEN__'
 
 /** 当前 token（空串 = 本次启动未启用鉴权，浏览器直连开发即是）。 */
 let apiToken = ''
@@ -396,6 +430,33 @@ export function startApiTokenSync(): void {
   if (global !== undefined) setApiToken(global)
 }
 
+/**
+ * REST 失败：保留 HTTP 状态与机器码，message 说的是人话。
+ *
+ * 界面有些降级是按状态分支的（待办插件关闭后 `/api/todos` 回 404，侧栏据此显示
+ * 「插件已关闭」而不是报错），只留一句 message 的话调用方只能去解析中文——所以
+ * `status` 与 `code` 一个都不能少。
+ *
+ * message 与 raw 是同一件事的两副面孔：`message` 是给用户看的那一句（过去这里直接
+ * 摆的是服务端 `{error}` 的英文原话，于是聊天区红条说着「这条消息没发出去」，三步
+ * 之后一个 toast 蹦出 `conversation not found`），`raw` 是服务端原文，交给折叠的
+ * 「详情」——AsyncState / HistoryFailure 那套既有 affordance 要的就是它。
+ */
+export class ApiRequestError extends Error {
+  /** 服务端 `{error}` 的原话；没有 body 时是 `HTTP <status>`。折叠详情里给的就是它。 */
+  readonly raw: string
+
+  constructor(
+    raw: string,
+    readonly status: number,
+    readonly code?: string,
+  ) {
+    super(humanError(raw, REST_HINT))
+    this.raw = raw
+    this.name = 'ApiRequestError'
+  }
+}
+
 export class ApiClient {
   constructor(readonly base: string) {}
 
@@ -417,8 +478,10 @@ export class ApiClient {
     })
     const body = (await response.json().catch(() => {
       return {}
-    })) as T & { error?: string }
-    if (!response.ok) throw new Error(body.error ?? `HTTP ${response.status}`)
+    })) as T & { error?: string; code?: string }
+    if (!response.ok) {
+      throw new ApiRequestError(body.error ?? `HTTP ${response.status}`, response.status, body.code)
+    }
     return body
   }
 
@@ -438,21 +501,27 @@ export class ApiClient {
     return this.request(`/api/agents/${id}`, { method: 'DELETE' })
   }
 
-  /**
-   * 点赞/点踩：亲密度按同一套规则增长。
-   * 回包里的 agent 是更新后的真值，调用方据此刷新界面上的亲密度。
-   */
-  bumpAgentAffinity(id: string, signal: 'thumb_up' | 'thumb_down'): Promise<{ agent: AgentDef }> {
-    return this.request(`/api/agents/${id}/affinity`, { method: 'POST', body: JSON.stringify({ signal }) })
+  /** 本机用户的资料（在「我的」页可改）。服务端是唯一真源，界面不另存一份。 */
+  profile(): Promise<{ profile: UserProfile }> {
+    return this.request('/api/profile')
   }
 
-  /** 音色目录（只有 id 与显示名：声音尚未接入，取不到时下拉退到渲染层内置清单）。 */
-  agentVoices(): Promise<{ voices: VoicePreset[] }> {
-    return this.request('/api/agent-voices')
+  /** 改资料。只带要改的字段，没带的保持原样。 */
+  saveProfile(patch: Partial<UserProfile>): Promise<{ profile: UserProfile }> {
+    return this.request('/api/profile', { method: 'PATCH', body: JSON.stringify(patch) })
   }
 
   deleteConversation(id: string): Promise<{ deleted: string }> {
     return this.request(`/api/conversations/${id}`, { method: 'DELETE' })
+  }
+
+  /**
+   * 撤销删除：把软删的会话放回列表。
+   *
+   * 删除是**软删**（服务端只打标记，消息还在库里），所以撤销就是把标记清掉。
+   */
+  restoreConversation(id: string): Promise<{ conversation?: Conversation }> {
+    return this.request(`/api/conversations/${id}/restore`, { method: 'POST', body: '{}' })
   }
 
   /** 中止该会话在途的一轮生成。 */
@@ -492,6 +561,122 @@ export class ApiClient {
     return this.request('/api/providers')
   }
 
+  /** 插件清单（服务端运行时的真实状态；渲染层不在本地维护插件表）。 */
+  plugins(): Promise<{ plugins: PluginView[] }> {
+    return this.request('/api/plugins')
+  }
+
+  /**
+   * 开一次 RyVibe：一句话进，小队开始盘问。
+   *
+   * 服务端会建一个群会话并把它挂上「grill me」方法与盘问工具；页面靠
+   * {@link vibe} 轮询进度，不订阅 WS。
+   */
+  startVibe(requirement: string): Promise<{ session: VibeSessionView }> {
+    return this.request('/api/vibe', { method: 'POST', body: JSON.stringify({ requirement }) })
+  }
+
+  /** RyVibe 的当前状态：问到哪、还差几个答案、方案出来没有。`after` 之后的新产出才回传。 */
+  vibe(
+    id: string,
+    after?: number,
+  ): Promise<{
+    session: VibeSessionView
+    questions: VibeQuestionView[]
+    output: VibeOutputView[]
+    /** 落盘时写进待办的任务清单。 */
+    todos: TodoItem[]
+  }> {
+    const query = after === undefined ? '' : `?after=${after}`
+    return this.request(`/api/vibe/${encodeURIComponent(id)}${query}`)
+  }
+
+  /**
+   * 读项目骨架里的一个文件。
+   *
+   * 只认服务端记下的那份文件清单：目录名与文件名都来自模型，这条路不能变成
+   * 任意文件读取的口子。
+   */
+  vibeProjectFile(id: string, name: string): Promise<{ name: string; size: number; content: string }> {
+    return this.request(`/api/vibe/${encodeURIComponent(id)}/file?name=${encodeURIComponent(name)}`)
+  }
+
+  /**
+   * 回答这张盘问卡：一次交上全部答案。
+   *
+   * `skipped` = 用户点了「按你们的默认方案来」——答案照旧是预选项，只是给小队
+   * 的话术不同。
+   */
+  answerVibe(
+    id: string,
+    input: { answers: { questionId: string; selected: string[] }[]; skipped?: boolean },
+  ): Promise<{ session: VibeSessionView }> {
+    return this.request(`/api/vibe/${encodeURIComponent(id)}/answer`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+  }
+
+  /** 最近几次 RyVibe（页面上的「回到上次」）。 */
+  vibeSessions(): Promise<{ sessions: VibeSessionView[] }> {
+    return this.request('/api/vibe')
+  }
+
+  /** 失败后重来一次：把这一轮重新排一遍。 */
+  retryVibe(id: string): Promise<{ session: VibeSessionView }> {
+    return this.request(`/api/vibe/${encodeURIComponent(id)}/retry`, { method: 'POST', body: '{}' })
+  }
+
+  /**
+   * 开关插件：服务端会真实卸载/重挂该插件，不是只写配置。
+   * 回包是该插件切换后的视图，调用方直接替换列表项即可。
+   */
+  setPluginEnabled(id: string, enabled: boolean): Promise<{ plugin: PluginView }> {
+    return this.request(`/api/plugins/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ enabled }),
+    })
+  }
+
+  /**
+   * 当前会话的待办清单（`todo` 插件的路由）。
+   *
+   * 声明成「函数或 undefined」而不是普通方法：待办由插件提供，旧版服务端或组件
+   * 测试的最小替身没有这组接口时，右栏据 `=== undefined` 整块跳过，而不是在
+   * 运行时对着一个不存在的函数调用。
+   */
+  listTodos: ((conversationId: string) => Promise<TodoGroup>) | undefined = (conversationId) => {
+    return this.request(`/api/todos?conversationId=${encodeURIComponent(conversationId)}`)
+  }
+  setTodoDone: ((conversationId: string, id: string, done: boolean) => Promise<TodoGroup>) | undefined = (
+    conversationId,
+    id,
+    done,
+  ) => {
+    return this.request(`/api/todos/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ conversationId, done }),
+    })
+  }
+  clearTodos: ((conversationId: string) => Promise<TodoGroup>) | undefined = (conversationId) => {
+    return this.request(`/api/todos?conversationId=${encodeURIComponent(conversationId)}`, { method: 'DELETE' })
+  }
+
+  /**
+   * 撤销清空：把被清掉的那批待办原样写回（id 与勾选状态都不变）。
+   *
+   * 服务端未实现该路由时回 404 + { error: 'not found: POST /api/todos/restore' }。
+   */
+  restoreTodos: ((conversationId: string, items: TodoItem[]) => Promise<TodoGroup>) | undefined = (
+    conversationId,
+    items,
+  ) => {
+    return this.request('/api/todos/restore', {
+      method: 'POST',
+      body: JSON.stringify({ conversationId, items }),
+    })
+  }
+
   /**
    * 供应商预设（添加供应商向导的可选项）。
    * 服务端未实现该路由时回 404 + { error: 'not found: GET /api/provider-presets' }，
@@ -504,6 +689,19 @@ export class ApiClient {
   /** 新增自定义供应商；服务端未实现时同 providerPresets 走 404 分支。 */
   createProvider(input: CreateProviderInput): Promise<{ provider: ProviderInfo }> {
     return this.request('/api/providers', { method: 'POST', body: JSON.stringify(input) })
+  }
+
+  /**
+   * 向一份**还没保存**的供应商草稿问模型目录（POST /api/providers/discover）。
+   *
+   * 请求里的 Key 是一次性的：服务端只拿它打那一次模型列表端点，不落盘、不回显、
+   * 不注册路由——所以用户可以先问再决定要不要存这家。
+   *
+   * 与 verify 一样永远回 200 + 中文结论：连不上、看不成目录都看 `ok` 与 `message`，
+   * 不是等 catch（只有入参非法才会 400）。
+   */
+  discoverProvider(input: { baseUrl: string; protocol: string; apiKey?: string }): Promise<ProviderDiscoveryResponse> {
+    return this.request('/api/providers/discover', { method: 'POST', body: JSON.stringify(input) })
   }
 
   /** 删除自定义供应商（内置供应商后端会拒绝）；未实现时 404。 */
@@ -528,6 +726,43 @@ export class ApiClient {
   /** 改会话元信息（重命名 / 置顶 / 静音）。 */
   patchConversation(conversationId: string, patch: ConversationPatch): Promise<{ conversation: Conversation }> {
     return this.request(`/api/conversations/${conversationId}`, { method: 'PATCH', body: JSON.stringify(patch) })
+  }
+
+  /**
+   * 编辑并重发：改写一条用户消息的正文，删掉它之后的一切，用新正文重跑这一轮。
+   *
+   * 库里那条用户消息是**原地改写**的（seq 不变），因此界面重拉历史后"我说的
+   * 那句话"还是那句话，只是内容换了。
+   */
+  editMessage(conversationId: string, seq: number, text: string): Promise<{ accepted: boolean; streamSeq: number }> {
+    return this.request(`/api/conversations/${conversationId}/messages/${seq}/edit`, {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+    })
+  }
+
+  /**
+   * 重新生成：把一条 agent 消息换成同一句提示词重新答一遍。
+   *
+   * 被换掉的只有那条回复与它之后的一切；用户那句话原地不动。
+   */
+  regenerateMessage(conversationId: string, seq: number): Promise<{ accepted: boolean; streamSeq: number }> {
+    return this.request(`/api/conversations/${conversationId}/messages/${seq}/regenerate`, {
+      method: 'POST',
+      body: '{}',
+    })
+  }
+
+  /**
+   * 从此处分支：把会话在第 N 条消息处的状态复制成一个新会话。
+   *
+   * 分支**不重跑**任何一轮——它只是把上下文带走，之后两边各走各的。
+   */
+  branchConversation(conversationId: string, atSeq: number, title?: string): Promise<{ conversation: Conversation }> {
+    return this.request(`/api/conversations/${conversationId}/branch`, {
+      method: 'POST',
+      body: JSON.stringify({ atSeq, ...(title === undefined ? {} : { title }) }),
+    })
   }
 
   /**
@@ -641,14 +876,22 @@ export class ApiClient {
     return this.request('/api/memory/reembed', { method: 'POST' })
   }
 
-  /** 用户反馈：👎 即时反思；👍 归因 helpful。 */
+  /**
+   * 用户反馈：👎 即时反思；👍 归因 helpful。
+   *
+   * 亲密度 bump 由服务端在这条路由里内联做（反馈被接受才涨），因此这里
+   * 只此一个入口；回包里的 agent 是更新后的真值，调用方据此刷新界面上的亲密度。
+   * 同一消息同一信号重复提交会幂等返回 { recorded:false, duplicate:true }。
+   */
   sendFeedback(input: {
     conversationId: string
     agentId: string
     signal: 'thumb_up' | 'thumb_down'
     userText?: string
     assistantText?: string
-  }): Promise<{ recorded: boolean }> {
+    /** 来源消息 id（服务端按 messageId+signal 去重，防连刷）。 */
+    messageId?: string
+  }): Promise<{ recorded: boolean; duplicate?: boolean; agent?: AgentDef }> {
     return this.request('/api/feedback', { method: 'POST', body: JSON.stringify(input) })
   }
 
@@ -662,8 +905,49 @@ export class ApiClient {
     return this.request(`/api/playbook/${id}/status`, { method: 'POST', body: JSON.stringify({ status }) })
   }
 
+  /**
+   * 产物/附件文件的可打开 URL。
+   *
+   * token 必须走查询串：这里的结果喂给 `<a href>` 与 `<img src>`，浏览器不会（也不能）
+   * 给它们加 Authorization 头，服务端 presentedToken 认 `?token=`。生产模式下没有它，
+   * 每张文件卡片都会 401——图片裂开、点开是 JSON 错误页。
+   */
   fileUrl(name: string): string {
-    return `${this.base}/api/files/${encodeURIComponent(name)}`
+    const path = `/api/files/${encodeURIComponent(name)}`
+    const token = currentApiToken()
+    return token.length === 0 ? `${this.base}${path}` : `${this.base}${path}?token=${encodeURIComponent(token)}`
+  }
+
+  /** 产物预览的元数据（GET /api/files/:name/info）。 */
+  fileInfo(name: string): Promise<ArtifactInfo> {
+    return this.request(`/api/files/${encodeURIComponent(name)}/info`)
+  }
+
+  /**
+   * 产物原始字节的 URL：内嵌预览的 `<img src>` / `<iframe src>` 直接吃它。
+   *
+   * token 同样只能走查询串（理由同 fileUrl）。download=true 时服务端回
+   * Content-Disposition: attachment——「下载」必须是一次显式动作，不是内嵌的副作用。
+   */
+  fileRawUrl(name: string, download = false): string {
+    const flag = download ? 'download=1' : ''
+    const suffix = flag.length === 0 ? '' : `?${flag}`
+    const path = `/api/files/${encodeURIComponent(name)}/raw${suffix}`
+    const token = currentApiToken()
+    const glue = flag.length === 0 ? '?' : '&'
+    return token.length === 0 ? `${this.base}${path}` : `${this.base}${path}${glue}token=${encodeURIComponent(token)}`
+  }
+
+  /**
+   * 把产物读成文本（Markdown / 代码预览用）。
+   *
+   * 走 raw 端点而不是拼字符串：符号链接逃逸与体积上限都在服务端那道闸后面，
+   * 渲染层不需要也不该再实现一遍。
+   */
+  async fileText(name: string): Promise<string> {
+    const response = await fetch(this.fileRawUrl(name))
+    if (!response.ok) throw new ApiRequestError(`HTTP ${response.status}`, response.status)
+    return response.text()
   }
 
   /** 工作区目录（agent 读写文件的默认位置；由服务端解析，渲染层不猜路径）。 */
@@ -861,43 +1145,8 @@ export function messageText(row: MessageRow): string {
 
 // ---- 观测面：用量账单 / 记忆健康度 / 进化指标（GET /api/usage、/api/memory/health、
 // /api/evolve/stats）三块面板的真实数据面。形状与 apps/server 对应路由的返回体
-// 一一对齐；服务端关闭某子系统时回 {enabled:false} 而不是报错，面板据此说明原因。 ----
-
-/** GET /api/usage 里按会话聚合的一行。 */
-export interface ConversationUsageRow {
-  conversationId: string
-  title: string
-  kind: Conversation['kind']
-  input: number
-  output: number
-  total: number
-  /** 带 usage 的消息条数（= 模型调用次数）。 */
-  messages: number
-}
-
-/** 供应商桶里的一个发言 agent（显示名由服务端从 agents 表取回）。 */
-export interface ProviderAgentUsage {
-  agentId: string
-  name: string
-  total: number
-}
-
-/** GET /api/usage 里按供应商聚合的一行（agents 按花费倒序）。 */
-export interface ProviderUsageRow {
-  provider: string
-  displayName: string
-  input: number
-  output: number
-  total: number
-  agents: ProviderAgentUsage[]
-}
-
-/** GET /api/usage 的返回体：两个维度来自同一批消息，合计恒等于 totals。 */
-export interface UsageReport {
-  byConversation: ConversationUsageRow[]
-  byProvider: ProviderUsageRow[]
-  totals: { input: number; output: number; total: number }
-}
+// 一一对齐；服务端关闭某子系统时回 {enabled:false} 而不是报错，面板据此说明原因。
+// 用量账单那组 DTO 已随顶部一起改为对 @ryharness/server 的纯类型导入。 ----
 
 /** 最近一次召回（GET /api/memory/health 的 lastRecall）。 */
 export interface MemoryRecall {

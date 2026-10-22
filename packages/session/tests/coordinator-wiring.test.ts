@@ -6,17 +6,17 @@
  *   半截回复仍然落库；
  * - 教训注入走真实调用路径：协调器绑定 → AgentLoop → EvolveService.compile，
  *   无关教训不得进入本轮 prompt。
- * @module @ryagent/session/tests/coordinator-wiring
+ * @module @ryharness/session/tests/coordinator-wiring
  */
 
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { AgentDefinition, Tool } from '@ryagent/agent'
-import { isAbortedError } from '@ryagent/agent'
-import type { GenerateOptions, LlmRuntime, StreamChunk, TokenUsage, ToolCallId } from '@ryagent/llm'
-import type { RunContext, UsageReport } from '@ryagent/session'
-import { SessionCoordinator, SessionStore } from '@ryagent/session'
+import type { AgentDefinition, Tool } from '@ryharness/agent'
+import { isAbortedError } from '@ryharness/agent'
+import type { GenerateOptions, LlmRuntime, StreamChunk, TokenUsage, ToolCallId } from '@ryharness/llm'
+import type { RunContext, UsageReport } from '@ryharness/session'
+import { SessionCoordinator, SessionStore } from '@ryharness/session'
 import { afterEach, describe, expect, it } from 'vitest'
 
 const AGENT: AgentDefinition = {
@@ -33,7 +33,7 @@ const USAGE_B: TokenUsage = { inputTokens: 60, outputTokens: 40, totalTokens: 10
 
 const dirs: string[] = []
 function dbPath(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'ryagent-session-'))
+  const dir = mkdtempSync(join(tmpdir(), 'ryharness-session-'))
   dirs.push(dir)
   return join(dir, 's.db')
 }
@@ -285,7 +285,7 @@ describe('取消链路', () => {
 
 describe('教训注入的真实路径', () => {
   it('AgentLoop 把本轮输入传给 EvolveService：相关教训进 prompt，无关的不进', async () => {
-    const { EvolveService } = await import('@ryagent/evolve')
+    const { EvolveService } = await import('@ryharness/evolve')
     const evolution = new EvolveService({ dbPath: dbPath(), logger: () => {} })
     try {
       const related = evolution.store.insertReflection({ agentId: 'a1', lesson: '写文件前先确认目录存在' })
@@ -309,7 +309,7 @@ describe('教训注入的真实路径', () => {
   })
 
   it('同样的规则在群聊里同样生效（调度器创建的循环也走这条路）', async () => {
-    const { EvolveService } = await import('@ryagent/evolve')
+    const { EvolveService } = await import('@ryharness/evolve')
     const evolution = new EvolveService({ dbPath: dbPath(), logger: () => {} })
     try {
       evolution.store.insertReflection({ agentId: 'ryen', lesson: '写文件前先确认目录存在' })

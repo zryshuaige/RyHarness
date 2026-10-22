@@ -1,4 +1,4 @@
-import { defineProperty } from '@ryagent/cosmokit'
+import { defineProperty } from '@ryharness/cosmokit'
 import { Context } from './context.ts'
 import { createCallable, joinPrototype, symbols, type Tracker } from './utils.ts'
 

@@ -9,13 +9,13 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { MemoryRow } from '@ryagent/memory'
-import { MemoryStore, toPublicMemories, toPublicMemory } from '@ryagent/memory'
+import type { MemoryRow } from '@ryharness/memory'
+import { MemoryStore, toPublicMemories, toPublicMemory } from '@ryharness/memory'
 import { afterEach, describe, expect, it } from 'vitest'
 
 const dirs: string[] = []
 function store(): MemoryStore {
-  const dir = mkdtempSync(join(tmpdir(), 'ryagent-memory-proj-'))
+  const dir = mkdtempSync(join(tmpdir(), 'ryharness-memory-proj-'))
   dirs.push(dir)
   return new MemoryStore(join(dir, 'm.db'))
 }

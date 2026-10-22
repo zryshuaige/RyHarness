@@ -8,7 +8,7 @@
  *
  * 约定：凡是**要出包**的记忆列表（HTTP 回包、事件负载、导出）都先过
  * {@link toPublicMemory}，不许把 store 的原始行直接往外抛。
- * @module @ryagent/memory/project
+ * @module @ryharness/memory/project
  */
 
 import type { MemoryKind } from './schema.ts'

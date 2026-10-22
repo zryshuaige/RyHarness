@@ -8,12 +8,12 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { RyAgentServer } from '@ryagent/server'
+import { RyHarnessServer } from '@ryharness/server'
 
-const dataDir = mkdtempSync(join(tmpdir(), 'ryagent-demo-server-'))
+const dataDir = mkdtempSync(join(tmpdir(), 'ryharness-demo-server-'))
 
 try {
-  const server = await RyAgentServer.create({ port: 0, dataDir })
+  const server = await RyHarnessServer.create({ port: 0, dataDir })
   console.log(`[demo] server at ${server.url} (data: ${dataDir})`)
 
   const templates = (await (await fetch(`${server.url}/api/agent-templates`)).json()) as {

@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentDef, ApiClient, Conversation, MessageRow, WsEvent } from '../renderer/src/api.ts'
 import { ChatView } from '../renderer/src/components/ChatView.tsx'
 import { LEAVE_MS } from '../renderer/src/lib/useLeaving.ts'
-import { ChatStore } from '../renderer/src/store.ts'
+import { bucketOf, ChatStore, type ConversationBucket } from '../renderer/src/store.ts'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -54,6 +54,7 @@ function row(id: string, seq: number, text = '历史消息'): MessageRow {
 let container: HTMLDivElement
 let root: ReturnType<typeof createRoot>
 let store: ChatStore
+let bucket: ConversationBucket
 /** 由测试驱动的 WS 事件泵。 */
 let push: (event: WsEvent) => void
 /** postMessage 的调用记录与行为（默认成功）。 */
@@ -100,7 +101,7 @@ function fakeApi(): ApiClient {
 async function render(props: { onNavigate?: (target: string) => void } = {}): Promise<void> {
   await act(async () => {
     root = createRoot(container)
-    root.render(<ChatView api={fakeApi()} conversation={conversation} agents={[agent]} store={store} {...props} />)
+    root.render(<ChatView api={fakeApi()} conversation={conversation} agents={[agent]} bucket={bucket} {...props} />)
     await Promise.resolve()
   })
 }
@@ -154,6 +155,7 @@ beforeEach(() => {
   container = document.createElement('div')
   document.body.appendChild(container)
   store = new ChatStore()
+  bucket = bucketOf(store)
   sent = []
   postBehavior = () => {
     return Promise.resolve({ accepted: true })
@@ -214,7 +216,7 @@ describe('搜索命中定位（around 游标）', () => {
 
     await act(async () => {
       window.dispatchEvent(
-        new CustomEvent('ryagent:scroll-to-message', { detail: { conversationId: 'c1', messageId: 'm42' } }),
+        new CustomEvent('ryharness:scroll-to-message', { detail: { conversationId: 'c1', messageId: 'm42' } }),
       )
       await Promise.resolve()
     })
@@ -236,7 +238,7 @@ describe('搜索命中定位（around 游标）', () => {
     await render()
     await act(async () => {
       window.dispatchEvent(
-        new CustomEvent('ryagent:scroll-to-message', { detail: { conversationId: 'c1', messageId: 'm1' } }),
+        new CustomEvent('ryharness:scroll-to-message', { detail: { conversationId: 'c1', messageId: 'm1' } }),
       )
       await Promise.resolve()
     })
@@ -249,7 +251,7 @@ describe('搜索命中定位（around 游标）', () => {
     await render()
     await act(async () => {
       window.dispatchEvent(
-        new CustomEvent('ryagent:scroll-to-message', { detail: { conversationId: 'other', messageId: 'm42' } }),
+        new CustomEvent('ryharness:scroll-to-message', { detail: { conversationId: 'other', messageId: 'm42' } }),
       )
       await Promise.resolve()
     })
@@ -263,7 +265,7 @@ describe('搜索命中定位（around 游标）', () => {
     await render()
     await act(async () => {
       window.dispatchEvent(
-        new CustomEvent('ryagent:scroll-to-message', { detail: { conversationId: 'c1', messageId: 'gone' } }),
+        new CustomEvent('ryharness:scroll-to-message', { detail: { conversationId: 'c1', messageId: 'gone' } }),
       )
       await Promise.resolve()
     })
@@ -291,7 +293,7 @@ describe('搜索命中定位（around 游标）', () => {
     await render()
     await act(async () => {
       window.dispatchEvent(
-        new CustomEvent('ryagent:scroll-to-message', { detail: { conversationId: 'c1', messageId: 'm42' } }),
+        new CustomEvent('ryharness:scroll-to-message', { detail: { conversationId: 'c1', messageId: 'm42' } }),
       )
       await Promise.resolve()
     })
@@ -328,8 +330,10 @@ describe('发送失败要有重试入口', () => {
     await render()
     typeText('帮我看看这个')
     pressEnter()
-    // 60ms：store 的重绘是 40ms 合并窗口（见 NOTIFY_INTERVAL_MS），回执落地要过它。
-    await settle(60)
+    // 120ms：store 的重绘是 40ms 合并窗口（见 NOTIFY_INTERVAL_MS）。回执的失败是
+    // promise 微任务，落点可能正好压在窗口边界上——边界那一侧要再等一个合并窗口，
+    // 否则这条断言量的就是「回执落在窗口的哪一相位」，而不是「界面最终有没有失败态」。
+    await settle(120)
 
     // 气泡还在，但它不是"已送达"：红条之外还要在这条消息上自己说清楚。
     const failed = container.querySelector('.chat-hint')
@@ -345,7 +349,7 @@ describe('发送失败要有重试入口', () => {
     act(() => {
       failed!.querySelector<HTMLButtonElement>('button')!.click()
     })
-    await settle(60)
+    await settle(120)
     expect(sent).toEqual(['帮我看看这个', '帮我看看这个'])
     expect(container.querySelector('.chat-hint')).toBeNull()
     // 重试没有多出一条消息：仍是原来那一条用户气泡。
@@ -397,12 +401,12 @@ describe('错误条可读化', () => {
       type: 'error',
       conversationId: 'c1',
       code: 'MISSING_CREDENTIAL',
-      message: '@ryagent/llm-openai: provider "siliconflow" needs its API key in the RYAGENT_KEY_SILICONFLOW variable',
+      message: '@ryharness/llm-openai: provider "siliconflow" needs its API key in the RYHARNESS_KEY_SILICONFLOW variable',
     })
     const banner = container.querySelector('.error-banner')
     expect(banner?.textContent).toContain('API Key')
-    expect(banner?.textContent).not.toContain('RYAGENT_KEY')
-    expect(banner?.textContent).not.toContain('@ryagent/llm-openai')
+    expect(banner?.textContent).not.toContain('RYHARNESS_KEY')
+    expect(banner?.textContent).not.toContain('@ryharness/llm-openai')
 
     act(() => {
       buttonByText('.error-banner button', '去我的 → 模型供应商').click()
@@ -410,18 +414,18 @@ describe('错误条可读化', () => {
     expect(navigated).toEqual(['me'])
   })
 
-  it('宿主没接导航时，动作退化成 ryagent:navigate 窗口事件', async () => {
+  it('宿主没接导航时，动作退化成 ryharness:navigate 窗口事件', async () => {
     await render()
     emit({ type: 'error', conversationId: 'c1', code: 'NOT_FOUND', message: 'model_not_found: qwen-max' })
     const seen: unknown[] = []
     const listener = (event: Event): void => {
       seen.push((event as CustomEvent<{ target?: string }>).detail)
     }
-    window.addEventListener('ryagent:navigate', listener)
+    window.addEventListener('ryharness:navigate', listener)
     act(() => {
       buttonByText('.error-banner button', '去通讯录改 agent').click()
     })
-    window.removeEventListener('ryagent:navigate', listener)
+    window.removeEventListener('ryharness:navigate', listener)
     expect(seen).toEqual([{ target: 'contacts' }])
   })
 
@@ -431,6 +435,28 @@ describe('错误条可读化', () => {
     const banner = container.querySelector('.error-banner')
     expect(banner?.textContent).toContain('这一轮没跑起来')
     expect(banner?.textContent).toContain('上游超时')
+  })
+
+  it('认不出的故障：原文折进「详情」，不与红条第一行挤在一起', async () => {
+    await render()
+    emit({
+      type: 'error',
+      conversationId: 'c1',
+      code: 'SOMETHING_NEW',
+      message: 'scheduler queue stalled at depth 3',
+    })
+    const banner = container.querySelector('.error-banner')
+    expect(banner).not.toBeNull()
+    // 第一眼是人话 + 下一步。
+    const visible = banner?.querySelector('strong')?.textContent ?? ''
+    expect(visible).toBe('这一轮没跑起来。')
+    expect(visible).not.toContain('scheduler queue')
+    // 原文在折叠的「详情」里（与 HistoryFailure 同一套 affordance，默认不带 open）。
+    const details = banner?.querySelector('details')
+    expect(details).not.toBeNull()
+    expect(details?.hasAttribute('open')).toBe(false)
+    expect(details?.querySelector('summary')?.textContent).toBe('详情')
+    expect(details?.querySelector('code')?.textContent).toContain('scheduler queue stalled at depth 3')
   })
 })
 
@@ -483,7 +509,7 @@ describe('聊天区窗口化', () => {
     expect(container.querySelector('[data-message-id="m3"]')).toBeNull()
     await act(async () => {
       window.dispatchEvent(
-        new CustomEvent('ryagent:scroll-to-message', { detail: { conversationId: 'c1', messageId: 'm3' } }),
+        new CustomEvent('ryharness:scroll-to-message', { detail: { conversationId: 'c1', messageId: 'm3' } }),
       )
       await Promise.resolve()
     })

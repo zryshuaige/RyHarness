@@ -1,5 +1,5 @@
 {
-  "name": "@ryagent/server",
+  "name": "@ryharness/server",
   "version": "0.1.0",
   "type": "module",
   "license": "MIT",
@@ -18,16 +18,16 @@
     "dev": "tsx src/main.ts"
   },
   "dependencies": {
-    "@ryagent/agent": "workspace:*",
-    "@ryagent/cordis": "workspace:*",
-    "@ryagent/group": "workspace:*",
-    "@ryagent/llm": "workspace:*",
-    "@ryagent/llm-openai": "workspace:*",
-    "@ryagent/session": "workspace:*",
-    "@ryagent/tools": "workspace:*",
+    "@ryharness/agent": "workspace:*",
+    "@ryharness/cordis": "workspace:*",
+    "@ryharness/llm": "workspace:*",
+    "@ryharness/llm-openai": "workspace:*",
+    "@ryharness/session": "workspace:*",
+    "@ryharness/tools": "workspace:*",
+    "@ryharness/voice": "workspace:*",
     "ws": "^8.18.0",
-    "@ryagent/memory": "workspace:*",
-    "@ryagent/evolve": "workspace:*"
+    "@ryharness/memory": "workspace:*",
+    "@ryharness/evolve": "workspace:*"
   },
   "devDependencies": {
     "@types/ws": "^8.5.10"

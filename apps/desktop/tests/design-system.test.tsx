@@ -17,7 +17,7 @@
  *
  * 另外两条资产/组件层的约定：品牌猫单源、橘猫是一等头像选项。
  */
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 // 路径走 fs 而不是 URL：jsdom 环境会把全局 URL 换成 whatwg 实现，import.meta.url
 // 在它那儿解析不出 file: 协议（"The URL must be of scheme file"）。
@@ -35,6 +35,7 @@ import {
   parseAvatarSpec,
   randomAvatarSpec,
 } from '../renderer/src/components/avatars/avatars.tsx'
+import { Cat } from '../renderer/src/components/Cat.tsx'
 import { ICONS } from '../renderer/src/components/Icon.tsx'
 import { RightPanel } from '../renderer/src/components/RightPanel.tsx'
 import { ChatStore } from '../renderer/src/store.ts'
@@ -45,17 +46,247 @@ const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '../renderer/src')
 const HTML = resolve(dirname(fileURLToPath(import.meta.url)), '../renderer/index.html')
 const BRAND = resolve(dirname(fileURLToPath(import.meta.url)), '../assets/brand')
 
+type Rgba = [number, number, number, number]
+
+/** '#rgb' / '#rrggbb' / 'rgb(r, g, b)' / 'rgba(r, g, b, a)' / 'transparent' → RGBA。 */
+function parseColor(value: string): Rgba | null {
+  const text = value.trim().toLowerCase()
+  if (text === 'transparent') return [0, 0, 0, 0]
+  const hex = /^#([0-9a-f]{3,8})$/.exec(text)?.[1]
+  if (hex !== undefined) {
+    // 三位写法每半段复制一次；其余长度（含 8 位的 alpha）不是我们要的色
+    const wide = hex.length <= 4 ? hex.replace(/./g, '$&$&') : hex
+    if (wide.length !== 6) return null
+    return [
+      Number.parseInt(wide.slice(0, 2), 16),
+      Number.parseInt(wide.slice(2, 4), 16),
+      Number.parseInt(wide.slice(4, 6), 16),
+      1,
+    ]
+  }
+  const fn = /^rgba?\(([^)]+)\)$/.exec(text)?.[1]
+  if (fn === undefined) return null
+  const parts = fn.split(/[,/\s]+/).filter((part) => {
+    return part !== ''
+  })
+  if (parts.length < 3) return null
+  return [
+    Number.parseFloat(parts[0] as string),
+    Number.parseFloat(parts[1] as string),
+    Number.parseFloat(parts[2] as string),
+    parts.length > 3 ? Number.parseFloat(parts[3] as string) : 1,
+  ]
+}
+
+/** 半透明色压到不透明底上。 */
+function flatten(color: Rgba, backdrop: number[]): [number, number, number] {
+  const alpha = color[3]
+  return [
+    color[0] * alpha + backdrop[0] * (1 - alpha),
+    color[1] * alpha + backdrop[1] * (1 - alpha),
+    color[2] * alpha + backdrop[2] * (1 - alpha),
+  ]
+}
+
+/** WCAG 2.x 对比度。任一端解析不出来就返回 0——宁可红，也不当它通过。 */
+function contrastRatio(fg: Rgba | null, bg: Rgba | null): number {
+  if (fg === null || bg === null) return 0
+  const white: [number, number, number] = [255, 255, 255]
+  const back = flatten(bg, white)
+  const front = flatten(fg, back)
+  const luminance = (rgb: number[]): number => {
+    const [r, g, b] = rgb.map((raw) => {
+      const channel = raw / 255
+      return channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
+    })
+    return 0.2126 * (r ?? 0) + 0.7152 * (g ?? 0) + 0.0722 * (b ?? 0)
+  }
+  const [light, dark] = [luminance(front), luminance(back)].sort((a, b) => {
+    return b - a
+  })
+  return (light as number) / ((dark as number) + 0.05)
+}
+
+/**
+ * 把四张样式表按 main.tsx 的真实顺序注入 jsdom，var() 全部换成字面值。
+ *
+ * 为什么值得单起一套：全仓的视觉门禁此前全是 CSS 字符串匹配——看不见层叠（谁盖过谁），
+ * 也看不见 token 是否真的解析得出颜色。这里用真的 CSSOM 走一遍级联，
+ * 拿到的是「该元素此刻真正生效的声明」。
+ *
+ * jsdom 不做 var() 替换（getComputedStyle 会把 'var(--text-primary)' 原样吐回来，
+ * 背景则直接退回初始值），所以先注入原样式、按当前 data-theme 让 jsdom 把 :root 上
+ * 每个 token 解析成字面值，再把这些字面值填回 var() 重新注入一遍。两遍都是真的级联，
+ * 变的只有 token 这一步由谁来解。
+ */
+function injectSheets(theme: 'light' | 'dark'): { style: HTMLStyleElement } {
+  const css = STYLESHEETS.map((name) => {
+    return readFileSync(resolve(SRC, name), 'utf8')
+  }).join('\n')
+
+  const probe = document.createElement('style')
+  probe.textContent = css
+  document.head.appendChild(probe)
+  document.documentElement.dataset.theme = theme
+  const rootStyle = window.getComputedStyle(document.documentElement)
+  const tokens = new Map<string, string>()
+  for (const m of css.matchAll(/(--[a-z0-9-]+)\s*:/g)) {
+    const value = rootStyle.getPropertyValue(m[1] as string).trim()
+    if (value !== '') tokens.set(m[1] as string, value)
+  }
+  probe.remove()
+
+  const element = document.createElement('style')
+  element.textContent = css.replace(/var\(\s*(--[a-z0-9-]+)\s*(?:,[^)]*)?\)/g, (whole, name: string) => {
+    // token 本身可能还指向另一个 token（--focus-outline: var(--amber-text)），顺着走完
+    let value = tokens.get(name) ?? whole
+    for (let depth = 0; depth < 5; depth++) {
+      const next = /^var\(\s*(--[a-z0-9-]+)\s*\)$/.exec(value.trim())?.[1]
+      if (next === undefined || !tokens.has(next)) break
+      value = tokens.get(next) as string
+    }
+    return value
+  })
+  document.head.appendChild(element)
+  return { style: element }
+}
+
+/** 同 injectSheets，只是外层套一个「白底控件同名壳」的夹具，只问静态声明。 */
+function liveStyles(theme: 'light' | 'dark'): {
+  declared: (selector: string, prop: string) => string
+  color: (selector: string, prop: string) => Rgba | null
+  dispose: () => void
+} {
+  const { style: element } = injectSheets(theme)
+
+  // 每个白底控件挂一个同名壳：只测样式表的层叠结果，不引入真实组件（那会把
+  // 组件层的条件分支也搅进来，测到的就不是「这条 CSS 画出来什么样」）
+  const fixture = document.createElement('div')
+  for (const selector of WHITE_SURFACE_SELECTORS) {
+    fixture.appendChild(document.createElement('div')).className = selector.slice(1)
+  }
+  document.body.appendChild(fixture)
+
+  const styleOf = (selector: string): CSSStyleDeclaration => {
+    const target = fixture.querySelector(selector)
+    if (target === null) throw new Error(`jsdom 夹具里没有 ${selector}`)
+    return window.getComputedStyle(target)
+  }
+  /**
+   * 控件背后真的那层底色。透明的控件（首屏的起步胶囊）自己不画背景，它压的是页面底色
+   * `--bg-app`——判对比度必须按那层算。
+   *
+   * 为什么不能沿用 contrastRatio 里"透明按白底合成"的旧默认：那只在浅色档成立。暗色档
+   * 下把透明的浅色字合成到白底上，算出来是 1.15:1，一条其实完全可读的胶囊会被判成不达标。
+   * 这不是放宽门禁，是把门禁问的那句"衬在什么上面"问对。
+   */
+  const backdrop = (): string => {
+    return window.getComputedStyle(document.documentElement).getPropertyValue('--bg-app').trim()
+  }
+  return {
+    declared: (selector, prop) => {
+      return styleOf(selector).getPropertyValue(prop).trim()
+    },
+    color: (selector, prop) => {
+      const value = styleOf(selector).getPropertyValue(prop)
+      return parseColor(value.trim() === 'transparent' || value.trim() === '' ? backdrop() : value)
+    },
+    dispose: () => {
+      fixture.remove()
+      element.remove()
+      delete document.documentElement.dataset.theme
+    },
+  }
+}
+
+/** 聚焦之后真正生效的焦点声明。 */
+interface FocusSignal {
+  outline: string
+  boxShadow: string
+  /** 有没有可见的焦点信号：outline 与 box-shadow 任一不是「什么都没有」。 */
+  visible: boolean
+}
+
+/**
+ * 渲染级焦点探针：真样式表 + 真元素 + 真 focus()，读的是层叠之后的结果。
+ *
+ * 为什么字符串匹配测不出焦点环的回归：把兜底写成「:where(button, a[href], [tabindex])」
+ * 在文件里依然漂漂亮亮，`grep ':where' styles.css` 照样通过——但键盘 Tab 到的每一个
+ * 表单控件都不在兜底里，而且一次编译、一个用例都不会红。同理，`.field input[type="range"]`
+ * 那句 `box-shadow: none` 与 `.field input:focus` 同为 0,2,1，靠后的它把焦点环整个吞掉，
+ * 文件里两条规则都在、看着都没问题，级联之后滑杆聚焦时 outline 与 box-shadow 双双为空。
+ * 这两件事只有真的走一遍级联才看得见。
+ *
+ * 一条必须知道的限制：jsdom 的 getComputedStyle 只按源码顺序解析级联，完全不看特异度
+ * （实测 `.high:focus` 写在前面、`:where(...)` 写在后面，赢的是后面那个）。所以这里能
+ * 钉住的是「聚焦后还剩什么」，钉不住「浏览器里两条规则谁赢」——后者只能用 specificity()
+ * 算，别拿这里的断言冒充。
+ */
+function focusProbe(html: string): { focus: (selector: string) => FocusSignal; dispose: () => void } {
+  const { style } = injectSheets('dark')
+  const fixture = document.createElement('div')
+  fixture.innerHTML = html
+  document.body.appendChild(fixture)
+
+  return {
+    focus: (selector) => {
+      const target = fixture.querySelector<HTMLElement>(selector)
+      if (target === null) throw new Error(`jsdom 夹具里没有 ${selector}`)
+      target.focus()
+      const cs = window.getComputedStyle(target)
+      const outline = cs.outline.trim()
+      const boxShadow = cs.boxShadow.trim()
+      const blank = (value: string): boolean => {
+        return value === '' || value === 'none'
+      }
+      return { outline, boxShadow, visible: !blank(outline) || !blank(boxShadow) }
+    },
+    dispose: () => {
+      ;(document.activeElement as HTMLElement | null)?.blur()
+      fixture.remove()
+      style.remove()
+      delete document.documentElement.dataset.theme
+    },
+  }
+}
+
 /** 去注释后的样式源码：注释里提到的 token / 选择器不算数。 */
 const strip = (css: string): string => {
   return css.replace(/\/\*[\s\S]*?\*\//g, '')
 }
 
 const STYLESHEETS = ['styles.css', 'styles-product.css', 'styles-provider.css', 'styles-memory.css'] as const
+
+/**
+ * 全局焦点环兜底那条选择器。写成一个常量是因为它的每个片段都被单独断言过：原生可聚焦
+ * 控件在不在表里、tabindex="-1" 有没有被排除、排除是不是待在 :where() 内部——
+ * 少任何一条都是一次静默的键盘可达性回归，而断言散落各处时很容易只改一半。
+ */
+const FOCUS_FALLBACK =
+  ':where(button, a[href], input, select, textarea, summary, [tabindex]:not([tabindex="-1"])):focus-visible'
+
+/**
+ * 白底面的控件。纯白面压在白底上时暖棕阴影只有 1.2:1（离 WCAG 1.4.11 要求的 3:1 还差
+ * 2.5 倍），所以它们的边缘只能由 --edge 描边给；这一组曾经整体退化成「只有阴影」，
+ * 控件还在、轮廓没了，正是「UI 方方的、糊」的一半来源。
+ *
+ * 首屏的「待办行」不在这一组里：它已经不再是白面控件，而是一行压在页面底色上的平行
+ * （描边与阴影都撤了）。它换来的新保证在下面那条 describe 里单独钉住——不是删掉了不管，
+ * 是那个保证的前提已经不成立了。
+ */
+const WHITE_SURFACES: readonly (readonly [(typeof STYLESHEETS)[number], string])[] = [
+  ['styles.css', '.bubble-bubble'],
+  ['styles.css', '.btn'],
+  ['styles.css', '.me-row'],
+  ['styles.css', '.welcome-chip'],
+  ['styles.css', '.chat-input-col'],
+  ['styles-product.css', '.welcome-compose'],
+]
+const WHITE_SURFACE_SELECTORS = WHITE_SURFACES.map((entry) => {
+  return entry[1]
+})
 const sheet = (name: (typeof STYLESHEETS)[number]): string => {
   return strip(readFileSync(resolve(SRC, name), 'utf8'))
-}
-const brandAsset = (name: string): string => {
-  return readFileSync(resolve(BRAND, name), 'utf8')
 }
 
 /** :root / :root[data-theme=...] 块里声明的 token（含各主题覆盖）。 */
@@ -70,8 +301,32 @@ function themeTokens(css: string): Map<string, string> {
 }
 
 /**
+ * 按顶层逗号拆选择器组，并压掉多余空白，所以 `.a,\n.b { … }` 里问 `.b` 也问得到。
+ * `:where(a, b)` / `:has(a, b)` 里的逗号不是分隔符——全局焦点环那条正是这个形状，
+ * 按裸逗号拆会把它切成三个互相不存在的选择器。
+ */
+function splitSelectors(prelude: string): string[] {
+  const parts: string[] = []
+  let depth = 0
+  let current = ''
+  for (const ch of prelude) {
+    if (ch === '(') depth += 1
+    else if (ch === ')') depth = Math.max(0, depth - 1)
+    if (ch === ',' && depth === 0) {
+      parts.push(current)
+      current = ''
+      continue
+    }
+    current += ch
+  }
+  parts.push(current)
+  return parts.map((sel) => {
+    return sel.trim().replace(/\s+/g, ' ')
+  })
+}
+
+/**
  * 顶层规则（不在 @media / @keyframes / @container 内）的「选择器组 → 声明块」。
- * 选择器组按逗号拆开并压掉多余空白，所以 `.a,\n.b { … }` 里问 `.b` 也问得到。
  */
 function topLevelRules(css: string): { selectors: string[]; body: string }[] {
   const out: { selectors: string[]; body: string }[] = []
@@ -88,12 +343,7 @@ function topLevelRules(css: string): { selectors: string[]; body: string }[] {
       if (depth !== 0) continue
       const prelude = css.slice(ruleStart, bodyStart - 1).trim()
       if (!prelude.startsWith('@')) {
-        out.push({
-          selectors: prelude.split(',').map((sel) => {
-            return sel.trim().replace(/\s+/g, ' ')
-          }),
-          body: css.slice(bodyStart, i),
-        })
+        out.push({ selectors: splitSelectors(prelude), body: css.slice(bodyStart, i) })
       }
       ruleStart = i + 1
     }
@@ -119,6 +369,18 @@ function effectiveBody(css: string, selector: string): string {
     if (rule.selectors.includes(selector)) found = rule.body
   }
   return found
+}
+
+/** 某个选择器在所有规则组里的声明块拼起来（一个选择器可能被拆成几组分头写）。 */
+function allBodies(css: string, selector: string): string {
+  return topLevelRules(css)
+    .filter((rule) => {
+      return rule.selectors.includes(selector)
+    })
+    .map((rule) => {
+      return rule.body
+    })
+    .join('\n')
 }
 
 /** 某个 at-rule（@media / @container）内部的整段文本（含嵌套规则）。 */
@@ -175,9 +437,12 @@ function boxSides(
 
 /** 选择器特异性：id ×1e4 + class/属性/伪类 ×1e2 + 元素。数够这几条规则用。 */
 function specificity(selector: string): number {
-  const ids = selector.match(/#[\w-]+/g)?.length ?? 0
-  const classes = selector.match(/\.[\w-]+|\[[^\]]+\]|::?[\w-]+(?:\([^)]*\))?/g)?.length ?? 0
-  const types = selector.match(/(^|[\s>+~,])([a-zA-Z][\w-]*)/g)?.length ?? 0
+  // :where() 里的部分按 0 计——这正是它存在的理由。不认它就会把全局焦点环
+  // 算得比组件类还重，于是得出「组件盖不掉默认值」这个相反的结论。
+  const flat = selector.replace(/:where\([^)]*\)/g, ' ')
+  const ids = flat.match(/#[\w-]+/g)?.length ?? 0
+  const classes = flat.match(/\.[\w-]+|\[[^\]]+\]|::?[\w-]+(?:\([^)]*\))?/g)?.length ?? 0
+  const types = flat.match(/(^|[\s>+~,])([a-zA-Z][\w-]*)/g)?.length ?? 0
   return ids * 10_000 + classes * 100 + types
 }
 
@@ -268,14 +533,93 @@ describe('一个组件的边缘只定义一次', () => {
     }
   })
 
-  it('欢迎页与聊天页的 composer 是同一个长相（同一档阴影，不叠描边）', () => {
+  it('欢迎页与聊天页的 composer 是同一个长相（同一档阴影 + 同一根 --edge 描边）', () => {
     const inputCol = ruleBody(sheet('styles.css'), '.chat-input-col')
     const welcome = ruleBody(sheet('styles-product.css'), '.welcome-compose')
     expect(inputCol).toContain('box-shadow: var(--shadow-2)')
     expect(welcome).toContain('box-shadow: var(--shadow-2)')
-    // 抬起面只用阴影：两个 composer 都不再叠描边
-    expect(inputCol).toMatch(/border:\s*none/)
-    expect(welcome).toMatch(/border:\s*none/)
+    // 白卡压在白底上时阴影量不出边，所以「边缘归描边、抬升归阴影」两根都要在，
+    // 且必须是同一根：少一根两处 composer 就会再次画成两种控件。
+    expect(inputCol).toContain('border: 1px solid var(--edge)')
+    expect(welcome).toContain('border: 1px solid var(--edge)')
+  })
+
+  /**
+   * 首屏的"一屏一件事"是有形状的，形状就是这三条。此前它们只是评审意见：改布局的人
+   * 看不到自己动了唯一那块抬升面，于是每轮都多长出一张卡。这里把它们变成会红的断言。
+   *
+   * 允许出现的抬升面只有两处：composer（全页的焦点）与品牌猫的画（它带的是 .cat 这个
+   * 别的组件的形状，首屏只是给它一个位置）。其余任何 .welcome* 规则都不许有阴影——
+   * 第二块抬升面就是「拼装感」的第一来源。
+   */
+  const welcomeElevated = (): string[] => {
+    const allowed = new Set(['.welcome-compose', '.welcome-cat .cat'])
+    /**
+     * 「抬升」不等于「有 box-shadow」：`0 0 0 2px` 那种是描边环（叠头像之间互相切开、
+     * 圆形头像收边），偏移与模糊都是 0，画出来的东西始终贴在原位。真正的抬升一定带
+     * 非零的偏移或模糊。认不出数字的（var(--shadow-2) 这类）一律当抬升，宁可误报。
+     */
+    const lifts = (value: string): boolean => {
+      return value.split(',').some((part) => {
+        const parts = part.trim().split(/\s+/)
+        if (parts.length < 3) return true
+        const [x, y, blur] = parts as [string, string, string]
+        return /[1-9]/.test(x) || /[1-9]/.test(y) || /[1-9]/.test(blur)
+      })
+    }
+    const found: string[] = []
+    for (const name of ['styles.css', 'styles-product.css'] as const) {
+      for (const rule of topLevelRules(sheet(name))) {
+        const shadow = /box-shadow:\s*([^;]+);/.exec(rule.body)?.[1]?.trim()
+        if (shadow === undefined || shadow === 'none' || shadow === '') continue
+        if (!lifts(shadow)) continue
+        for (const selector of rule.selectors) {
+          if (!selector.startsWith('.welcome') || allowed.has(selector)) continue
+          if (selector.includes(':')) continue
+          found.push(selector)
+        }
+      }
+    }
+    return found
+  }
+
+  it('首屏只有 composer 一块抬升面（品牌猫的画除外），第二块就是拼装感', () => {
+    expect(welcomeElevated()).toEqual([])
+  })
+
+  it('首屏只用两档圆角：交互胶囊是 pill，dock 与待办行是 lg', () => {
+    const seen = new Map<string, string>()
+    for (const name of ['styles.css', 'styles-product.css'] as const) {
+      for (const rule of topLevelRules(sheet(name))) {
+        for (const selector of rule.selectors) {
+          if (!selector.startsWith('.welcome')) continue
+          // 品牌猫的底板沿用 .cat 这个别的组件的形状，不受这条门禁约束。
+          if (selector.includes('.cat')) continue
+          const radius = /border-radius:\s*([^;]+);/.exec(rule.body)?.[1]?.trim()
+          if (radius !== undefined) seen.set(selector, radius)
+        }
+      }
+    }
+    const allowed = new Set(['var(--radius-pill)', 'var(--radius-lg)', '50%'])
+    const offenders = [...seen].filter((entry) => {
+      return !allowed.has(entry[1])
+    })
+    expect(offenders, `首屏出现了第三档圆角: ${offenders.map((e) => `${e[0]} → ${e[1]}`).join(' / ')}`).toEqual([])
+    // 两档各自的归属也要钉住，否则"都用 pill"也算过：dock 必须是 lg，胶囊必须是 pill。
+    // 胶囊的圆角落在 .welcome-chip 上（那是它唯一的定义处），.welcome-task 只覆盖布局。
+    expect(seen.get('.welcome-compose')).toBe('var(--radius-lg)')
+    expect(seen.get('.welcome-chip')).toBe('var(--radius-pill)')
+  })
+
+  it('待办行是平的：它复刻左栏的一行，就不能自己再长成一张卡', () => {
+    const row = ruleBody(sheet('styles.css'), '.welcome-recent-item')
+    // 这条取代它此前在 WHITE_SURFACES 里的位置：白面没了，"边缘归描边"的前提也不成立了，
+    // 换成"它不许再有面"——描边与阴影都不得出现，可见性交给悬停底与焦点环。
+    expect(row).not.toMatch(/box-shadow:\s*var\(--shadow-[12]\)/)
+    expect(row).toMatch(/(?:^|;|\s)border:\s*none/)
+    expect(row).toMatch(/background:\s*transparent/)
+    // 悬停时仍然浮出一个圆角矩形：平着不等于摸不着。
+    expect(ruleBody(sheet('styles.css'), '.welcome-recent-item:hover')).toContain('background: var(--hover-bg)')
   })
 
   it('.btn 是白底控件，靠那 1px --edge 站住（阴影在纯白底上等于没有）', () => {
@@ -431,6 +775,12 @@ describe('暗色用户不被按在浅色上', () => {
   const app = readFileSync(resolve(SRC, 'App.tsx'), 'utf8')
   /** index.html 里的内联 splash 样式（整份 HTML 当 CSS 解析会被 <script> 里的括号带偏）。 */
   const splashCss = strip(/<style>([\s\S]*?)<\/style>/.exec(html)?.[1] ?? '')
+  /**
+   * 主题引导脚本：不再是 index.html 里的内联脚本，而是 public/theme-boot.js
+   * （CSP 的 script-src 收回了 'unsafe-inline'，内联脚本过不了）。口径不变：
+   * 存储键与 App 一致，并且在 React 挂载之前就把 data-theme 定好。
+   */
+  const themeBoot = readFileSync(resolve(SRC, '../public/theme-boot.js'), 'utf8')
 
   /** 假系统偏好：vitest 的 jsdom 环境不装 window.matchMedia。 */
   function stubPrefersDark(dark: boolean): void {
@@ -440,7 +790,7 @@ describe('暗色用户不被按在浅色上', () => {
   }
 
   it('没有存储时跟随系统深浅色（此前一律硬回浅色）', () => {
-    localStorage.removeItem('ryagent-theme')
+    localStorage.removeItem('ryharness-theme')
     try {
       stubPrefersDark(true)
       expect(loadTheme()).toBe('dark')
@@ -448,18 +798,18 @@ describe('暗色用户不被按在浅色上', () => {
       expect(loadTheme()).toBe('light')
     } finally {
       vi.unstubAllGlobals()
-      localStorage.removeItem('ryagent-theme')
+      localStorage.removeItem('ryharness-theme')
     }
   })
 
   it('用户自己选过就听用户的，系统偏好不再插手', () => {
-    localStorage.setItem('ryagent-theme', 'light')
+    localStorage.setItem('ryharness-theme', 'light')
     try {
       stubPrefersDark(true)
       expect(loadTheme()).toBe('light')
     } finally {
       vi.unstubAllGlobals()
-      localStorage.removeItem('ryagent-theme')
+      localStorage.removeItem('ryharness-theme')
     }
   })
 
@@ -470,15 +820,26 @@ describe('暗色用户不被按在浅色上', () => {
     expect(html).not.toMatch(/#splash \{[^}]*background: #FAF7F2/)
   })
 
-  it('index.html：挂载前那段内联脚本就把 data-theme 定好，且与 App 同一口径', () => {
-    const keyInHtml = /localStorage\.getItem\('([^']+)'\)/.exec(html)?.[1]
-    const keyInApp = /localStorage\.getItem\('([^']+)'\)/.exec(app)?.[1]
-    expect(keyInHtml).toBe(keyInApp)
-    expect(html).toContain('document.documentElement.dataset.theme')
-    expect(html).toContain('(prefers-color-scheme: dark)')
-    // 脚本必须排在 </head> 之前，也排在 React 挂载脚本之前
-    expect(html.indexOf('dataset.theme')).toBeLessThan(html.indexOf('</head>'))
-    expect(html.indexOf('dataset.theme')).toBeLessThan(html.indexOf('/src/main.tsx'))
+  it('index.html：挂载前那段引导脚本就把 data-theme 定好，且与 App 同一口径', () => {
+    // 主题键在两处（外部引导脚本与 App）必须是同一个。取键的方式有两种：直接读
+    // localStorage，或走 lib/storage 的旧键回落层——两种都认。
+    const keyOf = (source: string): string | undefined => {
+      return (
+        /localStorage\.getItem\('([^']+)'\)/.exec(source)?.[1] ?? /readSetting\('([^']+)'\)/.exec(source)?.[1]
+      )
+    }
+    const keyInBoot = keyOf(themeBoot)
+    const keyInApp = keyOf(app)
+    expect(keyInBoot).toBe(keyInApp)
+    expect(keyInBoot).toBe('ryharness-theme')
+    expect(themeBoot).toContain('document.documentElement.dataset.theme')
+    expect(themeBoot).toContain('(prefers-color-scheme: dark)')
+    // 脚本本身在外部文件里，index.html 里的 <script src> 必须排在 </head> 之前，
+    // 也排在 React 挂载脚本之前（经典脚本、同步执行，才赶得上第一帧）。
+    const tag = /<script src="[^"]*theme-boot\.js"[^>]*>/.exec(html)?.[0] ?? ''
+    expect(tag, 'index.html 里没有引用 theme-boot.js').not.toBe('')
+    expect(html.indexOf(tag)).toBeLessThan(html.indexOf('</head>'))
+    expect(html.indexOf(tag)).toBeLessThan(html.indexOf('/src/main.tsx'))
   })
 
   it('暗色下品牌方块仍然看得见（moonshot / ollama 的品牌色几乎就是背景色）', () => {
@@ -520,27 +881,33 @@ describe('品牌猫单源', () => {
     expect(registered).not.toContain('cat')
   })
 
-  it('母版在 assets/brand/cat-face*.svg，且没有领结', () => {
-    for (const mood of ['cat-face.svg', 'cat-face-thinking.svg', 'cat-face-happy.svg']) {
-      expect(existsSync(resolve(BRAND, mood)), mood).toBe(true)
-    }
-    const idle = brandAsset('cat-face.svg')
-    // 轮廓：脸底板 + 两只三角耳 + 圆眼 + 三角鼻 + 笑嘴，就这些
-    expect(idle).toContain('<circle cx="32" cy="36" r="17"')
-    expect(idle).toContain('d="M21.5 22.6 L19.6 10.4 L29.1 19.3 Z"')
-    expect(idle).toContain('d="M42.5 22.6 L44.4 10.4 L34.9 19.3 Z"')
-    // 领结是此前 AppIcon 那只手绘猫的记号，母版里不许再出现
-    expect(idle).not.toMatch(/bow|领结/)
+  it('母版是 assets/brand/mark.png 位图，品牌目录里没有第二份造型', () => {
+    // 母版改成位图之后，「三只几何 SVG + 三份派生图标」这套结构整个退场了。品牌目录里
+    // 只剩母版与它的分级契约；任何新出现的 svg/png 都是有人又画了一只猫。
+    expect(readdirSync(BRAND).sort()).toEqual(['mark.png', 'tiers.json'])
+    const master = readFileSync(resolve(BRAND, 'mark.png'))
+    // PNG 头：签名 + IHDR。边长与 alpha 是「这份母版是制备好的那一版」的结构不变量
+    // （gen-icon.mjs 也校验同一组，换了母版当场失败而不是产出一批带白角的图标）。
+    expect(master.subarray(0, 4).toString('hex')).toBe('89504e47')
+    expect(master.subarray(12, 16).toString('latin1')).toBe('IHDR')
+    const tiers = JSON.parse(readFileSync(resolve(BRAND, 'tiers.json'), 'utf8')) as { masterSize: number }
+    expect(master.readUInt32BE(16), '母版宽').toBe(tiers.masterSize)
+    expect(master.readUInt32BE(20), '母版高').toBe(tiers.masterSize)
+    // 透明像素：母版是调色板量化 + tRNS（RGBA 直存也行），两种编码都带这条块。
+    // 少了它，四角就会在深色任务栏上留下一圈白角。
+    expect(master.includes(Buffer.from('tRNS')), '母版必须带 alpha（四角抠成透明）').toBe(true)
   })
 
-  it('墨色走 token：母版只挂 class，颜色由 CSS 决定', () => {
-    expect(brandAsset('cat-face.svg')).toContain('class="ink"')
-    expect(brandAsset('cat-face.svg')).toContain('class="inkf"')
-    const base = sheet('styles.css')
-    expect(ruleBody(base, '.cat .ink')).toContain('stroke: var(--cat-ink)')
-    expect(ruleBody(base, '.cat .inkf')).toContain('fill: var(--cat-ink)')
-    // 浅色是暖棕手绘感，暗色必须翻成暖浅色，否则整只猫糊进背景：两个主题各一份
-    expect([...base.matchAll(/--cat-ink:\s*(#[0-9A-Fa-f]{6})/g)].map((m) => m[1])).toHaveLength(2)
+  it('徽标只由 <Cat> 渲染，且不再有随主题翻色的墨色钩子', () => {
+    // 位图母版的颜色是烤进像素里的：此前那套「墨色走 --cat-ink、脸底色按主题翻深」的
+    // 机制连同一个可翻的图元都没有了。.cat 规则现在只有盒模型两条（assets/brand/cat.css）。
+    const catCss = strip(readFileSync(resolve(SRC, 'assets/brand/cat.css'), 'utf8'))
+    expect(catCss).not.toMatch(/--cat-(ink|ear|face)/)
+    expect(catCss, '头像位的满幅圆').toMatch(/\.cat-circle\s*\{[^}]*border-radius:\s*50%/)
+    const markup = renderToStaticMarkup(<Cat size={40} />)
+    expect(markup).toContain('<img')
+    expect(markup).toContain('class="cat"')
+    expect(markup, '位图徽标不是内联 SVG').not.toContain('<svg')
   })
 })
 
@@ -563,7 +930,9 @@ describe('橘猫是一等头像选项', () => {
   it("avatarKey='cat' 渲染真正的猫，既不是首字母色块也不是骨架", () => {
     const html = renderToStaticMarkup(<Avatar avatarKey="cat" name="Ryen" size={40} />)
     expect(html).toContain('avatar-cat')
-    expect(html).toContain('<svg class="cat"')
+    expect(html).toContain('<img class="cat cat-circle"')
+    // 与应用图标同源：渲染层吃的那张图就是 gen:icon 导出的 256 档
+    expect(html).toContain('src="/app/cat.png"')
     expect(html).not.toContain('avatar-fallback')
     expect(html).not.toContain('avatar-loading')
   })
@@ -720,9 +1089,12 @@ describe('Markdown 层级与表格', () => {
     expect(ruleBody(base, '.bubble-md a:focus-visible')).toContain('outline: 2px solid var(--focus-outline)')
     // 行内代码不能顺手把围栏代码也画上底色（围栏那块由 styles-content.css 复位）
     expect(ruleBody(base, '.bubble-md code:not(.md-code *)')).toContain('background: var(--bg-subtle)')
+    // 含 .bubble-md 就算，不只是「以 .bubble-md 开头」：翻面规则写成
+    // .bubble-row.from-user .bubble-bubble .bubble-md …，前缀匹配全部漏掉，
+    // 三处裸 rgba 就这么一路逃过检查。漏进来的正是本该被 token 化的那一档。
     const markdown = topLevelRules(base).filter((rule) => {
       return rule.selectors.some((sel) => {
-        return sel.startsWith('.bubble-md')
+        return sel.includes('.bubble-md')
       })
     })
     for (const rule of markdown) {
@@ -743,6 +1115,13 @@ describe('Markdown 层级与表格', () => {
     for (const rule of flipped) {
       expect(rule.body, rule.selectors.join(' ')).not.toMatch(/font-size|margin-top|padding:/)
     }
+    // 翻面用的两档色必须与 .tool-row / .file-card 共用同一个 token，否则同一个值
+    // 在三个地方各抄一份，主题一翻就分叉（th 分两组写：底色一组、描边一组）
+    const flipTh = allBodies(base, '.bubble-row.from-user .bubble-bubble .bubble-md th')
+    expect(flipTh).toContain('var(--on-amber-quiet)')
+    expect(flipTh).toContain('var(--on-amber-edge)')
+    expect(allBodies(base, '.bubble-row.from-user .bubble-bubble .tool-row')).toContain('var(--on-amber-quiet)')
+    expect(allBodies(base, '.bubble-row.from-user .bubble-bubble .file-card')).toContain('var(--on-amber-quiet)')
   })
 })
 
@@ -787,5 +1166,203 @@ describe('窄窗口：列表面板先让宽度', () => {
     expect(specificity('.list-panel:has(.list-panel-toggle) .search-box')).toBeGreaterThan(
       specificity('.search-box.has-icon'),
     )
+  })
+})
+
+/**
+ * 白底控件的边缘：这一组曾经整体退化成「只有阴影」，而暖棕模糊在纯白上只有 1.2:1，
+ * 离 WCAG 1.4.11 的 3:1 差着两个数量级——控件还在，轮廓没了，用户看到的就是「糊」。
+ * 这一段刻意不只做字符串匹配：注入真 CSSOM 走一遍级叠，再沿 token 链解析，
+ * 字符串匹配看不见「谁盖过谁」也看不见「这个 token 到底解不解得出颜色」。
+ */
+describe('白底控件靠描边站住（阴影只管抬升）', () => {
+  it('阴影不再兼任边缘信号：--shadow-1 只表达抬升，边缘一律归 --edge', () => {
+    const base = sheet('styles.css')
+    // 只看浅色档：themeTokens 是按出现顺序覆盖的，暗色块在后面，取到的是暗色那份
+    const light = /--shadow-1:\s*([^;]+);/.exec(blockAfter(base, ":root[data-theme='light']"))?.[1] ?? ''
+    expect(light, '浅色档 --shadow-1 不见了').not.toBe('')
+    // --shadow-1 的棕 alpha 只表达「抬起来一点」：再高就会在白底上糊成一片脏边，
+    // 而它无论多高也到不了 3:1——边缘这件事必须交给描边。
+    for (const alpha of [...light.matchAll(/rgba\([^)]*?,\s*\.(\d+)\)/g)]) {
+      const value = Number.parseFloat(`.${alpha[1] as string}`)
+      expect(value, `--shadow-1 的 alpha ${alpha[0]} 偏高`).toBeLessThanOrEqual(0.1)
+    }
+    // 暗色档自带内描边（那才是暗色的边缘信号），浅色档不该有——否则白底上又是双份边
+    expect(light).not.toContain('inset')
+    // 白底控件的边缘必须真的是 --edge，而不是某个更淡的裸色
+    for (const [file, selector] of WHITE_SURFACES) {
+      const body = ruleBody(sheet(file), selector)
+      expect(body, `${selector} 少了边缘`).toMatch(/border:\s*1px solid var\(--edge\)/)
+      expect(body, `${selector} 仍在写裸边框宽度`).not.toMatch(/border:\s*2px/)
+    }
+  })
+
+  it('.btn-mini 撤掉的是抬升档，不是边缘（它与 .btn 同元素，边缘随 .btn 走）', () => {
+    const mini = ruleBody(sheet('styles-product.css'), '.btn-mini')
+    expect(mini).toContain('box-shadow: none')
+    // 若 .btn 的边缘改成 inset ring，这行 box-shadow: none 会把它一并抹掉——
+    // 所以这里钉住的是「边缘不靠 box-shadow」
+    expect(ruleBody(sheet('styles.css'), '.btn')).toContain('border: 1px solid var(--edge)')
+  })
+
+  for (const theme of ['light', 'dark'] as const) {
+    it(`${theme} 主题下注入 jsdom：每个白底控件仍有一根可见边缘`, () => {
+      const live = liveStyles(theme)
+      try {
+        for (const [, selector] of WHITE_SURFACES) {
+          const border = live.declared(selector, 'border')
+          expect(border, `${selector} 层叠之后没有 border 声明`).not.toBe('')
+          expect(Number.parseFloat(border), `${selector} 的描边宽度 ${border}`).toBeGreaterThanOrEqual(1)
+          // 描边色要能解出真色，否则这根线画出来是透明的
+          const color = parseColor(/(rgba?\([^)]*\)|#[0-9a-f]{3,8})/.exec(border)?.[1] ?? '')
+          expect(color, `${selector} 的描边色 ${border} 解析不出`).not.toBeNull()
+          expect(color?.[3], `${selector} 的描边全透明`).toBeGreaterThan(0)
+        }
+      } finally {
+        live.dispose()
+      }
+    })
+
+    it(`${theme} 主题下 .btn / .welcome-chip 的前景与背景对比度 ≥ 3:1`, () => {
+      const live = liveStyles(theme)
+      try {
+        for (const selector of ['.btn', '.welcome-chip']) {
+          const fg = live.color(selector, 'color')
+          const bg = live.color(selector, 'background')
+          expect(fg, `${selector} 前景 ${live.declared(selector, 'color')} 解析不出`).not.toBeNull()
+          expect(bg, `${selector} 背景 ${live.declared(selector, 'background')} 解析不出`).not.toBeNull()
+          // 3:1 是 WCAG 1.4.3 对大字的下限，也是这条门禁的底线；这两处实际在 11:1 以上，
+          // 留余量是为了不让 token 微调就把门禁推红
+          expect(contrastRatio(fg, bg), `${selector} 前景/背景对比度不足`).toBeGreaterThanOrEqual(3)
+        }
+      } finally {
+        live.dispose()
+      }
+    })
+  }
+
+  it('焦点环是全局默认：新增任何可聚焦控件都不会静默失去它', () => {
+    const base = sheet('styles.css')
+    const global = ruleBody(base, FOCUS_FALLBACK)
+    expect(global).toContain('outline: 2px solid var(--focus-outline)')
+    expect(global).toContain('outline-offset: 2px')
+    // :where() 把整张表（含 tabindex="-1" 的排除）降成 0 特异度：组件类盖不掉这条默认值，
+    // 自带焦点环的控件（.search-box / .toast-action）也仍然是「只有一圈」
+    expect(specificity(FOCUS_FALLBACK)).toBe(100)
+    // 兜底表里必须列全原生可聚焦控件。只列 button/a/[tabindex] 时，键盘 Tab 到的
+    // 表单控件落在兜底之外，而且一次编译、一个用例都不会红
+    expect(FOCUS_FALLBACK).toMatch(/\binput\b/)
+    expect(FOCUS_FALLBACK).toMatch(/\bselect\b/)
+    expect(FOCUS_FALLBACK).toMatch(/\btextarea\b/)
+    // tabindex="-1" 是刻意留给脚本聚焦的（弹窗容器、role=alert 段落），键盘走不到它；
+    // 真给它画环，整只弹窗会镶一圈琥珀
+    expect(FOCUS_FALLBACK).toMatch(/\[tabindex\]:not\(\[tabindex="-1"\]\)/)
+    // 白名单缩到只剩「焦点环必须落在真正可聚焦的元素上」这一条显式契约
+    const whitelist = [...base.matchAll(/^\s*(\.[\w-]+[^\s{]*):focus-visible/gm)].map((m) => {
+      return m[1] as string
+    })
+    expect(whitelist).toEqual(['.conversation-item-main'])
+  })
+
+  it('焦点信号由 composer 容器承担，输入框内层不得再画第二道框', () => {
+    const base = sheet('styles.css')
+    expect(ruleBody(base, '.chat-input-box textarea:focus')).toContain('outline: none')
+    // 焦点由外层容器表达：描边染琥珀 + 4px 光晕，在 composer 这个尺度上足够醒目
+    const container = ruleBody(base, '.chat-input-col:focus-within')
+    expect(container).toContain('border-color: var(--amber-text)')
+    expect(container).toMatch(/0 0 0 4px/)
+    // 白卡里再套一个硬边矩形＝一个控件两层框，正是"方方的感觉"的来源：内层不许画框
+    expect(base).not.toMatch(/\.chat-input-box:focus-within\s*\{[^}]*inset/)
+  })
+
+  // ---- 焦点环：渲染级断言 ----
+  // 下面每一条都在真级联里问「聚焦后还剩什么」。此前只有一条 grep ':where' 的源码断言，
+  // 于是「表单控件漏掉」「tabindex="-1" 被圈进去」两类回归一条都测不出来。
+  // 夹具照抄真实 DOM：.field 包文本框与滑杆、.search-box 是 <input>、
+  // .conversation-item-main 是会话行的 <button>，都不替样式表留情面。
+  const FIXTURE = `
+    <button id="btn">按钮</button>
+    <a id="link" href="#x">链接</a>
+    <input id="search" class="search-box">
+    <div class="field"><input id="text" type="text"></div>
+    <div class="field"><input id="range" type="range"></div>
+    <div class="apikey-row"><input id="apikey" type="password"></div>
+    <div class="conversation-item"><button id="row" class="conversation-item-main">行</button></div>
+    <div id="modal" class="modal" tabindex="-1"></div>
+  `
+
+  it('键盘能到达的控件聚焦后都有可见焦点信号（滑杆与 API Key 输入框曾经两样皆空）', () => {
+    const probe = focusProbe(FIXTURE)
+    try {
+      for (const selector of ['#btn', '#link', '#text', '#range', '#apikey', '#row']) {
+        expect(probe.focus(selector).visible, `${selector} 聚焦后没有任何可见焦点信号`).toBe(true)
+      }
+    } finally {
+      probe.dispose()
+    }
+  })
+
+  it('.field 的焦点环不被后面的 input[type="range"] 规则抹掉', () => {
+    const probe = focusProbe(FIXTURE)
+    try {
+      const ring = probe.focus('#btn').outline
+      expect(ring, '连普通按钮都没拿到兜底焦点环，先修兜底').toMatch(/^2px solid /)
+
+      // 文本框：焦点信号由自身那圈 inset + 光晕承担，所以 box-shadow 必须还在。
+      // 它与 input[type="range"] 同为 0,2,1，靠后那句 box-shadow: none 曾把它清成 none。
+      const text = probe.focus('#text')
+      expect(text.boxShadow, '.field 文本框的焦点环被 range 规则吞掉了').not.toBe('none')
+      expect(text.boxShadow).toMatch(/inset/)
+
+      // 滑杆不吃输入框皮肤，于是焦点信号落到全局 outline 上——两样皆空才是回归。
+      const range = probe.focus('#range')
+      expect(range.boxShadow).toBe('none')
+      expect(range.outline, '人格四维性格滑杆聚焦后没有任何焦点信号').toBe(ring)
+    } finally {
+      probe.dispose()
+    }
+
+    // 结构上的保证（jsdom 只按源码顺序解析，钉不住「谁后谁赢」，所以这条单独查选择器）：
+    // 滑杆从皮肤层就被 :not([type="range"]) 排除，于是两条规则不再竞争同一声明，
+    // 顺序不再是焦点环的生死开关。
+    const base = sheet('styles.css')
+    const skin = ruleBody(base, '.field input:not([type="range"])')
+    expect(skin, '输入框皮肤又把滑杆圈回去了').toContain('box-shadow')
+    expect(ruleBody(base, '.field input:not([type="range"]):focus')).toContain('var(--focus-ring)')
+  })
+
+  it('tabindex="-1" 不被兜底圈进去：弹窗容器聚焦时不会镶一圈琥珀', () => {
+    const probe = focusProbe(FIXTURE)
+    try {
+      const ring = probe.focus('#btn').outline
+      // 弹窗容器是刻意编程可达的（打开时把焦点放上去），键盘用户根本 Tab 不到它。
+      // 兜底一旦把它圈进去，整只弹窗镶一圈琥珀框。兜底只写 outline，判据就是这一项；
+      // box-shadow 不用问——.modal 自带的 --shadow-3 与焦点无关，不是信号。
+      expect(probe.focus('#modal').outline, 'tabindex="-1" 拿到了兜底焦点环').not.toBe(ring)
+    } finally {
+      probe.dispose()
+    }
+  })
+
+  it('自带焦点环的控件仍然只有一圈（修兜底不许给它们加第二圈）', () => {
+    // 特异度只能算，不能靠 jsdom 读出来：jsdom 的 getComputedStyle 只按源码顺序解析，
+    // 完全不看特异度（实测把 .high:focus 写在前面、:where(...) 写在后面，赢的是后面那个）。
+    // 浏览器里谁赢由特异度决定，所以这条必须用算的。
+    expect(specificity('.search-box:focus')).toBeGreaterThan(specificity(FOCUS_FALLBACK))
+    const search = ruleBody(sheet('styles.css'), '.search-box:focus')
+    expect(search, '.search-box 的焦点规则不见了').toContain('outline: none')
+    expect(search).toContain('var(--focus-ring)')
+
+    const probe = focusProbe(FIXTURE)
+    try {
+      // 搜索框自己那圈「琥珀描边 + 光晕」必须还在（这条与特异度无关，jsdom 读得出来）
+      expect(probe.focus('#search').boxShadow, '搜索框自己的焦点环丢了').toMatch(/inset/)
+
+      // 会话行主按钮：全局兜底与显式契约写的是同一条 outline，重复声明不叠出两圈。
+      // 这条在 jsdom 里成立是靠源码顺序（显式契约写在兜底之后），而它同时也是更高特异度。
+      expect(probe.focus('#row').outline).toBe(probe.focus('#btn').outline)
+    } finally {
+      probe.dispose()
+    }
   })
 })

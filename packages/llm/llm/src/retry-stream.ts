@@ -12,7 +12,7 @@
  * duplicate content the consumer already saw. Usage chunks of a failed
  * attempt are discarded so only the surviving attempt reports usage.
  *
- * @module @ryagent/llm/retry-stream
+ * @module @ryharness/llm/retry-stream
  */
 
 import { QUOTA_EXCEEDED_CODE } from './error.ts'

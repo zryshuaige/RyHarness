@@ -1,5 +1,5 @@
 {
-  "name": "@ryagent/llm-openai",
+  "name": "@ryharness/llm-openai",
   "version": "0.1.0",
   "type": "module",
   "license": "MIT",
@@ -17,11 +17,14 @@
     "build": "tsdown"
   },
   "dependencies": {
-    "@ryagent/llm": "workspace:*",
-    "@ryagent/timeout": "workspace:*",
+    "@ryharness/llm": "workspace:*",
+    "@ryharness/timeout": "workspace:*",
     "eventsource-parser": "^3.1.0"
   },
+  "devDependencies": {
+    "@ryharness/brand": "workspace:*"
+  },
   "peerDependencies": {
-    "@ryagent/cordis": "workspace:*"
+    "@ryharness/cordis": "workspace:*"
   }
 }

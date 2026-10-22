@@ -44,6 +44,23 @@ describe('visibleRange', () => {
     expect(bottom.end).toBe(3000)
   })
 
+  it('贴底（scrollTop = Infinity）时窗口要盖住整个视口，不是只剩最后一行', () => {
+    // 此前 first = floor(Infinity / estimate) = Infinity，被 start 夹成 count-1，
+    // 于是贴底时视口里只剩最后一个 turn、其余全是空白哨兵——会话超过 30 轮后
+    // "往上翻再滚回底部 / 点跳至最新 / 发一条新消息"都会看到"消息全没了"。
+    for (const count of [31, 100, 500]) {
+      const range = visibleRange({
+        count,
+        estimateHeight: ROW_H,
+        scrollTop: Number.POSITIVE_INFINITY,
+        viewportHeight: ROW_H * 10,
+      })
+      // 可视 10 行 + 上下余量：窗口必须覆盖视口
+      expect(range.end - range.start).toBeGreaterThanOrEqual(10 + DEFAULT_OVERSCAN * 2)
+      expect(range.end).toBe(count)
+    }
+  })
+
   it('超宽屏 + 极矮行时仍有硬上界（窗口化在极端屏上不是摆设）', () => {
     const range = visibleRange({
       count: 5000,

@@ -1,7 +1,7 @@
-import type { AgentDefinition } from '@ryagent/agent'
-import { brandString } from '@ryagent/brand'
-import type { GenerateOptions, LlmRuntime, StreamChunk, ToolCallId } from '@ryagent/llm'
-import { SessionCoordinator, SessionStore } from '@ryagent/session'
+import type { AgentDefinition } from '@ryharness/agent'
+import { brandString } from '@ryharness/brand'
+import type { GenerateOptions, LlmRuntime, StreamChunk, ToolCallId } from '@ryharness/llm'
+import { SessionCoordinator, SessionStore } from '@ryharness/session'
 import { describe, expect, it } from 'vitest'
 
 const AGENT: AgentDefinition = {

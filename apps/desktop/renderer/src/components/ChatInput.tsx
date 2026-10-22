@@ -1,9 +1,31 @@
 import type { ClipboardEvent, DragEvent, KeyboardEvent } from 'react'
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
+import { type Command, commandQueryAt, filterCommands, stripCommand } from '../lib/commands.ts'
+import { humanError } from '../lib/error-text.ts'
+import { formatSize } from '../lib/format.ts'
+import { filterMentions, mentionQueryAt } from '../lib/mentions.ts'
 import { LEAVE_MS, useLeaving } from '../lib/useLeaving.ts'
-import { filterMentions, formatSize, type MessageAttachment, mentionQueryAt } from '../store.ts'
+import type { MessageAttachment } from '../store.ts'
 import { Avatar } from './avatars/Avatar.tsx'
 import { Icon } from './Icon.tsx'
+
+export interface ChatInputProps {
+  members: MentionMember[]
+  onSend: (text: string, attachments?: MessageAttachment[]) => void
+  disabled?: boolean
+  /** 对方正在生成：显示停止按钮与"已用时"。 */
+  streaming?: boolean
+  onStop?: () => void
+  /** 受控草稿；不传则用内部状态。 */
+  draft?: string
+  onDraftChange?: (text: string) => void
+  /** 变化即聚焦输入框并把光标移到末尾。 */
+  focusToken?: number
+  /** 附件落库通道：把文件交上去，返回落库后的卡片元数据（与 file_produce 同构）。 */
+  onUpload?: (file: File) => Promise<MessageAttachment>
+  /** `/` 命令面板的候选（壳构建：每条命令要拿到应用级动作）。 */
+  commands?: readonly Command[]
+}
 
 interface MentionMember {
   id: string
@@ -46,7 +68,7 @@ function mimeOf(file: File): string {
  * 替用户直接发出去——发出去就改不回来了）。`focusToken` 每次变化即聚焦并把光标
  * 放到末尾，chip 填词后用户可以接着改。
  */
-export function ChatInput({
+function ChatInputView({
   members,
   onSend,
   disabled,
@@ -56,21 +78,8 @@ export function ChatInput({
   onDraftChange,
   focusToken,
   onUpload,
-}: {
-  members: MentionMember[]
-  onSend: (text: string, attachments?: MessageAttachment[]) => void
-  disabled?: boolean
-  /** 对方正在生成：显示停止按钮与"已用时"。 */
-  streaming?: boolean
-  onStop?: () => void
-  /** 受控草稿；不传则用内部状态。 */
-  draft?: string
-  onDraftChange?: (text: string) => void
-  /** 变化即聚焦输入框并把光标移到末尾。 */
-  focusToken?: number
-  /** 附件落库通道：把文件交上去，返回落库后的卡片元数据（与 file_produce 同构）。 */
-  onUpload?: (file: File) => Promise<MessageAttachment>
-}) {
+  commands = [],
+}: ChatInputProps) {
   const [ownText, setOwnText] = useState('')
   const text = draft ?? ownText
   const setText = (next: string): void => {
@@ -113,7 +122,7 @@ export function ChatInput({
     } catch (error) {
       patchAttachment(entry.id, {
         status: 'error',
-        error: error instanceof Error ? error.message : String(error),
+        error: humanError(error, '这个文件没能加上，换一个再试'),
       })
     }
   }
@@ -177,6 +186,14 @@ export function ChatInput({
 
   const mention = dismissed ? null : mentionQueryAt(text, cursor)
   const candidates = mention === null ? [] : filterMentions(members, mention.query).slice(0, 6)
+  /**
+   * `/` 命令面板：行首斜杠触发（中间的斜杠是正文，见 lib/commands.ts 的口径）。
+   * 与 @提及两套候选不会同时出现——一行里 `/` 与 `@` 谁在光标前谁生效。
+   */
+  const [commandDismissed, setCommandDismissed] = useState(false)
+  const command = commandDismissed ? null : commandQueryAt(text, cursor)
+  const commandCandidates = command === null ? [] : filterCommands(commands, command.query).slice(0, 8)
+  const commandMenu = useLeaving(LEAVE_MS, commandCandidates.length > 0 ? commandCandidates : undefined)
   /** 补全菜单走统一退场体系：关掉时先播 .is-leaving 再卸载。 */
   const menu = useLeaving(LEAVE_MS, candidates.length > 0 ? candidates : undefined)
   const [busyElapsed, setBusyElapsed] = useState<number | undefined>(undefined)
@@ -228,6 +245,7 @@ export function ChatInput({
   }
 
   // 外部把草稿塞进来（欢迎页 chip）：聚焦并把光标放到末尾，用户可以接着改。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: autoGrow 是纯 DOM 操作（按内容改高度），不是需要进依赖的响应式值
   useEffect(() => {
     if (focusToken === undefined) return
     const node = ref.current
@@ -236,7 +254,6 @@ export function ChatInput({
     node.setSelectionRange(node.value.length, node.value.length)
     setCursor(node.value.length)
     autoGrow(node)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusToken])
 
   const complete = (name: string): void => {
@@ -260,6 +277,25 @@ export function ChatInput({
     // 半截拼音当消息发出去（中文用户必踩）。nativeEvent.isComposing 是标准信号，
     // 部分 Electron 下的 IME 不带它，再由 compositionstart/end 的 ref 兜底。
     if (event.nativeEvent.isComposing || composingRef.current) return
+    // 命令菜单优先于提及菜单：行首的 "/" 与 "@" 不会同时成立，但两套候选都非空时
+    // 先响应命令（它是更靠前的那次触发）。
+    if (commandCandidates.length > 0) {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault()
+        const pick = commandCandidates[Math.min(selected, commandCandidates.length - 1)]
+        if (pick !== undefined) runCommand(pick)
+      } else if (event.key === 'ArrowDown') {
+        event.preventDefault()
+        setSelected((selected + 1) % commandCandidates.length)
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault()
+        setSelected((selected + commandCandidates.length - 1) % commandCandidates.length)
+      } else if (event.key === 'Escape') {
+        event.preventDefault()
+        setCommandDismissed(true)
+      }
+      return
+    }
     if (event.key === 'Enter' && !event.shiftKey && candidates.length === 0) {
       event.preventDefault()
       submit()
@@ -277,6 +313,30 @@ export function ChatInput({
       event.preventDefault()
       setDismissed(true)
     }
+  }
+
+  /**
+   * 执行一条命令：只删掉命令本身，命令之后用户写的正文留着。
+   *
+   * 此前这里 `setText('')` 把整个输入框清空——用户写了一半的草稿（"/help 帮我看看
+   * 这段代码" 里后半截那段）会跟着命令一起静默消失。命令只是那一个词，草稿是用户
+   * 自己的东西：删命令，不删草稿。删哪一段由 lib/commands.ts 的 stripCommand 算，
+   * 组件与测试共用同一个纯函数。
+   */
+  const runCommand = (command: Command): void => {
+    const stripped = stripCommand(text, cursor)
+    setText(stripped.text)
+    setCursor(stripped.cursor)
+    setSelected(0)
+    setCommandDismissed(true)
+    command.run()
+    // 文本变了，浏览器会把光标甩到末尾：把它放回剩下的正文里，用户能接着写。
+    requestAnimationFrame(() => {
+      const node = ref.current
+      if (node === null) return
+      node.focus()
+      node.setSelectionRange(stripped.cursor, stripped.cursor)
+    })
   }
 
   const submit = (): void => {
@@ -320,10 +380,42 @@ export function ChatInput({
               >
                 <Avatar avatarKey={member.avatar} name={member.name} seed={member.id} size={24} />
                 <span className="mention-name">
-                  <Icon name="at-sign" size={12} />
+                  <Icon name="at-sign" size={16} />
                   {member.name}
                 </span>
                 {(member.tools?.length ?? 0) > 0 && <span className="mention-badge">{member.tools!.length} 工具</span>}
+              </li>
+            ))}
+          </ul>
+        )}
+        {commandMenu.shown !== undefined && (
+          <ul
+            ref={commandMenu.ref}
+            className={commandMenu.leaving ? 'mention-menu is-leaving' : 'mention-menu'}
+            // biome-ignore lint/a11y/noNoninteractiveElementToInteractiveRole: 命令菜单焦点留在 textarea，aria-selected 表达选中态
+            role="listbox"
+          >
+            {commandMenu.shown.map((candidate, index) => (
+              // biome-ignore lint/a11y/useFocusableInteractive: 焦点不离开输入框，选中态经 aria-selected 暴露
+              <li
+                key={candidate.id}
+                // biome-ignore lint/a11y/noNoninteractiveElementToInteractiveRole: 命令菜单项由键盘在 textarea 内驱动
+                role="option"
+                aria-selected={index === selected}
+                className={index === selected ? 'is-selected' : ''}
+                onMouseDown={(event) => {
+                  event.preventDefault()
+                  runCommand(candidate)
+                }}
+                onMouseEnter={() => {
+                  setSelected(index)
+                }}
+              >
+                <span className="mention-name">
+                  <Icon name="blocks" size={16} />
+                  {candidate.label}
+                </span>
+                {candidate.hint !== undefined && <span className="mention-badge">{candidate.hint}</span>}
               </li>
             ))}
           </ul>
@@ -339,7 +431,7 @@ export function ChatInput({
             <div className="attach-strip">
               {attachments.map((item) => (
                 <span key={item.id} className={`attach-item is-${item.status}`} title={item.error ?? item.name}>
-                  <Icon name="file" size={12} />
+                  <Icon name="file" size={16} />
                   <span className="attach-name">{item.name}</span>
                   <span className="attach-meta">
                     {item.status === 'uploading'
@@ -371,7 +463,7 @@ export function ChatInput({
                       })
                     }}
                   >
-                    <Icon name="x" size={12} />
+                    <Icon name="x" size={16} />
                   </button>
                 </span>
               ))}
@@ -390,6 +482,7 @@ export function ChatInput({
               setText(event.target.value)
               setCursor(event.target.selectionStart ?? event.target.value.length)
               setDismissed(false)
+              setCommandDismissed(false)
               autoGrow(event.target)
             }}
             onKeyDown={handleKey}
@@ -432,3 +525,13 @@ export function ChatInput({
     </>
   )
 }
+
+/**
+ * 输入框本体是 memo 的：流式期聊天区每 40ms 重渲染一次，而输入框真正关心的只有
+ * 「这一轮还在不在跑」与草稿本身。此前它跟着消息流每帧重渲染——光标、输入法组合态、
+ * 附件条全都在重新走一遍，而屏幕上一个字都没变。
+ *
+ * 前提是调用方给的 props 身份稳定：函数一律 useCallback，成员列表在单聊时传模块级
+ * 常量而不是每次新建的 `[]`（见 ChatView 的 NO_MEMBERS）。
+ */
+export const ChatInput = memo(ChatInputView)

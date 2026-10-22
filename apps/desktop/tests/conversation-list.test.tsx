@@ -229,7 +229,7 @@ describe('全文搜索', () => {
     const listener = (): void => {
       events.push('jump')
     }
-    window.addEventListener('ryagent:scroll-to-message', listener)
+    window.addEventListener('ryharness:scroll-to-message', listener)
 
     await renderList(api, {
       onSelect: (id: string) => {
@@ -254,7 +254,7 @@ describe('全文搜索', () => {
     expect(scrollIntoView).toHaveBeenCalled()
     expect(target.classList.contains('is-search-hit')).toBe(true)
     expect(events).toEqual(['jump'])
-    window.removeEventListener('ryagent:scroll-to-message', listener)
+    window.removeEventListener('ryharness:scroll-to-message', listener)
     target.remove()
   })
 
@@ -593,5 +593,99 @@ describe('窗口化列表的行进场动画', () => {
     ).toHaveLength(0)
     // 首帧那批此刻已滚出窗口，但标记不是"当前可见才有效"——动画只此一次。
     expect(firstBatch.size).toBeGreaterThan(0)
+  })
+})
+
+describe('删除 / 置顶的补间接线', () => {
+  /** jsdom 没有 View Transitions：种一个假的，用来证明状态更新确实走了补间通道。 */
+  function stubViewTransition(): string[] {
+    const calls: string[] = []
+    Object.defineProperty(document, 'startViewTransition', {
+      configurable: true,
+      writable: true,
+      value: (update: () => void) => {
+        calls.push('start')
+        update()
+        return { finished: Promise.resolve() }
+      },
+    })
+    return calls
+  }
+
+  afterEach(() => {
+    Reflect.deleteProperty(document, 'startViewTransition')
+  })
+
+  it('每行带上自己的 view-transition-name，且没有挤掉原有的 --i', async () => {
+    await renderList(undefined)
+    const rows = [...container.querySelectorAll<HTMLElement>('.conversation-item')]
+    expect(rows).toHaveLength(2)
+    // 名字按会话 id 给（行在 DOM 里有稳定标识，补间才能把同一行认出来）
+    expect(rows[0]?.style.viewTransitionName).toBe('conv-c1')
+    expect(rows[1]?.style.viewTransitionName).toBe('conv-c2')
+    // stagger 的 --i 还在同一份内联样式上：是合并，不是把原 style 覆盖掉
+    expect(rows[0]?.getAttribute('style')).toContain('--i')
+    expect(rows[1]?.getAttribute('style')).toContain('--i')
+  })
+
+  it('置顶：本地状态更新走补间通道，且这一行真的排到了最前', async () => {
+    const calls = stubViewTransition()
+    const { api, recorded } = fakeApi(() => {
+      return Promise.resolve({ results: [] })
+    })
+    await renderList(api)
+    await openMenu(1)
+    await act(async () => {
+      buttonByText('置顶', container.querySelectorAll('.conversation-item')[1]!).click()
+      await Promise.resolve()
+    })
+    // 一次点击只该补间一次：包住的是本地那次 setOverrides，同步跑完
+    expect(calls).toHaveLength(1)
+    expect(recorded.patches).toEqual([['c2', { pinned: true }]])
+    const titles = [...container.querySelectorAll('.conversation-item strong')].map((node) => {
+      return node.textContent
+    })
+    expect(titles[0]).toContain('小码')
+    expect(titles[0]).toContain('置顶')
+  })
+
+  it('删除：补间包住本地移除，其余行原样留在列表里', async () => {
+    const calls = stubViewTransition()
+    const { api, recorded } = fakeApi(() => {
+      return Promise.resolve({ results: [] })
+    })
+    let changed = 0
+    await act(async () => {
+      root = createRoot(container)
+      root.render(
+        <ConversationList
+          conversations={conversations}
+          agents={agents}
+          activeId="c1"
+          api={api}
+          onSelect={() => {}}
+          onChanged={() => {
+            changed += 1
+          }}
+        />,
+      )
+      await Promise.resolve()
+    })
+    await openMenu(0)
+    act(() => {
+      buttonByText('删除', container.querySelectorAll('.conversation-item')[0]!).click()
+    })
+    await act(async () => {
+      buttonByText('确认删除', container.querySelector('[role="dialog"]')!).click()
+      await Promise.resolve()
+    })
+    // 补间只包了本地那次移除（DELETE 的 await 在外面，不重复补间）
+    expect(calls).toHaveLength(1)
+    expect(recorded.deleted).toEqual(['c1'])
+    expect(changed).toBe(1)
+    const rows = [...container.querySelectorAll<HTMLElement>('.conversation-item')]
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.style.viewTransitionName).toBe('conv-c2')
+    expect(rows[0]?.textContent).toContain('脚本写好了')
   })
 })

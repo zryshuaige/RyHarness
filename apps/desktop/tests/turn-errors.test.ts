@@ -11,14 +11,14 @@ describe('explainTurnError · 凭据类', () => {
   it('MISSING_CREDENTIAL：说人话、指向模型供应商，且不把环境变量名甩回界面', () => {
     const explained = explainTurnError(
       'MISSING_CREDENTIAL',
-      '@ryagent/llm-openai: provider "siliconflow" needs its API key in the RYAGENT_KEY_SILICONFLOW environment variable',
+      '@ryharness/llm-openai: provider "siliconflow" needs its API key in the RYHARNESS_KEY_SILICONFLOW environment variable',
     )
     expect(explained.title).toContain('API Key')
     expect(explained.action).toEqual({ label: '去我的 → 模型供应商', target: 'me' })
     // 原文里的环境变量名不该出现在任何面向用户的字段里。
     const userFacing = `${explained.title} ${explained.hint} ${explained.detail ?? ''}`
-    expect(userFacing).not.toContain('RYAGENT_KEY')
-    expect(userFacing).not.toContain('@ryagent/llm-openai')
+    expect(userFacing).not.toContain('RYHARNESS_KEY')
+    expect(userFacing).not.toContain('@ryharness/llm-openai')
   })
 
   it('INVALID_CREDENTIAL：Key 失效与「没配」是两件事，说法也不同', () => {
@@ -66,7 +66,7 @@ describe('explainTurnError · 可重试类', () => {
 describe('explainTurnError · 容错解析与兜底', () => {
   it('code 认不出时扫原文：内核把普通 Error 抛成 UNKNOWN，线索还在 message 里', () => {
     const cases: [string, string | undefined][] = [
-      ['@ryagent/session: unknown agent "ghost"', 'contacts'],
+      ['@ryharness/session: unknown agent "ghost"', 'contacts'],
       ['provider "x" needs its API key in the FOO_KEY environment variable', 'me'],
       ['model_not_found: qwen-max', 'contacts'],
       ['HTTP 429 Too Many Requests', 'retry'],

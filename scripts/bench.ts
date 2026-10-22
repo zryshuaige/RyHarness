@@ -7,11 +7,11 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { performance } from 'node:perf_hooks'
-import { EvolveService } from '@ryagent/evolve'
-import { HashEmbeddings, MemoryService, NullEmbeddings, SiliconFlowEmbeddings } from '@ryagent/memory'
-import { SessionStore } from '@ryagent/session'
+import { EvolveService } from '@ryharness/evolve'
+import { HashEmbeddings, MemoryService, NullEmbeddings, SiliconFlowEmbeddings } from '@ryharness/memory'
+import { SessionStore } from '@ryharness/session'
 
-const dir = mkdtempSync(join(tmpdir(), 'ryagent-bench-'))
+const dir = mkdtempSync(join(tmpdir(), 'ryharness-bench-'))
 const dbPath = join(dir, 'bench.db')
 
 const store = new SessionStore(dbPath)
@@ -123,10 +123,10 @@ await benchAsync('playbook compile', 500, () => {
 })
 
 // ---- server 冷启动 ----
-const { RyAgentServer } = await import('@ryagent/server')
-const dir2 = mkdtempSync(join(tmpdir(), 'ryagent-boot-'))
+const { RyHarnessServer } = await import('@ryharness/server')
+const dir2 = mkdtempSync(join(tmpdir(), 'ryharness-boot-'))
 const tBoot = performance.now()
-const server = await RyAgentServer.create({ port: 0, dataDir: dir2, memory: null, evolution: null })
+const server = await RyHarnessServer.create({ port: 0, dataDir: dir2, memory: null, evolution: null })
 console.log(`[bench] server 冷启动（建库+迁移+种子+listen）: ${(performance.now() - tBoot).toFixed(0)} ms`)
 await server.close()
 

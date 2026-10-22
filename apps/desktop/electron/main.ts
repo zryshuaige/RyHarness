@@ -1,10 +1,10 @@
 /**
- * Electron 主进程：内嵌启动 @ryagent/server（固定端口，被占用时回退随机），创建窗口。
- * 开发模式加载 Vite dev server（RYAGENT_DEV_SERVER_URL），生产模式由主进程
+ * Electron 主进程：内嵌启动 @ryharness/server（固定端口，被占用时回退随机），创建窗口。
+ * 开发模式加载 Vite dev server（RYHARNESS_DEV_SERVER_URL），生产模式由主进程
  * 自己的回环 HTTP server 伺服渲染层构建产物（同源加载、并行分片、可缓存）。
  *
  * 启动顺序：**窗口先行**——whenReady 立刻建窗并开始加载渲染层（先显示骨架），
- * @ryagent/server（WAL 恢复/迁移，慢盘 50–200ms+）并行启动，就绪后把 API 地址
+ * @ryharness/server（WAL 恢复/迁移，慢盘 50–200ms+）并行启动，就绪后把 API 地址
  * 推给渲染层。菜单栏 autoHide（macOS 保留应用菜单）。
  *
  * 常驻：主进程自己订阅后端 WS（Node 22+ 内置 WebSocket）跟踪每个会话的进行中
@@ -16,11 +16,11 @@
  */
 
 import { randomBytes } from 'node:crypto'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { createServer as createNetServer } from 'node:net'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { configureSecretStore, RyAgentServer } from '@ryagent/server'
+import { configureSecretStore, RyHarnessServer, type WsEvent } from '@ryharness/server'
 import {
   app,
   BrowserWindow,
@@ -32,19 +32,27 @@ import {
   nativeImage,
   safeStorage,
   screen,
+  session,
   shell,
   Tray,
 } from 'electron'
+import { NEW_CHAT_SHORTCUT, SEARCH_FOCUS_EVENT, SEARCH_SHORTCUT } from '../shared/shortcuts.ts'
+import { clampBounds, readWindowBounds, WINDOW_STATE_FILE, writeWindowBounds } from '../shared/window-bounds.ts'
 import { runCapture } from './capture.ts'
+import { migrateLegacyDataDir } from './data-dir.ts'
 import { RENDERER_MOUNT, RendererAssets } from './renderer-assets.ts'
+import { allowedPermission, canOpenPath, dotEnvCandidates, envTokenAllowed, envValue } from './security.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 
 /**
- * 应用图标按尺寸分级取用。每一档都是同一份矢量母版 assets/brand/cat-face.svg 的
- * **独立**导出：小尺寸档做过光学补偿（加粗五官、必要时删掉细节），不是拿 256 档
- * 降采样——16px 上母版的五官会一起糊掉，降采样只会把糊的结果缩小。档位表与每档的
- * 补偿参数记在 assets/brand/tiers.json，由 `pnpm gen:icon` 一并生成。
+ * 应用图标按尺寸分级取用。每一档都是位图母版 assets/brand/mark.png 的**独立**缩放，
+ * 不是拿 256 档降采样——降采样只会把上一档糊掉的结果再缩小一遍。
+ *
+ * 九档（含 favicon）一律整幅 + 同一个 0.245 圆角遮罩：没有裁窗，也不存在「这一档
+ * 扣不扣圆角」的分支。裁脸与圆角在几何上互斥（理由与实测见
+ * apps/desktop/docs/brand/icon.md），统一外轮廓比保五官更要紧。
+ * tiers.json 因此只登记档位表、圆角与接线文件名，由 `pnpm gen:icon` 一并生成。
  *
  * 托盘只有 16/24 两个物理尺寸，直接喂对应档位；窗口与任务栏用 256 档。
  * 改品牌请改 assets/brand/ 再重新导出，不要在这里换图。
@@ -55,7 +63,30 @@ const ICON_TIER = {
   window: 'icon-256.png',
 } as const
 
+/** 窗口/任务栏喂给 Windows 的那份多档图标（与 exe 内嵌、开始菜单快捷方式同一份源）。 */
+const WINDOW_ICON = 'icon.ico'
+
+/**
+ * 窗口图标落在哪：打包态走 asar **之外**的 resources/icon.ico，开发态走仓库里的
+ * assets/icon.ico。两个理由各自独立，缺一都不会立刻显形：
+ *
+ * 1. Windows 只认 .ico。Electron 自己的 BrowserWindow.icon 文档就是这么写的
+ *    （"On Windows it is recommended to use `ICO` icons"，electron.d.ts）——单张 256 档
+ *    PNG 要由系统自己降采样出 16/24/32/48/64，任务栏那一格必然发虚。
+ * 2. 打包态交给 BrowserWindow 的路径是由 Chromium 的图片加载器读的（不是 Node 的 fs），
+ *    那条路要穿过 app.asar 归档。整条图标链上只有这一环是开发态（真实文件）验过的；一旦
+ *    读不到，窗口就拿不到 WM_SETICON，任务栏按钮退成默认字形——而 exe 内嵌那只橘猫不会
+ *    来救场：进程带着显式 AUMID 时 Explorer 先找该 AUMID 注册的资源，不再往下退到 exe。
+ */
+export function windowIconPath(layout: { here: string; resourcesPath: string; isPackaged: boolean }): string {
+  return layout.isPackaged ? join(layout.resourcesPath, WINDOW_ICON) : join(layout.here, '../assets', WINDOW_ICON)
+}
+
 const appIcon = (tier: keyof typeof ICON_TIER): string => {
+  // 托盘两档是注入通知区的位图，仍取 asar 内逐档导出的 PNG；窗口那枚换多档 .ico。
+  if (tier === 'window') {
+    return windowIconPath({ here, resourcesPath: process.resourcesPath, isPackaged: app.isPackaged })
+  }
   return join(here, '../assets', ICON_TIER[tier])
 }
 
@@ -107,7 +138,7 @@ function isPortAvailable(port: number, host: string): Promise<boolean> {
 /**
  * 端口选择：固定端口优先，被占用时回退随机端口。
  *
- * 为什么先探再起：`RyAgentServer.create` 内部的 `http.listen` 没有挂 error 监听，
+ * 为什么先探再起：`RyHarnessServer.create` 内部的 `http.listen` 没有挂 error 监听，
  * 端口被占时不会 reject，而是变成主进程的未捕获异常（应用直接闪退）。开发态同时
  * 跑着另一个实例、或用户机器上正好有别的程序占着 32100 都很常见，所以这里先探。
  * probe 可注入，测试不需要真的占一个端口。
@@ -117,20 +148,31 @@ export async function resolveBackendPort(options: {
   host: string
   probe?: (port: number, host: string) => Promise<boolean>
 }): Promise<{ port: number; fallback: boolean; reason?: string }> {
-  // 显式要求随机端口（RYAGENT_PORT=0，测试与多开场景）时不必探测。
+  // 显式要求随机端口（RYHARNESS_PORT=0，测试与多开场景）时不必探测。
   if (options.port === 0) return { port: 0, fallback: false }
   const probe = options.probe ?? isPortAvailable
   if (await probe(options.port, options.host)) return { port: options.port, fallback: false }
   return { port: 0, fallback: true, reason: `端口 ${options.port} 已被占用` }
 }
 
-/** RYAGENT_PORT 解析：缺省或非法值退回默认固定端口；0 表示显式要求随机端口。 */
+/** RYHARNESS_PORT 解析：缺省或非法值退回默认固定端口；0 表示显式要求随机端口。 */
 export function backendPortFromEnv(env: Record<string, string | undefined> = process.env): number {
-  const raw = env.RYAGENT_PORT
+  const raw = envValue(env, 'PORT')
   if (raw === undefined || raw.trim().length === 0) return DEFAULT_BACKEND_PORT
   const port = Number(raw)
   return Number.isInteger(port) && port >= 0 && port <= 65_535 ? port : DEFAULT_BACKEND_PORT
 }
+
+/**
+ * 改名那天的数据迁移：产品从 RyAgent 改成 RyHarness，数据目录的位置与文件名都跟着
+ * 变了（`%APPDATA%\RyAgent\ryagent-data\ryagent.db` → `%APPDATA%\RyHarness\
+ * ryharness-data\ryharness.db`）。
+ *
+ * 不迁的话，用户升级后打开应用会发现会话、长期记忆、助理配置全没了——那些数据还
+ * 在老目录里躺着，只是没人去读。这是最难查的一类"数据丢了"。
+ *
+ * 实现在 {@link migrateLegacyDataDir}（单独成模块是为了能单测）。
+ */
 
 // ---- API 一次性 token ----
 
@@ -160,7 +202,7 @@ export interface BootPhase {
   deltaMs: number
 }
 
-/** 启动计时快照（可查询：主进程持有 + `ryagent:boot-trace` IPC + userData 日志）。 */
+/** 启动计时快照（可查询：主进程持有 + `ryharness:boot-trace` IPC + userData 日志）。 */
 export interface BootSnapshot {
   /** 进程冷启动时刻（Unix 毫秒）。 */
   startedAt: number
@@ -244,7 +286,7 @@ export interface RendererBootReport {
 }
 
 /** 渲染层启动阶段挂在 window 上的全局键（主进程用 executeJavaScript 读，不经 preload）。 */
-const RENDERER_BOOT_GLOBAL = '__RYAGENT_BOOT__'
+const RENDERER_BOOT_GLOBAL = '__RYHARNESS_BOOT__'
 
 /**
  * 从渲染层读回它自己记的阶段（首屏 JS 执行 → DOM 就绪 → 首帧）。
@@ -275,7 +317,7 @@ export function writeBootTraceLog(userDataDir: string, trace: BootTrace): void {
   try {
     writeFileSync(join(userDataDir, 'boot-trace.log'), `${JSON.stringify(trace.snapshot(), null, 2)}\n`, 'utf8')
   } catch (error) {
-    console.error('[ryagent] failed to write boot trace log:', error)
+    console.error('[ryharness] failed to write boot trace log:', error)
   }
 }
 
@@ -285,21 +327,20 @@ const bootTrace = new BootTrace()
 /**
  * 启动时加载 .env（KEY=VALUE）。用 Node 自带的 process.loadEnvFile——引擎要求
  * ^22.19||>=24，自带实现语义明确（已存在的环境变量优先），不再手写解析器。
- * 候选路径按序查找：RYAGENT_ENV_FILE → userData/.env → 应用目录/.env →
- * 仓库根（dev 模式 ../../.env）→ cwd/.env。
+ *
+ * 候选路径见 {@link dotEnvCandidates}：生产态只认显式指定与 userData 两处，
+ * 开发态才多给应用目录 / 仓库根 / cwd。
  *
  * 由 main() 在 app.whenReady 之后调用（而不是模块顶层）：顶层执行会让测试
  * import 本模块时先摸一遍磁盘上的 .env。
  */
 function loadDotEnvIntoProcess(): void {
-  const candidates = [
-    process.env.RYAGENT_ENV_FILE,
-    join(app.getPath('userData'), '.env'),
-    join(app.getAppPath(), '.env'),
-    join(app.getAppPath(), '..', '..', '.env'),
-    join(process.cwd(), '.env'),
-  ].filter((p): p is string => {
-    return typeof p === 'string' && p.length > 0
+  const candidates = dotEnvCandidates({
+    envFile: envValue(process.env, 'ENV_FILE'),
+    userData: app.getPath('userData'),
+    appPath: app.getAppPath(),
+    cwd: process.cwd(),
+    packaged: app.isPackaged,
   })
   for (const candidate of candidates) {
     if (!existsSync(candidate)) continue
@@ -307,7 +348,7 @@ function loadDotEnvIntoProcess(): void {
       process.loadEnvFile(candidate)
     } catch (error) {
       // 解析失败不应挡住启动：凭据缺失由 provider 状态灯与首启配置卡兜底。
-      console.error(`[ryagent] failed to load env file ${candidate}:`, error)
+      console.error(`[ryharness] failed to load env file ${candidate}:`, error)
     }
     return
   }
@@ -324,12 +365,12 @@ function readAppMeta(): { name: string; version: string } {
     const raw = readFileSync(join(app.getAppPath(), 'package.json'), 'utf8')
     const pkg = JSON.parse(raw) as { productName?: string; name?: string; version?: string }
     return {
-      name: pkg.productName ?? pkg.name ?? 'RyAgent',
+      name: pkg.productName ?? pkg.name ?? 'RyHarness',
       version: pkg.version ?? app.getVersion(),
     }
   } catch {
     // 读不到就退回 Electron 自己的取值：关于框只是信息展示，不该把启动带崩。
-    return { name: 'RyAgent', version: app.getVersion() }
+    return { name: 'RyHarness', version: app.getVersion() }
   }
 }
 
@@ -357,6 +398,17 @@ function showAbout(): void {
  * 保留「关于 / 重新加载 / 开发者工具 / 退出」四个入口，退出走 app.quit()
  * 触发 before-quit 的后端 flush，不给「数据没落盘就关窗」留口子。
  */
+/** 派发一个窗口事件到渲染层（应用菜单里的动作走这条路）。 */
+function dispatchToRenderer(event: string): void {
+  const win = mainWindow
+  if (win === undefined || win.isDestroyed()) return
+  void win.webContents
+    .executeJavaScript(`window.dispatchEvent(new CustomEvent(${JSON.stringify(event)}))`)
+    .catch((error: unknown) => {
+      console.error('[renderer] failed to dispatch event:', error)
+    })
+}
+
 function applyAppMenu(): void {
   const isMac = process.platform === 'darwin'
   const meta = readAppMeta()
@@ -406,6 +458,21 @@ function applyAppMenu(): void {
         { role: 'reload', label: '重新加载' },
         { role: 'forceReload', label: '强制重新加载' },
         { type: 'separator' },
+        {
+          label: SEARCH_SHORTCUT.label,
+          accelerator: SEARCH_SHORTCUT.accelerator,
+          click: () => {
+            dispatchToRenderer(SEARCH_FOCUS_EVENT)
+          },
+        },
+        {
+          label: NEW_CHAT_SHORTCUT.label,
+          accelerator: NEW_CHAT_SHORTCUT.accelerator,
+          click: () => {
+            dispatchToRenderer(NEW_CHAT_EVENT)
+          },
+        },
+        { type: 'separator' },
         { role: 'toggleDevTools', label: '开发者工具' },
         { role: 'togglefullscreen', label: '全屏' },
       ],
@@ -442,71 +509,132 @@ const IS_MAC = process.platform === 'darwin'
  * 标题栏配色跟随渲染层的主题。
  *
  * 标题栏由原生绘制，只有主进程能改；而渲染层翻转主题只改 documentElement 的
- * data-theme，preload 目前也没有回传通道（DesktopBridge 只有 appName/openPath），
- * 所以这里在窗口**获得焦点期间**低频读一次：切主题必然先跟窗口交互，窗口一失焦
- * 就停表，不在后台空转。等 preload 暴露 setTitleBarColor 之后，本函数即可整体删除。
+ * data-theme，preload 此前也没有回传通道（DesktopBridge 只有 appName/openPath），
+ * 所以这里在窗口**获得焦点期间**每 400ms 问一次渲染层「现在什么主题」——
+ * 一次 executeJavaScript 就是一个跨进程往返，常年占着渲染层的主线程。
+ *
+ * 现在改成**推**：渲染层切主题时经 preload 说一声（ryharness:theme），主进程直接改；
+ * 只在首屏加载完与窗口获得焦点时各拉一次（首屏那次渲染层可能还没挂上桥，推不回来）。
  */
 function followRendererTheme(window: BrowserWindow): void {
   if (IS_MAC) return
-  let timer: ReturnType<typeof setInterval> | undefined
-  const sync = (): void => {
+  const pull = (): void => {
     if (window.isDestroyed()) return
     void window.webContents
       .executeJavaScript("document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'")
       .then((theme: unknown) => {
-        window.setTitleBarOverlay({
-          ...TITLEBAR_OVERLAY[theme === 'dark' ? 'dark' : 'light'],
-          height: TITLEBAR_H,
-        })
+        applyTitleBarTheme(theme)
       })
       .catch(() => {
-        // 文档还没就绪时 executeJavaScript 会抛；下一轮再试。
+        // 文档还没就绪时 executeJavaScript 会抛；渲染层那一下推会补上。
       })
   }
-  window.webContents.on('did-finish-load', sync)
-  window.on('focus', () => {
-    sync()
-    timer ??= setInterval(sync, 400)
-  })
-  window.on('blur', () => {
-    if (timer === undefined) return
-    clearInterval(timer)
-    timer = undefined
-  })
-  window.once('closed', () => {
-    if (timer === undefined) return
-    clearInterval(timer)
+  window.webContents.on('did-finish-load', pull)
+  window.on('focus', pull)
+}
+
+/** 把主题色刷到原生标题栏上（渲染层推过来或首屏拉一次，都走这里）。 */
+function applyTitleBarTheme(theme: unknown): void {
+  if (IS_MAC) return
+  const window = mainWindow
+  if (window === undefined || window.isDestroyed()) return
+  window.setTitleBarOverlay({
+    ...TITLEBAR_OVERLAY[theme === 'dark' ? 'dark' : 'light'],
+    height: TITLEBAR_H,
   })
 }
 
 /**
- * 「打开工作区目录」的唯一通道：渲染层拿不到 Node 权限，只能经 preload 调到这里。
- * 目录来自本机后端（GET /api/workspace），不是网页传来的任意 URL，但仍做形状校验，
- * 免得渲染层被注入了非字符串就把 shell 叫歪。shell.openPath 成功返回空串。
+ * 应用页面的 origin：窗口建起来时记下，IPC 校验来源用。
+ */
+let appPageOrigin: string | undefined
+
+/**
+ * IPC 的来源校验：只有应用自己的页面能调。
+ *
+ * Electron 安全清单第 17 条：任何被加载进这个窗口的 frame（blob:、同源 iframe）
+ * 都能 invoke 这些 channel。不校验来源，等于把主进程的能力一并开放出去。
+ */
+function isTrustedSender(event: Electron.IpcMainInvokeEvent): boolean {
+  const origin = event.senderFrame?.origin
+  if (origin === undefined || appPageOrigin === undefined) return false
+  return origin === appPageOrigin
+}
+
+/**
+ * 「打开工作区目录 / 用系统程序打开产物」的唯一通道：渲染层拿不到 Node 权限，
+ * 只能经 preload 调到这里。
+ *
+ * 目录与产物路径来自本机后端（GET /api/workspace、GET /api/files/:name/info），
+ * 不是网页传来的任意 URL——但后端给的是 agent 写出来的东西，所以这里仍然要过
+ * 三道闸：来源是应用自己的页面、路径在工作区之内、不是可执行文件。
+ * shell.openPath 成功返回空串。
  *
  * 注册放进 main()（而不是模块顶层）：顶层 ipcMain.handle 在测试里 import 本模块
  * 时会立刻打在一个不存在的 ipcMain 上。
  */
-function registerIpcHandlers(): void {
-  ipcMain.handle('ryagent:open-path', (_event, targetPath: unknown) => {
-    if (typeof targetPath !== 'string' || targetPath.length === 0) return 'invalid path'
+function registerIpcHandlers(workspaceRoot: string): void {
+  ipcMain.handle('ryharness:open-path', (event, targetPath: unknown) => {
+    if (!isTrustedSender(event)) return 'invalid sender'
+    if (typeof targetPath !== 'string') return 'invalid path'
+    if (!canOpenPath(workspaceRoot, targetPath)) return 'invalid path'
     return shell.openPath(targetPath)
   })
   // 启动计时的查询口：开发时从渲染层/控制台随时问「这次启动各阶段多久」，
   // 不依赖任何遥测服务（离线开发、CI、本机排障都能用）。
-  ipcMain.handle('ryagent:boot-trace', () => {
+  ipcMain.handle('ryharness:boot-trace', () => {
     return bootTrace.snapshot()
   })
+  /**
+   * 渲染层切了主题，推过来让原生标题栏跟上。
+   *
+   * 此前主进程是每 400ms 问渲染层一次「现在什么主题」——一次 executeJavaScript 就是
+   * 一个跨进程往返，常年占着渲染层的主线程。改成推之后这个往返只在切主题时发生一次。
+   */
+  ipcMain.on('ryharness:theme', (event, theme: unknown) => {
+    if (!isTrustedSender(event)) return
+    if (theme !== 'light' && theme !== 'dark') return
+    applyTitleBarTheme(theme)
+  })
+}
+
+/**
+ * 权限策略：默认拒绝，按白名单放行。
+ *
+ * Electron 的默认行为是**自动批准所有权限请求**（见 security.ts 里的说明）。
+ */
+function registerPermissionPolicy(): void {
+  const target = session.defaultSession
+  target.setPermissionRequestHandler((_webContents, permission, callback) => {
+    callback(allowedPermission(permission))
+  })
+  target.setPermissionCheckHandler((_webContents, permission) => {
+    return allowedPermission(permission)
+  })
+}
+
+/**
+ * 主显示器的工作区尺寸（DIP）。
+ *
+ * 注意：本机 1.5× 缩放下 Electron 的 workAreaSize 返回的是**物理像素**（1707），
+ * 而窗口 bounds 是 DIP——两者混用会让自动居中把窗口放到屏幕外。所以先用
+ * dipToScreenPoint 探测坐标单位再统一换算，位置也自己算，不依赖 Electron 居中。
+ */
+function primaryWorkArea(): { width: number; height: number } {
+  const display = screen.getPrimaryDisplay()
+  const scale = display.scaleFactor > 0 ? display.scaleFactor : 1
+  const probe = screen.dipToScreenPoint({ x: 100, y: 100 })
+  const unit = Math.abs(probe.x - 100) < 0.5 ? 1 : scale
+  return {
+    width: Math.round(display.workAreaSize.width / unit),
+    height: Math.round(display.workAreaSize.height / unit),
+  }
 }
 
 /**
  * 开窗尺寸与位置：设计稿按 1320×840，但 150% 缩放的小屏工作区可能只有 1100 DIP 宽，
  * 固定尺寸会让窗口超出屏幕、右侧内容被裁掉（内容按视口宽度布局，视口比屏幕宽）。
  * 这里按主显示器工作区收敛，并保证不小于 minWidth/minHeight。
- *
- * 注意：本机 1.5× 缩放下 Electron 的 workAreaSize 返回的是**物理像素**（1707），
- * 而窗口 bounds 是 DIP——两者混用会让自动居中把窗口放到屏幕外。所以先用
- * dipToScreenPoint 探测坐标单位再统一换算，位置也自己算，不依赖 Electron 居中。
  */
 function fitToWorkArea(desired: { width: number; height: number }): {
   width: number
@@ -514,14 +642,7 @@ function fitToWorkArea(desired: { width: number; height: number }): {
   x: number
   y: number
 } {
-  const display = screen.getPrimaryDisplay()
-  const scale = display.scaleFactor > 0 ? display.scaleFactor : 1
-  const probe = screen.dipToScreenPoint({ x: 100, y: 100 })
-  const unit = Math.abs(probe.x - 100) < 0.5 ? 1 : scale
-  const work = {
-    width: Math.round(display.workAreaSize.width / unit),
-    height: Math.round(display.workAreaSize.height / unit),
-  }
+  const work = primaryWorkArea()
   const width = Math.min(desired.width, Math.max(MIN_WIDTH, work.width - 32))
   const height = Math.min(desired.height, Math.max(MIN_HEIGHT, work.height - 32))
   return {
@@ -532,17 +653,103 @@ function fitToWorkArea(desired: { width: number; height: number }): {
   }
 }
 
+/** 窗口位置状态文件的位置（userData 下）。 */
+function windowStatePath(): string {
+  return join(app.getPath('userData'), WINDOW_STATE_FILE)
+}
+
+/** 外链 URL 的长度上限：超长的多半是畸形输入，不值得交给系统浏览器。 */
+export const MAX_EXTERNAL_URL_LENGTH = 2048
+
+/**
+ * 外链策略：这个 URL 允许交给系统浏览器打开吗？
+ *
+ * 渲染层有五处 `target="_blank"`（Markdown 里的链接、「去官网申请 API Key」、
+ * 产物的「在新窗口打开」…）。此前主进程既没有 `setWindowOpenHandler`，也没有
+ * `shell.openExternal`，于是它们开出来的是**应用自己的新窗口**：无边框、无菜单、
+ * 独立任务栏，看起来像被劫持，而用户真正的浏览器被绕开了。
+ *
+ * 只放行 http/https：`file:` 会让系统浏览器打开本机文件、`javascript:` 在部分
+ * 浏览器里仍可执行、`data:` 则是内联内容——这些都不该从应用里递出去。
+ *
+ * @param raw - 渲染层交上来的原始 URL。
+ * @returns 规范化后的 URL；不允许打开时返回 undefined。
+ */
+export function externalLinkUrl(raw: string): string | undefined {
+  const trimmed = raw.trim()
+  if (trimmed.length === 0 || trimmed.length > MAX_EXTERNAL_URL_LENGTH) return undefined
+  let parsed: URL
+  try {
+    parsed = new URL(trimmed)
+  } catch {
+    return undefined
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return undefined
+  return parsed.toString()
+}
+
+/**
+ * 窗口新开请求的处理：允许的 http(s) 交给系统浏览器，其余一律 deny。
+ *
+ * 抽成纯函数是为了能测：主进程里的 `setWindowOpenHandler` 回调一旦接错
+ * （放行了 file:、或者忘了 deny 掉内部窗口），表现是"点个链接弹出一个没有
+ * 边框的孤儿窗口"——不接成纯函数就只能靠真机手点。
+ *
+ * @param open - 真正打开外部 URL 的动作（主进程里接 shell.openExternal）。
+ */
+export function externalWindowOpenHandler(
+  open: (url: string) => void,
+): (details: { url: string }) => { action: 'deny' } {
+  return ({ url }) => {
+    const external = externalLinkUrl(url)
+    if (external !== undefined) open(external)
+    return { action: 'deny' }
+  }
+}
+
+/**
+ * 窗口自身导航的判定。
+ *
+ * 站内（同一个 origin）放行——那是应用自己的页面；站外一律拦下这次导航，
+ * 并把 http(s) 链接交给系统浏览器。不拦的话，`<a target="_self">` 或一段脚本
+ * 就能把应用壳带跑，用户看到的是"应用变成了网页"。
+ *
+ * @param url - 即将导航到的地址。
+ * @param pageOrigin - 应用页面的 origin（资源服务）。
+ */
+export function externalNavigationTarget(url: string, pageOrigin: string): { allow: boolean; external?: string } {
+  let target: URL
+  try {
+    target = new URL(url)
+  } catch {
+    return { allow: false }
+  }
+  if (target.origin === pageOrigin) return { allow: true }
+  const external = externalLinkUrl(url)
+  return external === undefined ? { allow: false } : { allow: false, external }
+}
+
 function createWindow(pageUrl: string): BrowserWindow {
   const fit = fitToWorkArea({ width: 1320, height: 840 })
+  const pageOrigin = new URL(pageUrl).origin
+  // 记下应用页面的 origin：IPC 校验来源用（只有这个 origin 的页面能调主进程）。
+  appPageOrigin = pageOrigin
+  // 记住上次的位置与尺寸：桌面应用的基本盘之一。位置要收敛回当前屏幕
+  // （换了显示器或分辨率之后，上次的坐标可能整块在屏外）。
+  const statePath = windowStatePath()
+  const remembered = readWindowBounds(statePath)
+  const work = primaryWorkArea()
+  const bounds =
+    remembered === undefined ? fit : clampBounds(remembered, work, { width: MIN_WIDTH, height: MIN_HEIGHT })
   const window = new BrowserWindow({
-    x: fit.x,
-    y: fit.y,
-    width: fit.width,
-    height: fit.height,
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
     minWidth: MIN_WIDTH,
     minHeight: MIN_HEIGHT,
     backgroundColor: '#FAF7F2',
-    title: 'RyAgent',
+    title: 'RyHarness',
     icon: appIcon('window'),
     // 首帧画完再显示，避免加载期的白/空窗口闪烁（加载期的骨架由渲染层自己画）。
     show: false,
@@ -561,10 +768,34 @@ function createWindow(pageUrl: string): BrowserWindow {
       // 为此把它单独构建了一次）。谁把 sandbox 关掉或把 preload 换成 ESM，桥都会
       // 静默消失且渲染层零报错——这一行把那条隐式依赖变成显式的。
       sandbox: true,
+      // Chromium 把内置 PDF 阅读器挂在 NPAPI 插件开关后面，Electron 默认关掉它。
+      // 这正是原来「PDF 只能下载、不能预览」的根因：不是路径或 MIME 的问题，也不是
+      // 缺 pdf.js。打开这一项，`<embed type="application/pdf">` 才能真正渲染出页面。
+      plugins: true,
     },
   })
   window.once('ready-to-show', () => {
     window.show()
+  })
+  // 记住位置与尺寸：拖动/缩放停下来后（去抖 400ms）写回，退出时也写一次。
+  // 写失败只当没记住——记不住窗口位置不是故障，不该打断用户。
+  let rememberTimer: ReturnType<typeof setTimeout> | undefined
+  const rememberBounds = (): void => {
+    if (window.isDestroyed()) return
+    writeWindowBounds(statePath, window.getBounds())
+  }
+  const scheduleRemember = (): void => {
+    if (rememberTimer !== undefined) clearTimeout(rememberTimer)
+    rememberTimer = setTimeout(() => {
+      rememberTimer = undefined
+      rememberBounds()
+    }, 400)
+  }
+  window.on('resize', scheduleRemember)
+  window.on('move', scheduleRemember)
+  window.on('close', () => {
+    if (rememberTimer !== undefined) clearTimeout(rememberTimer)
+    rememberBounds()
   })
   followRendererTheme(window)
   // 关窗不退出：托盘在场时窗口只是收起来，正在跑的活继续跑（退出走托盘菜单）。
@@ -587,6 +818,22 @@ function createWindow(pageUrl: string): BrowserWindow {
   window.webContents.on('did-fail-load', (_event, code, description) => {
     console.error(`[renderer] load failed: ${description} (${code})`)
   })
+  // 外链交给系统浏览器：应用自己开的新窗口是无边框、无菜单的孤儿窗口，
+  // 看起来像被劫持，用户真正的浏览器反倒被绕开。渲染层五处 target="_blank"
+  // （Markdown 链接、「去官网申请 API Key」、产物的「在新窗口打开」）全走这一条。
+  window.webContents.setWindowOpenHandler(
+    externalWindowOpenHandler((url) => {
+      void shell.openExternal(url)
+    }),
+  )
+  // 窗口自身不导航到站外：没有这一条，<a target="_self"> 或脚本导航就能把
+  // 应用壳带跑，用户看到的是"应用变成了网页"。站外链接同样交给系统浏览器。
+  window.webContents.on('will-navigate', (event, url) => {
+    const decision = externalNavigationTarget(url, pageOrigin)
+    if (decision.allow) return
+    event.preventDefault()
+    if (decision.external !== undefined) void shell.openExternal(decision.external)
+  })
   // 首屏计时：DOM 就绪 = 骨架屏已画出来，did-finish-load = 所有分片到齐。
   window.webContents.on('dom-ready', () => {
     bootTrace.mark('dom-ready')
@@ -603,7 +850,7 @@ function createWindow(pageUrl: string): BrowserWindow {
 }
 
 /**
- * 渲染层首屏阶段并进主进程时间轴（读 window.__RYAGENT_BOOT__，不经 preload）。
+ * 渲染层首屏阶段并进主进程时间轴（读 window.__RYHARNESS_BOOT__，不经 preload）。
  *
  * 读不到不算失败：老页面还没执行到 boot-trace 模块、或窗口已经关掉，属正常。无论
  * 有没有读到，这份计时都会落一行日志并写进 userData——主进程各阶段本身就是排障要的。
@@ -615,9 +862,9 @@ async function collectRendererBootPhases(window: BrowserWindow): Promise<void> {
     )
     bootTrace.recordRenderer(readRendererBootReport(JSON.parse(String(payload))), windowLoadStartedAt)
   } catch (error) {
-    console.error('[ryagent] failed to collect renderer boot phases:', error)
+    console.error('[ryharness] failed to collect renderer boot phases:', error)
   }
-  console.log(`[ryagent] ${bootTrace.summary()}`)
+  console.log(`[ryharness] ${bootTrace.summary()}`)
   writeBootTraceLog(app.getPath('userData'), bootTrace)
 }
 
@@ -639,8 +886,8 @@ function whenLoaded(window: BrowserWindow): Promise<void> {
  *  推的是**实际绑定到的**地址（端口回退随机时与配置的固定端口不同）。
  *
  *  渲染层契约（apps/desktop/renderer/src/lib/boot.ts 消费）：
- *  - `window.__RYAGENT_API_BASE__` / `ryagent:api-base` 事件（detail = 地址字符串）；
- *  - `window.__RYAGENT_API_TOKEN__` / `ryagent:api-token` 事件（detail = token 字符串）；
+ *  - `window.__RYHARNESS_API_BASE__` / `ryharness:api-base` 事件（detail = 地址字符串）；
+ *  - `window.__RYHARNESS_API_TOKEN__` / `ryharness:api-token` 事件（detail = token 字符串）；
  *  - 请求带上 `Authorization: Bearer <token>`，WS 用 `?token=<token>`。
  *  两个事件分开而不是把 detail 改成对象：事件名与旧的地址通道一一对应，
  *  只加一条不改旧的，渲染层什么时候接上都接得上。
@@ -649,10 +896,10 @@ function pushApiBase(window: BrowserWindow, apiBase: string, token: string | und
   const payload = JSON.stringify(apiBase)
   const tokenPayload = JSON.stringify(token ?? '')
   const script =
-    `window.__RYAGENT_API_BASE__=${payload};` +
-    `window.dispatchEvent(new CustomEvent('ryagent:api-base',{detail:${payload}}));` +
-    `window.__RYAGENT_API_TOKEN__=${tokenPayload};` +
-    `window.dispatchEvent(new CustomEvent('ryagent:api-token',{detail:${tokenPayload}}));`
+    `window.__RYHARNESS_API_BASE__=${payload};` +
+    `window.dispatchEvent(new CustomEvent('ryharness:api-base',{detail:${payload}}));` +
+    `window.__RYHARNESS_API_TOKEN__=${tokenPayload};` +
+    `window.dispatchEvent(new CustomEvent('ryharness:api-token',{detail:${tokenPayload}}));`
   const send = (): void => {
     if (window.isDestroyed() || window.webContents.isDestroyed()) return
     window.webContents.executeJavaScript(script).catch((error: unknown) => {
@@ -696,7 +943,7 @@ const FIRST_LAUNCH_MARKER = 'first-launch-seeded'
  * 与 renderer/src/App.tsx 里的 NEW_CHAT_EVENT 是同一个字符串：主进程与渲染层
  * 各自打包、不共享模块，所以这里只靠名字对齐——改一边必须改另一边。
  */
-const NEW_CHAT_EVENT = 'ryagent:new-chat'
+const NEW_CHAT_EVENT = 'ryharness:new-chat'
 /** 新回复的通知正文长度上限（超了通知面板会自己截断，这里先截干净）。 */
 const NOTIFY_BODY_LIMIT = 160
 
@@ -739,7 +986,26 @@ export function setAutoLaunch(enabled: boolean): void {
   tray?.setContextMenu(buildTrayMenu())
 }
 
-/** 托盘菜单：打开主窗口 / 新对话 / 开机自启 / 退出，四项都有真实行为。 */
+/**
+ * 全局免打扰：开着时任何会话都不弹系统通知。
+ *
+ * 与「按会话静音」是两层：前者是应用级的开关（现在不想被打扰），后者是某个
+ * 群太吵、只压它一个。
+ */
+let doNotDisturb = false
+
+/** 免打扰当前是否开着（托盘菜单与通知路径共用同一份）。 */
+export function isDoNotDisturb(): boolean {
+  return doNotDisturb
+}
+
+/** 开关免打扰，并让托盘菜单的勾选立刻回显。 */
+export function setDoNotDisturb(enabled: boolean): void {
+  doNotDisturb = enabled
+  tray?.setContextMenu(buildTrayMenu())
+}
+
+/** 托盘菜单：打开主窗口 / 新对话 / 免打扰 / 开机自启 / 退出，项项都有真实行为。 */
 function buildTrayMenu(): Menu {
   const meta = readAppMeta()
   return Menu.buildFromTemplate([
@@ -756,6 +1022,14 @@ function buildTrayMenu(): Menu {
       },
     },
     { type: 'separator' },
+    {
+      label: '免打扰',
+      type: 'checkbox',
+      checked: doNotDisturb,
+      click: (item) => {
+        setDoNotDisturb(item.checked)
+      },
+    },
     {
       label: '开机自启',
       type: 'checkbox',
@@ -781,7 +1055,7 @@ function createTray(): void {
   const image = nativeImage.createFromPath(file)
   if (image.isEmpty()) {
     // 空图标在部分平台上会让 Tray 抛错，把整个主进程带下去；宁可不常驻。
-    console.error(`[ryagent] tray icon missing: ${file}`)
+    console.error(`[ryharness] tray icon missing: ${file}`)
     return
   }
   tray = new Tray(image)
@@ -801,7 +1075,8 @@ function updateTray(state: PresenceState): void {
 /** 托盘 tooltip 文案。 */
 export function trayStatusText(appName: string, state: PresenceState): string {
   if (state.busy.size > 0) {
-    const names = [...new Set(state.busy.values())]
+    // 一个会话里可能是几个助理接力（群聊一轮三人各说一段），所以按 agent 名摊平再去重。
+    const names = [...new Set([...state.busy.values()].flatMap((agents) => [...agents]))]
     const who = names.length === 1 ? names[0] : `${names.length} 位助理`
     return `${appName}：${who}正在回复…`
   }
@@ -811,8 +1086,8 @@ export function trayStatusText(appName: string, state: PresenceState): string {
 
 /** 在场状态快照。 */
 export interface PresenceState {
-  /** 会话 id → 正在回复的 agent 名。 */
-  busy: Map<string, string>
+  /** 会话 id → 这一轮正在发言的 agent 名（群聊一轮可能是好几位）。 */
+  busy: Map<string, ReadonlySet<string>>
   /** 窗口不在前台时攒下的新回复条数。 */
   unread: number
 }
@@ -824,15 +1099,39 @@ export interface MinimalSocket {
   close(): void
 }
 
-/** 在场监听所需的后端事件（只取驱动托盘/通知用得到的字段）。 */
-interface PresenceEvent {
-  type: string
-  senderId: string
-  senderName?: string
-  text?: string
-  message?: string
-  code?: string
+/** 在场监听所需的后端事件契约：直接用服务端的 @ryharness/server WsEvent。 */
+type PresenceEvent = WsEvent
+
+/** 一条轮次里某个 agent 的发言：托盘上叫什么、这轮已经说了多少字。 */
+interface TurnSpeaker {
+  /** 收到过 message-start 才算「开口了」；只见到 dispatch / 工具事件的是「在场未开口」。 */
+  started: boolean
+  /** 托盘与通知上显示的名字。后端还没给名字时（派工、工具事件）退回 senderId。 */
+  name: string
+  /** 这一轮该 agent 的正文增量。 */
+  text: string
 }
+
+/** 一条轮次（一个 turnIndex）里所有 agent 的发言。 */
+interface ConversationTurn {
+  /** 还没发完 message-done 的 agent（senderId → 发言状态）。托盘只算这些。 */
+  pending: Map<string, TurnSpeaker>
+  /** 已经说完的发言，按说完顺序留着：整轮收口时一起进那一条通知。 */
+  spoken: TurnSpeaker[]
+}
+
+/**
+ * 没带 turnIndex 的事件归到这个键下。
+ *
+ * 服务端契约里 text-delta 与工具类事件不带 turnIndex（见 apps/server/src/events.ts），
+ * 所以「这是哪条轮次的」只能拿 senderId 反查正在进行的轮次；一条都查不到时
+ * （主进程中途才连上 WS，漏掉了 message-start）先记在这个占位轮次里，等
+ * message-done 到来时按「这个会话只剩一条在跑的轮次」把它收掉——否则托盘会
+ * 永远停在「正在回复」。
+ */
+const UNKNOWN_TURN = 'unknown'
+/** 轮次键：真实 turnIndex，或上面那个占位键。 */
+type TurnKey = number | typeof UNKNOWN_TURN
 
 /** 会话列表多久扫一次（新会话建出来后自动纳入监听）。 */
 const DISCOVER_INTERVAL_MS = 5000
@@ -850,7 +1149,14 @@ export function websocketUrl(baseUrl: string, conversationId: string, token?: st
   return url.toString()
 }
 
-/** 解析一条 WS 推送；形状不对就当没收到（主进程不该被脏数据带崩）。 */
+/**
+ * 解析一条 WS 推送；形状不对就当没收到（主进程不该被脏数据带崩）。
+ *
+ * 逐个 type 按 @ryharness/server 的 WsEvent 契约逐字段校验，而不是「能抄几个抄几个」：
+ * 手写鸭子类型时服务端改一个字段名，这里静默读到 undefined，通知少一条也看不出异常。
+ * 现在返回的就是真 WsEvent——下游 switch 能按联合类型收窄，服务端新增事件类型时
+ * 漏处理的分支直接编译不过（见 PresenceMonitor.onEvent 末尾的 never 校验）。
+ */
 function parsePresenceEvent(raw: unknown): PresenceEvent | undefined {
   if (typeof raw !== 'string') return undefined
   let parsed: unknown
@@ -860,16 +1166,104 @@ function parsePresenceEvent(raw: unknown): PresenceEvent | undefined {
     return undefined
   }
   if (typeof parsed !== 'object' || parsed === null) return undefined
-  const event = parsed as Record<string, unknown>
-  // senderId 只有部分事件带（error 就没有），缺省按空串处理，别把整条丢掉。
-  if (typeof event.type !== 'string') return undefined
-  return {
-    type: event.type,
-    senderId: typeof event.senderId === 'string' ? event.senderId : '',
-    ...(typeof event.senderName === 'string' ? { senderName: event.senderName } : {}),
-    ...(typeof event.text === 'string' ? { text: event.text } : {}),
-    ...(typeof event.message === 'string' ? { message: event.message } : {}),
-    ...(typeof event.code === 'string' ? { code: event.code } : {}),
+  const fields = parsed as Record<string, unknown>
+  const str = (key: string): string | undefined => {
+    const value = fields[key]
+    return typeof value === 'string' ? value : undefined
+  }
+  const type = str('type')
+  const conversationId = str('conversationId')
+  if (type === undefined || conversationId === undefined) return undefined
+  const senderId = str('senderId')
+  const turnIndex = fields.turnIndex
+  const callId = str('callId')
+  switch (type) {
+    case 'message-start': {
+      // senderName 缺了还能退到 senderId：名字只用于托盘与通知抬头，不能因为它
+      // 把「有人在忙」这个事实整条丢掉。
+      if (senderId === undefined || typeof turnIndex !== 'number') return undefined
+      return {
+        type: 'message-start',
+        conversationId,
+        senderId,
+        senderName: str('senderName') ?? senderId,
+        turnIndex,
+      }
+    }
+    case 'text-delta': {
+      const text = str('text')
+      if (senderId === undefined || text === undefined) return undefined
+      return { type: 'text-delta', conversationId, senderId, text }
+    }
+    case 'tool-call-start': {
+      const name = str('name')
+      const args = str('arguments')
+      if (senderId === undefined || callId === undefined || name === undefined || args === undefined) return undefined
+      return { type: 'tool-call-start', conversationId, senderId, callId, name, arguments: args }
+    }
+    case 'tool-result': {
+      const name = str('name')
+      const content = str('content')
+      if (senderId === undefined || callId === undefined || name === undefined || typeof fields.isError !== 'boolean') {
+        return undefined
+      }
+      return {
+        type: 'tool-result',
+        conversationId,
+        senderId,
+        callId,
+        name,
+        isError: fields.isError,
+        content: content ?? '',
+      }
+    }
+    case 'produce-card': {
+      // 卡片字段也是契约的一部分，逐个校一遍，不给脏卡片留位置（在场监听只用 senderId）。
+      const card = fields.card
+      if (senderId === undefined || callId === undefined || typeof card !== 'object' || card === null) return undefined
+      const meta = card as Record<string, unknown>
+      const { path, mime, name: fileName, size } = meta
+      if (
+        typeof path !== 'string' ||
+        typeof mime !== 'string' ||
+        typeof fileName !== 'string' ||
+        typeof size !== 'number'
+      ) {
+        return undefined
+      }
+      return { type: 'produce-card', conversationId, senderId, callId, card: { path, mime, name: fileName, size } }
+    }
+    case 'dispatch': {
+      const toAgent = str('toAgent')
+      const reason = str('reason')
+      if (toAgent === undefined || reason === undefined || typeof turnIndex !== 'number') return undefined
+      const fromAgent = str('fromAgent')
+      return {
+        type: 'dispatch',
+        conversationId,
+        ...(fromAgent === undefined ? {} : { fromAgent }),
+        toAgent,
+        reason,
+        turnIndex,
+      }
+    }
+    case 'message-done':
+      if (senderId === undefined || typeof turnIndex !== 'number') return undefined
+      // usage 在场监听用不到（用量面板在渲染层收），带不带都不影响托盘与通知。
+      return { type: 'message-done', conversationId, senderId, turnIndex }
+    case 'error': {
+      const message = str('message')
+      const code = str('code')
+      if (message === undefined || code === undefined) return undefined
+      return { type: 'error', conversationId, message, code }
+    }
+    case 'queued':
+      // 契约里 queued 刻意不带 turnIndex（入队时这一轮还没有序号）。
+      if (senderId !== 'user') return undefined
+      return { type: 'queued', conversationId, senderId }
+    default:
+      // 服务端将来新增的类型：主进程对不认识的事件一律不猜。
+      return undefined
   }
 }
 
@@ -878,14 +1272,22 @@ function parsePresenceEvent(raw: unknown): PresenceEvent | undefined {
  *
  * 渲染层只订阅当前打开的那个会话，托盘与通知却要覆盖全部会话——所以这里在
  * 主进程另起一份订阅；后端是单进程事件总线，多一个订阅者不会多跑一次模型。
+ *
+ * 记账按**轮次**而不是按会话：群聊一轮里三名 agent 各发一次
+ * message-start / text-delta / message-done，共享同一个 turnIndex。早期版本把
+ * 正文挂在会话上，于是第一条 message-done 就把草稿删干净，后两条正文为空 →
+ * 弹两次「这一轮没有文字」、一轮未读 +3。现在同一轮只在最后一位 agent 收口时
+ * 通知一次、累计一条未读。
  */
 export class PresenceMonitor {
   private readonly sockets = new Map<string, MinimalSocket | WebSocket>()
-  private readonly busy = new Map<string, string>()
-  private readonly drafts = new Map<string, string>()
+  /** 会话 id → 轮次键 → 该轮发言。托盘状态由这里现算，不另存一份。 */
+  private readonly turns = new Map<string, Map<TurnKey, ConversationTurn>>()
   private readonly attempts = new Map<string, number>()
   private readonly retries = new Map<string, ReturnType<typeof setTimeout>>()
   private discoverTimer: ReturnType<typeof setInterval> | undefined
+  /** 静音中的会话（按服务端回传的 muted 标记）。 */
+  private readonly muted = new Set<string>()
   private unread = 0
   private stopped = false
 
@@ -897,6 +1299,13 @@ export class PresenceMonitor {
       onState: (state: PresenceState) => void
       onReply: (reply: { agentName: string; text: string }) => void
       isFocused: () => boolean
+      /**
+       * 全局免打扰：开着时任何会话都不弹通知。
+       *
+       * 与「按会话静音」是两层：前者是应用级的开关（现在不想被打扰），后者
+       * 是某个群太吵、只压它一个。
+       */
+      isDnd?: () => boolean
       createSocket?: (url: string) => MinimalSocket | WebSocket
     },
   ) {}
@@ -916,6 +1325,7 @@ export class PresenceMonitor {
     this.retries.clear()
     for (const socket of this.sockets.values()) socket.close()
     this.sockets.clear()
+    this.turns.clear()
   }
 
   /** 窗口回到前台：攒着的新回复已经看得见了。 */
@@ -925,8 +1335,85 @@ export class PresenceMonitor {
     this.emit()
   }
 
+  /** 托盘状态由在跑的轮次现算：会话 → 这一轮还在发言的 agent 名。 */
   private emit(): void {
-    this.options.onState({ busy: new Map(this.busy), unread: this.unread })
+    const busy = new Map<string, ReadonlySet<string>>()
+    for (const [conversationId, byTurn] of this.turns) {
+      const names = new Set<string>()
+      for (const turn of byTurn.values()) {
+        for (const speaker of turn.pending.values()) names.add(speaker.name)
+      }
+      if (names.size > 0) busy.set(conversationId, names)
+    }
+    this.options.onState({ busy, unread: this.unread })
+  }
+
+  /** 取出（必要时新建）一条轮次。 */
+  private turn(conversationId: string, key: TurnKey): ConversationTurn {
+    let byTurn = this.turns.get(conversationId)
+    if (byTurn === undefined) {
+      byTurn = new Map<TurnKey, ConversationTurn>()
+      this.turns.set(conversationId, byTurn)
+    }
+    let turn = byTurn.get(key)
+    if (turn === undefined) {
+      turn = { pending: new Map(), spoken: [] }
+      byTurn.set(key, turn)
+    }
+    return turn
+  }
+
+  /** 拿 senderId 反查它正在说的轮次（text-delta 与工具事件不带 turnIndex）。 */
+  private turnOf(conversationId: string, senderId: string): ConversationTurn | undefined {
+    for (const turn of this.turns.get(conversationId)?.values() ?? []) {
+      if (turn.pending.has(senderId)) return turn
+    }
+    return undefined
+  }
+
+  /** 这个会话唯一在跑的轮次（含占位轮次）：工具事件与收口兜底都用它。 */
+  private soleTurn(conversationId: string): ConversationTurn | undefined {
+    const byTurn = this.turns.get(conversationId)
+    if (byTurn === undefined || byTurn.size !== 1) return undefined
+    return [...byTurn.values()][0]
+  }
+
+  /**
+   * 按 turnIndex 找一条轮次；找不到就退到「这个会话唯一在跑的那条」。
+   *
+   * 退这一步是为了中途才连上 WS 的场景：漏掉的 message-start 让轮次记在占位键下，
+   * 而 message-done 带的是真实 turnIndex。收口必须认，否则托盘永远停在「正在回复」。
+   */
+  private findTurn(conversationId: string, turnIndex: number): [TurnKey, ConversationTurn] | undefined {
+    const byTurn = this.turns.get(conversationId)
+    if (byTurn === undefined) return undefined
+    const exact = byTurn.get(turnIndex)
+    if (exact !== undefined) return [turnIndex, exact]
+    if (byTurn.size !== 1) return undefined
+    return [...byTurn.entries()][0]
+  }
+
+  /** 把某条轮次从在场状态里摘掉（摘完顺手清掉空会话）。 */
+  private discardTurn(conversationId: string, key: TurnKey): void {
+    const byTurn = this.turns.get(conversationId)
+    if (byTurn === undefined) return
+    byTurn.delete(key)
+    if (byTurn.size === 0) this.turns.delete(conversationId)
+  }
+
+  /**
+   * 丢掉这个会话里所有不是 key 的轮次：新一轮已经开跑，旧的那些就是残留。
+   *
+   * 依据是后端在同一会话内串行执行轮次（apps/server/src/app.ts 的 turnChains），
+   * 所以两个轮次不会同时在跑。真撞上并行轮次时，表现是少记一个 agent 的正文，
+   * 而不是托盘永远灭不了。
+   */
+  private supersedeTurns(conversationId: string, key: TurnKey): void {
+    const byTurn = this.turns.get(conversationId)
+    if (byTurn === undefined) return
+    for (const other of [...byTurn.keys()]) {
+      if (other !== key) byTurn.delete(other)
+    }
   }
 
   private async discover(): Promise<void> {
@@ -936,9 +1423,14 @@ export class PresenceMonitor {
         headers: this.options.token === undefined ? {} : { authorization: `Bearer ${this.options.token}` },
       })
       if (!response.ok) return
-      const body = (await response.json()) as { conversations?: { id?: unknown }[] }
+      const body = (await response.json()) as { conversations?: { id?: unknown; muted?: unknown }[] }
+      // 静音集合顺手在这轮扫描里更新：会话列表本来就每 5 秒拉一次，通知路径
+      // 不必为了知道"这个会话静没静音"再单独打一次后端。
+      this.muted.clear()
       for (const conversation of body.conversations ?? []) {
-        if (typeof conversation.id !== 'string' || this.sockets.has(conversation.id)) continue
+        if (typeof conversation.id !== 'string') continue
+        if (conversation.muted === true) this.muted.add(conversation.id)
+        if (this.sockets.has(conversation.id)) continue
         this.subscribe(conversation.id)
       }
     } catch {
@@ -955,6 +1447,9 @@ export class PresenceMonitor {
     }
     socket.onclose = () => {
       this.sockets.delete(conversationId)
+      // 断线那一段的事件整段丢了，残缺的轮次记账不能再当真：清掉，重连后由新到达的
+      // 事件重新点亮托盘。否则丢一条 message-done 就会让托盘永远停在「正在回复」。
+      this.turns.delete(conversationId)
       if (this.stopped) return
       const attempt = this.attempts.get(conversationId) ?? 0
       this.attempts.set(conversationId, attempt + 1)
@@ -967,6 +1462,10 @@ export class PresenceMonitor {
     }
   }
 
+  /**
+   * 九种 WS 事件逐个按语义处理：一个都不落 default——服务端新增事件类型而这里
+   * 没跟上时，下面末尾的 never 校验会直接编译不过，而不是等真机上少一条通知。
+   */
   private onEvent(conversationId: string, raw: unknown): void {
     const event = parsePresenceEvent(raw)
     if (event === undefined) return
@@ -974,42 +1473,140 @@ export class PresenceMonitor {
       case 'message-start': {
         // 用户自己发消息也会先来一条 message-start，那不是「有人在忙」。
         if (event.senderId === 'user') return
-        this.busy.set(conversationId, event.senderName ?? event.senderId)
-        this.drafts.set(conversationId, '')
+        // 一个会话里的轮次是串行的：真来了新一轮，上一轮的残留记账（丢掉过
+        // message-done 的那一轮）就该丢掉，否则托盘会永远停在「正在回复」。
+        this.supersedeTurns(conversationId, event.turnIndex)
+        const turn = this.turn(conversationId, event.turnIndex)
+        const speaker = turn.pending.get(event.senderId)
+        // 派工/工具事件已经把它记成「在场但未开口」时，这里补上真名，已经攒的正文留住。
+        if (speaker === undefined) {
+          turn.pending.set(event.senderId, { started: true, name: event.senderName, text: '' })
+        } else {
+          speaker.started = true
+          speaker.name = event.senderName
+        }
         this.emit()
         break
       }
-      case 'text-delta':
-        this.drafts.set(conversationId, `${this.drafts.get(conversationId) ?? ''}${event.text ?? ''}`)
+      case 'text-delta': {
+        // 后台窗口看不到流式正文，所以增量只进草稿、不推状态。契约里 text-delta
+        // 不带 turnIndex：先按 senderId 反查它在说的轮次，再退到本会话正在跑的那条，
+        // 都查不到（中途才连上 WS，漏掉了 message-start）才记到占位轮次上。
+        const turn =
+          this.turnOf(conversationId, event.senderId) ??
+          this.soleTurn(conversationId) ??
+          this.turn(conversationId, UNKNOWN_TURN)
+        const speaker = turn.pending.get(event.senderId)
+        if (speaker === undefined) {
+          turn.pending.set(event.senderId, { started: false, name: event.senderId, text: event.text })
+          // 新开了一条轮次（中途接上的那一轮）：托盘该亮起来，这不是流式增量。
+          this.emit()
+        } else {
+          speaker.text += event.text
+        }
         break
+      }
+      case 'dispatch': {
+        // 派工：接手的 agent 还没开口，但这一轮已经在跑，托盘先亮起来。
+        const turn = this.turn(conversationId, event.turnIndex)
+        if (!turn.pending.has(event.toAgent)) {
+          turn.pending.set(event.toAgent, { started: false, name: event.toAgent, text: '' })
+          this.emit()
+        }
+        break
+      }
+      case 'tool-call-start':
+      case 'tool-result':
+      case 'produce-card': {
+        // 工具事件说明这个 agent 正在干活，只是契约里不带 turnIndex。只在本会话
+        // 已经有一条轮次在跑时补记名：凭空造一轮的话，等不到它的 message-done，
+        // 托盘就会一直亮着。
+        if (this.turnOf(conversationId, event.senderId) !== undefined) break
+        const turn = this.soleTurn(conversationId)
+        if (turn === undefined) break
+        turn.pending.set(event.senderId, { started: false, name: event.senderId, text: '' })
+        this.emit()
+        break
+      }
       case 'message-done': {
-        const agentName = this.busy.get(conversationId) ?? event.senderId
-        const text = (this.drafts.get(conversationId) ?? '').trim()
-        this.busy.delete(conversationId)
-        this.drafts.delete(conversationId)
-        if (this.options.isFocused()) {
+        // 先按 turnIndex 精确找，找不到再退到「这个会话唯一在跑的那条轮次」：
+        // 主进程中途才连上 WS 时，轮次记在占位键下，而这条 done 带的是真实序号。
+        const found = this.findTurn(conversationId, event.turnIndex)
+        if (found === undefined) break
+        const [key, turn] = found
+        const speaker = turn.pending.get(event.senderId)
+        if (speaker === undefined) break
+        // 这一位说完了：正文留进整轮发言表，等最后一位说完时一起进那一条通知。
+        turn.pending.delete(event.senderId)
+        turn.spoken.push(speaker)
+        // 只见到派工/工具事件的「在场」不占收口条件：它们没开口，不会再发 done。
+        for (const [senderId, each] of turn.pending) {
+          if (!each.started) turn.pending.delete(senderId)
+        }
+        if (turn.pending.size > 0) {
+          // 群里这一轮还有 agent 在说：托盘继续亮，不通知、不计未读。
           this.emit()
           break
         }
-        this.unread += 1
-        this.emit()
-        this.options.onReply({ agentName, text: text.length > 0 ? text : '这一轮没有文字' })
+        this.closeTurn(conversationId, key, turn)
         break
       }
       case 'error': {
-        this.busy.delete(conversationId)
-        this.drafts.delete(conversationId)
+        // 错误终止整条轮次：这一轮不会再有 message-done 过来。
+        this.turns.delete(conversationId)
         this.emit()
         // 主动「已停止」不是故障，不该弹通知。
-        if (event.code === 'ABORTED' || this.options.isFocused()) break
+        if (event.code === 'ABORTED' || !this.shouldNotify(conversationId)) break
         this.unread += 1
         this.emit()
-        this.options.onReply({ agentName: 'RyAgent', text: event.message ?? '出了点问题' })
+        this.options.onReply({ agentName: 'RyHarness', text: event.message })
         break
       }
-      default:
+      case 'queued':
+        // 用户消息在排队：真正在跑的那一轮已经把托盘点亮了，排队本身不是「有人在忙」。
         break
+      default: {
+        const unhandled: never = event
+        throw new Error(`[ryharness] 未处理的在场事件：${JSON.stringify(unhandled)}`)
+      }
     }
+  }
+
+  /**
+   * 收口一条轮次：托盘灭灯；窗口不在前台时按「一轮一条」弹通知、累计一条未读。
+   *
+   * 群聊一轮由好几位 agent 各说一段，收口只发生在最后一位说完时——所以通知抬头与
+   * 正文取的是整轮攒下的发言（turn.spoken），不是某一个人的。
+   */
+  /**
+   * 这一轮该不该弹系统通知。
+   *
+   * 三道闸：全局免打扰 → 窗口在前台 → 会话被静音。
+   *
+   * 静音的约定是"不弹未读"（渲染层 api.ts 的 muted 契约：静音 = 不弹未读），
+   * 所以静音的会话连未读都不累计——它在列表里已经以"已静音"角标明示过了，
+   * 系统通知再来一次就是违约而不是提醒。静音集合由每 5 秒一次的会话列表扫描
+   * 顺带刷新（见 discover），通知路径不必为它单独打一次后端。
+   */
+  private shouldNotify(conversationId: string): boolean {
+    if (this.options.isDnd?.() === true) return false
+    if (this.options.isFocused()) return false
+    if (this.muted.has(conversationId)) return false
+    return true
+  }
+
+  private closeTurn(conversationId: string, key: TurnKey, turn: ConversationTurn): void {
+    this.discardTurn(conversationId, key)
+    this.emit()
+    if (!this.shouldNotify(conversationId)) return
+    this.unread += 1
+    this.emit()
+    const names = [...new Set(turn.spoken.map((each) => each.name))]
+    const body = turn.spoken
+      .map((each) => each.text.trim())
+      .filter((text) => text.length > 0)
+      .join('\n')
+    this.options.onReply({ agentName: names.join('、'), text: body.length > 0 ? body : '这一轮没有文字' })
   }
 }
 
@@ -1086,7 +1683,12 @@ export interface DemoSeedResult {
 }
 
 /**
- * 种一条已经发生过的接力演示会话：用户发一句话，总管派工，助理转交，总管收口。
+ * 种一条已经发生过的接力演示会话：用户提一个工作任务，总管派工，助理交付文件，
+ * 总管收口并记下后续。
+ *
+ * 场景必须是「干活」而不是「过日子」：RyHarness 是干活用的 agent，示例要一眼展示
+ * 核心能力——派工、文件交付、长期记忆、主动提醒；聚餐订座那类生活场景让用户
+ * 误以为这是个聊天玩具。
  *
  * 走 store 而不是 POST /messages：后者会真的跑一轮模型（没有 key 就报错气泡，
  * 有 key 就花钱）。演示要的是「社交隐喻当天成立」，不是「再烧一次 token」。
@@ -1107,7 +1709,9 @@ export function seedFirstLaunchDemo(store: DemoSeedStore): DemoSeedResult {
   })
   const conversation = store.createConversation({
     kind: 'group',
-    title: `${DEMO_TITLE_PREFIX} · ${ryen.name}、${worker.name}、${keeper.name}一起定晚饭`,
+    // 职位名直接取成员名（工程师 / 管家），只有 Ryen 是品牌名不是职能名，括号里补上
+    // 「总管」：这是用户看到三位成员分工的第一处，只写「Ryen」等于什么都没说。
+    title: `${DEMO_TITLE_PREFIX} · ${ryen.name}（总管）、${worker.name}、${keeper.name}一起做季度报告`,
     memberAgentIds: memberIds,
     dispatcherAgentId: ryen.id,
   })
@@ -1131,9 +1735,12 @@ export function seedFirstLaunchDemo(store: DemoSeedStore): DemoSeedResult {
     undefined,
     `这是一条示例会话：产品自带的演示，接力已经发生过了，不是你自己的历史。看完可在首屏一键删掉。`,
   )
-  say('user', 'user', `我们三个定下周去哪吃？${worker.name}你查查还没去过的，${keeper.name}你记得我的忌口。`, [
-    keeper.id,
-  ])
+  say(
+    'user',
+    'user',
+    `帮我做一份智能家居行业的季度分析报告，周五要给老板汇报。${worker.name}你拉数据写初稿，${keeper.name}你照我上次改过的模板把关格式。`,
+    [keeper.id],
+  )
   store.recordDispatchEvent({
     conversationId: conversation.id,
     fromAgent: ryen.id,
@@ -1141,7 +1748,11 @@ export function seedFirstLaunchDemo(store: DemoSeedStore): DemoSeedResult {
     reason: 'default-dispatcher',
     turnIndex: 0,
   })
-  say('agent', worker.id, `翻完「吃过的店」清单，排掉上个月去过的三家，还剩巷口那家意面和河对岸的川菜。`)
+  say(
+    'agent',
+    worker.id,
+    `数据拉好了：Q3 市场规模 7157 亿，同比 +12.4%，增长最快的三个品类都配了图表；初稿写到结论段了。`,
+  )
   store.recordDispatchEvent({
     conversationId: conversation.id,
     fromAgent: worker.id,
@@ -1149,8 +1760,16 @@ export function seedFirstLaunchDemo(store: DemoSeedStore): DemoSeedResult {
     reason: `relay @${keeper.name}`,
     turnIndex: 0,
   })
-  say('agent', keeper.id, `你的忌口我记得：不吃香菜，微辣以上会皱眉头。巷口那家可以少辣。`)
-  say('agent', ryen.id, `那就定周三晚，巷口那家意面、少辣。我记进长期记忆了，下次你不用再提醒。`)
+  say(
+    'agent',
+    keeper.id,
+    `照你上次改过的模板核过了：封面、数据来源标注都齐了；你偏好结论先行，我把核心发现提到了第一页。`,
+  )
+  say(
+    'agent',
+    ryen.id,
+    `报告已经放进工作区（智能家居季度报告-v1.docx），结论先行、图表齐全。周五要汇报这件事我记进长期记忆了，周四傍晚我来提醒你过一遍。`,
+  )
   return { conversationId: conversation.id, memberIds }
 }
 
@@ -1158,19 +1777,19 @@ export function seedFirstLaunchDemo(store: DemoSeedStore): DemoSeedResult {
  * 首启落种一次，之后靠标记文件记住：示例被用户删掉时表也就空了，
  * 只看「表空没空」会在下次启动把它又种回来。
  */
-function seedFirstLaunchOnce(server: RyAgentServer): void {
+function seedFirstLaunchOnce(server: RyHarnessServer): void {
   const marker = join(server.dataDir, FIRST_LAUNCH_MARKER)
   if (existsSync(marker)) return
   try {
     const result = seedFirstLaunchDemo(server.store)
-    console.log(`[ryagent] first launch seed: ${result.conversationId ?? 'skipped'}`)
+    console.log(`[ryharness] first launch seed: ${result.conversationId ?? 'skipped'}`)
   } catch (error) {
-    console.error('[ryagent] first launch seed failed:', error)
+    console.error('[ryharness] first launch seed failed:', error)
   } finally {
     try {
       writeFileSync(marker, new Date().toISOString())
     } catch (error) {
-      console.error('[ryagent] failed to write first launch marker:', error)
+      console.error('[ryharness] failed to write first launch marker:', error)
     }
   }
 }
@@ -1186,6 +1805,9 @@ function startResidency(baseUrl: string, token: string | undefined): void {
     isFocused: () => {
       return windowFocused
     },
+    isDnd: () => {
+      return isDoNotDisturb()
+    },
     onState: (state) => {
       updateTray(state)
     },
@@ -1197,9 +1819,9 @@ function startResidency(baseUrl: string, token: string | undefined): void {
 }
 
 async function main(): Promise<void> {
-  const isCapture = process.env.RYAGENT_CAPTURE === '1'
+  const isCapture = envValue(process.env, 'CAPTURE') === '1'
   // 单实例锁：第二个实例直接退出，由首实例聚焦已有窗口。
-  // 截图模式（RYAGENT_CAPTURE=1）是独立进程，不参与锁。
+  // 截图模式（RYHARNESS_CAPTURE=1）是独立进程，不参与锁。
   if (!isCapture && !app.requestSingleInstanceLock()) {
     app.exit(0)
     return
@@ -1208,10 +1830,10 @@ async function main(): Promise<void> {
   await app.whenReady()
   bootTrace.mark('app-ready')
   // Windows 的系统通知按 AUMID 归属应用；不设的话任务栏/通知里显示的是 electron.app.Electron。
-  app.setAppUserModelId('com.ryagent.desktop')
+  app.setAppUserModelId('com.ryharness.desktop')
   // 凭据落盘用系统密钥库加密（必须在任何读写 api-keys.json 之前钉住）。
   // safeStorage 在 app ready 之后才保证可用；isEncryptionAvailable() 为假时
-  // 交给 @ryagent/server 的明文降级路径，它会在日志里说明降级原因。
+  // 交给 @ryharness/server 的明文降级路径，它会在日志里说明降级原因。
   configureSecretStore(
     safeStorage.isEncryptionAvailable()
       ? {
@@ -1226,14 +1848,55 @@ async function main(): Promise<void> {
       : undefined,
   )
   // 本次启动的 API token：后端强制校验，渲染层与常驻监听都带着它。
-  // RYAGENT_API_TOKEN 只给自动化冒烟测试用（release.yml 要在进程外访问 API，
-  // 不能靠猜随机 token）；正常启动一律随机生成。
-  apiToken = process.env.RYAGENT_API_TOKEN ?? generateApiToken()
+  //
+  // RYHARNESS_API_TOKEN 只给**自动化**用（release.yml 要在进程外访问 API，不能靠猜
+  // 随机 token），而且只在 CI 或截图模式下生效（见 envTokenAllowed）。生产构建同样
+  // 认这个环境变量的话，用户（或用户抄来的脚本、快捷方式、计划任务）设一个
+  // RYHARNESS_API_TOKEN，本机任何进程都能拿 Bearer 直调本机 API——而这个 API 背后是
+  // 带 shellExec 的 agent 工具链。每次启动随机 256 位 token 的防线被一个环境变量
+  // 整个绕过，界面上还没有任何提示。
+  const allowEnvToken = envTokenAllowed(process.env)
+  apiToken = (allowEnvToken ? envValue(process.env, 'API_TOKEN') : undefined) ?? generateApiToken()
   loadDotEnvIntoProcess()
-  registerIpcHandlers()
+  /**
+   * 数据目录与工作区根目录在这里定一次：后端与 IPC 的路径闸必须用**同一个**根，
+   * 各算各的就会出现「后端放行、主进程拦下」这种用户看不懂的失败。
+   */
+  const dataDir = envValue(process.env, 'DATA_DIR') ?? join(app.getPath('userData'), 'ryharness-data')
+  /**
+   * 改名那天的数据迁移：老数据在 `%APPDATA%\RyAgent\ryagent-data`，新位置是
+   * `%APPDATA%\RyHarness\ryharness-data`。不迁的话用户升级后打开应用会发现会话、
+   * 长期记忆、助理配置全没了——数据还在老目录里，只是没人去读。
+   *
+   * 只在**新目录不存在**时迁；用户自己指定了 RYHARNESS_DATA_DIR 的话更不迁
+   * （那是他自己挑的地方）。
+   */
+  if (envValue(process.env, 'DATA_DIR') === undefined) {
+    const legacyDataDir = join(app.getPath('appData'), 'RyAgent', 'ryagent-data')
+    const migration = migrateLegacyDataDir({
+      dataDir,
+      legacyDataDir,
+      exists: existsSync,
+      move: (from, to) => {
+        renameSync(from, to)
+      },
+      fileExists: existsSync,
+      rename: (from, to) => {
+        renameSync(from, to)
+      },
+    })
+    if (migration.migrated) {
+      console.log(`[ryharness] 已把老版本的数据目录迁到 ${dataDir}`)
+    } else if (migration.reason !== undefined && migration.reason.startsWith('move failed')) {
+      console.warn(`[ryharness] 老数据目录迁移失败（${migration.reason}）：${legacyDataDir}`)
+    }
+  }
+  const workspaceRoot = join(dataDir, 'workspace')
+  registerIpcHandlers(workspaceRoot)
+  registerPermissionPolicy()
   applyAppMenu()
 
-  const devServerUrl = process.env.RYAGENT_DEV_SERVER_URL
+  const devServerUrl = envValue(process.env, 'DEV_SERVER_URL')
   // 渲染层资源服务：与后端无关，先就绪，窗口才能立刻开始加载。
   let assets: RendererAssets | undefined
   if (devServerUrl === undefined || devServerUrl.length === 0) {
@@ -1241,21 +1904,21 @@ async function main(): Promise<void> {
     // 不归零）；被占用时回退随机，实际地址由 assets.url 带出，调用方不必关心。
     const assetChoice = await resolveBackendPort({ port: DEFAULT_ASSETS_PORT, host: BACKEND_HOST })
     if (assetChoice.fallback === true) {
-      console.warn(`[ryagent] ${assetChoice.reason ?? '端口被占用'}，资源服务回退随机端口`)
+      console.warn(`[ryharness] ${assetChoice.reason ?? '端口被占用'}，资源服务回退随机端口`)
     }
     assets = await RendererAssets.start(join(here, '../renderer/dist'), { port: assetChoice.port })
-    if (assets.fellBack) console.warn(`[ryagent] 资源服务端口 ${DEFAULT_ASSETS_PORT} 起不来，已回退 ${assets.port}`)
+    if (assets.fellBack) console.warn(`[ryharness] 资源服务端口 ${DEFAULT_ASSETS_PORT} 起不来，已回退 ${assets.port}`)
   }
   bootTrace.mark('assets-ready')
-  const startServer = async (): Promise<RyAgentServer> => {
+  const startServer = async (): Promise<RyHarnessServer> => {
     // 固定端口优先（跨启动 origin 稳定，HTTP 与 V8 缓存不归零）；被占用时回退随机，
     // 实际地址由 readyServer.url 推给渲染层，调用方不必关心用的是哪个端口。
     const choice = await resolveBackendPort({ port: backendPortFromEnv(), host: BACKEND_HOST })
-    if (choice.fallback === true) console.warn(`[ryagent] ${choice.reason ?? '端口被占用'}，回退随机端口`)
-    return RyAgentServer.create({
+    if (choice.fallback === true) console.warn(`[ryharness] ${choice.reason ?? '端口被占用'}，回退随机端口`)
+    return RyHarnessServer.create({
       port: choice.port,
       host: BACKEND_HOST,
-      dataDir: process.env.RYAGENT_DATA_DIR ?? join(app.getPath('userData'), 'ryagent-data'),
+      dataDir,
       authToken: apiToken,
     })
   }
@@ -1283,11 +1946,11 @@ async function main(): Promise<void> {
   // 两种模式都不把 api 写进 URL（窗口加载时后端可能还没起来），统一走 pushApiBase。
   pageUrl = assets !== undefined ? `${assets.url}${RENDERER_MOUNT}` : `${devServerUrl ?? ''}`
   mainWindow = createWindow(pageUrl)
-  let readyServer: RyAgentServer
+  let readyServer: RyHarnessServer
   try {
     readyServer = await startServer()
   } catch (error) {
-    dialog.showErrorBox('RyAgent 启动失败', error instanceof Error ? error.message : String(error))
+    dialog.showErrorBox('RyHarness 启动失败', error instanceof Error ? error.message : String(error))
     app.exit(1)
     return
   }

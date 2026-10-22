@@ -3,27 +3,26 @@
  *
  * Windows 上优先使用 Git Bash（本开发/部署环境的 shell），找不到时退回
  * cmd.exe；POSIX 上使用 /bin/sh。用 execFile 直接.spawn 解释器（不经
- * cmd 字符串拼接），避免 Windows 路径空格引号问题；输出按字符数截断，
- * 超时强杀进程。取消时把 `ToolContext.signal` 交给 spawn：等待立刻中断，
- * 并按进程树把 shell 及其子孙一起收掉。
+ * cmd 字符串拼接），避免 Windows 路径空格引号问题；输出按字符数截断。
+ * 超时与取消由本模块自己接管（不再交给 execFile 的 signal/timeout）：
+ * 中断发生时先按进程树把 shell 及其子孙一起收掉、确认收干净了再返回，
+ * 顺序与"确认过再返回"都是硬要求，见 {@link terminateProcessTree}。
  *
  * 安全闸：命令命中 `.env` / `.ssh/` / `.aws/` / `.git/config` / api-keys.json
  * 以及凭据类文件名时直接报错且**不执行**（见 {@link findSensitiveInCommand}）。
  * 闸默认开着，只能由宿主用 {@link setShellGuardPolicy} 显式放开。
- * @module @ryagent/tools/shell
+ * @module @ryharness/tools/shell
  */
 
 import type { ChildProcess } from 'node:child_process'
 import { execFile, spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { promisify } from 'node:util'
-import { type Tool, throwIfAborted } from '@ryagent/agent'
+import { type Tool, throwIfAborted } from '@ryharness/agent'
 import { truncateOutput } from './workspace.ts'
-
-const execFileAsync = promisify(execFile)
 
 const DEFAULT_TIMEOUT_MS = 30_000
 const MAX_OUTPUT_CHARS = 32_000
+const MAX_BUFFER_BYTES = 4 * 1024 * 1024
 
 /** 各平台的默认 shell 与单命令标志；Windows 优先 Git Bash。 */
 function defaultShell(): { shell: string; args: (command: string) => string[] } {
@@ -79,7 +78,7 @@ function argNumber(args: unknown, key: string, fallback: number): number {
 
 /**
  * shell 安全闸策略（进程级；只能由宿主在启动配置时改，模型自己改不了）。
- * @module @ryagent/tools/shell/guard
+ * @module @ryharness/tools/shell/guard
  */
 
 /** shell_exec 的安全闸配置。 */
@@ -310,50 +309,166 @@ export const shellExec: Tool = {
       return { content: `invalid timeoutMs: ${String(timeoutMs)}`, isError: true }
     }
     const { shell, args: shellArgs } = defaultShell()
-    const running = execFileAsync(shell, shellArgs(command), {
-      cwd: ctx.workspaceRoot,
-      timeout: timeoutMs,
-      killSignal: 'SIGKILL',
-      maxBuffer: 4 * 1024 * 1024,
-      windowsHide: true,
-      ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
-    })
-    try {
-      const { stdout, stderr } = await running
-      const combined = stderr.length > 0 ? `${stdout}\n[stderr]\n${stderr}` : stdout
-      return { content: truncateOutput(combined.trimEnd(), MAX_OUTPUT_CHARS) }
-    } catch (error) {
-      // 取消不是命令失败：结果无意义，由循环在边界抛 AbortedError 收尾。
-      if (ctx.signal?.aborted === true) {
-        killProcessTree(running.child)
-        return { content: 'command aborted', isError: true }
-      }
-      const failed = error as { stdout?: string; stderr?: string; message?: string; killed?: boolean }
-      const output = [failed.stdout, failed.stderr]
-        .filter((part): part is string => {
-          return typeof part === 'string' && part.length > 0
-        })
-        .join('\n')
-      const reason = failed.killed === true ? `timed out after ${timeoutMs}ms` : (failed.message ?? 'command failed')
+    const { child, done } = runShell(shell, shellArgs(command), ctx.workspaceRoot)
+    const settled = await raceInterruption(done, timeoutMs, ctx.signal)
+    if (settled === 'abort' || settled === 'timeout') {
+      await terminateProcessTree(child)
       return {
-        content: output.length > 0 ? `${reason}\n${truncateOutput(output.trimEnd(), MAX_OUTPUT_CHARS)}` : reason,
+        content: settled === 'abort' ? 'command aborted' : `timed out after ${timeoutMs}ms`,
         isError: true,
       }
+    }
+    const { stdout, stderr, error } = settled
+    if (error === null) {
+      const combined = stderr.length > 0 ? `${stdout}\n[stderr]\n${stderr}` : stdout
+      return { content: truncateOutput(combined.trimEnd(), MAX_OUTPUT_CHARS) }
+    }
+    const output = [error.stdout, error.stderr]
+      .filter((part): part is string => {
+        return typeof part === 'string' && part.length > 0
+      })
+      .join('\n')
+    const reason = error.killed === true ? `timed out after ${timeoutMs}ms` : (error.message ?? 'command failed')
+    return {
+      content: output.length > 0 ? `${reason}\n${truncateOutput(output.trimEnd(), MAX_OUTPUT_CHARS)}` : reason,
+      isError: true,
     }
   },
 }
 
+/** 一次 shell 调用的结果：命令输出，加上（若有）失败原因。 */
+interface ShellOutcome {
+  stdout: string
+  stderr: string
+  /** execFile 只用回调报错，不 reject：工具层统一按 isError 结果返回，不抛。 */
+  error: ExecFailure | null
+}
+
+/** execFile 的失败对象：除了 message 还带着已捕获的输出与"是不是被杀"。 */
+interface ExecFailure {
+  stdout?: string
+  stderr?: string
+  message?: string
+  killed?: boolean
+}
+
 /**
- * 按进程树收尾。Windows 上杀掉 shell 并不会自动带走它启动的子进程：
- * Git Bash 走 MSYS2，信号会顺着进程组传下去，但退化到 cmd.exe（或任何
- * 不做信号传播的 shell）时，`npm install` / `python x.py` 里真正干活的进程
- * 会继续跑几分钟并占着工作区。taskkill /T 才是按树清理。
+ * 起一条命令并把句柄同步交出来。
+ *
+ * 用回调形式而不是 `promisify(execFile)`：中断收尾必须赶在 execFile 自己的
+ * signal/timeout 杀掉直接子进程**之前**拿到句柄去按树枚举，否则树就拼不出来了。
  */
-function killProcessTree(child: ChildProcess): void {
-  if (process.platform !== 'win32' || child.pid === undefined) return
-  try {
-    spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }).unref()
-  } catch {
-    // 进程可能已经退出；杀不掉不该改变工具结果。
+function runShell(file: string, args: string[], cwd: string): { child: ChildProcess; done: Promise<ShellOutcome> } {
+  let settle: (outcome: ShellOutcome) => void = () => {}
+  const done = new Promise<ShellOutcome>((resolve) => {
+    settle = resolve
+  })
+  const child = execFile(
+    file,
+    args,
+    {
+      cwd,
+      maxBuffer: MAX_BUFFER_BYTES,
+      windowsHide: true,
+    },
+    (error, stdout, stderr) => {
+      settle({ stdout, stderr, error })
+    },
+  )
+  return { child, done }
+}
+
+/** 谁先到谁算数：命令跑完、超时、还是被 signal 取消。 */
+function raceInterruption(
+  done: Promise<ShellOutcome>,
+  timeoutMs: number,
+  signal: AbortSignal | undefined,
+): Promise<ShellOutcome | 'timeout' | 'abort'> {
+  return new Promise((resolve) => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const settle = (value: ShellOutcome | 'timeout' | 'abort'): void => {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
+      resolve(value)
+    }
+    const onAbort = (): void => {
+      settle('abort')
+    }
+    timer = setTimeout(() => {
+      settle('timeout')
+    }, timeoutMs)
+    signal?.addEventListener('abort', onAbort, { once: true })
+    void done.then(settle)
+  })
+}
+
+/**
+ * 按进程树收尾，并等它真的收完再返回。
+ *
+ * 顺序与"确认过再返回"都是硬要求：
+ * - Windows 的 taskkill /T 是从父进程往下枚举的。父进程一旦先死（execFile 自己的
+ *   signal/timeout handler 就是这么干的），这棵树就再也拼不出来，里面的孙进程会以
+ *   无主孤儿的形式继续跑——用户机器 CPU 被 `while true; do :; done` 吃满就是这么来的。
+ *   所以这里先 taskkill 整树，失败才退回只杀直接子进程。
+ * - 必须 await。`spawn(...).unref()` 那种"发射完就不管"的写法在杀不掉时等于没杀，
+ *   而这正是测试漏掉它的原因：断言只等 promise settle，看不见进程还在跑。
+ *
+ * 平台差异是显式的：win32 有 taskkill /T 这条按父子关系枚举的路；POSIX 没有对应接口，
+ * 而 execFile 又没有 detached 选项（shell 拿不到自己的进程组），所以那边只能保证直接
+ * 子进程被 SIGKILL——仍然比原实现的"整个函数直接 return、什么都不杀"强。
+ */
+async function terminateProcessTree(child: ChildProcess): Promise<void> {
+  const pid = child.pid
+  if (pid === undefined) return
+  if (process.platform === 'win32') {
+    // 顺序是硬要求：taskkill /T 必须先跑，且跑的时候父进程必须还活着——它是从父进程
+    // 往下枚举的，父进程一死树就拼不出来，孙进程全部漏掉。父进程一死还有个更隐蔽的
+    // 坑：继承 stdout 管道的孙进程会拿着管道不放，child 的 'close' 永远不触发，连
+    // "等 close 再 taskkill" 这种写法都会原地挂死。所以先 taskkill 整树，失败才退回
+    // SIGKILL 只杀直接子进程，最后带超时地等 'close' 落袋（不等它：任务时限已到）。
+    const treeKilled = await taskkillTree(pid)
+    if (!treeKilled) child.kill('SIGKILL')
+    await waitForClose(child)
+    return
   }
+  child.kill('SIGKILL')
+}
+
+/** 等 'close'，但只等到时限：进程杀不掉时收尾不能无限期挂着。 */
+function waitForClose(child: ChildProcess, timeoutMs = 2_000): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve()
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      resolve(undefined)
+    }, timeoutMs)
+    child.once('close', () => {
+      clearTimeout(timer)
+      resolve(undefined)
+    })
+  })
+}
+
+/** taskkill /T /F：按父子关系枚举并强杀整棵树。进程已不在、taskkill 自己卡住，都算失败。 */
+function taskkillTree(pid: number, timeoutMs = 5_000): Promise<boolean> {
+  return new Promise((resolve) => {
+    let killer: ChildProcess
+    try {
+      killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
+    } catch {
+      resolve(false)
+      return
+    }
+    const timer = setTimeout(() => {
+      killer.kill('SIGKILL')
+      resolve(false)
+    }, timeoutMs)
+    killer.on('error', () => {
+      clearTimeout(timer)
+      resolve(false)
+    })
+    killer.on('close', (code) => {
+      clearTimeout(timer)
+      resolve(code === 0)
+    })
+  })
 }

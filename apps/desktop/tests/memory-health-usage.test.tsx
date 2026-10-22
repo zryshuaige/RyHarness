@@ -189,7 +189,8 @@ describe('记忆健康度', () => {
     expect(stat('记忆总数')).toBe('8 条')
     expect(stat('已归档')).toBe('1 条')
     // 最近一次有召回的是第 2 轮（memoryItems 3 / 42ms），不是最近那一轮。
-    expect(stat('最近召回')).toBe('3 条 · 42ms')
+    // 界面按「秒」显示耗时：42ms 是接口值，毫秒不该原样上屏。
+    expect(stat('最近召回')).toBe('3 条 · 0.04 秒')
     expect(container.textContent).toContain('该 agent 空间')
   })
 
@@ -284,7 +285,9 @@ describe('记忆删除失败要有反馈', () => {
     })
     expect(getToasts().length).toBe(before + 1)
     expect(getToasts().at(-1)?.kind).toBe('error')
-    expect(getToasts().at(-1)?.text).toContain('memory not found')
+    // 服务端字面量翻成人话，`memory not found` 不上屏。
+    expect(getToasts().at(-1)?.text).toContain('这条记忆已经不在了')
+    expect(getToasts().at(-1)?.text).not.toContain('memory not found')
     expect(container.textContent).toContain('用户喜欢简洁的回复')
   })
 
@@ -396,9 +399,10 @@ describe('用量账单', () => {
   it('按会话聚合，并写清统计口径', async () => {
     await renderMePage(meApi())
     expect(container.textContent).toContain('用量账单')
-    expect(container.querySelector('.usage-total')?.textContent).toContain('累计 5.0k tokens')
-    expect(container.querySelector('.usage-total')?.textContent).toContain('输入 3.9k')
-    expect(container.querySelector('.usage-total')?.textContent).toContain('输出 1.1k')
+    // token 是开发者单位，界面统一说「字」；断言随语义改为 humanTokens 口径。
+    expect(container.querySelector('.usage-total')?.textContent).toContain('累计 约 5.0 千字')
+    expect(container.querySelector('.usage-total')?.textContent).toContain('输入 约 3.9 千字')
+    expect(container.querySelector('.usage-total')?.textContent).toContain('输出 约 1.1 千字')
     expect(container.querySelector('.usage-scope')?.textContent).toContain('覆盖 2 个会话')
     expect(container.querySelector('.usage-scope')?.textContent).toContain('全部历史')
     const rows = [...container.querySelectorAll('.usage-row')]
@@ -500,7 +504,9 @@ describe('用量账单', () => {
       }),
     )
     const alert = container.querySelector('.usage-ledger, [role="alert"]')
-    expect(alert?.textContent).toContain('用量没读出来：HTTP 503')
+    // `HTTP 503` 没有可解释的语义，退回调用点的中文兜底，原话不上屏。
+    expect(alert?.textContent).toContain('用量没读出来：')
+    expect(alert?.textContent).not.toContain('HTTP 503')
   })
 
   it('「我的」页同时挂着记忆健康度区块', async () => {
@@ -514,7 +520,7 @@ describe('用量账单', () => {
     const health = container.querySelector('.memory-health')!
     expect(health.textContent).toContain('全部空间')
     expect(stat('记忆总数')).toBe('12 条')
-    expect(stat('最近召回')).toBe('4 条 · 58ms')
+    expect(stat('最近召回')).toBe('4 条 · 0.06 秒')
   })
 })
 
@@ -551,7 +557,7 @@ describe('记忆健康度：五格全接 /api/memory/health', () => {
     expect(stat('记忆总数')).toBe('12 条')
     expect(stat('已归档')).toBe('2 条')
     expect(stat('缺向量')).toBe('3 条')
-    expect(stat('最近召回')).toBe('4 条 · 58ms')
+    expect(stat('最近召回')).toBe('4 条 · 0.06 秒')
     expect(stat('存储体积')).toBe('1.5 MB')
     expect(container.textContent).not.toContain('—')
     expect(container.textContent).toContain('全部空间')
@@ -670,7 +676,7 @@ describe('记忆健康度：五格全接 /api/memory/health', () => {
     await flush()
     // 退回后总数与召回仍然有真值；缺向量/体积答不出来才留「—」。
     expect(stat('记忆总数')).toBe('12 条')
-    expect(stat('最近召回')).toBe('3 条 · 42ms')
+    expect(stat('最近召回')).toBe('3 条 · 0.04 秒')
     expect(stat('缺向量')).toBe('—')
     expect(stat('存储体积')).toBe('—')
   })
@@ -771,10 +777,15 @@ describe('ApiClient：健康度 / 账单 / 溯源三条读口', () => {
     ])
   })
 
-  it('路由未注册时把服务端的 error 原样抛出（界面据此降级，不吞）', async () => {
+  it('路由未注册时不吞：raw 带服务端原话（界面据此降级），message 说人话', async () => {
     const api = new ApiClient('http://127.0.0.1:32100')
     stubFetch({ error: 'not found: GET /api/evolve/entries/e1/explain' }, 404)
-    await expect(api.explainPlaybookEntry('e1')).rejects.toThrow('not found: GET /api/evolve/entries/e1/explain')
+    // 降级判据读的是 raw / status，不是 message：message 现在是给人看的那一句。
+    await expect(api.explainPlaybookEntry('e1')).rejects.toMatchObject({
+      status: 404,
+      raw: 'not found: GET /api/evolve/entries/e1/explain',
+      message: '本机服务没有这个接口，界面可能比服务端新。',
+    })
   })
 })
 
@@ -846,9 +857,9 @@ describe('经验溯源：它从哪来', () => {
       origins.map((node) => {
         return node.querySelector('.entry-origin-kind')?.textContent
       }),
-    ).toEqual(['教训', '反馈', '反馈', '种子'])
+    ).toEqual(['教训', '反馈', '反馈', '预置'])
     // detail 缺失时回落到种类标签，不留空白。
-    expect(origins[3]!.querySelector('.entry-origin-detail')?.textContent).toBe('种子')
+    expect(origins[3]!.querySelector('.entry-origin-detail')?.textContent).toBe('预置')
 
     // 收起再展开不再重复请求。
     click(toggle)
@@ -872,7 +883,7 @@ describe('经验溯源：它从哪来', () => {
     })
     click(container.querySelector('.entry-explain-toggle')!)
     await flush()
-    expect(container.textContent).toContain('来历暂时查不到')
+    expect(container.textContent).toContain('来源查不到')
     expect(container.querySelector('.entry-origin-list')).toBeNull()
   })
 
@@ -884,7 +895,7 @@ describe('经验溯源：它从哪来', () => {
     click(container.querySelector('.entry-explain-toggle')!)
     await flush()
     expect(container.querySelector('.entry-explain-body')).not.toBeNull()
-    expect(container.textContent).toContain('来历暂时查不到')
+    expect(container.textContent).toContain('来源查不到')
   })
 
   it('零溯源记录：说清是种子/手动写入，而不是空白', async () => {
@@ -904,7 +915,7 @@ describe('经验溯源：它从哪来', () => {
     click(container.querySelector('.entry-explain-toggle')!)
     await flush()
     expect(container.textContent).toContain('来源未知')
-    expect(container.textContent).toContain('没有记录到具体来源')
+    expect(container.textContent).toContain('没有来源记录')
   })
 })
 
@@ -927,12 +938,13 @@ describe('进化指标：它到底有没有在学', () => {
     // 手册是某个 agent 的，进化记账是全进程一份的——口径必须写在界面上。
     expect(container.textContent).toContain('全部 agent')
     expect(container.querySelector('.evolve-stats-total')?.textContent).toContain('累计 3 轮')
-    expect(container.querySelector('.evolve-stats-total')?.textContent).toContain('平均 328ms')
+    // 平均耗时同样按秒显示（328ms → 0.33 秒），不再把毫秒原样上屏。
+    expect(container.querySelector('.evolve-stats-total')?.textContent).toContain('平均 0.33 秒')
     expect(container.querySelector('.evolve-stats-total')?.textContent).toContain('处理 46 条')
     const rounds = [...container.querySelectorAll('.evolve-round')]
     expect(rounds).toHaveLength(3)
     expect(rounds[0]!.querySelector('.evolve-round-kind')?.textContent).toBe('对话轮')
-    expect(rounds[0]!.querySelector('.evolve-round-num')?.textContent).toBe('120ms · 处理 3 条')
+    expect(rounds[0]!.querySelector('.evolve-round-num')?.textContent).toBe('0.12 秒 · 处理 3 条')
     expect(rounds[2]!.querySelector('.evolve-round-kind')?.textContent).toBe('巩固')
     expect(container.textContent).toContain('最近一轮是对话轮')
   })
@@ -1004,7 +1016,7 @@ describe('进化指标：它到底有没有在学', () => {
     expect(container.textContent).toContain('更早的 1 轮未列出')
   })
 
-  it('进化系统未启用 / 读失败 / 端点不存在：都不画半截数字', async () => {
+  it('进化系统未启用 / 读失败 / 端点不存在：三种状态各有各的说法', async () => {
     await renderBlock({
       evolveStats: () => {
         return Promise.resolve({ enabled: false })
@@ -1017,18 +1029,35 @@ describe('进化指标：它到底有没有在学', () => {
     container.remove()
     container = document.createElement('div')
     document.body.appendChild(container)
-    await renderBlock({
-      evolveStats: () => {
-        return Promise.reject(new Error('not found: GET /api/evolve/stats'))
-      },
+    // 读失败不再整块消失：错误条 + 重试；重试成功后才画真值。
+    let calls = 0
+    const flaky = vi.fn(() => {
+      calls += 1
+      return calls === 1
+        ? Promise.reject(new Error('not found: GET /api/evolve/stats'))
+        : Promise.resolve(evolveStats())
     })
-    expect(container.querySelector('.evolve-stats')).toBeNull()
+    await renderBlock({ evolveStats: flaky })
+    expect(container.textContent).toContain('进化统计没读出来')
+    expect(container.querySelector('.evolve-stats-total')).toBeNull()
+    // 原始报错只在折叠的「详情」里，不占第一眼。
+    expect(container.querySelector('details')?.textContent).toContain('not found: GET /api/evolve/stats')
+    const retry = container.querySelector<HTMLButtonElement>('.apikey-error button')
+    expect(retry).not.toBeNull()
+    await act(async () => {
+      retry?.click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(flaky).toHaveBeenCalledTimes(2)
+    expect(container.textContent).toContain('进化记录')
 
     root.unmount()
     container.remove()
     container = document.createElement('div')
     document.body.appendChild(container)
     await renderBlock({})
-    expect(container.querySelector('.evolve-stats')).toBeNull()
+    // 端点不存在 = 这版服务端没有进化统计，按「未启用」说，不留空白。
+    expect(container.textContent).toContain('进化系统未启用')
   })
 })

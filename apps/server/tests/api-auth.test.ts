@@ -8,7 +8,7 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { RyAgentServer } from '@ryagent/server'
+import { RyHarnessServer } from '@ryharness/server'
 import { afterEach, describe, expect, it } from 'vitest'
 import WebSocket from 'ws'
 
@@ -17,10 +17,10 @@ const WRONG = 'unit-test-api-token-WRONG'
 
 const tmpDirs: string[] = []
 
-async function startServer(token: string | undefined): Promise<RyAgentServer> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'ryagent-auth-'))
+async function startServer(token: string | undefined): Promise<RyHarnessServer> {
+  const dataDir = mkdtempSync(join(tmpdir(), 'ryharness-auth-'))
   tmpDirs.push(dataDir)
-  return RyAgentServer.create({
+  return RyHarnessServer.create({
     port: 0,
     dataDir,
     memory: null,
@@ -50,7 +50,7 @@ describe('本地 API 的一次性 token', () => {
       const rejected: (Record<string, string> | undefined)[] = [
         undefined,
         { authorization: `Bearer ${WRONG}` },
-        { 'x-ryagent-token': WRONG },
+        { 'x-ryharness-token': WRONG },
         { authorization: `Bearer ${TOKEN}x` },
       ]
       for (const headers of rejected) {
@@ -65,11 +65,11 @@ describe('本地 API 的一次性 token', () => {
     }
   })
 
-  it('Authorization: Bearer、x-ryagent-token 头与 ?token= 三条路都放行', async () => {
+  it('Authorization: Bearer、x-ryharness-token 头与 ?token= 三条路都放行', async () => {
     const server = await startServer(TOKEN)
     try {
       expect((await get(server.url, '/api/agents', { authorization: `Bearer ${TOKEN}` })).status).toBe(200)
-      expect((await get(server.url, '/api/agents', { 'x-ryagent-token': TOKEN })).status).toBe(200)
+      expect((await get(server.url, '/api/agents', { 'x-ryharness-token': TOKEN })).status).toBe(200)
       expect((await get(server.url, `/api/agents?token=${TOKEN}`)).status).toBe(200)
       // 写操作同样过闸：闸门不能只拦读。
       const created = await fetch(`${server.url}/api/agents`, {

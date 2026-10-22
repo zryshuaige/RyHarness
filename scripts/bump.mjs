@@ -1,7 +1,7 @@
 /**
  * 统一版本脚本：版本号只在一处改。
  *
- * RyAgent 的 20 个工作区包各自带一份 `version`，加上根 package.json、「我的」页
+ * RyHarness 的 20 个工作区包各自带一份 `version`，加上根 package.json、「我的」页
  * 的展示版本与 CHANGELOG 头部，一次发版要手工同步 4 类位置，漏任何一处都会让
  * 安装包文件名、依赖图与变更记录互相矛盾。根 package.json 是唯一真值来源：
  * `--check` 只读校验（CI 与发版前跑），`--set` 一次改完全部位置并写 CHANGELOG 头部。

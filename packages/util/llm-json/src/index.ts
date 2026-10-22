@@ -8,10 +8,10 @@
  * 刻意不内置任何供应商默认值：baseURL / apiKey / model 全部由调用方从
  * providers.json 传入，用户换供应商时管线必须跟着换。
  *
- * @module @ryagent/util-llm-json
+ * @module @ryharness/util-llm-json
  */
 
-import { HarnessError } from '@ryagent/llm'
+import { HarnessError } from '@ryharness/llm'
 
 /** 一次结构化输出请求的失败分类后缀（拼在 `${codeNamespace}_` 之后）。 */
 export type ChatJsonFailureKind = 'CONFIG' | 'HTTP' | 'EMPTY' | 'JSON'

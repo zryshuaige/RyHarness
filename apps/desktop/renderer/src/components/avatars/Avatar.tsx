@@ -1,4 +1,6 @@
 import { type ReactNode, useEffect, useMemo, useState } from 'react'
+import { animalAssetUrl, animalHueFilter, parseAnimalAvatar } from '../../lib/animal-3d.ts'
+import { portraitOf, portraitSrc, portraitSrcSet } from '../../lib/brand-portraits.ts'
 import { Cat } from '../Cat.tsx'
 import {
   AVATAR_SPEC,
@@ -92,6 +94,8 @@ export function Avatar({
   const [ready, setReady] = useState(() => {
     return styleKey === undefined || isAvatarStyleLoaded(styleKey)
   })
+  /** 风格 chunk 拉取失败：走首字母色块，而不是永远停在骨架上。 */
+  const [failed, setFailed] = useState(false)
   useEffect(() => {
     if (styleKey === undefined) {
       setReady(true)
@@ -102,10 +106,15 @@ export function Avatar({
       return
     }
     setReady(false)
+    setFailed(false)
     let alive = true
     void loadAvatarStyle(styleKey)
       .catch(() => {
-        /* 加载失败：保持骨架，语义上退化为占位 */
+        // 加载失败（chunk 404、离线、版本不一致）：落到首字母色块，不停在骨架上。
+        // 此前 catch 是空的而 then 照样置 ready，dicebearSvg 查不到风格又返回 null，
+        // 于是永久卡成一块带 aria-busy 的灰方块——通讯录、气泡、资料卡里全是它，
+        // 而且永远不会自愈。首字母色块是早就写好的兜底，只是这条路径走不到它。
+        if (alive) setFailed(true)
       })
       .then(() => {
         if (alive) setReady(true)
@@ -123,14 +132,58 @@ export function Avatar({
   if (avatarKey === BRAND_AVATAR) {
     return (
       <AvatarShell size={size} variant="avatar-cat" className={className} label={name}>
-        <Cat mood="idle" shape="circle" size={size} />
+        <Cat shape="circle" size={size} />
+      </AvatarShell>
+    )
+  }
+  // 立体动物（`an3d:<种类>:<色相>`）：照片级 3D 渲染的动物头（assets/animals/
+  // *.webp，透明底），毛色靠 CSS filter 实时染——8 种毛色零额外资产。
+  // 这里只用正面那一张：聊天流、群头像这些地方要的是"一眼认得出谁"，
+  // 能转头的三视图留给 Avatar3D（通讯录 / 身份卡 / 「我的」页）。
+  const animal = parseAnimalAvatar(avatarKey)
+  if (animal !== undefined) {
+    const src = animalAssetUrl(animal.kind, 'front')
+    if (src !== undefined) {
+      return (
+        <AvatarShell size={size} variant="avatar-animal" className={className} label={name}>
+          <img
+            className="avatar-portrait-img"
+            src={src}
+            style={{ filter: animalHueFilter(animal.kind, animal.hue) }}
+            width={size}
+            height={size}
+            alt=""
+            draggable={false}
+            decoding="async"
+          />
+        </AvatarShell>
+      )
+    }
+  }
+  // 立绘头像（柴犬/灰狐/剪影）：与品牌橘猫共用同一块圆形画布，
+  // 图本身已经是「圆形透明底 + 24/64/256 三档 WebP」，这里只负责按布局宽度选档。
+  const portrait = portraitOf(avatarKey)
+  if (portrait !== undefined) {
+    return (
+      <AvatarShell size={size} variant="avatar-portrait" className={className} label={name}>
+        <img
+          className="avatar-portrait-img"
+          src={portraitSrc(portrait.key, 256)}
+          srcSet={portraitSrcSet(portrait.key)}
+          sizes={`${size}px`}
+          width={size}
+          height={size}
+          alt=""
+          draggable={false}
+          decoding="async"
+        />
       </AvatarShell>
     )
   }
   if (dicebear !== null) {
     return <AvatarShell size={size} className={className} label={name} html={dicebear} />
   }
-  if (spec !== null) {
+  if (spec !== null && !failed) {
     // 骨架：容器尺寸与最终头像完全一致，加载完成只是内部替换，无跳动。
     return (
       <AvatarShell

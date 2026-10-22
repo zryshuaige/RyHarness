@@ -1,10 +1,12 @@
 import { createRoot } from 'react-dom/client'
 import { App } from './App.tsx'
 import { startApiTokenSync } from './api.ts'
+import { ErrorBoundary, reportRenderCrash } from './components/ErrorBoundary.tsx'
 import './styles.css'
 import './styles-product.css'
 import './styles-provider.css'
 import './styles-memory.css'
+import './styles-control.css'
 
 const splash = document.getElementById('splash')
 
@@ -25,4 +27,11 @@ if (splash !== null) {
   }, 2500)
 }
 
-createRoot(document.getElementById('root') as HTMLElement).render(<App />)
+// 最外层兜底：没有它，App 里任何一次渲染期抛错都会掀掉整棵树，#root 变成零子节点——
+// 窗口里只剩一片底色（真机上就是这么白过一次的）。App 内部另有内容区边界，能局部救回。
+// onError 记崩溃日志：没有它，崩溃在磁盘上不留痕，只能靠用户手点复制去捞。
+createRoot(document.getElementById('root') as HTMLElement).render(
+  <ErrorBoundary title="RyHarness 没能画出来" onError={reportRenderCrash}>
+    <App />
+  </ErrorBoundary>,
+)

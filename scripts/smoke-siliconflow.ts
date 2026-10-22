@@ -9,16 +9,16 @@
  *   (b) 一轮 tool calling（echo 工具），验证模型发起 tool_call 且参数 JSON
  *       组装完整。
  *
- * API key 读取顺序：环境变量 SILICONFLOW_API_KEY → RyAgent/.env（gitignored）。
+ * API key 读取顺序：环境变量 SILICONFLOW_API_KEY → RyHarness/.env（gitignored）。
  * 缺失时打印提示并以退出码 0 跳过（不是失败）。模型可用 SILICONFLOW_MODEL
- * 覆盖，默认 deepseek-ai/DeepSeek-V3。
+ * 覆盖，默认 deepseek-ai/DeepSeek-V4-Pro。
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { Context } from '@ryagent/cordis'
-import type { StreamChunk, ToolCallBlock } from '@ryagent/llm'
-import LlmRuntime, { createUserMessage } from '@ryagent/llm'
-import { apply } from '@ryagent/llm-openai'
+import { Context } from '@ryharness/cordis'
+import type { StreamChunk, ToolCallBlock } from '@ryharness/llm'
+import LlmRuntime, { createUserMessage } from '@ryharness/llm'
+import { apply } from '@ryharness/llm-openai'
 
 // .env 交给 Node 标准库解析（引擎要求 ^22.19||>=24），不再各写一份正则。
 try {
@@ -29,12 +29,12 @@ try {
 const env = process.env as Record<string, string>
 const apiKey = env.SILICONFLOW_API_KEY
 if (apiKey === undefined || apiKey.length === 0) {
-  console.log('[smoke] 未找到 SILICONFLOW_API_KEY（环境变量或 RyAgent/.env），跳过 SiliconFlow 冒烟。')
+  console.log('[smoke] 未找到 SILICONFLOW_API_KEY（环境变量或 RyHarness/.env），跳过 SiliconFlow 冒烟。')
   console.log('[smoke] 设置后重试：pnpm smoke:siliconflow')
   process.exit(0)
 }
 
-const model = env.SILICONFLOW_MODEL ?? 'deepseek-ai/DeepSeek-V3'
+const model = env.SILICONFLOW_MODEL ?? 'deepseek-ai/DeepSeek-V4-Pro'
 const provider = 'siliconflow'
 
 const ctx = new Context()

@@ -1,27 +1,48 @@
 // @vitest-environment node
 
 /**
- * 品牌标记的两条硬指标（复评 P0）：
+ * 图标分级导出的验收网：位图母版 → 逐档独立缩放 → 主进程与渲染层各自接线。
  *
- *   1. 16px 到 256px 都读作「猫」。评审记的是「耳朵与脸的轮廓比例导致识别跑偏，
- *      读成兔子」——兔子耳是又高又窄的长条（母版旧值：高/底 ≈ 2.4，耳高 ≈ 1.15×脸
- *      半径），猫耳是宽底矮顶的三角。这里把几何算出来钉死，顺带钉住两耳之间的负
- *      空间凹口与 ω 形嘴（只有一段弧的嘴在猫/狗/兔之间分不出家）。
- *   2. 尺寸分级是真的分级。小尺寸档必须是**独立栅格化**并做过光学补偿的产物，
- *      拿 256 档降采样只会把糊掉的结果缩小。这里用可测量的方式证明：小尺寸档的墨
- *      像素必须比同尺寸的降采样更多（加粗五官 / 删细节换来的识别度）。
+ *   1. 分级契约只有一份 —— brand/tiers.json 是 gen-icon.mjs 写出的产物，档位表、圆角半径
+ *      与接线文件名都必须与脚本里的源表逐项对上，防止有人手改 JSON 而下次生成被覆盖。
+ *   2. 九档是同一枚母版的九次独立缩放 —— 逐像素比对「母版直接缩到该尺寸」的结果，
+ *      把「有人又加回了脸部特写裁窗」钉死：一旦有裁窗，像素差立刻出现。
+ *   3. 外轮廓随尺寸不变 —— 每档都带同一个圆角底板遮罩。托盘在非 HiDPI 下是圆角、HiDPI
+ *      下是直角的那种分叉，就是从这里漏出去的。
+ *   4. 耳朵在每一档都完整 —— 母版上两只耳尖的奶油色毛在最小那档也数得到，且分布左右两侧。
+ *   5. 接线真的接上了 —— 托盘取 16/24 档、窗口取 256 档；index.html 的 icon link 指向
+ *      RENDERER_MOUNT 下真实存在的文件；renderer/public 里的副本与 assets/ 逐字节一致。
  *
- * 另外钉住两处接线：托盘取 16/24 档、窗口取 256 档（不再从大图缩）；favicon 与
- * 单色版真的被网页端引到，且 public/ 里的副本与母版逐字节一致（单一真源）。
+ * 断言钉结构不变量（文件齐备、像素尺寸、策略一致、像素与母版缩放一致、接线一致），
+ * 不钉具体配色。为什么只有 PNG 没有 .svg：母版是位图，产不出真矢量，留一个自称矢量、
+ * 实际内嵌 PNG 的包装只会给「这是一张真矢量」的错觉。消费方（安装包取 icon.ico、
+ * Chromium 取 PNG favicon）都不需要 .svg。
  */
 
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import sharp from 'sharp'
 import { describe, expect, it, vi } from 'vitest'
 import { trayIconTier } from '../electron/main.ts'
 import { RENDERER_MOUNT } from '../electron/renderer-assets.ts'
+import { Cat } from '../renderer/src/components/Cat.tsx'
+
+// gen-icon.mjs 以「是不是入口」守卫自己，直接 import 不会重写一遍产物。这里只声明
+// 测试真正用到的那几个值。
+interface GenIcon {
+  MASTER: string
+  MASTER_SIZE: number
+  PLATE_RADIUS: number
+  TIERS: number[]
+  WIRING: { tray: string; trayHiDpi: string; window: string }
+  DERIVED: Record<string, { file: string; size: number }>
+}
+// @ts-expect-error -- scripts/ 下是纯 Node 脚本，没有 .d.ts（仓库不开 allowJs），只需要它的运行时行为
+const genIcon = await import('../scripts/gen-icon.mjs')
+const { MASTER, MASTER_SIZE, PLATE_RADIUS, TIERS, WIRING, DERIVED } = genIcon as GenIcon
 
 // main.ts 只在顶层 import electron 的具名导出，真正用到的 API 都在函数体内
 // （main() 见文件末尾的 VITEST 守卫）。这里给一份够导入的替身即可。
@@ -46,191 +67,212 @@ const ASSETS = join(DESKTOP, 'assets')
 const PUBLIC = join(DESKTOP, 'renderer/public')
 const HTML_FILE = join(DESKTOP, 'renderer/index.html')
 
-const readBrand = (name: string): string => {
-  return readFileSync(resolve(BRAND, name), 'utf8')
-}
 const html = readFileSync(HTML_FILE, 'utf8')
 
-/** 分级契约：档位表与每档的光学补偿参数，由 gen:icon 与母版一起生成。 */
-interface TierTuning {
-  eye: number
-  mouth: number
-  nose: number
-}
 interface TierManifest {
+  master: string
+  masterSize: number
+  plateRadius: number
   tray: string
   trayHiDpi: string
   window: string
+  brand: string
   favicon: string
-  faviconPng: string
-  mono: string
-  /** 键是像素边长，值是该档的补偿参数。 */
-  tuning: Record<string, TierTuning>
+  faviconLarge: string
+  icons: Record<string, { file: string; masked: boolean }>
 }
 const tiers = JSON.parse(readFileSync(join(BRAND, 'tiers.json'), 'utf8')) as TierManifest
-const TIER_SIZES = Object.keys(tiers.tuning).map(Number)
-const tuningOf = (size: number): TierTuning => {
-  return tiers.tuning[String(size)] as TierTuning
-}
+const TIER_SIZES = TIERS
 
 /** PNG 头 24 字节里就是宽高（IHDR），不引 sharp 也能核对导出尺寸。 */
 function pngSize(file: string): { width: number; height: number } {
   const head = readFileSync(file)
-  expect(head.subarray(1, 4).toString('latin1'), file).toBe('PNG')
+  expect(head.subarray(0, 4).toString('hex'), file).toBe('89504e47')
   expect(head.subarray(12, 16).toString('latin1'), file).toBe('IHDR')
   return { width: head.readUInt32BE(16), height: head.readUInt32BE(20) }
 }
 
-/** 暗像素数：五官墨色比脸底暗一个数量级，阈值卡在两者中间。 */
-async function inkPixels(buffer: Buffer): Promise<number> {
-  const { data, info } = await sharp(buffer).removeAlpha().raw().toBuffer({ resolveWithObject: true })
-  let count = 0
-  for (let i = 0; i < data.length; i += info.channels) {
-    const luma = (0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2]) / 255
-    if (luma < 0.25) count++
-  }
-  return count
+/** 某个像素的 alpha。用来判「这一档有没有抠圆角」。 */
+async function alphaAt(file: string, x: number, y: number): Promise<number> {
+  const { data } = await sharp(file)
+    .ensureAlpha()
+    .extract({ left: x, top: y, width: 1, height: 1 })
+    .raw()
+    .toBuffer({ resolveWithObject: true })
+  return data[3] as number
 }
 
-interface Point {
-  x: number
-  y: number
-}
-const dist = (a: Point, b: Point): number => {
-  return Math.hypot(a.x - b.x, a.y - b.y)
-}
-/** 点到线段的垂距（耳高就是耳尖到底边的距离）。 */
-function distanceToLine(p: Point, a: Point, b: Point): number {
-  const dx = b.x - a.x
-  const dy = b.y - a.y
-  return Math.abs(dy * p.x - dx * p.y + b.x * a.y - b.y * a.x) / Math.hypot(dx, dy)
-}
-
-const master = readBrand('cat-face.svg')
-const head = /<circle cx="([\d.]+)" cy="([\d.]+)" r="([\d.]+)" class="face"/.exec(master)
-if (head === null) throw new Error('母版里没有脸')
-const HEAD: Point = { x: Number(head[1]), y: Number(head[2]) }
-const R = Number(head[3])
-/** 耳朵三角写作 M(外侧底角) L(耳尖) L(内侧底角) Z。 */
-const earPaths = [
-  ...master.matchAll(/<path d="M([\d.]+) ([\d.]+) L([\d.]+) ([\d.]+) L([\d.]+) ([\d.]+) Z" class="face"/g),
-].map((match) => {
-  const at = (i: number): Point => {
-    return { x: Number(match[i]), y: Number(match[i + 1]) }
-  }
-  return { outer: at(1), tip: at(3), inner: at(5) }
-})
-
-describe('识别度：轮廓比例与负空间都指向「猫」而不是「兔子」', () => {
-  it('耳朵是宽底矮顶的三角，不是又高又窄的长条', () => {
-    expect(earPaths).toHaveLength(2)
-    for (const ear of earPaths) {
-      const base = dist(ear.outer, ear.inner)
-      const height = distanceToLine(ear.tip, ear.outer, ear.inner)
-      // 兔子耳的判据就是这个比值：旧母版 2.4（高 17.4 / 底 10.9），肉眼看是两根天线。
-      expect(height / base, '耳高/耳底').toBeLessThanOrEqual(1.6)
-      // 耳高相对脸半径也不能超过一整圈——旧值 1.15，耳尖比整颗脸还高。
-      expect(height / R, '耳高/脸半径').toBeLessThanOrEqual(0.8)
-      // 反过来底不能太窄，否则还是同一根长条
-      expect(base / R, '耳底/脸半径').toBeGreaterThanOrEqual(0.4)
-      // 耳尖露出脸的顶不超过 0.7 圈
-      expect((HEAD.y - R - ear.tip.y) / R, '耳尖高出脸顶').toBeLessThanOrEqual(0.7)
+describe('母版：assets/brand/mark.png', () => {
+  it('母版是制备好的那一版：边长对上、四角抠成透明', async () => {
+    const file = join(BRAND, MASTER)
+    expect(existsSync(file), MASTER).toBe(true)
+    expect(tiers.master).toBe(MASTER)
+    expect(pngSize(file)).toEqual({ width: MASTER_SIZE, height: MASTER_SIZE })
+    expect(tiers.masterSize).toBe(MASTER_SIZE)
+    // 四角透明：母版之外没有像素。没有抠角的话，派生档在深色任务栏上会留一圈白角。
+    for (const [x, y] of [
+      [0, 0],
+      [MASTER_SIZE - 1, 0],
+      [0, MASTER_SIZE - 1],
+      [MASTER_SIZE - 1, MASTER_SIZE - 1],
+    ]) {
+      expect(await alphaAt(file, x as number, y as number), `母版角 (${x},${y})`).toBe(0)
     }
+    // 边中点是实心的琥珀底板（不是抠空的）
+    expect(await alphaAt(file, 0, Math.floor(MASTER_SIZE / 2))).toBeGreaterThan(200)
   })
 
-  it('两只耳的外侧底角落在脸的圆周上（负空间的凹口由此才有）', () => {
-    for (const ear of earPaths) {
-      expect(Math.abs(dist(ear.outer, HEAD) - R), '外侧底角').toBeLessThanOrEqual(0.3)
-      expect(Math.abs(dist(ear.inner, HEAD) - R), '内侧底角').toBeLessThanOrEqual(0.3)
-    }
-    // 两耳内侧底角之间留出一条窄缝：头顶从这里凹进去，猫耳的 V 口
-    const gap = Math.abs(earPaths[0]?.inner.x - (earPaths[1]?.inner.x ?? 0))
-    expect(gap).toBeGreaterThan(0)
-    expect(gap, '两耳之间的缝').toBeLessThan(R * 0.5)
-  })
-
-  it('脸要够圆够大：圆脸 + 宽耳才是猫，小脸配长耳就是兔子', () => {
-    expect(R, '脸半径').toBeGreaterThanOrEqual(16)
-    // 整只猫（耳尖到下巴）占满 64 网格的大半，不能缩成底板中间的一小点
-    const top = Math.min(...earPaths.map((ear) => ear.tip.y))
-    expect((HEAD.y + R - top) / 64).toBeGreaterThan(0.6)
-  })
-
-  it('嘴是 ω 形（两段曲线），不是一条孤零零的弧', () => {
-    const mouth = /<path class="ink" d="([^"]+)"/.exec(master)?.[1]
-    expect(mouth).toBeDefined()
-    expect((mouth as string).match(/\bq[\d.]/g), '嘴的曲线段数').toHaveLength(2)
-  })
-
-  it('三态只换五官与星光：耳朵比例在三个母版里逐字符相同', () => {
-    for (const mood of ['cat-face-thinking.svg', 'cat-face-happy.svg']) {
-      const ears = [...readBrand(mood).matchAll(/<path d="(M[\d.]+ [\d.]+ L[\d.]+ [\d.]+ L[\d.]+ [\d.]+ Z)"/g)]
-        .map((match) => {
-          return match[1]
-        })
-        .join(' | ')
-      expect(ears, mood).toBe('M21.5 22.6 L19.6 10.4 L29.1 19.3 Z | M42.5 22.6 L44.4 10.4 L34.9 19.3 Z')
-    }
+  it('品牌目录里只有母版与分级契约：没有第二份猫的造型', () => {
+    // 矢量母版时代这里是「三态 SVG + 三份派生图标」，现在只剩这两份。
+    expect(readdirSync(BRAND).sort()).toEqual(['mark.png', 'tiers.json'])
   })
 })
 
-describe('尺寸分级导出（16/24/32/48/64/128/256）', () => {
-  it('档位表覆盖七档，每一档都有彩色与单色位图且像素尺寸对得上', () => {
-    expect(TIER_SIZES).toEqual([16, 24, 32, 48, 64, 128, 256])
-    for (const size of TIER_SIZES) {
-      for (const name of [`icon-${size}.png`, `icon-mono-${size}.png`]) {
-        const file = join(ASSETS, name)
-        expect(existsSync(file), name).toBe(true)
-        expect(pngSize(file), name).toEqual({ width: size, height: size })
-      }
+describe('逐档导出：九档是同一枚母版的九次独立缩放', () => {
+  it('档位表覆盖九档，每一档都有产物且像素尺寸对得上', () => {
+    expect(TIER_SIZES).toEqual([16, 24, 32, 48, 64, 128, 256, 512, 1024])
+    for (const size of TIERS) {
+      const file = join(ASSETS, tiers.icons[String(size)]?.file ?? `icon-${size}.png`)
+      expect(existsSync(file), `${size}px`).toBe(true)
+      expect(pngSize(file), `${size}px`).toEqual({ width: size, height: size })
     }
     // 安装包用的多档 ICO 也得有
     expect(existsSync(join(ASSETS, 'icon.ico'))).toBe(true)
   })
 
-  it('小尺寸档做过光学补偿：加粗五官、该删的细节删掉', () => {
-    const masterEye = 2.7
-    const masterMouth = 1.9
-    for (const size of TIER_SIZES) {
-      const tier = tuningOf(size)
-      const rendered = (size * tier.eye * 2) / 64
-      if (size <= 32) {
-        // 眼直径在 16px 上低于 1.5px 就等于看不见，必须补大
-        expect(tier.eye, `${size}px 眼半径`).toBeGreaterThanOrEqual(masterEye)
-        expect(rendered, `${size}px 眼直径`).toBeGreaterThanOrEqual(1.5)
-      }
-      if (tier.mouth === 0) {
-        // 16px 上嘴只有 0.5px 宽，留着只是噪点
-        expect(size).toBe(16)
-      } else if (size <= 48) {
-        expect(tier.mouth, `${size}px 嘴宽`).toBeGreaterThanOrEqual(masterMouth)
-      }
-    }
-    expect(tuningOf(16).mouth).toBe(0)
+  it('分级契约只有一份：tiers.json 与 gen-icon 的源表逐项对得上', () => {
+    expect(tiers.plateRadius).toBe(PLATE_RADIUS)
+    // 契约里不再有裁窗：九档共用一块母版，形状不再随尺寸分叉。
+    expect(tiers).not.toHaveProperty('faceCrop')
+    expect({ tray: tiers.tray, trayHiDpi: tiers.trayHiDpi, window: tiers.window }).toEqual(WIRING)
+    expect(
+      Object.fromEntries(
+        TIERS.map((size) => {
+          return [String(size), { masked: true }]
+        }),
+      ),
+    ).toEqual(
+      Object.fromEntries(
+        Object.entries(tiers.icons).map(([size, spec]) => {
+          return [size, { masked: spec.masked }]
+        }),
+      ),
+    )
   })
 
-  it('小尺寸档不是 256 档的降采样：补偿后墨像素更多（16px 上一眼能看出来）', async () => {
-    const master256 = readFileSync(join(ASSETS, 'icon-256.png'))
-    for (const size of [16, 24, 32, 48, 64]) {
-      const naive = await sharp(master256).resize(size, size).png().toBuffer()
-      const tuned = readFileSync(join(ASSETS, `icon-${size}.png`))
-      expect(await inkPixels(tuned), `${size}px`).toBeGreaterThan(await inkPixels(naive))
+  it('每一档内区都与「母版直接缩到该尺寸」一致：没有裁窗，轮廓与母版逐像素相同', async () => {
+    // 比圆角遮罩盖不到的内区（inset = 半径 + 2px）。
+    //   alpha 通道逐字节相同 —— 轮廓就是母版的轮廓，一档都没多也没少；
+    //   RGB 平均差 < 5 —— 加回脸部特写裁窗时实测平均差 32~62（24px 是 51.29），
+    //   这里差 0.0~2.0。门槛离两个量级，不靠逐字节相等这种脆断言。
+    for (const size of TIERS) {
+      const inset = Math.round(size * PLATE_RADIUS) + 2
+      const inner = Math.max(1, size - inset * 2)
+      const box = { left: inset, top: inset, width: inner, height: inner }
+      const fromMaster = await sharp(join(BRAND, MASTER))
+        .resize(size, size, { fit: 'fill', kernel: 'lanczos3' })
+        .extract(box)
+        .ensureAlpha()
+        .raw()
+        .toBuffer()
+      const produced = await sharp(join(ASSETS, `icon-${size}.png`))
+        .extract(box)
+        .ensureAlpha()
+        .raw()
+        .toBuffer()
+      let alphaBad = 0
+      let sum = 0
+      for (let i = 0; i < produced.length; i++) {
+        // 遮罩是逐像素 dest-in 合成，放大路径上有 ±1~3 的舍入（实测 128px 内区最大差
+        // 3、共 16 个像素），按 8 容差比。真正要抓的是遮罩把内区啃掉一块。
+        if (i % 4 === 3 && Math.abs((produced[i] as number) - (fromMaster[i] as number)) > 8) alphaBad++
+        if (i % 4 !== 3) sum += Math.abs((produced[i] as number) - (fromMaster[i] as number))
+      }
+      expect(alphaBad, `${size}px 的轮廓与母版不一致`).toBe(0)
+      const meanDiff = sum / (produced.length * 0.75)
+      expect(meanDiff, `${size}px 内区与母版独立缩放差太多（被裁窗了？）`).toBeLessThan(5)
     }
-  }, 30_000)
+  })
+
+  it('外轮廓随尺寸不变：九档都带同一个圆角底板', async () => {
+    // 这条钉的是「形状不随尺寸变」。曾经 24/32/48 是满出血直角方块，托盘于是非 HiDPI
+    // 下圆角、HiDPI 下直角，同一枚 favicon 在 32 与 128 尺寸下两种身份。
+    for (const size of TIERS) {
+      const file = join(ASSETS, `icon-${size}.png`)
+      expect(await alphaAt(file, 0, 0), `${size}px 左上角`).toBe(0)
+      expect(await alphaAt(file, size - 1, size - 1), `${size}px 右下角`).toBe(0)
+      // 圆角之外的正边中点仍然是实心底板（不是整张都被抠空）
+      expect(await alphaAt(file, 0, Math.floor(size / 2)), `${size}px 左中`).toBeGreaterThan(200)
+      expect(await alphaAt(file, Math.floor(size / 2), 0), `${size}px 上中`).toBeGreaterThan(200)
+    }
+    // favicon 两档也是同一套圆角：32 与 128 下缩放看到的轮廓必须一致
+    for (const spec of Object.values(DERIVED)) {
+      expect(await alphaAt(join(ASSETS, spec.file), 0, 0), spec.file).toBe(0)
+    }
+  })
+
+  it('耳朵在每一档都完整：顶部条带左右两侧都数得到奶油色毛', async () => {
+    // 「耳朵被切了」旧的断言测不出来——它只验「有深色像素」，切掉一只耳朵照样过。
+    // 这里量的是耳朵本身：耳廓的奶油白（r-b < 70）在底板橙（r-b ≈ 130~190）上分得开。
+    // 实测 16/24/32/48 档顶部 30% 条带内左/右分别有 1/3、4/9、11/20、28/47 个这样的像素。
+    for (const size of TIERS) {
+      const band = Math.max(2, Math.round(size * 0.3))
+      const { data, info } = await sharp(join(ASSETS, `icon-${size}.png`))
+        .removeAlpha()
+        .raw()
+        .toBuffer({ resolveWithObject: true })
+      let left = 0
+      let right = 0
+      for (let y = 0; y < band; y++) {
+        for (let x = 0; x < size; x++) {
+          const i = (y * info.width + x) * info.channels
+          const r = data[i] as number
+          const b = data[i + 2] as number
+          if (r < 170 || r - b >= 70) continue
+          if (x < size / 2) left++
+          else right++
+        }
+      }
+      expect(left, `${size}px 左耳没了`).toBeGreaterThan(0)
+      expect(right, `${size}px 右耳没了`).toBeGreaterThan(0)
+    }
+  })
+
+  it('16px 托盘档数得出两只深色眼与粉鼻（托盘就吃这一档）', async () => {
+    // 实测整幅 16px 深色 5 / 粉 27（24px 是 13 / 39）。此前文档写「裁到脸在 16px 全糊」，
+    // 实测不成立——糊的不是脸，是把耳朵切掉了（依据见 docs/brand/icon.md）。
+    const stats = async (file: string, size: number) => {
+      const { data, info } = await sharp(file).removeAlpha().raw().toBuffer({ resolveWithObject: true })
+      let dark = 0
+      let pink = 0
+      for (let i = 0; i < data.length; i += info.channels) {
+        const r = data[i] as number
+        const g = data[i + 1] as number
+        const b = data[i + 2] as number
+        if ((0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 < 0.25) dark++
+        if (r > 190 && g > 100 && g < 190 && b > 110 && b < 190 && r - g > 20) pink++
+      }
+      expect(info.width, file).toBe(size)
+      return { dark, pink }
+    }
+    const tray = await stats(join(ASSETS, tiers.tray), 16)
+    expect(tray.dark, '16px 数不出两只眼').toBeGreaterThanOrEqual(4)
+    expect(tray.pink, '16px 数不出粉鼻').toBeGreaterThanOrEqual(20)
+  })
 })
 
 describe('接线：托盘取 16/24 档、窗口取 256 档', () => {
   it('main.ts 的档位表与 tiers.json 逐项对上', () => {
     const main = readFileSync(join(DESKTOP, 'electron/main.ts'), 'utf8')
-    for (const tier of [tiers.tray, tiers.trayHiDpi, tiers.window]) {
-      expect(main, tier).toContain(`'${tier}'`)
-    }
-    // 托盘不再拿 256 档缩到 16：那份缩出来的是糊掉的母版，不是做过补偿的 16 档
+    expect(main).toContain(`tray: '${tiers.tray}'`)
+    expect(main).toContain(`trayHiDpi: '${tiers.trayHiDpi}'`)
+    expect(main).toContain(`window: '${tiers.window}'`)
+    // 托盘不再拿 256 档缩到 16：那份缩出来的是糊掉的母版，不是特写档
     expect(main).not.toContain('createFromPath(APP_ICON).resize(')
-    expect(main).toContain("tray: 'icon-16.png'")
-    expect(main).toContain("trayHiDpi: 'icon-24.png'")
-    expect(main).toContain("window: 'icon-256.png'")
     expect(main).toContain("icon: appIcon('window')")
+    for (const name of [tiers.tray, tiers.trayHiDpi, tiers.window]) {
+      expect(existsSync(join(ASSETS, name)), name).toBe(true)
+    }
   })
 
   it('HiDPI 屏给 24 档，其余给 16 档', () => {
@@ -241,59 +283,49 @@ describe('接线：托盘取 16/24 档、窗口取 256 档', () => {
   })
 })
 
-describe('接线：favicon 与单色版真的被网页端引到', () => {
-  it('index.html 挂了三条 icon link，且都指向 RENDERER_MOUNT 下的真实文件', () => {
-    const links = [...html.matchAll(/<link rel="icon"[^>]*>/g)].map((match) => {
-      return match[0]
+describe('接线：渲染层拿到的就是这些图', () => {
+  it('index.html 挂了 icon link，且都指向 RENDERER_MOUNT 下真实存在的位图', () => {
+    const hrefs = [...html.matchAll(/<link rel="icon"[^>]*href="([^"]+)"/g)].map((m) => {
+      return m[1] as string
     })
-    expect(links).toHaveLength(3)
-    const hrefs = [...html.matchAll(/<link rel="icon"[^>]*href="([^"]+)"/g)].map((match) => {
-      return match[1] as string
-    })
-    expect(hrefs).toEqual([
-      `${RENDERER_MOUNT}/${tiers.faviconPng}`,
-      `${RENDERER_MOUNT}/${tiers.favicon}`,
-      `${RENDERER_MOUNT}/${tiers.mono}`,
-    ])
+    expect(hrefs.length).toBeGreaterThan(0)
     for (const href of hrefs) {
       // 页面挂在 /app 上（没有尾斜杠），根相对的 href 在生产里会 404；这里钉住前缀。
       expect(href.startsWith(`${RENDERER_MOUNT}/`), href).toBe(true)
       const name = href.slice(RENDERER_MOUNT.length + 1)
+      expect(name.endsWith('.png'), `${name}：母版是位图，不产出 .svg 包装`).toBe(true)
       expect(existsSync(join(PUBLIC, name)), `${name} → renderer/public`).toBe(true)
-      expect(existsSync(join(ASSETS, name)) || existsSync(join(BRAND, name)), `${name} 有产物`).toBe(true)
+      expect(existsSync(join(ASSETS, name)), `${name} 有产物`).toBe(true)
     }
   })
 
-  it('单色版只挂在深色底那条上（浅色标签栏上它等于隐形）', () => {
-    const monoLink = [...html.matchAll(/<link rel="icon"[^>]*>/g)]
-      .map((match) => {
-        return match[0]
-      })
-      .find((tag) => {
-        return tag.includes(tiers.mono)
-      })
-    expect(monoLink).toContain(`media="(prefers-color-scheme: dark)"`)
-    // 彩色 favicon 自带琥珀底板，深浅底都压得住
-    expect(readBrand('favicon.svg')).toContain('ryagent-plate')
-    expect(readBrand('icon-mono.svg')).not.toContain('ryagent-plate')
+  it('renderer/public 里的品牌资产只有 gen-icon 声明的那几份，且与 assets/ 逐字节一致', () => {
+    const declared = Object.values(DERIVED).map((spec) => spec.file)
+    // public/ 里还住着桌面外壳自己的两个文件（主题引导脚本与 splash 样式，
+    // 见 tests/desktop-shell-security.test.ts）——它们不是品牌资产，所以这里
+    // 断言的是「品牌资产这一类不多不少」，而不是整个目录的精确清单：
+    // 目录里多出一张猫图才是真问题（那是第二只猫）。
+    const brandLike = readdirSync(PUBLIC).filter((name) => {
+      return name.endsWith('.png') || name.endsWith('.svg')
+    })
+    expect(brandLike.sort()).toEqual([...declared].sort())
+    for (const spec of Object.values(DERIVED)) {
+      expect(readFileSync(join(PUBLIC, spec.file)).equals(readFileSync(join(ASSETS, spec.file))), spec.file).toBe(true)
+    }
+    // 契约里登记的名字与文件名一一对上（渲染层按 tiers.json 引用）
+    for (const spec of Object.values(DERIVED)) {
+      expect(Object.values(tiers)).toContain(spec.file)
+    }
   })
 
-  it('public/ 是母版的逐字节副本，不是另画的一份', () => {
-    for (const [name, from] of [
-      ['favicon.svg', join(BRAND, 'favicon.svg')],
-      ['icon-mono.svg', join(BRAND, 'icon-mono.svg')],
-      ['favicon-32.png', join(ASSETS, 'favicon-32.png')],
-    ]) {
-      expect(readFileSync(join(PUBLIC, name)).equals(readFileSync(from)), name).toBe(true)
-    }
-    expect([tiers.favicon, tiers.faviconPng]).toEqual(['favicon.svg', 'favicon-32.png'])
-  })
-
-  it('零外部素材：被引到网页端的两个 SVG 都不引用站外资源', () => {
-    for (const name of ['favicon.svg', 'icon-mono.svg']) {
-      const svg = readBrand(name)
-      expect(svg, name).not.toMatch(/<(image|use)\b/)
-      expect(svg.replace(/xmlns(:\w+)?="[^"]*"/g, ''), name).not.toMatch(/https?:\/\/(?!www\.w3\.org)/)
-    }
+  it('启动屏与 <Cat> 引的是同一张图（不是两份各自维护的猫）', () => {
+    const splash = /<img[^>]*class="splash-mark"[^>]*>/.exec(html)?.[0] ?? ''
+    expect(splash).not.toBe('')
+    expect(splash).toContain(`${RENDERER_MOUNT}/${tiers.brand}`)
+    // <Cat> 的 src 由组件自己拼（挂载前缀 + 文件名），这里渲染一次看真实产物，
+    // 比在源码里找字符串更贴近「渲染层拿到的确实是这张图」。
+    const badge = renderToStaticMarkup(createElement(Cat, { size: 40 }))
+    expect(badge).toContain(`src="${RENDERER_MOUNT}/${tiers.brand}"`)
+    expect(existsSync(join(PUBLIC, tiers.brand))).toBe(true)
   })
 })

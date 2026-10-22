@@ -4,7 +4,7 @@
  * 只记计量数字与会话/轮次标识，**不记消息正文、prompt 与凭据**——这份快照会经
  * GET /api/telemetry 原样发给渲染层。容量固定，写满即丢最旧的（环形缓冲），
  * 长时间运行不会把内存吃光。
- * @module @ryagent/server/telemetry
+ * @module @ryharness/server/telemetry
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks'
@@ -123,7 +123,7 @@ export class Telemetry {
    * {@link Telemetry.recallTurn} 都能指名到这一轮。
    *
    * 用 AsyncLocalStorage 而不是把 conversationId 加进 AgentMemoryHooks.recall 的
-   * 参数：钩子接口被 @ryagent/agent / @ryagent/session 两个包共用，改签名要连带
+   * 参数：钩子接口被 @ryharness/agent / @ryharness/session 两个包共用，改签名要连带
    * 动它们的实现与测试，而归属问题只是本进程的记账问题。
    */
   scopedTurn<T>(conversationId: string, fn: () => T): T {

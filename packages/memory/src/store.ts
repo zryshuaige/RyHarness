@@ -1,7 +1,7 @@
 /**
  * 记忆存储层：CRUD、软删链、FTS5 BM25、内存余弦检索、访问计数。
- * 与 @ryagent/session 共用同一 SQLite 文件（WAL 下多连接安全）。
- * @module @ryagent/memory/store
+ * 与 @ryharness/session 共用同一 SQLite 文件（WAL 下多连接安全）。
+ * @module @ryharness/memory/store
  */
 
 import { createHash, randomUUID } from 'node:crypto'
@@ -22,6 +22,10 @@ export interface MemoryRow {
   updatedAt: number
   lastAccessedAt: number
   accessCount: number
+  /** 用户 👍 次数（反向信号，与 access_count 同为召回增益的一部分）。 */
+  helpfulCount: number
+  /** 用户 👎 次数（反向信号；排序时从增益里扣，见 service 的 recallGain）。 */
+  harmfulCount: number
   sourceConversationId?: string
   status: MemoryStatus
   supersedesId?: string
@@ -55,6 +59,8 @@ function rowToMemory(row: Record<string, unknown>): MemoryRow {
     updatedAt: Number(row.updated_at),
     lastAccessedAt: Number(row.last_accessed_at),
     accessCount: Number(row.access_count),
+    helpfulCount: Number(row.helpful_count ?? 0),
+    harmfulCount: Number(row.harmful_count ?? 0),
     ...(row.source_conversation_id === null || row.source_conversation_id === undefined
       ? {}
       : { sourceConversationId: String(row.source_conversation_id) }),
@@ -118,8 +124,15 @@ export class MemoryStore {
    * 延迟随库规模线性增长（1000 条 × 1024 维 ≈ 4MB/轮的读 + 反序列化）。
    * 失效条件 = 本连接写代数变化，或其他连接提交过（agent 删除等跨连接写入走
    * PRAGMA data_version）。访问计数就地改缓存行，不因此整体失效。
+   *
+   * 桶内另存一份 id → 行 的索引：{@link touchAccess} 每轮都要修补缓存里的
+   * 计数，全量扫描是 O(全库)——1000 条记忆的库里每轮召回白扫一遍，与 SSE
+   * 推流同线程。
    */
-  private readonly embeddingIndex = new Map<string, { stamp: string; rows: MemoryRow[] }>()
+  private readonly embeddingIndex = new Map<
+    string,
+    { stamp: string; rows: MemoryRow[]; byId: Map<string, MemoryRow> }
+  >()
   private embeddingEpoch = 0
 
   constructor(dbPath: string) {
@@ -134,43 +147,70 @@ export class MemoryStore {
 
   // ---- 写入 ----
 
-  /** 新增一条记忆（FTS 同步建索引）。 */
+  /**
+   * 新增一条记忆（FTS 同步建索引）。
+   *
+   * 两条写（记忆行 / FTS 索引行）此前各自隐式事务：中途失败会留下**有行无索引**的
+   * 记忆——它从此对 BM25 词法通道永久不可见，且没有任何"重建 FTS"的任务能救它。
+   * 会话侧早就把"多语句写必须同事务"当成硬要求（见 @ryharness/session 的
+   * `appendMessage`），同一个 SQLite 文件上的记忆侧不能是另一套标准。
+   */
   insert(input: InsertMemoryInput): MemoryRow {
     const now = Date.now()
     const id = randomUUID()
     const dim = input.embedding === undefined || input.embedding === null ? null : input.embedding.length
-    this.db
-      .prepare(`
-      INSERT INTO memories (id, agent_id, kind, content, embedding, dim, embedding_model, created_at,
-                            updated_at, source_conversation_id, status, supersedes_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
-    `)
-      .run(
-        id,
-        input.agentId,
-        input.kind,
-        input.content,
-        input.embedding ?? null,
-        dim,
-        input.embeddingModel ?? null,
-        now,
-        now,
-        input.sourceConversationId ?? null,
-        input.supersedesId ?? null,
-      )
-    this.db
-      .prepare('INSERT INTO memories_fts (rowid, content) VALUES (?, ?)')
-      .run(this.rowidOf(id), bigrams(input.content))
+    // BEGIN IMMEDIATE 在写入前就拿写锁，单写者模型下不引入额外争用
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      this.db
+        .prepare(`
+        INSERT INTO memories (id, agent_id, kind, content, embedding, dim, embedding_model, created_at,
+                              updated_at, source_conversation_id, status, supersedes_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
+      `)
+        .run(
+          id,
+          input.agentId,
+          input.kind,
+          input.content,
+          input.embedding ?? null,
+          dim,
+          input.embeddingModel ?? null,
+          now,
+          now,
+          input.sourceConversationId ?? null,
+          input.supersedesId ?? null,
+        )
+      this.db
+        .prepare('INSERT INTO memories_fts (rowid, content) VALUES (?, ?)')
+        .run(this.rowidOf(id), bigrams(input.content))
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
     this.invalidateEmbeddingIndex()
     const row = this.get(id)
-    if (row === undefined) throw new Error('@ryagent/memory: insert did not persist')
+    if (row === undefined) throw new Error('@ryharness/memory: insert did not persist')
     return row
   }
 
-  /** 软删：status → superseded（被取代，保历史）或 deleted。 */
+  /**
+   * 软删：status → superseded（被取代，保历史）或 deleted。
+   *
+   * 状态写与索引删必须同事务：只改了状态没删索引，那条记忆还占着 BM25 的候选
+   * 窗口，召回质量会随时间单调退化。
+   */
   supersede(id: string, status: 'superseded' | 'deleted' = 'superseded'): void {
-    this.db.prepare('UPDATE memories SET status = ?, updated_at = ? WHERE id = ?').run(status, Date.now(), id)
-    this.db.prepare('DELETE FROM memories_fts WHERE rowid = ?').run(this.rowidOf(id))
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      this.db.prepare('UPDATE memories SET status = ?, updated_at = ? WHERE id = ?').run(status, Date.now(), id)
+      this.db.prepare('DELETE FROM memories_fts WHERE rowid = ?').run(this.rowidOf(id))
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
     this.invalidateEmbeddingIndex()
   }
 
@@ -188,31 +228,32 @@ export class MemoryStore {
   // ---- 检索 ----
 
   /**
-   * FTS5 BM25 候选窗口（全库，按 bm25 升序）。
+   * FTS5 BM25 候选窗口（按 bm25 升序，只含 active 记忆）。
    *
    * 窗口是**全局**的：空间归属的过滤放在调用侧（{@link searchFts}），因此同一次
    * 扇出里多个成员可以共用这一份命中表，不必每个成员各发一次 MATCH。
+   *
+   * 一条 JOIN 把 MATCH 与取行合在一起：原先每个命中再 `SELECT * ... WHERE
+   * rowid = ?`，窗口 30 就是每轮 31 次查询——而这段跑在 Node 单线程上，与 SSE
+   * 推流同一条线程。status 过滤也下推到 SQL，LIMIT 取到的就是前 window 条
+   * **active** 行（原先软删行会占位、白白吃掉窗口）。
    */
   searchFtsHits(query: string, window = 30): { memory: MemoryRow; score: number }[] {
     // OR 语义：候选事实常比记忆长，全 AND 会零命中；BM25 按命中比例排序。
     const matchQuery = ftsMatchQuery(query)
     if (matchQuery.length === 0) return []
-    const rowids = this.db
+    const rows = this.db
       .prepare(
-        'SELECT rowid, bm25(memories_fts) AS score FROM memories_fts WHERE memories_fts MATCH ? ORDER BY score LIMIT ?',
+        `SELECT memories.*, bm25(memories_fts) AS bm25_score
+           FROM memories_fts JOIN memories ON memories.rowid = memories_fts.rowid
+          WHERE memories_fts MATCH ? AND memories.status = 'active'
+          ORDER BY bm25_score
+          LIMIT ?`,
       )
-      .all(matchQuery, window) as { rowid: number; score: number }[]
-    const out: { memory: MemoryRow; score: number }[] = []
-    for (const hit of rowids) {
-      const row = this.db.prepare('SELECT * FROM memories WHERE rowid = ?').get(Number(hit.rowid)) as
-        | Record<string, unknown>
-        | undefined
-      if (row === undefined) continue
-      const memory = rowToMemory(row)
-      if (memory.status !== 'active') continue
-      out.push({ memory, score: Number(hit.score) })
-    }
-    return out
+      .all(matchQuery, window) as Record<string, unknown>[]
+    return rows.map((row) => {
+      return { memory: rowToMemory(row), score: Number(row.bm25_score) }
+    })
   }
 
   /** FTS5 BM25 top-N（active 记忆，限定空间：agent 私有 + 共享）。 */
@@ -250,7 +291,15 @@ export class MemoryStore {
             .all(embeddingModel, spaceId)
     ) as Record<string, unknown>[]
     const out = rows.map(rowToMemory)
-    this.embeddingIndex.set(key, { stamp, rows: out })
+    this.embeddingIndex.set(key, {
+      stamp,
+      rows: out,
+      byId: new Map(
+        out.map((row) => {
+          return [row.id, row]
+        }),
+      ),
+    })
     return out
   }
 
@@ -289,23 +338,77 @@ export class MemoryStore {
     return rows.map(rowToMemory)
   }
 
-  /** 访问计数 + 时间更新（召回命中后调用）。 */
+  /**
+   * 访问计数 + 时间更新（召回命中后调用）。
+   *
+   * 合成一条 `WHERE id IN (...)`：逐 id UPDATE 各带一次隐式事务，命中 5 条就是
+   * 5 次提交。缓存修补走桶内的 id 索引，只碰命中的行——全量扫描是 O(全库)。
+   */
   touchAccess(ids: readonly string[]): void {
+    if (ids.length === 0) return
     const now = Date.now()
-    const stmt = this.db.prepare(
-      'UPDATE memories SET access_count = access_count + 1, last_accessed_at = ? WHERE id = ?',
-    )
-    for (const id of ids) stmt.run(now, id)
+    for (let start = 0; start < ids.length; start += ROWID_CHUNK) {
+      const chunk = ids.slice(start, start + ROWID_CHUNK)
+      this.db
+        .prepare(
+          `UPDATE memories SET access_count = access_count + 1, last_accessed_at = ?
+            WHERE id IN (${chunk
+              .map(() => {
+                return '?'
+              })
+              .join(',')})`,
+        )
+        .run(now, ...chunk)
+    }
     // 常驻缓存里是同一批对象，就地改：每轮召回都会 touchAccess，
     // 若因此整体失效，缓存就等于没加（下一轮照样全表读）。
-    const touched = new Set(ids)
     for (const entry of this.embeddingIndex.values()) {
-      for (const row of entry.rows) {
-        if (!touched.has(row.id)) continue
+      for (const id of ids) {
+        const row = entry.byId.get(id)
+        if (row === undefined) continue
         row.accessCount += 1
         row.lastAccessedAt = now
       }
     }
+  }
+
+  /**
+   * 用户反馈回灌：👍 记 helpful +1，👎 记 harmful +1（两个计数彼此独立，与
+   * EvolveStore.addCounts 同一套语义——手册里也是分列累加、排序时取净值）。
+   *
+   * 与 {@link touchAccess} 一样分片 + 合成一条 UPDATE，并且同样要就地修补常驻向量
+   * 缓存——被反馈的记忆大概率马上要参与下一轮排序，而排序读的是缓存里的行对象，
+   * 不修补的话这一轮反馈要到缓存整体失效之后才生效，用户会看到「点了没反应」。
+   *
+   * 只累加，不做软删：用户说的是「这条没用」，不是「这条是错的、删掉」。降权由
+   * 排序层的增益下界承担（见 service 的 recallGain），记忆本体与历史都留着。
+   * @returns 实际更新到的行数。
+   */
+  applyFeedback(ids: readonly string[], signal: 'thumb_up' | 'thumb_down'): number {
+    if (ids.length === 0) return 0
+    const column = signal === 'thumb_up' ? 'helpful_count' : 'harmful_count'
+    let changed = 0
+    for (let start = 0; start < ids.length; start += ROWID_CHUNK) {
+      const chunk = ids.slice(start, start + ROWID_CHUNK)
+      const placeholders = chunk
+        .map(() => {
+          return '?'
+        })
+        .join(',')
+      const result = this.db
+        .prepare(`UPDATE memories SET ${column} = ${column} + 1 WHERE id IN (${placeholders})`)
+        .run(...chunk)
+      changed += Number(result.changes)
+    }
+    for (const entry of this.embeddingIndex.values()) {
+      for (const id of ids) {
+        const row = entry.byId.get(id)
+        if (row === undefined) continue
+        if (signal === 'thumb_up') row.helpfulCount += 1
+        else row.harmfulCount += 1
+      }
+    }
+    return changed
   }
 
   /** 回写 updatedAt（巩固/衰减任务与测试用）。 */
@@ -345,10 +448,19 @@ export class MemoryStore {
       | { content: string; status: string }
       | undefined
     if (row === undefined || row.status !== 'inactive') return false
-    this.db.prepare("UPDATE memories SET status = 'active', updated_at = ? WHERE id = ?").run(Date.now(), id)
-    const rowid = this.rowidOf(id)
-    this.db.prepare('DELETE FROM memories_fts WHERE rowid = ?').run(rowid)
-    this.db.prepare('INSERT INTO memories_fts (rowid, content) VALUES (?, ?)').run(rowid, bigrams(row.content))
+    // 三条写（状态 / 删旧索引 / 建新索引）同事务：中途失败会留下"已恢复但仍搜不到"
+    // 或"索引里躺着一条已归档的行"的半条记忆。
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      this.db.prepare("UPDATE memories SET status = 'active', updated_at = ? WHERE id = ?").run(Date.now(), id)
+      const rowid = this.rowidOf(id)
+      this.db.prepare('DELETE FROM memories_fts WHERE rowid = ?').run(rowid)
+      this.db.prepare('INSERT INTO memories_fts (rowid, content) VALUES (?, ?)').run(rowid, bigrams(row.content))
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
     this.invalidateEmbeddingIndex()
     return true
   }
@@ -467,12 +579,21 @@ export class MemoryStore {
     const args = [SHARED_SPACE, now - dormantAfterMs]
     if (limit !== undefined) return this.archiveBatch(predicate, args, now, limit)
     const stale = this.staleRowids(predicate, args)
-    const result = this.db
-      .prepare(`UPDATE memories SET status = 'inactive', updated_at = ? WHERE ${predicate}`)
-      .run(now, ...args)
-    this.dropFtsRows(stale)
-    this.invalidateEmbeddingIndex()
-    return Number(result.changes)
+    // 状态改与索引清必须同事务：只改 status 的话索引里全是死行，BM25 候选窗口
+    // 被吃光，召回质量随时间单调退化。
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      const result = this.db
+        .prepare(`UPDATE memories SET status = 'inactive', updated_at = ? WHERE ${predicate}`)
+        .run(now, ...args)
+      this.dropFtsRows(stale)
+      this.db.exec('COMMIT')
+      this.invalidateEmbeddingIndex()
+      return Number(result.changes)
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
   }
 
   /**
@@ -495,12 +616,20 @@ export class MemoryStore {
     const args = [now - maxAgeMs]
     if (limit !== undefined) return this.archiveBatch(predicate, args, now, limit)
     const stale = this.staleRowids(predicate, args)
-    const result = this.db
-      .prepare(`UPDATE memories SET status = 'inactive', updated_at = ? WHERE ${predicate}`)
-      .run(now, ...args)
-    this.dropFtsRows(stale)
-    this.invalidateEmbeddingIndex()
-    return Number(result.changes)
+    // 同 archiveDormant：状态改与索引清同事务，否则索引里会躺着已归档的死行。
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      const result = this.db
+        .prepare(`UPDATE memories SET status = 'inactive', updated_at = ? WHERE ${predicate}`)
+        .run(now, ...args)
+      this.dropFtsRows(stale)
+      this.db.exec('COMMIT')
+      this.invalidateEmbeddingIndex()
+      return Number(result.changes)
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
   }
 
   /** 命中归档条件的 rowid（按 rowid 推进，切片可重复调用）。 */

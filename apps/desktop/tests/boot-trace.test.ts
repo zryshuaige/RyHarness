@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 /**
- * 渲染层启动计时：阶段挂在 window.__RYAGENT_BOOT__ 上，主进程读走并入自己的时间轴。
+ * 渲染层启动计时：阶段挂在 window.__RYHARNESS_BOOT__ 上，主进程读走并入自己的时间轴。
  * 这里只验渲染层这一半：打点幂等、快照是副本、没挂到 window 上时不炸。
  */
 import { describe, expect, it } from 'vitest'
@@ -14,9 +14,9 @@ describe('渲染层启动埋点', () => {
     expect(stages).toContain('dom-ready')
   })
 
-  it('阶段同时挂到 window.__RYAGENT_BOOT__（主进程 executeJavaScript 读的就是它）', () => {
+  it('阶段同时挂到 window.__RYHARNESS_BOOT__（主进程 executeJavaScript 读的就是它）', () => {
     markBootPhase('first-interactive')
-    const published = (window as unknown as Record<string, unknown>).__RYAGENT_BOOT__ as {
+    const published = (window as unknown as Record<string, unknown>).__RYHARNESS_BOOT__ as {
       phases: { stage: string; ms: number }[]
     }
     expect(published.phases.some((phase) => phase.stage === 'first-interactive')).toBe(true)

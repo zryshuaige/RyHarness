@@ -1,4 +1,4 @@
-import type { Dict } from '@ryagent/cosmokit'
+import type { Dict } from '@ryharness/cosmokit'
 import { EventsService } from './events.ts'
 import { LoggerService } from './logger.ts'
 import { ReflectService } from './reflect.ts'

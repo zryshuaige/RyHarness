@@ -4,12 +4,12 @@
  * mapped interfaces make the content, source, and finish unions extensible.
  */
 
-import type { FileAttachmentRef, ImageAttachmentRef } from '@ryagent/attachment'
-import type { Branded } from '@ryagent/brand'
+import type { FileAttachmentRef, ImageAttachmentRef } from '@ryharness/attachment'
+import type { Branded } from '@ryharness/brand'
 import type { MessageId, ProviderRequestId, ReasoningEffortId, ToolCallId } from './brand.ts'
 import type { Message, UserMessage } from './message.ts'
 
-declare module '@ryagent/cordis' {
+declare module '@ryharness/cordis' {
   interface Events {
     /**
      * The provider topology changed: an adapter registered or unregistered
@@ -278,7 +278,7 @@ export interface LlmModelDiscoveryRequest {
   apiKey?: string
 }
 
-declare module '@ryagent/typert-protocol' {
+declare module '@ryharness/typert-protocol' {
   interface RemoteErrorDetailsMap {
     /** A draft provider interrogation refused or failed. */
     'llm/model-discovery-rejected': {

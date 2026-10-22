@@ -9,14 +9,14 @@ import assert from 'node:assert/strict'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { AgentLoopEvent } from '@ryagent/agent'
-import { AgentLoop, forkTemplate, RYEN_TEMPLATE } from '@ryagent/agent'
-import { brandString } from '@ryagent/brand'
-import { Context } from '@ryagent/cordis'
-import type { GenerateOptions, StreamChunk, ToolCallId } from '@ryagent/llm'
-import LlmRuntime, { LlmAdapter } from '@ryagent/llm'
-import { SessionStore } from '@ryagent/session'
-import { fsWrite } from '@ryagent/tools'
+import type { AgentLoopEvent } from '@ryharness/agent'
+import { AgentLoop, forkTemplate, RYEN_TEMPLATE } from '@ryharness/agent'
+import { brandString } from '@ryharness/brand'
+import { Context } from '@ryharness/cordis'
+import type { GenerateOptions, StreamChunk, ToolCallId } from '@ryharness/llm'
+import LlmRuntime, { LlmAdapter } from '@ryharness/llm'
+import { SessionStore } from '@ryharness/session'
+import { fsWrite } from '@ryharness/tools'
 
 /** 录制两轮响应的假适配器：记录每次请求。 */
 class MockAdapter extends LlmAdapter {
@@ -41,7 +41,7 @@ class MockAdapter extends LlmAdapter {
               index: 0,
               id: callId,
               name: 'fs_write',
-              argumentsDelta: '{"path":"hello.md","content":"# 你好，RyAgent\\n"}',
+              argumentsDelta: '{"path":"hello.md","content":"# 你好，RyHarness\\n"}',
             },
             {
               type: 'block-end',
@@ -50,7 +50,7 @@ class MockAdapter extends LlmAdapter {
                 type: 'tool-call',
                 id: callId,
                 name: 'fs_write',
-                arguments: '{"path":"hello.md","content":"# 你好，RyAgent\\n"}',
+                arguments: '{"path":"hello.md","content":"# 你好，RyHarness\\n"}',
               },
             },
             { type: 'finish', reason: { kind: 'tool-calls' } },
@@ -68,7 +68,7 @@ class MockAdapter extends LlmAdapter {
   }
 }
 
-const tmp = mkdtempSync(join(tmpdir(), 'ryagent-demo-'))
+const tmp = mkdtempSync(join(tmpdir(), 'ryharness-demo-'))
 const workspaceRoot = join(tmp, 'workspace')
 const store = new SessionStore(join(tmp, 'demo.db'))
 
@@ -130,7 +130,7 @@ try {
   // ---- 断言 3：工作区文件落盘 ----
   const produced = join(workspaceRoot, 'hello.md')
   assert.ok(existsSync(produced), 'hello.md 未写入工作区')
-  assert.equal(readFileSync(produced, 'utf8'), '# 你好，RyAgent\n')
+  assert.equal(readFileSync(produced, 'utf8'), '# 你好，RyHarness\n')
   console.log('✓ fs_write 工具结果已落盘到工作区')
 
   // ---- 持久化：消息落库 ----

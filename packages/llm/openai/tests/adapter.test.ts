@@ -1,14 +1,14 @@
-import { brandString } from '@ryagent/brand'
-import type { GenerateOptions, StreamChunk, ToolCallId } from '@ryagent/llm'
+import { brandString } from '@ryharness/brand'
+import type { GenerateOptions, StreamChunk, ToolCallId } from '@ryharness/llm'
 import {
   createAssistantMessage,
   createDeveloperMessage,
   createToolResultMessage,
   createUserMessage,
   LlmError,
-} from '@ryagent/llm'
-import type { OpenAiChatRequest } from '@ryagent/llm-openai'
-import { OpenAiAdapter, serializeRequest } from '@ryagent/llm-openai'
+} from '@ryharness/llm'
+import type { OpenAiChatRequest } from '@ryharness/llm-openai'
+import { OpenAiAdapter, serializeRequest } from '@ryharness/llm-openai'
 import { describe, expect, it } from 'vitest'
 
 function sseResponse(...lines: string[]): Response {
@@ -170,6 +170,29 @@ describe('OpenAiAdapter', () => {
     const error = await collect(adapter.stream(baseOptions)).catch((e: unknown) => e)
     expect(error).toBeInstanceOf(LlmError)
     expect((error as LlmError).code).toBe('QUOTA')
+    // 供应商要求的退避与排障事实要进 failure（之前算了却丢在构造函数外）。
+    expect((error as LlmError).failure.providerRetryAfterMs).toBe(30_000)
+    expect((error as LlmError).failure.status).toBe(429)
+  })
+
+  it('429 的 Retry-After 支持 HTTP-date 形态，request-id 头进 failure（排障要件）', async () => {
+    const adapter = makeAdapter(
+      async () =>
+        new Response(JSON.stringify({ error: { message: 'slow down', type: 'rate_limit_error' } }), {
+          status: 429,
+          headers: {
+            'retry-after': new Date(Date.now() + 45_000).toUTCString(),
+            'x-request-id': 'req-abc-123',
+          },
+        }),
+    )
+    const error = await collect(adapter.stream(baseOptions)).catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(LlmError)
+    const failure = (error as LlmError).failure
+    expect(failure.code).toBe('RATE_LIMIT')
+    expect(failure.requestId).toBe('req-abc-123')
+    expect(failure.providerRetryAfterMs).toBeGreaterThan(0)
+    expect(failure.providerRetryAfterMs).toBeLessThanOrEqual(45_000)
   })
 
   it('maps 401 to INVALID_CREDENTIAL', async () => {
@@ -240,5 +263,48 @@ describe('serializeRequest', () => {
       ],
     })
     expect(request.messages).toEqual([{ role: 'tool', tool_call_id: 'c9', content: '[Tool error]\nboom' }])
+  })
+})
+
+/**
+ * 思考档位目录的暴露。
+ *
+ * 这是 UI 决定「要不要给用户思考强度选择器」的唯一依据。路由没声明 reasoningControl
+ * 就不给——否则用户选哪档都会被端点静默忽略，一个装饰性的控件比没有更糟。
+ */
+describe('adapter 思考档位目录', () => {
+  const adapterFor = (reasoningControl: 'effort' | 'thinking-adaptive' | 'none' | undefined): OpenAiAdapter =>
+    new OpenAiAdapter({
+      providers: {
+        test: {
+          baseURL: 'https://example.test/v1',
+          apiKey: 'sk-test',
+          models: [{ id: 'm', contextWindow: 8192 }],
+          ...(reasoningControl === undefined ? {} : { reasoningControl }),
+        },
+      },
+      // 这组用例只调 resolveModel：它读配置、拼档位目录，一个请求都不发。
+      // 所以这里给一个永不触发的桩就够了，不需要为它编一个完整 fetch 签名。
+      fetch: async () => {
+        throw new Error('resolveModel 不该发请求')
+      },
+    })
+
+  it('声明支持的路由给出档位与默认档', async () => {
+    const resolved = await adapterFor('effort').resolveModel('test', 'm')
+    expect(
+      resolved.reasoning?.efforts.map((effort) => {
+        return effort.id
+      }),
+    ).toEqual(['low', 'medium', 'high'])
+    expect(resolved.reasoning?.defaultEffort).toBe('medium')
+  })
+
+  it('未声明的路由不声明档位（UI 据此不给选择器）', async () => {
+    expect((await adapterFor(undefined).resolveModel('test', 'm')).reasoning).toBeUndefined()
+  })
+
+  it('显式声明 none 同样不声明档位', async () => {
+    expect((await adapterFor('none').resolveModel('test', 'm')).reasoning).toBeUndefined()
   })
 })

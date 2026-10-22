@@ -1,6 +1,21 @@
 /**
  * MemoryService：检索管线（recall）+ 异步抽取管线（enqueueExtraction）。
  *
+ * 首 token 路径：注入块分两段拿——{@link MemoryService.recallSync} 同步组装
+ * （落库向量缓存 + FTS5，全程不 await），{@link MemoryService.recallRefine} 在
+ * 开流之后把本轮 embedding 落进缓存，**并把这一轮真算出来的语义命中留在手上**，
+ * 下一轮的同步召回把它当第三条通道并进 RRF。
+ *
+ * 为什么不能只落缓存：embedding_cache 的键是查询文本的 sha256，而真人对话里
+ * 同一句输入不会原样出现第二次——只落缓存的语义通道，在线上等于不存在（只有
+ * 用户复述同一句话时才命中），换模型/换 embedding 后的语义召回能力一并消失。
+ * 回灌让语义通道的召回结果一定进过某一次注入块，只是晚一轮。
+ *
+ * 记忆按设计只是增强：词法通道全本地，语义通道是一次网络往返，两者的召回质量
+ * 差距远小于一次网络往返在首 token 上留下的痕迹。await 路径
+ * （{@link MemoryService.recall}）保留给抽取管线与不带同步入口的调用方，它的
+ * deadline 是真的（recallBudgetMs 覆盖 embedding 等待，而不只是画像查询）。
+ *
  * 检索配方（调研 §3.4）：输入 → embedding 余弦 top-10 + FTS5 BM25 top-10 →
  * RRF(k=60) 融合 → 时间衰减 score *= exp(-Δdays/30) → top-5 注入；
  * 共享画像（'*shared*' 的 profile 类）全量注入。
@@ -9,7 +24,7 @@
  * （scope 路由：用户事实 → *shared*；互动经验 → agent 空间）→ 每条候选查
  * top-10 相似 → LLM 四操作 → UPDATE/DELETE 走 superseded 软删链。
  * 单 writer 异步队列，失败重试一次后记日志不炸主流程。
- * @module @ryagent/memory/service
+ * @module @ryharness/memory/service
  */
 
 import type { EmbeddingProvider } from './embeddings.ts'
@@ -26,12 +41,34 @@ const RRF_K = 60
 const RECALL_PER_CHANNEL = 10
 /** 注入条数。 */
 const RECALL_TOP_N = 5
+/**
+ * 回灌给下一轮的语义命中条数。
+ *
+ * 比语义通道本身的 top-10 保守：这些行是**上一句**输入算出来的，与本轮问题的
+ * 相关性天然低一档，宁可少注入也别让过期相关性挤掉本轮该召回的记忆。
+ */
+const CARRIED_SEMANTIC_TOP_N = 3
+/**
+ * 回灌缓存的条目上限（按 agent 空间计）。
+ *
+ * 只是防长驻进程（桌面端常年不退出）里堆积快照：每条至多 3 行 MemoryRow，
+ * 触顶时按插入顺序淘汰最旧的。
+ */
+const CARRIED_SEMANTIC_SPACES = 64
 /** 衰减时间常数（天）。 */
 const DECAY_DAYS = 30
 /** 默认 embedding 请求超时（毫秒）。 */
 const DEFAULT_EMBED_TIMEOUT_MS = 800
 /** 默认 recall 整体预算（毫秒）——保障首 token 延迟。 */
 const DEFAULT_RECALL_BUDGET_MS = 1_200
+/**
+ * 首 token 路径上 embedding 的 deadline（毫秒）。
+ *
+ * 记忆按设计只是增强：语义通道是一次网络往返，词法通道是本地 FTS5，两条通道
+ * 的召回质量差距远小于一次 800ms 的首 token 延迟。这里给 150ms 是折中——比
+ * 「本地命中缓存就 0ms、否则 150ms」的两段式更简单，比默认的 800ms 少得多。
+ */
+const DEFAULT_FIRST_TOKEN_DEADLINE_MS = 150
 /** 重建向量是后台批量任务，预算与首 token 路径无关（沿用 800ms 必然写 0 条）。 */
 const DEFAULT_REEMBED_TIMEOUT_MS = 30_000
 /** 重建分片：单次请求条数，多数 embedding 端点有上限，整批塞进去容易被拒。 */
@@ -48,9 +85,64 @@ const TEXT_DEDUPE_WINDOW = 200
 const ADD_FORCE_THRESHOLD = 0.7
 const NOOP_ALLOW_THRESHOLD = 0.85
 
+/**
+ * 用户反馈在召回增益里的权重（与访问增益同量级）。
+ *
+ * 取 2：一次 👎 约等于三次「被检索到」。两者不是一回事——命中是检索的副产物（记忆
+ * 与提问本来就相关），而 👎 是用户对着**这一轮的输出**下的判断，后者信息量更大。
+ * 取 1 时它只值 0.69（不到一次命中），一条已被反复召回的错误记忆扣掉一次仍然保留
+ * 四分之三的强化增益，等于没有刹车。
+ *
+ * 又不取更大：权重再高就成了单点否决——一次误伤（用户其实是在骂模型答得不好，不是
+ * 说记忆错了）会让那条记忆再也召不回来，而用户并没有要求删掉它。
+ */
+const FEEDBACK_GAIN_WEIGHT = 2
+
+/**
+ * 召回增益：命中即强化，👎 即扣回。
+ *
+ * 这是「单向棘轮」唯一的刹车。此前只有 `1 + log1p(accessCount)` 一个单调不减的因子，
+ * 于是任何错误记忆一旦被注入过就只会越来越稳——用户点了 👎 也听不见，每一轮召回
+ * 反过来又给它加一次分。两项都取对数：反馈的边际价值随之递减，三次 👎 与三十次
+ * 👎 的差别不该和一次与十次一样大。
+ *
+ * 下界取 0 而不是负数：增益为负会让排序被反向扭曲（RRF 分恒正），而「这条记忆
+ * 退出竞争」正是用户点 👎 时想要的结果——它没被软删，只是排不进去了，随时能被 👍 拉回来。
+ * @param counts - 记忆的三个计数；取形状而非整行，方便测试与 future 复用。
+ * @returns 乘在 RRF 与衰减项上的增益系数，恒 ≥ 0。
+ */
+export function recallGain(counts: { accessCount: number; helpfulCount: number; harmfulCount: number }): number {
+  const gain =
+    1 +
+    Math.log1p(counts.accessCount) +
+    FEEDBACK_GAIN_WEIGHT * (Math.log1p(counts.helpfulCount) - Math.log1p(counts.harmfulCount))
+  return gain > 0 ? gain : 0
+}
+
+/** 记忆 id 集合：按 agent 空间记住「上一轮注入了什么」，容量触顶按插入序淘汰。 */
+type InjectionMap = Map<string, string[]>
+
+/** 注入归因的条目上限（每个 agent 空间一条，触顶淘汰最久没刷新者）。 */
+const INJECTION_SPACES = 64
+
 /** 供 AgentLoop 接入的薄接口（recall 同步组装前、enqueue 异步收尾）。 */
 export interface AgentMemory {
   recall(agentId: string, inputText: string): Promise<string | undefined>
+  /**
+   * 首 token 路径上的同步召回（AgentLoop 专用）：落库向量缓存 + FTS5，全程
+   * 不 await。返回 undefined 表示没有可注入的记忆。
+   */
+  recallSync(agentId: string, inputText: string): string | undefined
+  /**
+   * 首 token 之后的补正：等本轮输入的向量落地，据此算出语义命中并留给**下一轮**
+   * 的 {@link MemoryService.recallSync} 注入（见类注释：只落缓存的语义通道在线
+   * 上等于不存在）。
+   *
+   * 刻意不组装注入块、也不记访问——两者都是同步召回已经做过的事，在这里再做
+   * 一次只会让共享画像的访问计数凭空翻倍。
+   * @returns 是否真的补到了向量（false = 超时或不可用，下一轮仍是纯 FTS5）。
+   */
+  recallRefine(agentId: string, inputText: string, deadlineMs?: number): Promise<boolean>
   enqueueExtraction(agentId: string, agentName: string, conversationId: string, turnText: string): void
 }
 
@@ -58,7 +150,7 @@ export interface AgentMemory {
  * 扇出召回的可选扩展面（由 {@link MemoryService} 实现）。
  *
  * 群聊一次 @ 多个成员时，各成员拿到的是**同一段输入**，对同一空间的召回结果
- * 本来就相同。调度器（@ryagent/group）检测到这个方法就用它，把 N 次
+ * 本来就相同。调度器（@ryharness/group）检测到这个方法就用它，把 N 次
  * recall 收敛成一次；没有实现时逐成员 recall 也照旧工作（只是重复请求）。
  */
 export interface MemoryRecallMany {
@@ -80,6 +172,12 @@ export interface MemoryServiceOptions {
   reembedTimeoutMs?: number
   /** 向量重建分片大小（默认 64）。 */
   reembedBatchSize?: number
+  /**
+   * 首 token 路径上 embedding 的 deadline（默认 150ms）。超过就走纯 FTS5，
+   * 在途请求继续跑并把向量写回缓存，下一轮的 {@link MemoryService.recallSync}
+   * 直接命中语义通道。
+   */
+  firstTokenDeadlineMs?: number
 }
 
 export class MemoryService implements AgentMemory, MemoryRecallMany {
@@ -92,6 +190,7 @@ export class MemoryService implements AgentMemory, MemoryRecallMany {
   private readonly recallBudgetMs: number
   private readonly reembedTimeoutMs: number
   private readonly reembedBatchSize: number
+  private readonly firstTokenDeadlineMs: number
   /** 单 writer 队列。 */
   private queue: Promise<void> = Promise.resolve()
   /**
@@ -103,6 +202,24 @@ export class MemoryService implements AgentMemory, MemoryRecallMany {
    * 读到了未命中，于是同一段文本在一轮里被打成 N 次 embedding 请求。
    */
   private readonly inflightEmbeddings = new Map<string, Promise<Float32Array | null>>()
+  /**
+   * 上一轮 {@link MemoryService.recallRefine} 算出的语义命中（键 = agent 空间）。
+   *
+   * 同步召回按输入文本取用一次即清空：语义结果必须在下一轮真的进注入块，否则
+   * 首 token 路径上的语义通道等于没有。取用时按 id 回库复核 status——补正与
+   * 下一次召回之间记忆可能被软删，注入一条已 superseded 的行比不注入更糟。
+   */
+  private readonly carriedSemantic = new Map<string, ScoredMemory[]>()
+  /**
+   * 每个 agent 空间「最近一次注入的记忆 id」。
+   *
+   * 用户点 👎 时要回答的问题是「刚才那一轮我看到了什么」，而召回钩子的契约只有
+   * (agentId, inputText)，拿不到会话 id——所以归因只能按 agent 空间近似，与
+   * EvolveService 的归因集合是同一类近似（它至少还带 conversationId）。
+   * 空间内连续多轮对话共用一条记录：第 N 轮注入的集合覆盖第 N-1 轮，符合「用户是在
+   * 对最近一条回复投票」的直觉。
+   */
+  private readonly lastInjected: InjectionMap = new Map()
 
   constructor(options: MemoryServiceOptions) {
     this.store = new MemoryStore(options.dbPath)
@@ -113,6 +230,7 @@ export class MemoryService implements AgentMemory, MemoryRecallMany {
     this.recallBudgetMs = options.recallBudgetMs ?? DEFAULT_RECALL_BUDGET_MS
     this.reembedTimeoutMs = options.reembedTimeoutMs ?? DEFAULT_REEMBED_TIMEOUT_MS
     this.reembedBatchSize = options.reembedBatchSize ?? REEMBED_BATCH
+    this.firstTokenDeadlineMs = options.firstTokenDeadlineMs ?? DEFAULT_FIRST_TOKEN_DEADLINE_MS
     this.log =
       options.logger ??
       ((message) => {
@@ -140,7 +258,7 @@ export class MemoryService implements AgentMemory, MemoryRecallMany {
    * @returns 注入文本；无记忆时返回 undefined（不注入空块）。
    */
   async recall(agentId: string, inputText: string): Promise<string | undefined> {
-    const context = await this.recallContext(inputText, true)
+    const context = await this.recallContext(inputText, true, this.recallBudgetMs)
     return this.formatRecall(context, agentId)
   }
 
@@ -155,7 +273,7 @@ export class MemoryService implements AgentMemory, MemoryRecallMany {
    * 互换（衰减项所致，与召回集合无关）。
    */
   async recallMany(agentIds: readonly string[], inputText: string): Promise<Map<string, string | undefined>> {
-    const context = await this.recallContext(inputText, true)
+    const context = await this.recallContext(inputText, true, this.recallBudgetMs)
     const out = new Map<string, string | undefined>()
     for (const agentId of new Set(agentIds)) {
       out.set(agentId, this.formatRecall(context, agentId))
@@ -163,9 +281,106 @@ export class MemoryService implements AgentMemory, MemoryRecallMany {
     return out
   }
 
+  /**
+   * 首 token 路径上的**同步**召回：落库向量缓存 + FTS5 + 上一轮回灌的语义命中，
+   * 全程不 await。
+   *
+   * 三条通道都只用本地读：当前查询的向量走 `embedding_cache`（上一轮补正已经
+   * 把结果写在这里，仅当用户原样复述同一句输入才会命中），词法走 FTS5，语义走
+   * 上一轮 {@link MemoryService.recallRefine} 回灌的命中。任何异常都静默降级成
+   * 「无注入」——记忆是增强，它没有资格让一次对话变慢或失败。
+   * @returns 注入文本；无可注入记忆时返回 undefined。
+   */
+  recallSync(agentId: string, inputText: string): string | undefined {
+    try {
+      const text = inputText.trim()
+      const vector = this.embeddings.available ? this.store.cachedEmbedding(text, this.embeddingModel) : null
+      const profile = this.store.listSharedProfile()
+      return this.formatRecall(
+        {
+          vector,
+          profile,
+          budgetExceeded: false,
+          sharedSemantic: vector === null ? [] : this.scoreSemantic(SHARED_SPACE, vector),
+          ftsHits: this.searchFtsChannel(text),
+          carried: this.takeCarriedSemantic(agentId),
+          pendingTouch: profile.map((m) => {
+            return m.id
+          }),
+        },
+        agentId,
+      )
+    } catch (error) {
+      this.log(
+        `@ryharness/memory: sync recall degraded to no-injection: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      )
+      return undefined
+    }
+  }
+
+  /**
+   * 首 token 之后的补正：等本轮输入的向量落地，据此算出语义通道命中并留给
+   * **下一轮**的 {@link MemoryService.recallSync}。
+   *
+   * 只落 embedding 缓存是不够的（缓存键是查询文本原样，真人对话里同一句话不会
+   * 说第二遍），所以这里顺手把这一轮真算出来的语义命中留在手上；它按 agent
+   * 空间隔离，扇出时各成员各留各的。
+   *
+   * 刻意不组装注入块、也不记访问——两者都是同步召回已经做过的事，在这里再做
+   * 一次只会让共享画像的访问计数凭空翻倍。
+   * @returns 是否真的补到了向量（false = 超时或不可用，下一轮仍是纯 FTS5）。
+   */
+  async recallRefine(agentId: string, inputText: string, deadlineMs = this.firstTokenDeadlineMs): Promise<boolean> {
+    if (!this.embeddings.available) return false
+    try {
+      const vector = await this.embedCached(inputText.trim(), deadlineMs)
+      if (vector === null) return false
+      this.carrySemantic(agentId, vector)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  /** 把这一轮的语义通道命中留给下一轮（按空间隔离，触顶淘汰最旧）。 */
+  private carrySemantic(agentId: string, vector: Float32Array): void {
+    const shared = this.scoreSemantic(SHARED_SPACE, vector)
+    const scored = [...(agentId === SHARED_SPACE ? [] : this.scoreSemantic(agentId, vector)), ...shared]
+      .sort((a, b) => {
+        return b.score - a.score
+      })
+      .slice(0, CARRIED_SEMANTIC_TOP_N)
+    // 先删后插：同一个空间连续多轮补正时靠它刷新插入序，淘汰的仍是"最久没回灌"。
+    this.carriedSemantic.delete(agentId)
+    if (scored.length === 0) return
+    this.carriedSemantic.set(agentId, scored)
+    while (this.carriedSemantic.size > CARRIED_SEMANTIC_SPACES) {
+      const oldest = this.carriedSemantic.keys().next()
+      if (oldest.done === true) break
+      this.carriedSemantic.delete(oldest.value)
+    }
+  }
+
+  /** 取走某空间回灌的语义命中（一次性），并回库复核它们是否仍然 active。 */
+  private takeCarriedSemantic(agentId: string): ScoredMemory[] {
+    const carried = this.carriedSemantic.get(agentId)
+    if (carried === undefined) return []
+    this.carriedSemantic.delete(agentId)
+    const out: ScoredMemory[] = []
+    for (const hit of carried) {
+      const row = this.store.get(hit.memory.id)
+      if (row === undefined || row.status !== 'active') continue
+      if (row.agentId !== agentId && row.agentId !== SHARED_SPACE) continue
+      out.push({ memory: row, score: hit.score })
+    }
+    return out
+  }
+
   /** 混合检索：embedding + BM25 → RRF(k=60) → 访问基准衰减 → top-N。 */
   async hybridRecall(agentId: string, input: string, limit = this.topN): Promise<MemoryRow[]> {
-    return this.rankRecall(await this.recallContext(input, false), agentId, limit)
+    return this.rankRecall(await this.recallContext(input, false, this.recallBudgetMs), agentId, limit)
   }
 
   /**
@@ -174,42 +389,49 @@ export class MemoryService implements AgentMemory, MemoryRecallMany {
    *
    * `withProfile` 只给注入路径开：抽取管线里的相似查询不算「注入即访问」，
    * 否则每次抽取都把共享画像的 access_count 顶上去，归档判定就失真了。
+   *
+   * `deadlineMs` 是这次检索的**整体**预算，`embedCached` 在它之内再 race 一次
+   * ——原先 recallBudgetMs 只量了画像查询之后的那个同步点就再也不看，
+   * 真正兜底的是 embedTimeoutMs=800，于是最坏 800ms 的纯等待发生在首 token
+   * 之前，而记忆按设计只是增强。
    */
-  private async recallContext(input: string, withProfile: boolean): Promise<RecallContext> {
+  private async recallContext(input: string, withProfile: boolean, deadlineMs: number): Promise<RecallContext> {
     const budgetStart = Date.now()
     const text = input.trim()
     let profile: MemoryRow[] = []
     let budgetExceeded = false
     if (withProfile) {
       profile = this.store.listSharedProfile()
-      if (profile.length > 0) {
-        // 注入即访问：画像每轮都被读进 prompt，却从不计入访问统计，access_count
-        // 恒为 0，巩固任务会把整批画像判成"长期零访问"直接归档——用户画像因此
-        // 悄无声息地整体消失。
-        this.store.touchAccess(
-          profile.map((m) => {
-            return m.id
-          }),
-        )
-      }
       // 预算守卫：画像已超预算时直接注入画像就收尾（profile 量小，正常不会发生）。
-      budgetExceeded = Date.now() - budgetStart > this.recallBudgetMs
+      budgetExceeded = Date.now() - budgetStart > deadlineMs
     }
 
     let vector: Float32Array | null = null
     let sharedSemantic: ScoredMemory[] = []
     let ftsHits: { memory: MemoryRow; score: number }[] = []
     if (!budgetExceeded) {
-      vector = await this.embedCached(text)
+      vector = await this.embedCached(text, Math.max(0, deadlineMs - (Date.now() - budgetStart)))
       if (vector !== null) {
         sharedSemantic = this.scoreSemantic(SHARED_SPACE, vector)
       }
       ftsHits = this.searchFtsChannel(text)
     }
-    return { vector, profile, budgetExceeded, sharedSemantic, ftsHits }
+    // 画像的访问记账不在这里发：与本轮检索命中合成一条 UPDATE（逐 id UPDATE
+    // 各带隐式事务，扇出里还会重复记账）。
+    return {
+      vector,
+      profile,
+      budgetExceeded,
+      sharedSemantic,
+      ftsHits,
+      carried: [],
+      pendingTouch: profile.map((m) => {
+        return m.id
+      }),
+    }
   }
 
-  /** 组装注入块并记账访问（共享画像已在上下文里记过一次）。 */
+  /** 组装注入块并记账访问（共享画像也在这里，一次性计入 pendingTouch）。 */
   private formatRecall(context: RecallContext, agentId: string): string | undefined {
     const sections: string[] = []
     if (context.profile.length > 0) {
@@ -231,15 +453,58 @@ export class MemoryService implements AgentMemory, MemoryRecallMany {
             })
             .join('\n')}`,
         )
-        this.store.touchAccess(
-          recalled.map((m) => {
-            return m.id
-          }),
-        )
+        for (const memory of recalled) context.pendingTouch.push(memory.id)
       }
     }
+    // 取出即清空：扇出里多个成员共用同一份上下文，画像的访问计数按「一次输入」
+    // 记 1，而不是「每个成员各记 1」。
+    const pending = context.pendingTouch
+    context.pendingTouch = []
+    this.store.touchAccess(pending)
+    // 归因记的是**这一轮真正出现在注入块里**的那些：画像 + 检索命中。
+    // 注入块为 undefined（无记忆可注入）时清掉该空间的归因而不是保留上一轮——
+    // 否则用户对着一句没注入任何记忆的回复点 👎，会罚到上一轮的头上。
+    this.rememberInjection(agentId, sections.length === 0 ? [] : pending)
     if (sections.length === 0) return undefined
     return `[记忆] ${sections.join('\n')}`
+  }
+
+  /** 记「这个空间最近一轮注入了什么」，供 recordFeedback 归因；触顶淘汰最旧者。 */
+  private rememberInjection(agentId: string, ids: readonly string[]): void {
+    // 先删后插：同一个空间连续多轮靠它刷新插入序，淘汰的仍是"最久没注入过"。
+    this.lastInjected.delete(agentId)
+    if (ids.length > 0) this.lastInjected.set(agentId, [...ids])
+    while (this.lastInjected.size > INJECTION_SPACES) {
+      const oldest = this.lastInjected.keys().next()
+      if (oldest.done === true) break
+      this.lastInjected.delete(oldest.value)
+    }
+  }
+
+  /**
+   * 用户反馈回灌：👍 / 👎 落到该 agent 空间最近一轮注入的记忆上。
+   *
+   * 这是记忆侧唯一的**反向信号**通路。没有它时 recall 是单向棘轮：命中即加权、
+   * 没有东西能减，一条被注入过的错误记忆只会随着每次召回越来越稳（详见
+   * {@link recallGain}）。
+   *
+   * 归因是「该空间最近一次注入的集合」而不是逐轮精确记录：召回钩子的契约只有
+   * (agentId, inputText)，拿不到 conversationId。这与 EvolveService 的归因是同一类
+   * 近似，误差同源、可接受；真要逐轮精确需要改 AgentMemory 契约（动 packages/agent）。
+   *
+   * 命中集合里可能含已被软删/归档的行（它们注入时还是 active，之后才被改状态）：
+   * applyFeedback 只累加计数，不改状态，因此历史记忆的反馈也不会丢。
+   * @returns 实际记上信号的记忆条数（没有可归因的注入时为 0）。
+   */
+  recordFeedback(input: { agentId: string; signal: 'thumb_up' | 'thumb_down' }): number {
+    const ids = this.lastInjected.get(input.agentId)
+    if (ids === undefined || ids.length === 0) return 0
+    return this.store.applyFeedback(ids, input.signal)
+  }
+
+  /** 该空间最近一轮注入的记忆 id（观测与评测用；返回副本）。 */
+  lastInjectedIds(agentId: string): readonly string[] {
+    return [...(this.lastInjected.get(agentId) ?? [])]
   }
 
   /** 两通道融合 + 衰减 + top-N（RRF(k=60) 与访问基准衰减，配方见调研 §3.4）。 */
@@ -267,6 +532,18 @@ export class MemoryService implements AgentMemory, MemoryRecallMany {
       )
     }
 
+    // 回灌通道：上一轮输入算出的语义命中，作为独立一条通道并进 RRF 而不是直接
+    // 塞进结果——它与本轮两个通道是同一条式子的证据，混进去才能参与衰减与
+    // top-N 竞争，而不是无视本轮问题强行注入。与当前查询向量命中同一 id 时
+    // 两路分数相加（RRF 的定义），不会互相抵消。
+    if (context.carried.length > 0) {
+      addRanked(
+        context.carried.map((hit) => {
+          return hit.memory
+        }),
+      )
+    }
+
     addRanked(
       context.ftsHits
         .filter((hit) => {
@@ -279,23 +556,33 @@ export class MemoryService implements AgentMemory, MemoryRecallMany {
     )
 
     const now = Date.now()
-    return [...candidates.values()]
-      .map((entry) => {
-        // 衰减基准是"最后一次被召回"而不是"最后一次写入"：两个月前写下但每周
-        // 都被命中的稳定偏好不该被压到 e⁻²。命中即强化：accessCount 走对数
-        // 增益，避免高频条目碾压其他维度。
-        const lastSeen = entry.memory.lastAccessedAt > 0 ? entry.memory.lastAccessedAt : entry.memory.updatedAt
-        const ageDays = Math.max(0, now - lastSeen) / 86_400_000
-        const reinforced = 1 + Math.log1p(entry.memory.accessCount)
-        return { memory: entry.memory, score: entry.rrf * Math.exp(-ageDays / DECAY_DAYS) * reinforced }
-      })
-      .sort((a, b) => {
-        return b.score - a.score
-      })
-      .slice(0, limit)
-      .map((hit) => {
-        return hit.memory
-      })
+    return (
+      [...candidates.values()]
+        .map((entry) => {
+          // 衰减基准是"最后一次被召回"而不是"最后一次写入"：两个月前写下但每周
+          // 都被命中的稳定偏好不该被压到 e⁻²。命中即强化：accessCount 走对数
+          // 增益，避免高频条目碾压其他维度；👎 从同一项里扣回（recallGain），
+          // 否则一次注入就足以让错误记忆此后每轮加分、永不沉底。
+          const lastSeen = entry.memory.lastAccessedAt > 0 ? entry.memory.lastAccessedAt : entry.memory.updatedAt
+          const ageDays = Math.max(0, now - lastSeen) / 86_400_000
+          const reinforced = recallGain(entry.memory)
+          return { memory: entry.memory, score: entry.rrf * Math.exp(-ageDays / DECAY_DAYS) * reinforced }
+        })
+        // 增益归零（👎 净额压过命中与基线）的候选直接退出竞争：排序分恒乘出 0，
+        // 占一个 top-N 名额只会挤出还有正分的记忆——「排不进去」是 recallGain
+        // 下界承诺的语义（行没被软删，👍 拉回净值后自动回来），不在候选层兜底
+        // 它就会在候选池小的时候无限期占坑。
+        .filter((hit) => {
+          return hit.score > 0
+        })
+        .sort((a, b) => {
+          return b.score - a.score
+        })
+        .slice(0, limit)
+        .map((hit) => {
+          return hit.memory
+        })
+    )
   }
 
   /**
@@ -322,7 +609,7 @@ export class MemoryService implements AgentMemory, MemoryRecallMany {
       })
     if (dimMismatch.size > 0) {
       this.log(
-        `@ryagent/memory: skipped ${dimMismatch.size} memories in "${spaceId}" whose embedding dim ` +
+        `@ryharness/memory: skipped ${dimMismatch.size} memories in "${spaceId}" whose embedding dim ` +
           `differs from model "${this.embeddingModel}"`,
       )
     }
@@ -340,7 +627,7 @@ export class MemoryService implements AgentMemory, MemoryRecallMany {
       return this.store.searchFtsHits(input, RECALL_PER_CHANNEL * 3)
     } catch (error) {
       this.log(
-        `@ryagent/memory: FTS channel degraded to ${this.embeddings.available ? 'semantic-only' : 'no-results'}: ` +
+        `@ryharness/memory: FTS channel degraded to ${this.embeddings.available ? 'semantic-only' : 'no-results'}: ` +
           `${error instanceof Error ? error.message : String(error)}`,
       )
       return []
@@ -348,26 +635,29 @@ export class MemoryService implements AgentMemory, MemoryRecallMany {
   }
 
   /**
-   * embedding + 按模型分桶的文本缓存 + 在途请求合并：相同文本不重复请求。
+   * embedding + 按模型分桶的文本缓存 + 在途请求合并 + 真正的 deadline race。
    *
-   * 三层缺一不可：落库缓存挡住跨轮重复，在途合并挡住**同轮内**的并发重复
-   * （扇出时 N 个成员同时问同一段输入，落库缓存那时谁都还没写回），超时降级
-   * 纯 FTS5。
+   * 三层缓存缺一不可：落库缓存挡住跨轮重复，在途合并挡住**同轮内**的并发重复
+   * （扇出时 N 个成员同时问同一段输入，落库缓存那时谁都还没写回）。
+   *
+   * deadline 是调用方给的**剩余**预算，通常比单次请求超时短（首 token 路径
+   * 只要 150ms）。超时就返回 null 降级纯 FTS5；在途请求继续跑完并把向量写回
+   * 缓存——所以「等不到」不等于「白等一次」。
+   * @param deadlineMs - 本次可等待的毫秒数；0 表示只吃已落库的缓存。
    */
-  private async embedCached(text: string): Promise<Float32Array | null> {
+  private async embedCached(text: string, deadlineMs = this.embedTimeoutMs): Promise<Float32Array | null> {
     if (!this.embeddings.available) return null
     const model = this.embeddingModel
     const cached = this.store.cachedEmbedding(text, model)
     if (cached !== null) return cached
     const key = `${model}\u0000${text}`
     const inFlight = this.inflightEmbeddings.get(key)
-    if (inFlight !== undefined) return inFlight
-    const request = this.requestEmbedding(text, model)
-    this.inflightEmbeddings.set(key, request)
+    const request = inFlight ?? this.requestEmbedding(text, model)
+    if (inFlight === undefined) this.inflightEmbeddings.set(key, request)
     try {
-      return await request
+      return await withTimeout(request, Math.max(0, deadlineMs))
     } finally {
-      this.inflightEmbeddings.delete(key)
+      if (inFlight === undefined) this.inflightEmbeddings.delete(key)
     }
   }
 
@@ -376,7 +666,7 @@ export class MemoryService implements AgentMemory, MemoryRecallMany {
     const vectors = await withTimeout(this.embeddings.embed([text]), this.embedTimeoutMs)
     const vector = vectors === null ? null : (vectors[0] ?? null)
     if (vector === null) {
-      this.log(`@ryagent/memory: embedding timed out after ${this.embedTimeoutMs}ms, falling back to FTS-only`)
+      this.log(`@ryharness/memory: embedding timed out after ${this.embedTimeoutMs}ms, falling back to FTS-only`)
       return null
     }
     this.store.cacheEmbedding(text, vector, model)
@@ -421,7 +711,7 @@ export class MemoryService implements AgentMemory, MemoryRecallMany {
       budget -= pending.length
       if (wrote === 0) {
         this.log(
-          `@ryagent/memory: reembed stalled at ${written} rows; embedding endpoint returned nothing ` +
+          `@ryharness/memory: reembed stalled at ${written} rows; embedding endpoint returned nothing ` +
             `(timeout or error), this batch and the rest are skipped`,
         )
         break
@@ -448,7 +738,7 @@ export class MemoryService implements AgentMemory, MemoryRecallMany {
     if (misses.length === 0) return out
     const fetched = await withTimeout(this.embeddings.embed(misses), timeoutMs)
     if (fetched === null) {
-      this.log(`@ryagent/memory: embedding batch timed out after ${timeoutMs}ms`)
+      this.log(`@ryharness/memory: embedding batch timed out after ${timeoutMs}ms`)
       return out
     }
     const byText = new Map<string, Float32Array | null>(
@@ -493,13 +783,13 @@ export class MemoryService implements AgentMemory, MemoryRecallMany {
       await this.runExtraction(agentId, agentName, conversationId, text)
     } catch (error) {
       this.log(
-        `@ryagent/memory: extraction failed, retrying once: ${error instanceof Error ? error.message : String(error)}`,
+        `@ryharness/memory: extraction failed, retrying once: ${error instanceof Error ? error.message : String(error)}`,
       )
       try {
         await this.runExtraction(agentId, agentName, conversationId, text)
       } catch (retryError) {
         this.log(
-          `@ryagent/memory: extraction gave up: ${retryError instanceof Error ? retryError.message : String(retryError)}`,
+          `@ryharness/memory: extraction gave up: ${retryError instanceof Error ? retryError.message : String(retryError)}`,
         )
       }
     }
@@ -584,7 +874,7 @@ export class MemoryService implements AgentMemory, MemoryRecallMany {
     if (this.embeddings.available) return false
     for (const memory of this.store.listActiveForAgent(spaceId, TEXT_DEDUPE_WINDOW)) {
       if (!textNearDuplicate(text, memory.content)) continue
-      this.log(`@ryagent/memory: dropped near-duplicate memory in "${spaceId}": ${text}`)
+      this.log(`@ryharness/memory: dropped near-duplicate memory in "${spaceId}": ${text}`)
       return true
     }
     return false
@@ -666,18 +956,38 @@ interface RecallContext {
   sharedSemantic: ScoredMemory[]
   /** 全库 BM25 候选窗口（bm25 升序；空间过滤在调用侧）。 */
   ftsHits: { memory: MemoryRow; score: number }[]
+  /**
+   * 上一轮 {@link MemoryService.recallRefine} 回灌的语义通道命中：首 token 路径
+   * 上真正的语义证据只在 await 路径才有，这是它唯一的去处（await 路径恒为空）。
+   */
+  carried: ScoredMemory[]
+  /**
+   * 待记访问的行：共享画像先入，检索命中在组装注入块时补。组装时合成一条
+   * UPDATE 发出并清空，所以扇出里多个成员共用这一份上下文也只记一次。
+   */
+  pendingTouch: string[]
 }
 
-/** Promise 超时包装：超时返回 null（embedding 降级纯 FTS5 路径用）。 */
+/**
+ * Promise 超时包装：超时返回 null（embedding 降级纯 FTS5 路径用）。
+ *
+ * 定时器必须清理：否则每轮召回都在事件循环上留一个挂起的句柄——扇出 N 个
+ * 成员就留 N 个，进程也退不出去。
+ */
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | null> {
-  return Promise.race([
-    promise.then((value) => {
-      return value as T | null
-    }),
-    new Promise<null>((resolve) => {
-      return setTimeout(() => {
-        return resolve(null)
-      }, timeoutMs)
-    }),
-  ])
+  return new Promise<T | null>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      resolve(null)
+    }, timeoutMs)
+    promise.then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (error: unknown) => {
+        clearTimeout(timer)
+        reject(error)
+      },
+    )
+  })
 }

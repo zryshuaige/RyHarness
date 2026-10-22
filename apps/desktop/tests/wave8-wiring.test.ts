@@ -121,16 +121,16 @@ describe('本地 API token：渲染层每个请求都得带上', () => {
     startApiTokenSync()
     startApiTokenSync()
 
-    window.dispatchEvent(new CustomEvent('ryagent:api-token', { detail: 'from-event' }))
+    window.dispatchEvent(new CustomEvent('ryharness:api-token', { detail: 'from-event' }))
     expect(currentApiToken()).toBe('from-event')
     expect(seen).toEqual(['from-event'])
 
-    globals.__RYAGENT_API_TOKEN__ = 'from-global'
+    globals.__RYHARNESS_API_TOKEN__ = 'from-global'
     startApiTokenSync()
     expect(currentApiToken()).toBe('from-global')
 
     off()
-    delete globals.__RYAGENT_API_TOKEN__
+    delete globals.__RYHARNESS_API_TOKEN__
   })
 
   it('URL 上的 ?token= 也认（主进程加载窗口时就已经带上）', () => {
@@ -187,6 +187,7 @@ describe('供应商编辑：api.ts 补上 PATCH 方法', () => {
       return jsonResponse({ error: 'provider "x" is used by 1 agent(s)' }, 409)
     })
 
+    // status / raw 是调用方要的（前者判 409，后者对得上服务端日志）；message 给人话。
     await expect(
       new ApiClient(BASE).updateProvider('x', {
         displayName: 'x',
@@ -194,7 +195,11 @@ describe('供应商编辑：api.ts 补上 PATCH 方法', () => {
         baseUrl: 'https://x.dev/v1',
         models: ['m'],
       }),
-    ).rejects.toThrow('is used by 1 agent')
+    ).rejects.toMatchObject({
+      status: 409,
+      raw: 'provider "x" is used by 1 agent(s)',
+      message: '还有助理在用这家模型服务，先去通讯录改绑再删。',
+    })
   })
 
   it('真实的 ApiClient 满足 ProviderApi：编辑入口在真应用里不是「后端未跟上」', () => {

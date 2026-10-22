@@ -1,5 +1,5 @@
 {
-  "name": "@ryagent/session",
+  "name": "@ryharness/session",
   "version": "0.1.0",
   "type": "module",
   "license": "MIT",
@@ -17,9 +17,14 @@
     "build": "tsdown"
   },
   "dependencies": {
-    "@ryagent/agent": "workspace:*",
-    "@ryagent/brand": "workspace:*",
-    "@ryagent/group": "workspace:*",
-    "@ryagent/llm": "workspace:*"
+    "@ryharness/agent": "workspace:*",
+    "@ryharness/brand": "workspace:*",
+    "@ryharness/group": "workspace:*",
+    "@ryharness/llm": "workspace:*",
+    "@ryharness/voice": "workspace:*"
+  },
+  "devDependencies": {
+    "@ryharness/evolve": "workspace:*",
+    "@ryharness/memory": "workspace:*"
   }
 }

@@ -27,7 +27,7 @@ const agents: AgentDef[] = [
 const demoGroup: Conversation = {
   id: 'demo-1',
   kind: 'group',
-  title: '示例 · 三个人一起定晚饭',
+  title: '示例 · 三个人一起做季度报告',
   memberAgentIds: ['ryen', 'coder', 'writer'],
   dispatcherAgentId: 'ryen',
   lastReadSeq: 0,
@@ -77,11 +77,13 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-function chipButton(text: string): HTMLButtonElement {
+function chipButton(prompt: string): HTMLButtonElement {
+  // 任务卡的可读标题缩短了，真正填进输入框的那句留在 data-prompt 上：
+  // 测试按「会填什么」找卡，而不是按卡片上恰好印了哪几个字找。
   const found = [...container.querySelectorAll<HTMLButtonElement>('.welcome-chip')].find((node) => {
-    return node.textContent?.includes(text)
+    return node.dataset.prompt === prompt
   })
-  if (found === undefined) throw new Error(`找不到 chip：${text}`)
+  if (found === undefined) throw new Error(`找不到任务卡：${prompt}`)
   return found
 }
 
@@ -107,31 +109,41 @@ describe('欢迎页：去向写在脸上，chip 点了就拨到该去的方向',
     })
   }
 
-  it('「跟 Ryen 聊 / 开个小队」两格摆明，默认只在单聊', async () => {
+  it('收件人行摆明去向，默认只在单聊；小队要用户自己点进去', async () => {
     await renderWelcome()
-    const buttons = [...container.querySelectorAll<HTMLButtonElement>('.welcome-chips [aria-pressed]')]
+    // 一排头像（每位助理一格，单聊选项）+ 另一端一枚小队胶囊 = 同一个决定的全部控件。
+    // 按名字读头像排，而不是按整块 textContent —— 没头像的助理，头像里会先落一个
+    // 首字，那不是名字的一部分。
     expect(
-      buttons.map((node) => {
-        return node.textContent?.trim()
+      [...container.querySelectorAll('.welcome-team-name')].map((node) => {
+        return node.textContent
       }),
-    ).toEqual(['跟 Ryen 聊', '开个小队（3 人）'])
-    expect(buttons[0]?.getAttribute('aria-pressed')).toBe('true')
-    expect(buttons[1]?.getAttribute('aria-pressed')).toBe('false')
+    ).toEqual(['Ryen', '小码', '小笔'])
+    const toggles = [...container.querySelectorAll<HTMLButtonElement>('.welcome-addressee [aria-pressed]')]
+    expect(toggles).toHaveLength(4)
+    expect(toggles[toggles.length - 1]?.textContent?.trim()).toBe('小队 · 3 人')
+    // 默认必须是 Ryen（个人助理）而不是群发：不选任何东西时这句话只给一个人。
+    expect(toggles[0]?.getAttribute('aria-pressed')).toBe('true')
+    expect(toggles[toggles.length - 1]?.getAttribute('aria-pressed')).toBe('false')
     // 只有一个 agent 时没有小队可开，这格得是关的而不是点进去才发现。
     await act(async () => {
       root?.unmount()
     })
     await renderWelcome({ agents: [agents[0]!] })
-    expect(container.querySelector<HTMLButtonElement>('.welcome-chips [aria-pressed="false"]')?.disabled).toBe(true)
+    expect(container.querySelector<HTMLButtonElement>('.welcome-squad')?.disabled).toBe(true)
   })
 
-  it('群场景的 chip 标着「小队」，单聊场景标着 Ryen', async () => {
+  it('群场景的 chip 把去向画成头像，单聊场景画成 Ryen', async () => {
     await renderWelcome()
-    expect(chipButton('我们三个定下周去哪吃').textContent).toContain('小队')
-    expect(chipButton('把我上次说的偏好讲给团队听').textContent).toContain('小队')
-    expect(chipButton('帮我整理一份本周周报').textContent).toContain('Ryen')
-    // 文案不许再说「群里还有另外两位」这种与去向无关的话。
-    expect(container.querySelector('.welcome-sub')?.textContent).not.toContain('群里还有另外两位')
+    // 两张小队任务各摆两个头像，一张单聊任务摆一个：点之前就知道发给谁。
+    expect(
+      chipButton('帮我做一份行业分析 PPT，小队一起上').querySelectorAll('.welcome-task-avatars .avatar'),
+    ).toHaveLength(2)
+    expect(chipButton('把我上次说的偏好讲给团队听').querySelectorAll('.welcome-task-avatars .avatar')).toHaveLength(2)
+    expect(chipButton('帮我整理一份本周周报').querySelectorAll('.welcome-task-avatars .avatar')).toHaveLength(1)
+    // 文案不许再说「群里还有另外两位」这种与去向无关的话：整屏都不许出现，
+    // 而不是只查某一句（那行引导语已经连同整段说明一起退场了）。
+    expect(container.textContent).not.toContain('群里还有另外两位')
   })
 
   it('点多 agent 的 chip：文案填进框、去向拨到小队，发送时带的也是小队', async () => {
@@ -142,18 +154,18 @@ describe('欢迎页：去向写在脸上，chip 点了就拨到该去的方向',
       },
     })
     await act(async () => {
-      chipButton('我们三个定下周去哪吃').click()
+      chipButton('帮我做一份行业分析 PPT，小队一起上').click()
       await Promise.resolve()
     })
     expect(container.querySelector<HTMLTextAreaElement>('.welcome-compose textarea')?.value).toBe(
-      '我们三个定下周去哪吃',
+      '帮我做一份行业分析 PPT，小队一起上',
     )
-    expect(container.querySelector('.welcome-chips [aria-pressed="true"]')?.textContent).toContain('开个小队')
+    expect(container.querySelector('.welcome-squad')?.getAttribute('aria-pressed')).toBe('true')
     await act(async () => {
       container.querySelector<HTMLButtonElement>('.send-btn')!.click()
       await Promise.resolve()
     })
-    expect(sent).toEqual([['我们三个定下周去哪吃', { kind: 'group' }]])
+    expect(sent).toEqual([['帮我做一份行业分析 PPT，小队一起上', { kind: 'group' }]])
   })
 
   it('点单聊 chip：去向回到单聊，发送时带的也是单聊', async () => {
@@ -164,12 +176,17 @@ describe('欢迎页：去向写在脸上，chip 点了就拨到该去的方向',
       },
     })
     await act(async () => {
-      chipButton('我们三个定下周去哪吃').click()
+      chipButton('帮我做一份行业分析 PPT，小队一起上').click()
       await Promise.resolve()
       chipButton('帮我整理一份本周周报').click()
       await Promise.resolve()
     })
-    expect(container.querySelector('.welcome-chips [aria-pressed="true"]')?.textContent).toContain('跟 Ryen 聊')
+    // 回到单聊 = 收件人行上 Ryen 那格重新亮起来，小队胶囊灭掉；不是另一对按钮。
+    expect(container.querySelector('.welcome-squad')?.getAttribute('aria-pressed')).toBe('false')
+    const ryen = [...container.querySelectorAll<HTMLButtonElement>('.welcome-team-member')].find((node) => {
+      return node.textContent?.trim() === 'Ryen'
+    })
+    expect(ryen?.getAttribute('aria-pressed')).toBe('true')
     await act(async () => {
       container.querySelector<HTMLButtonElement>('.send-btn')!.click()
       await Promise.resolve()
@@ -177,15 +194,15 @@ describe('欢迎页：去向写在脸上，chip 点了就拨到该去的方向',
     expect(sent).toEqual([['帮我整理一份本周周报', { kind: 'direct' }]])
   })
 
-  it('首屏层级：输入框与最近会话排在凭据卡与场景 chips 之前', async () => {
+  it('首屏层级：凭据卡排在输入框之前（硬前置不能放在页尾）', async () => {
     await act(async () => {
       root = createRoot(container)
       root.render(
         <WelcomeHome
           ryen={agents[0]}
           agents={agents}
-          conversations={[demoGroup, directChat]}
-          // 没配凭据：凭据卡必须出现，且不能把首屏顶穿。
+          conversations={[{ ...directChat, unreadCount: 1 }]}
+          // 没配凭据：凭据卡必须出现，且排在能打字之前。
           providers={[{ id: 'siliconflow', displayName: 'SiliconFlow', apiKeyConfigured: false, models: [] }]}
           onSaveApiKey={() => {
             return Promise.resolve()
@@ -196,16 +213,23 @@ describe('欢迎页：去向写在脸上，chip 点了就拨到该去的方向',
       )
       await Promise.resolve()
     })
-    const order = [...container.querySelectorAll('.welcome-compose, .welcome-recent, .apikey-card, .welcome-chip')]
+    const order = [...container.querySelectorAll('.apikey-card, .welcome-compose, .welcome-recent, .welcome-chip')]
     const at = (selector: string): number => {
       return order.findIndex((node) => {
         return node.matches(selector)
       })
     }
-    expect(at('.welcome-compose')).toBeGreaterThanOrEqual(0)
-    expect(at('.welcome-recent')).toBeGreaterThan(at('.welcome-compose'))
-    expect(at('.apikey-card')).toBeGreaterThan(at('.welcome-recent'))
-    expect(at('.welcome-chip')).toBeGreaterThan(at('.welcome-recent'))
+    // 新用户前三分钟的自然路径必须是"先解决前置，再开口"，不是"先失败一次"。
+    expect(at('.apikey-card')).toBeGreaterThanOrEqual(0)
+    expect(at('.welcome-compose')).toBeGreaterThan(at('.apikey-card'))
+    // 待办行与起步建议都排在输入 dock 之前：先让人看见有人在等、或有什么活可以起步，
+    // 再把话打进框里；凭据卡仍然是这一切之前的硬前置。
+    expect(at('.welcome-recent')).toBeGreaterThanOrEqual(0)
+    expect(at('.welcome-recent')).toBeLessThan(at('.welcome-compose'))
+    expect(at('.welcome-chip')).toBeLessThan(at('.welcome-compose'))
+    expect(at('.welcome-recent')).toBeLessThan(at('.welcome-chip'))
+    // 没有可用来源就别假装能聊：发送键是禁用的。
+    expect(container.querySelector<HTMLButtonElement>('.send-btn')?.disabled).toBe(true)
   })
 })
 
@@ -237,7 +261,7 @@ describe('壳：多 agent 场景真的落进群会话', () => {
     seq = 0
     FakeWebSocket.instances = []
     recorded = { calls: [], conversations: [demoGroup, directChat] }
-    ;(window as unknown as Record<string, unknown>).__RYAGENT_API_BASE__ = 'http://127.0.0.1:4200'
+    ;(window as unknown as Record<string, unknown>).__RYHARNESS_API_BASE__ = 'http://127.0.0.1:4200'
     ;(globalThis as { WebSocket?: unknown }).WebSocket = FakeWebSocket
     vi.stubGlobal('fetch', async (input: string, init?: RequestInit) => {
       const url = new URL(String(input))
@@ -247,7 +271,12 @@ describe('壳：多 agent 场景真的落进群会话', () => {
       const body = ((): unknown => {
         if (path === '/api/agents') return { agents }
         if (path === '/api/agent-templates') return { templates: [] }
-        if (path === '/api/providers') return { providers: [] }
+        if (path === '/api/providers') {
+          // 首屏现在以「有没有可用来源」为硬前置：一个都没有时输入框与发送键是禁用的
+          // （这正是本文件要验证的护栏），所以这里得有一家配好凭据的，测试才测得到
+          // chip 的去向而不是被前置卡拦住。
+          return { providers: [{ id: 'siliconflow', displayName: 'SiliconFlow', apiKeyConfigured: true, models: [] }] }
+        }
         if (path === '/api/conversations' && method === 'GET') return { conversations: recorded.conversations }
         if (path === '/api/conversations' && method === 'POST') {
           seq += 1
@@ -289,7 +318,7 @@ describe('壳：多 agent 场景真的落进群会话', () => {
 
   afterEach(() => {
     ;(globalThis as { WebSocket?: unknown }).WebSocket = realWebSocket
-    delete (window as unknown as Record<string, unknown>).__RYAGENT_API_BASE__
+    delete (window as unknown as Record<string, unknown>).__RYHARNESS_API_BASE__
   })
 
   async function renderApp(): Promise<void> {
@@ -328,9 +357,9 @@ describe('壳：多 agent 场景真的落进群会话', () => {
     })
   }
 
-  it('点「我们三个定下周去哪吃」：建小队群并把这句话发进那个群（不是 Ryen 单聊）', async () => {
+  it('点「帮我做一份行业分析 PPT，小队一起上」：建小队群并把这句话发进那个群（不是 Ryen 单聊）', async () => {
     await renderApp()
-    await sendViaChip('我们三个定下周去哪吃')
+    await sendViaChip('帮我做一份行业分析 PPT，小队一起上')
     const posts = created()
     expect(posts).toHaveLength(1)
     const payload = JSON.parse(posts[0]!.body) as { kind: string; memberAgentIds: string[] }
@@ -339,7 +368,7 @@ describe('壳：多 agent 场景真的落进群会话', () => {
     // 落点：新建的那个群，并且消息真的发进它了。
     expect(container.querySelector('.chat-header-info strong')?.textContent).toBe('小队')
     expect(posted('new-1')).toHaveLength(1)
-    expect(posted('new-1')[0]?.body).toContain('我们三个定下周去哪吃')
+    expect(posted('new-1')[0]?.body).toContain('帮我做一份行业分析 PPT，小队一起上')
     expect(posted('c1')).toHaveLength(0)
   })
 
@@ -347,15 +376,15 @@ describe('壳：多 agent 场景真的落进群会话', () => {
     // 把示例换成用户自己的小队群。
     recorded.conversations = [{ ...demoGroup, id: 'g9', title: '我们的小队' }, directChat]
     await renderApp()
-    await sendViaChip('我们三个定下周去哪吃')
+    await sendViaChip('帮我做一份行业分析 PPT，小队一起上')
     expect(created()).toHaveLength(0)
     expect(container.querySelector('.chat-header-info strong')?.textContent).toBe('我们的小队')
-    expect(posted('g9')[0]?.body).toContain('我们三个定下周去哪吃')
+    expect(posted('g9')[0]?.body).toContain('帮我做一份行业分析 PPT，小队一起上')
   })
 
   it('示例会话不会被当成小队：群场景另起一个会话', async () => {
     await renderApp()
-    await sendViaChip('我们三个定下周去哪吃')
+    await sendViaChip('帮我做一份行业分析 PPT，小队一起上')
     expect(created()).toHaveLength(1)
     expect(posted('demo-1')).toHaveLength(0)
     expect(container.querySelector('.chat-header-info strong')?.textContent).toBe('小队')
@@ -367,6 +396,42 @@ describe('壳：多 agent 场景真的落进群会话', () => {
     expect(created()).toHaveLength(0)
     expect(container.querySelector('.chat-header-info strong')?.textContent).toBe('Ryen')
     expect(posted('c1')[0]?.body).toContain('帮我整理一份本周周报')
+  })
+
+  it('团队点了小码再发送：建的是与小码的单聊，不是 Ryen', async () => {
+    await renderApp()
+    const member = [...container.querySelectorAll<HTMLButtonElement>('.welcome-team-member')].find((node) => {
+      return node.textContent?.includes('小码')
+    })
+    if (member === undefined) throw new Error('首屏团队里没有小码')
+    await act(async () => {
+      member.click()
+      await Promise.resolve()
+    })
+    const textarea = container.querySelector<HTMLTextAreaElement>('.welcome-compose textarea')
+    if (textarea === null) throw new Error('首屏没有输入框')
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
+      if (setter === undefined) throw new Error('HTMLTextAreaElement.prototype.value 缺少 setter')
+      setter.call(textarea, '帮我看一下这个报错')
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+      await Promise.resolve()
+    })
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('.send-btn')?.click()
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const posts = created()
+    expect(posts).toHaveLength(1)
+    const first = posts[0]
+    if (first === undefined) throw new Error('没有创建会话的请求')
+    const payload = JSON.parse(first.body) as { kind: string; agentId: string }
+    expect(payload.kind).toBe('direct')
+    expect(payload.agentId).toBe('coder')
+    expect(posted('new-1')).toHaveLength(1)
+    expect(posted('c1')).toHaveLength(0)
   })
 
   it('托盘「新对话」：派发事件即回到欢迎页，让用户自己选跟谁聊', async () => {
@@ -382,8 +447,8 @@ describe('壳：多 agent 场景真的落进群会话', () => {
       await Promise.resolve()
     })
     expect(container.querySelector('.welcome')).not.toBeNull()
-    // 两格去向都在：托盘不再替用户点开与 Ryen 的单聊。
-    expect(container.textContent).toContain('跟 Ryen 聊')
-    expect(container.textContent).toContain('开个小队')
+    // 收件人行在：托盘不再替用户点开与 Ryen 的单聊，头像排与小队胶囊都在。
+    expect(container.querySelectorAll('.welcome-team-member').length).toBeGreaterThan(0)
+    expect(container.querySelector('.welcome-squad')).not.toBeNull()
   })
 })

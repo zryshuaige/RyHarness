@@ -1,7 +1,7 @@
 /**
  * Normalization for values thrown by a final LLM adapter boundary.
  *
- * @module @ryagent/llm/adapter-failure
+ * @module @ryharness/llm/adapter-failure
  */
 
 import { HarnessError } from './error.ts'

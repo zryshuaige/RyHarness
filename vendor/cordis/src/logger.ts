@@ -1,4 +1,4 @@
-import { defineProperty, hyphenate } from '@ryagent/cosmokit'
+import { defineProperty, hyphenate } from '@ryharness/cosmokit'
 import { Context } from './context.ts'
 import { Fiber } from './fiber.ts'
 import { createCallable, joinPrototype, symbols, type Tracker } from './utils.ts'

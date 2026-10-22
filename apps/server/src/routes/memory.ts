@@ -1,12 +1,12 @@
 /**
  * 长期记忆路由：agent 记忆列表、软删、归档/恢复、重建向量、统计与整体健康度。
- * @module @ryagent/server/routes/memory
+ * @module @ryharness/server/routes/memory
  */
 
 import { readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { type MemoryService, toPublicMemories } from '@ryagent/memory'
-import type { SessionStore } from '@ryagent/session'
+import { type MemoryService, toPublicMemories } from '@ryharness/memory'
+import type { SessionStore } from '@ryharness/session'
 import { json, type Router, strField } from '../router.ts'
 import type { Telemetry } from '../telemetry.ts'
 
@@ -91,7 +91,7 @@ function countRecentLearned(store: SessionStore, memoryService: MemoryService, n
 /**
  * 记忆库占用的磁盘字节：数据目录下所有 SQLite 库文件（含 WAL）。
  *
- * 记忆与会话/进化共用同一个 ryagent.db，所以这是"这台机器上的数据一共多大"，
+ * 记忆与会话/进化共用同一个 ryharness.db，所以这是"这台机器上的数据一共多大"，
  * 不是"记忆自己占了多少"——后者在当前存储布局下无法诚实拆出来，宁可给一个
  * 说得清的数字，也不猜一个只属于记忆的体积。
  */

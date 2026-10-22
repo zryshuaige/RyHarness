@@ -7,6 +7,11 @@ on:
   pull_request:
     branches: [master]
   workflow_dispatch:
+  schedule:
+    # 夜间跑一遍性能清单：它对机器负载敏感，混在默认通道里只会让「测试全绿」变成噪声，
+    # 但完全不跑就会静默腐烂——没人知道它还能不能跑、跑出来的数字有没有塌。
+    # UTC 19:17 ≈ 北京时间次日 03:17，刻意避开整点。
+    - cron: '17 19 * * *'
 
 # 只读令牌：CI 不需要写权限，PR 来自 fork 时也不会拿到任何写能力。
 permissions:
@@ -19,6 +24,9 @@ concurrency:
 
 jobs:
   build-test:
+    # 夜间触发只为了跑性能清单（见 perf-nightly）：完整流水线留着也是白烧 Windows
+    # runner，而且真出问题时当天就该红，不必等到晚上。
+    if: github.event_name != 'schedule'
     runs-on: windows-latest
     # 硬性上限：依赖安装 + 构建 + 测试不应超过 20 分钟，超了就是卡死。
     timeout-minutes: 20
@@ -60,7 +68,72 @@ jobs:
         run: npx vitest run
 
       - name: Coverage
-        # 根 vitest.config.ts 刻意不设 thresholds，这一轮只统计不拦截，
-        # 因此它永远不会让 CI 变红。单独一轮而不是复用上面的 Test：
+        # 根 vitest.config.ts 的 thresholds 是逐文件「未覆盖条数上限」的棘轮：新写一个
+        # 不带测试的文件进来会红，回头补存量债不会。单独一轮而不是复用上面的 Test：
         # coverage 需要重新统计执行数据。
         run: npx vitest run --coverage
+
+      - name: Guardrails (类型逃逸 / 包依赖缺失 / 重复代码 / lint 棘轮 / NOTICE 总账)
+        # 硬门禁：scripts/verify-*.mjs 五条自研校验，任何一条非 0 退出即让 CI 变红。
+        # 这是「死代码 / 类型逃逸 / 重复代码 / 包依赖缺失 / lint 告警增长 / 许可总账漂移」
+        # 六类退化不再靠人眼的保证。
+        #
+        # NOTICE 已在 `pnpm verify` 链内（根 package.json 的 verify 脚本），这里单独再跑
+        # 一行是双保险：即使哪天有人把它从 verify 链里摘掉，CI 这一步仍然挡得住
+        # 「图标数/随包工作区包数/版本号与仓库事实脱节」——此前这类漂移只能靠人跑一次
+        # electron-builder 打包再 ls 安装目录才发现。
+        run: |
+          pnpm verify
+          node scripts/verify-notice.mjs
+
+      - name: Bench
+        # 只做趋势留痕，故意非阻塞：本机/CI 无 API key 时 embedding 段会降级为
+        # 确定性 stub，benchmark 数字仍可比，但不该因为环境缺 key 拦住合并。
+        run: pnpm bench
+        continue-on-error: true
+
+  # ---- 夜间：性能清单 ----
+  # vitest.perf.config.ts 自己写明「不进默认 CI 通道」，而一个从不运行的脚本会腐烂到
+  # 没人发现它已经坏了。所以给它一条夜间通道：continue-on-error 让它永远不挡住任何人，
+  # 数字作为 artifact 留下来，让「它退化了」变成一件看得见的事。
+  perf-nightly:
+    if: github.event_name == 'schedule'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    # 失败也不让整条工作流变红：性能用例会因机器负载抖动，红了只会养成忽略红灯的习惯。
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace
+        # 性能用例 import 服务端源码，渲染层/主进程走 dist，两边都要先有产物。
+        run: pnpm build
+
+      - name: Perf suite
+        run: npx vitest run --config vitest.perf.config.ts --reporter=json --outputFile=perf-results.json
+
+      - name: Server baseline
+        # 与本机 `pnpm bench` 同一套数字；无 key 时 embedding 段退化为确定性 stub。
+        run: pnpm bench
+
+      - name: Upload numbers
+        # always()：性能用例挂掉时那半截输出同样是定位问题的线索。
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-numbers-${{ github.run_number }}
+          path: perf-results.json
+          if-no-files-found: warn
+          retention-days: 30

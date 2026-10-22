@@ -6,10 +6,10 @@
  * finish with a retryable code is retried with exponential backoff + jitter
  * as long as the failed attempt delivered no content chunks.
  *
- * @module @ryagent/llm/retry-policy
+ * @module @ryharness/llm/retry-policy
  */
 
-import { MAX_TIMER_DELAY_MS } from '@ryagent/timeout'
+import { MAX_TIMER_DELAY_MS } from '@ryharness/timeout'
 import { EMPTY_RESPONSE_CODE } from './error.ts'
 
 const DEFAULT_MAX_RETRIES = 3

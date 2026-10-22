@@ -1,0 +1,41 @@
+name: 性能回归
+description: 记录一处可复现的变慢，或一次性能基线测量
+title: '[Perf] '
+labels: ['performance']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        服务端数字有现成的复现方式：`pnpm tsx scripts/bench.ts`（需要 API key 的 embedding 段会退化为
+        确定性 stub，数字仍可比）。客户端/渲染层的性能清单是另一条通道：`pnpm perf`。
+
+  - type: textarea
+    id: scenario
+    attributes:
+      label: 场景
+      description: 数据规模、消息条数、agent 数量，以及你测的是哪一段（首屏 / 流式 / 群聊 / 记忆召回…）。
+    validations:
+      required: true
+
+  - type: input
+    id: machine
+    attributes:
+      label: 机器
+      description: CPU、内存、是否插电、是否在跑别的构建。
+    validations:
+      required: true
+
+  - type: textarea
+    id: numbers
+    attributes:
+      label: 数字
+      description: 前后各一组最好；如果有基线，请一并贴出（如 `docs/performance.md` 的对应行）。
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现命令
+      render: shell

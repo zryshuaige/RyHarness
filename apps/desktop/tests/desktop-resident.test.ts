@@ -7,7 +7,8 @@
  * 登录项开关可断言）；被测逻辑本身——种子数据、状态文案、事件判定——不碰
  * Electron API，所以替身不会掩盖真实行为。
  */
-import { SessionStore } from '@ryagent/session'
+import type { WsEvent } from '@ryharness/server'
+import { SessionStore } from '@ryharness/session'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MinimalSocket, PresenceState } from '../electron/main.ts'
 import {
@@ -31,7 +32,7 @@ vi.mock('electron', () => {
   return {
     app: {
       getPath: () => {
-        return 'C:/tmp/ryagent'
+        return 'C:/tmp/ryharness'
       },
       getAppPath: () => {
         return 'C:/app'
@@ -202,21 +203,33 @@ describe('托盘状态文案', () => {
   const idle: PresenceState = { busy: new Map(), unread: 0 }
 
   it('空闲、有活、在等人看，三种状态说清楚', () => {
-    expect(trayStatusText('RyAgent', idle)).toContain('待命中')
-    expect(trayStatusText('RyAgent', { busy: new Map([['c1', '阿码']]), unread: 0 })).toContain('阿码正在回复')
-    expect(trayStatusText('RyAgent', { busy: new Map([['c1', '阿码']]), unread: 2 })).toContain('阿码正在回复')
-    expect(trayStatusText('RyAgent', { busy: new Map(), unread: 3 })).toContain('3 条新回复')
+    expect(trayStatusText('RyHarness', idle)).toContain('待命中')
+    expect(trayStatusText('RyHarness', { busy: new Map([['c1', new Set(['阿码'])]]), unread: 0 })).toContain(
+      '阿码正在回复',
+    )
+    expect(trayStatusText('RyHarness', { busy: new Map([['c1', new Set(['阿码'])]]), unread: 2 })).toContain(
+      '阿码正在回复',
+    )
+    expect(trayStatusText('RyHarness', { busy: new Map(), unread: 3 })).toContain('3 条新回复')
   })
 
   it('多个助理同时在跑时说数量，不逐个点名', () => {
-    const text = trayStatusText('RyAgent', {
+    const text = trayStatusText('RyHarness', {
       busy: new Map([
-        ['c1', '阿码'],
-        ['c2', '阿屉'],
+        ['c1', new Set(['阿码'])],
+        ['c2', new Set(['阿屉'])],
       ]),
       unread: 0,
     })
     expect(text).toContain('2 位助理')
+  })
+
+  it('一个群会话里三位 agent 接力时也算「多位助理」', () => {
+    const text = trayStatusText('RyHarness', {
+      busy: new Map([['c1', new Set(['阿码', '小美', '老张'])]]),
+      unread: 0,
+    })
+    expect(text).toContain('3 位助理')
   })
 })
 
@@ -270,8 +283,13 @@ describe('在场监听：托盘与通知的信号源', () => {
     })
   }
 
-  function push(event: Record<string, unknown>): void {
+  function push(event: WsEvent): void {
     for (const socket of sockets) socket.onmessage?.({ data: JSON.stringify(event) })
+  }
+
+  /** 绕过契约直接塞一条原始推送：专测服务端违约或脏数据时主进程会不会崩。 */
+  function pushRaw(data: string): void {
+    for (const socket of sockets) socket.onmessage?.({ data })
   }
 
   beforeEach(() => {
@@ -298,8 +316,14 @@ describe('在场监听：托盘与通知的信号源', () => {
     await vi.waitFor(() => {
       expect(sockets).toHaveLength(1)
     })
-    push({ type: 'message-start', conversationId: 'c1', senderId: 'ryen-team-coding', senderName: '阿码' })
-    expect(states.at(-1)?.busy.get('c1')).toBe('阿码')
+    push({
+      type: 'message-start',
+      conversationId: 'c1',
+      senderId: 'ryen-team-coding',
+      senderName: '阿码',
+      turnIndex: 3,
+    })
+    expect(states.at(-1)?.busy.get('c1')).toEqual(new Set(['阿码']))
     monitor.stop()
   })
 
@@ -309,23 +333,194 @@ describe('在场监听：托盘与通知的信号源', () => {
     await vi.waitFor(() => {
       expect(sockets).toHaveLength(1)
     })
-    push({ type: 'message-start', conversationId: 'c1', senderId: 'a1', senderName: '阿码' })
+    push({ type: 'message-start', conversationId: 'c1', senderId: 'a1', senderName: '阿码', turnIndex: 3 })
     push({ type: 'text-delta', conversationId: 'c1', senderId: 'a1', text: '巷口那家' })
     push({ type: 'text-delta', conversationId: 'c1', senderId: 'a1', text: '可以少辣。' })
-    push({ type: 'message-done', conversationId: 'c1', senderId: 'a1' })
+    push({ type: 'message-done', conversationId: 'c1', senderId: 'a1', turnIndex: 3 })
     expect(replies).toEqual([{ agentName: '阿码', text: '巷口那家可以少辣。' }])
     expect(states.at(-1)?.unread).toBe(1)
     expect(states.at(-1)?.busy.size).toBe(0)
 
     // 同一会话再来一轮：窗口在前台，只更新托盘、不通知。
     focused = true
-    push({ type: 'message-start', conversationId: 'c1', senderId: 'a1', senderName: '阿码' })
-    push({ type: 'message-done', conversationId: 'c1', senderId: 'a1' })
+    push({ type: 'message-start', conversationId: 'c1', senderId: 'a1', senderName: '阿码', turnIndex: 4 })
+    push({ type: 'message-done', conversationId: 'c1', senderId: 'a1', turnIndex: 4 })
     expect(replies).toHaveLength(1)
     expect(states.at(-1)?.unread).toBe(1)
 
     monitor.markSeen()
     expect(states.at(-1)?.unread).toBe(0)
+    monitor.stop()
+  })
+
+  /**
+   * 群聊一轮由好几位 agent 接力，后端给它们发的是**同一个 turnIndex**（见
+   * apps/server/src/app.ts 的 chatGroup 分支）。每条 message-done 都收口一次的话，
+   * 一轮会弹三条通知：头一条带着正文，后两条正文已被清空 → 「这一轮没有文字」，
+   * 未读一轮 +3。
+   */
+  it('群聊一轮三名 agent 各发一次 message-done：只收口一次，一条通知一条未读', async () => {
+    const monitor = makeMonitor()
+    monitor.start()
+    await vi.waitFor(() => {
+      expect(sockets).toHaveLength(1)
+    })
+    push({ type: 'message-start', conversationId: 'c1', senderId: 'a1', senderName: '阿码', turnIndex: 7 })
+    push({ type: 'message-start', conversationId: 'c1', senderId: 'a2', senderName: '小美', turnIndex: 7 })
+    expect(states.at(-1)?.busy.get('c1')).toEqual(new Set(['阿码', '小美']))
+
+    push({ type: 'text-delta', conversationId: 'c1', senderId: 'a1', text: '巷口那家' })
+    push({ type: 'message-done', conversationId: 'c1', senderId: 'a1', turnIndex: 7 })
+    // 第一位说完：这一轮还没结束，不通知也不计未读。
+    expect(replies).toHaveLength(0)
+    expect(states.at(-1)?.unread).toBe(0)
+    expect(states.at(-1)?.busy.get('c1')).toEqual(new Set(['小美']))
+
+    push({ type: 'message-start', conversationId: 'c1', senderId: 'a3', senderName: '老张', turnIndex: 7 })
+    push({ type: 'text-delta', conversationId: 'c1', senderId: 'a2', text: '可以少辣。' })
+    push({ type: 'message-done', conversationId: 'c1', senderId: 'a2', turnIndex: 7 })
+    push({ type: 'text-delta', conversationId: 'c1', senderId: 'a3', text: '再加个汤。' })
+    push({ type: 'message-done', conversationId: 'c1', senderId: 'a3', turnIndex: 7 })
+
+    expect(replies).toEqual([{ agentName: '阿码、小美、老张', text: '巷口那家\n可以少辣。\n再加个汤。' }])
+    expect(states.at(-1)?.unread).toBe(1)
+    expect(states.at(-1)?.busy.size).toBe(0)
+    monitor.stop()
+  })
+
+  it('派工与工具事件记在同一条轮次上；queued 是用户排队，不点亮托盘', async () => {
+    const monitor = makeMonitor()
+    monitor.start()
+    await vi.waitFor(() => {
+      expect(sockets).toHaveLength(1)
+    })
+    // 用户第二条消息在排队：没有轮次在跑时它什么也不是。
+    push({ type: 'queued', conversationId: 'c1', senderId: 'user' })
+    expect(states).toHaveLength(0)
+
+    // 派工：小美还没开口，这一轮已经在跑，托盘先亮起来。
+    push({
+      type: 'dispatch',
+      conversationId: 'c1',
+      fromAgent: 'ryen',
+      toAgent: 'a2',
+      reason: '这家店你去',
+      turnIndex: 7,
+    })
+    expect(states.at(-1)?.busy.get('c1')).toEqual(new Set(['a2']))
+
+    // 工具事件落在同一条轮次上，不新起一轮（它没 message-start 也算在干活）。
+    push({
+      type: 'tool-call-start',
+      conversationId: 'c1',
+      senderId: 'a2',
+      callId: 't1',
+      name: 'search',
+      arguments: '{}',
+    })
+    push({
+      type: 'tool-result',
+      conversationId: 'c1',
+      senderId: 'a2',
+      callId: 't1',
+      name: 'search',
+      isError: false,
+      content: 'ok',
+    })
+    push({
+      type: 'produce-card',
+      conversationId: 'c1',
+      senderId: 'a2',
+      callId: 't2',
+      card: { path: 'F:/out/map.png', name: 'map.png', size: 1024, mime: 'image/png' },
+    })
+    expect(states.at(-1)?.busy.get('c1')).toEqual(new Set(['a2']))
+
+    // 真名到了之后换成名字；这一轮随后正常收口，只通知一次。
+    push({ type: 'message-start', conversationId: 'c1', senderId: 'a2', senderName: '小美', turnIndex: 7 })
+    expect(states.at(-1)?.busy.get('c1')).toEqual(new Set(['小美']))
+    push({ type: 'text-delta', conversationId: 'c1', senderId: 'a2', text: '这家 8 分。' })
+    push({ type: 'message-done', conversationId: 'c1', senderId: 'a2', turnIndex: 7 })
+    expect(replies).toEqual([{ agentName: '小美', text: '这家 8 分。' }])
+    expect(states.at(-1)?.unread).toBe(1)
+    expect(states.at(-1)?.busy.size).toBe(0)
+    monitor.stop()
+  })
+
+  it('中途才连上 WS（漏掉 message-start）也能收口，不会卡在「正在回复」', async () => {
+    const monitor = makeMonitor()
+    monitor.start()
+    await vi.waitFor(() => {
+      expect(sockets).toHaveLength(1)
+    })
+    // 只有增量、没有 message-start：先记在占位轮次上。
+    push({ type: 'text-delta', conversationId: 'c1', senderId: 'a1', text: '这条是中途接上的' })
+    expect(states.at(-1)?.busy.get('c1')).toEqual(new Set(['a1']))
+    // message-done 带的是真实 turnIndex，收口照样认（否则托盘永远亮着）。
+    push({ type: 'message-done', conversationId: 'c1', senderId: 'a1', turnIndex: 12 })
+    expect(replies).toEqual([{ agentName: 'a1', text: '这条是中途接上的' }])
+    expect(states.at(-1)?.busy.size).toBe(0)
+    monitor.stop()
+  })
+
+  it('缺字段的推送整条丢掉：不收口、不通知，也不把托盘带崩', async () => {
+    const monitor = makeMonitor()
+    monitor.start()
+    await vi.waitFor(() => {
+      expect(sockets).toHaveLength(1)
+    })
+    // 契约里 message-start / message-done 都带 turnIndex，缺了就是脏数据。
+    pushRaw(JSON.stringify({ type: 'message-start', conversationId: 'c1', senderId: 'a1', senderName: '阿码' }))
+    pushRaw(JSON.stringify({ type: 'message-done', conversationId: 'c1', senderId: 'a1' }))
+    // 产物卡片字段不对，同样丢掉。
+    pushRaw(
+      JSON.stringify({ type: 'produce-card', conversationId: 'c1', senderId: 'a1', callId: 't1', card: { path: 1 } }),
+    )
+    // 服务端将来新增的事件类型：不认识就不猜，更不能把监听带崩。
+    pushRaw(JSON.stringify({ type: 'brand-new-event', conversationId: 'c1', senderId: 'a1' }))
+    expect(states).toHaveLength(0)
+    expect(replies).toHaveLength(0)
+
+    // 脏的收尾事件也不能顺手把在跑的那轮收掉——那等于凭空捏造一条通知。
+    push({ type: 'message-start', conversationId: 'c1', senderId: 'a1', senderName: '阿码', turnIndex: 5 })
+    pushRaw(JSON.stringify({ type: 'message-done', conversationId: 'c1', senderId: 'a1' }))
+    expect(replies).toHaveLength(0)
+    expect(states.at(-1)?.busy.get('c1')).toEqual(new Set(['阿码']))
+    // 真正合规的那条收尾照样生效。
+    push({ type: 'message-done', conversationId: 'c1', senderId: 'a1', turnIndex: 5 })
+    expect(replies).toHaveLength(1)
+    expect(states.at(-1)?.busy.size).toBe(0)
+    monitor.stop()
+  })
+
+  it('新一轮开跑时，上一轮丢掉收尾事件的残留记账被丢掉', async () => {
+    const monitor = makeMonitor()
+    monitor.start()
+    await vi.waitFor(() => {
+      expect(sockets).toHaveLength(1)
+    })
+    push({ type: 'message-start', conversationId: 'c1', senderId: 'a1', senderName: '阿码', turnIndex: 9 })
+    // 这一轮的收尾没来（断线丢的、或被当成脏数据丢了），托盘还亮着。
+    push({ type: 'message-start', conversationId: 'c1', senderId: 'a2', senderName: '小美', turnIndex: 10 })
+    expect(states.at(-1)?.busy.get('c1')).toEqual(new Set(['小美']))
+    push({ type: 'message-done', conversationId: 'c1', senderId: 'a2', turnIndex: 10 })
+    expect(states.at(-1)?.busy.size).toBe(0)
+    expect(replies).toEqual([{ agentName: '小美', text: '这一轮没有文字' }])
+    monitor.stop()
+  })
+
+  it('断线清掉残缺的轮次记账：断线前那一轮不再补通知', async () => {
+    const monitor = makeMonitor()
+    monitor.start()
+    await vi.waitFor(() => {
+      expect(sockets).toHaveLength(1)
+    })
+    push({ type: 'message-start', conversationId: 'c1', senderId: 'a1', senderName: '阿码', turnIndex: 9 })
+    expect(states.at(-1)?.busy.get('c1')).toEqual(new Set(['阿码']))
+    // 断线期间事件整段丢失：残缺的记账不能拿来收口，更不能据此弹通知。
+    sockets[0]?.onclose?.()
+    push({ type: 'message-done', conversationId: 'c1', senderId: 'a1', turnIndex: 9 })
+    expect(replies).toHaveLength(0)
     monitor.stop()
   })
 
@@ -335,13 +530,13 @@ describe('在场监听：托盘与通知的信号源', () => {
     await vi.waitFor(() => {
       expect(sockets).toHaveLength(1)
     })
-    push({ type: 'message-start', conversationId: 'c1', senderId: 'a1', senderName: '阿码' })
+    push({ type: 'message-start', conversationId: 'c1', senderId: 'a1', senderName: '阿码', turnIndex: 6 })
     push({ type: 'error', conversationId: 'c1', message: '已停止生成', code: 'ABORTED' })
     expect(replies).toHaveLength(0)
     expect(states.at(-1)?.busy.size).toBe(0)
 
     push({ type: 'error', conversationId: 'c1', message: '模型没有返回内容', code: 'INTERNAL' })
-    expect(replies).toEqual([{ agentName: 'RyAgent', text: '模型没有返回内容' }])
+    expect(replies).toEqual([{ agentName: 'RyHarness', text: '模型没有返回内容' }])
     monitor.stop()
   })
 
@@ -351,11 +546,11 @@ describe('在场监听：托盘与通知的信号源', () => {
     await vi.waitFor(() => {
       expect(sockets).toHaveLength(1)
     })
-    push({ type: 'message-start', conversationId: 'c1', senderId: 'user', senderName: '用户' })
+    push({ type: 'message-start', conversationId: 'c1', senderId: 'user', senderName: '用户', turnIndex: 5 })
     // 用户发言与脏数据都不该让托盘动起来：状态一次都不该被刷新。
     expect(states).toHaveLength(0)
-    sockets[0]?.onmessage?.({ data: 'not-json' })
-    sockets[0]?.onmessage?.({ data: '{"type":123}' })
+    pushRaw('not-json')
+    pushRaw('{"type":123}')
     expect(states).toHaveLength(0)
     monitor.stop()
   })
@@ -392,14 +587,14 @@ describe('托盘「新对话」', () => {
       welcome.className = 'welcome'
       document.body.appendChild(welcome)
     }
-    window.addEventListener('ryagent:new-chat', listener)
+    window.addEventListener('ryharness:new-chat', listener)
     try {
       // biome-ignore lint/security/noGlobalEval: 脚本本身就是给渲染层 executeJavaScript 用的
       const landed = eval(NEW_CHAT_SCRIPT) as Promise<boolean>
       expect(await landed).toBe(true)
       expect(received).toBeGreaterThan(0)
     } finally {
-      window.removeEventListener('ryagent:new-chat', listener)
+      window.removeEventListener('ryharness:new-chat', listener)
     }
   })
 

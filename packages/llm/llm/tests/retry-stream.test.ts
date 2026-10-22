@@ -1,6 +1,6 @@
-import { Context } from '@ryagent/cordis'
-import type { ResolvedRetryPolicy, StreamChunk } from '@ryagent/llm'
-import LlmRuntime, { LlmAdapter, LlmError, resolveRetryPolicy, streamWithRetry } from '@ryagent/llm'
+import { Context } from '@ryharness/cordis'
+import type { ResolvedRetryPolicy, StreamChunk } from '@ryharness/llm'
+import LlmRuntime, { LlmAdapter, LlmError, resolveRetryPolicy, streamWithRetry } from '@ryharness/llm'
 import { describe, expect, it } from 'vitest'
 
 /** 快速退避策略：测试不等真实 backoff。 */

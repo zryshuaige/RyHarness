@@ -4,7 +4,7 @@
  * 进化子系统用它做两件事：教训注入时挑相关项、归因计数时判断"这条经验与本轮
  * 有关吗"。不引外部依赖，也不需要向量——桌面规模的 playbook（几十条）用词面
  * 重叠足够，且完全确定性。
- * @module @ryagent/evolve/relevance
+ * @module @ryharness/evolve/relevance
  */
 
 /** 归一化：去空白/标点/符号并小写。 */

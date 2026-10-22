@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ToolContext } from '@ryagent/agent'
+import type { ToolContext } from '@ryharness/agent'
 import {
   findSensitiveInCommand,
   fsRead,
@@ -9,19 +9,19 @@ import {
   setShellGuardPolicy,
   shellExec,
   shellGuardPolicy,
-} from '@ryagent/tools'
+} from '@ryharness/tools'
 import { afterEach, describe, expect, it } from 'vitest'
 
 const roots: string[] = []
 function workspace(): { root: string; ctx: ToolContext } {
-  const root = mkdtempSync(join(tmpdir(), 'ryagent-guard-'))
+  const root = mkdtempSync(join(tmpdir(), 'ryharness-guard-'))
   roots.push(root)
   return { root, ctx: { workspaceRoot: root } }
 }
 
 /** 工作区之外的目录：用来验证写/读确实没穿透出去。 */
 function outsideDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'ryagent-outside-'))
+  const dir = mkdtempSync(join(tmpdir(), 'ryharness-outside-'))
   roots.push(dir)
   return dir
 }
@@ -72,7 +72,7 @@ describe('shell_exec 敏感路径闸', () => {
   it('不误伤日常命令与 .env 模板', () => {
     const allowed = [
       'ls',
-      'echo hello-ryagent',
+      'echo hello-ryharness',
       'npm test',
       'cat .env.example',
       'cat docs/env.sample',

@@ -12,12 +12,21 @@ import { ConversationList } from '../renderer/src/components/ConversationList.ts
 import type { GroupFormInput } from '../renderer/src/components/GroupSettingsModal.tsx'
 import { GroupSettingsModal } from '../renderer/src/components/GroupSettingsModal.tsx'
 import { getToasts, toast } from '../renderer/src/lib/toast.ts'
+import { currentValue, listedValues, pickOption, selectTrigger, triggerLabel } from './select-dom.tsx'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const agents: AgentDef[] = [
   { id: 'ryen', name: 'Ryen', avatar: 'cat', systemPrompt: 'p', provider: 'x', model: 'm', tools: [], isBuiltin: true },
-  { id: 'coder', name: '小码', systemPrompt: 'p', provider: 'x', model: 'm', tools: [], isBuiltin: false },
+  {
+    id: 'coder',
+    name: '小码',
+    systemPrompt: 'p',
+    provider: 'siliconflow',
+    model: 'deepseek-ai/DeepSeek-V3',
+    tools: [],
+    isBuiltin: false,
+  },
   { id: 'writer', name: '小笔', systemPrompt: 'p', provider: 'x', model: 'm', tools: [], isBuiltin: false },
 ]
 
@@ -252,6 +261,29 @@ describe('群设置弹窗：改群名 / 加人退人 / 换调度员', () => {
     })
   }
 
+  /**
+   * 建群模式：调度员那一格是可改的（改既有群时服务端还不落这个字段，那一格是锁着的，
+   * 见下面「编辑既有群时调度员下拉锁住」）。要测"换调度员"必须走这一条路。
+   */
+  async function renderCreate(): Promise<void> {
+    submitted = undefined
+    await act(async () => {
+      root = createRoot(container)
+      root.render(
+        <GroupSettingsModal
+          mode="create"
+          agents={agents}
+          onSubmit={(input) => {
+            submitted = input
+            return Promise.resolve()
+          }}
+          onClose={() => {}}
+        />,
+      )
+      await Promise.resolve()
+    })
+  }
+
   function checkbox(id: string): HTMLInputElement {
     const labels = [...container.querySelectorAll<HTMLElement>('.member-checks label')]
     const row = labels.find((label) => {
@@ -263,8 +295,9 @@ describe('群设置弹窗：改群名 / 加人退人 / 换调度员', () => {
     })
     return row!.querySelector<HTMLInputElement>('input[type="checkbox"]')!
   }
-  function dispatcherSelect(): HTMLSelectElement {
-    return container.querySelector<HTMLSelectElement>('select')!
+  /** 调度员那一格的下拉触发器（自绘下拉，不再是原生 `<select>`）。 */
+  function dispatcherSelect(): HTMLButtonElement {
+    return selectTrigger(container, '调度员')
   }
   function nameInput(): HTMLInputElement {
     return container.querySelector<HTMLInputElement>('input[type="text"], input:not([type])')!
@@ -277,7 +310,7 @@ describe('群设置弹窗：改群名 / 加人退人 / 换调度员', () => {
     expect(checkbox('ryen').checked).toBe(true)
     expect(checkbox('coder').checked).toBe(true)
     expect(checkbox('writer').checked).toBe(false)
-    expect(dispatcherSelect().value).toBe('ryen')
+    expect(triggerLabel(container, '调度员')).toBe('Ryen')
   })
 
   it('改名 + 加人一次提交出去', async () => {
@@ -302,22 +335,43 @@ describe('群设置弹窗：改群名 / 加人退人 / 换调度员', () => {
   })
 
   it('换调度员：下拉里只有已勾选的成员，换完提交新调度员', async () => {
-    await renderModal()
-    expect(
-      [...dispatcherSelect().options].map((option) => {
-        return option.value
-      }),
-    ).toEqual(['ryen', 'coder'])
+    await renderCreate()
     act(() => {
-      const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!
-      setter.call(dispatcherSelect(), 'coder')
-      dispatcherSelect().dispatchEvent(new Event('change', { bubbles: true }))
+      checkbox('coder').click()
     })
+    expect(listedValues(container, '调度员')).toEqual(['ryen', 'coder'])
+    pickOption(container, '调度员', 'coder')
+    expect(triggerLabel(container, '调度员')).toBe('小码')
     await act(async () => {
-      buttonByText('保存修改').click()
+      buttonByText('创建').click()
       await Promise.resolve()
     })
     expect(submitted?.dispatcherAgentId).toBe('coder')
+  })
+
+  it('退掉当前调度员后，候选里不再有这一位，调度员同步落到剩下的第一位', async () => {
+    await renderCreate()
+    act(() => {
+      checkbox('coder').click()
+    })
+    expect(currentValue(container, '调度员')).toBe('ryen')
+    act(() => {
+      checkbox('ryen').click()
+    })
+    // 少了这一步，下拉里就没有当前值了：触发器只能显示兜底文案（值还在时是那个原始
+    // id），state 还指着被摘掉的那个，提交上去的 dispatcherAgentId 不在成员名单里。
+    expect(listedValues(container, '调度员')).toEqual(['coder'])
+    expect(triggerLabel(container, '调度员')).toBe('小码')
+    expect(currentValue(container, '调度员')).toBe('coder')
+  })
+
+  it('一个成员都不勾时那一格锁住，并写明为什么（不是留一个点不动的空框）', async () => {
+    await renderCreate()
+    act(() => {
+      checkbox('ryen').click()
+    })
+    expect(dispatcherSelect().disabled).toBe(true)
+    expect(triggerLabel(container, '调度员')).toBe('先勾选成员')
   })
 
   it('退人：不是调度员的可以直接勾掉', async () => {
@@ -341,30 +395,33 @@ describe('群设置弹窗：改群名 / 加人退人 / 换调度员', () => {
     // 服务端会以 `dispatcher "ryen" must be one of memberAgentIds` 拒掉这次 PATCH，
     // 而且它认的是**记录里**那位调度员，与这里下拉选谁无关。
     expect(checkbox('ryen').checked).toBe(true)
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain('当前的调度员')
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain('服务端要求调度员始终在成员名单里')
+    // 这是信息性说明（不是红色错误）：红条只留给真的挡住保存的问题。
+    // 文案只说结论，不解释「服务端字段还没上线」——那是实现，不是用户的事。
+    const note = container.querySelector('.provider-note')?.textContent ?? ''
+    expect(note).toContain('现在是调度员')
+    expect(note).toContain('不能退出这个群')
+    expect(note).not.toContain('服务端')
   })
 
-  it('换调度员：这格能选，但当场说清服务端还不落这个字段（不假装保存就生效）', async () => {
+  it('成员行的副行走人话口径：模型与供应商，不摆 systemPrompt 原文', async () => {
     await renderModal()
-    expect(container.textContent).not.toContain('服务端目前还不支持改已有群的调度员')
-    act(() => {
-      const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!
-      setter.call(dispatcherSelect(), 'coder')
-      dispatcherSelect().dispatchEvent(new Event('change', { bubbles: true }))
-    })
-    expect(container.textContent).toContain('服务端目前还不支持改已有群的调度员')
-    // 换了调度员之后，记录里那位（Ryen）依然退不出去——服务端认的是记录里那位。
-    act(() => {
-      checkbox('ryen').click()
-    })
-    expect(checkbox('ryen').checked).toBe(true)
-    // 但请求照发：新调度员随保存一起过去，服务端字段一落地就生效。
+    // providerLabel + modelPair：厂商路径前缀（deepseek-ai/）摘掉，供应商说品牌名。
+    expect(container.textContent).toContain('DeepSeek-V3 · SiliconFlow')
+    expect(container.textContent).not.toContain('deepseek-ai')
+    // 系统提示词是英文提示词，截断上屏只剩半句没头没尾的话。
+    expect(container.textContent).not.toContain('siliconflow · p')
+  })
+
+  it('编辑既有群时调度员下拉锁住，并写明「暂不支持修改」', async () => {
+    await renderModal()
+    // 服务端还不落这个字段：直接禁用，别让用户先选一遍再在保存时发现没生效。
+    expect(dispatcherSelect().disabled).toBe(true)
+    expect(container.textContent).toContain('已有群的调度员暂不支持修改')
     await act(async () => {
       buttonByText('保存修改').click()
       await Promise.resolve()
     })
-    expect(submitted).toEqual({ title: '小队', memberAgentIds: ['ryen', 'coder'], dispatcherAgentId: 'coder' })
+    expect(submitted).toEqual({ title: '小队', memberAgentIds: ['ryen', 'coder'], dispatcherAgentId: 'ryen' })
   })
 
   it('保存失败留在原地并说清原因（不假装改好了）', async () => {
@@ -389,10 +446,16 @@ describe('群设置弹窗：改群名 / 加人退人 / 换调度员', () => {
       await Promise.resolve()
     })
     expect(container.querySelector('[role="dialog"]')).not.toBeNull()
+    // 兜底句说的是用户当时在做什么；`HTTP 400` 这种原话不上屏。
     expect(
       getToasts().some((item) => {
-        return item.text.includes('保存群设置失败') && item.text.includes('HTTP 400')
+        return item.text.includes('保存群设置失败：') && item.text.includes('再试一次')
       }),
     ).toBe(true)
+    expect(
+      getToasts().some((item) => {
+        return item.text.includes('HTTP 400')
+      }),
+    ).toBe(false)
   })
 })

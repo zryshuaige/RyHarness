@@ -1,7 +1,7 @@
-import type { AgentDefinition } from '@ryagent/agent'
-import type { GroupEvent } from '@ryagent/group'
-import { DEFAULT_FANOUT_CONCURRENCY, GroupDispatcher } from '@ryagent/group'
-import type { GenerateOptions, LlmRuntime, StreamChunk } from '@ryagent/llm'
+import type { AgentDefinition } from '@ryharness/agent'
+import type { GroupEvent } from '@ryharness/group'
+import { DEFAULT_FANOUT_CONCURRENCY, GroupDispatcher } from '@ryharness/group'
+import type { GenerateOptions, LlmRuntime, StreamChunk } from '@ryharness/llm'
 import { describe, expect, it } from 'vitest'
 
 function agent(id: string, name: string, systemPrompt = `你是${name}。`): AgentDefinition {

@@ -58,6 +58,10 @@ export function GroupAvatar({ members, size = 48 }: { members: Member[]; size?: 
         gridTemplateRows: `repeat(${shown.length <= 4 ? 2 : 3}, 1fr)`,
         gap: 2,
         padding: 2,
+        // 缝隙的底色：没有它，gap 露出来的是页面底色（列表里是白底、暗色里是
+        // 近黑），九宫格就散成一堆不相干的圆片而不是一张拼图。设计规范 §4.3
+        // 写的就是 --bg-subtle——比 --bg-surface 略深一档，分得开但不抢戏。
+        background: 'var(--bg-subtle)',
       }}
     >
       {shown.map((member, index) => (

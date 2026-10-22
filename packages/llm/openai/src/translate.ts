@@ -9,16 +9,17 @@
  * Every opened block is closed with a `block-end` carrying the assembled
  * block before the terminal `finish`; `usage` (when the endpoint sends it)
  * precedes `finish`.
- * @module @ryagent/llm-openai/translate
+ * @module @ryharness/llm-openai/translate
  */
 
-import type { FinishReason, StreamChunk, TokenUsage, ToolCallId } from '@ryagent/llm'
-import { EMPTY_RESPONSE_CODE, LlmError } from '@ryagent/llm'
+import type { FinishReason, StreamChunk, TokenUsage, ToolCallId } from '@ryharness/llm'
+import { EMPTY_RESPONSE_CODE, LlmError } from '@ryharness/llm'
 import type { OpenAiStreamChunk, OpenAiWireUsage } from './wire.ts'
 
 /** One output block under assembly, keyed by its {@link StreamChunk} block index. */
 type BlockState =
   | { readonly kind: 'text'; text: string }
+  | { readonly kind: 'reasoning'; text: string }
   | { readonly kind: 'tool-call'; id: ToolCallId; name: string; nameSent: boolean; arguments: string }
 
 /** Map one wire usage object to the disjoint harness token accounting. */
@@ -78,6 +79,9 @@ export async function* translateChunks(events: AsyncIterable<string>, model: str
   const closeAllBlocks = (): StreamChunk[] => {
     return blocks.map((block, index): StreamChunk => {
       if (block.kind === 'text') return { type: 'block-end', index, block: { type: 'text', text: block.text } }
+      if (block.kind === 'reasoning') {
+        return { type: 'block-end', index, block: { type: 'reasoning', text: block.text } }
+      }
       return {
         type: 'block-end',
         index,
@@ -100,8 +104,9 @@ export async function* translateChunks(events: AsyncIterable<string>, model: str
     }
 
     // Usage rides the terminal chunk with empty choices; defer it so it is
-    // emitted after the assembled blocks and before the finish chunk.
-    if (chunk.usage !== undefined) {
+    // emitted after the assembled blocks and before the finish chunk. The spec
+    // pins `usage: null` on every earlier chunk (DeepSeek follows literally).
+    if (chunk.usage !== undefined && chunk.usage !== null) {
       pendingUsage = mapUsage(chunk.usage)
     }
 
@@ -126,6 +131,21 @@ export async function* translateChunks(events: AsyncIterable<string>, model: str
         const block = blocks[index] as BlockState & { kind: 'text' }
         block.text += delta.content
         yield { type: 'text-delta', index, text: delta.content }
+      }
+      if (typeof delta.reasoning_content === 'string' && delta.reasoning_content.length > 0) {
+        const last = blocks[blocks.length - 1]
+        let index: number
+        if (last !== undefined && last.kind === 'reasoning') {
+          index = blocks.length - 1
+        } else {
+          index = blocks.length
+          blocks.push({ kind: 'reasoning', text: '' })
+
+          yield { type: 'block-start', index, blockType: 'reasoning' }
+        }
+        const block = blocks[index] as BlockState & { kind: 'reasoning' }
+        block.text += delta.reasoning_content
+        yield { type: 'reasoning-delta', index, text: delta.reasoning_content }
       }
       if (Array.isArray(delta.tool_calls)) {
         for (const toolDelta of delta.tool_calls) {

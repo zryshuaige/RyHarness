@@ -1,7 +1,8 @@
-import type { AgentDefinition, AgentLoopEvent, Tool, ToolResult } from '@ryagent/agent'
-import { AgentLoop, BUILTIN_TEMPLATES, forkTemplate, MAX_LOOP_CONTEXT_CHARS, RYEN_TEMPLATE } from '@ryagent/agent'
-import { brandString } from '@ryagent/brand'
-import type { GenerateOptions, LlmRuntime, Message, StreamChunk, ToolCallId } from '@ryagent/llm'
+import type { AgentDefinition, AgentLoopEvent, Tool, ToolResult } from '@ryharness/agent'
+import { AgentLoop, BUILTIN_TEMPLATES, forkTemplate, MAX_LOOP_CONTEXT_TOKENS, RYEN_TEMPLATE } from '@ryharness/agent'
+import { brandString } from '@ryharness/brand'
+import type { GenerateOptions, LlmRuntime, Message, StreamChunk, ToolCallId } from '@ryharness/llm'
+import { estimateTokens } from '@ryharness/llm'
 import { describe, expect, it } from 'vitest'
 
 /** 脚本化的假 LlmRuntime：每次 stream() 消耗一段录制 chunk，并记录每次请求。 */
@@ -139,6 +140,45 @@ describe('AgentLoop', () => {
     expect((result as { result: ToolResult }).result.content).toContain('unknown tool')
   })
 
+  it('resolves whitelist names from a tool lookup, so a removed tool disappears', async () => {
+    const registered = new Map<string, Tool>([['echo', echoTool]])
+    const lookup = {
+      get: (name: string) => registered.get(name),
+      list: () => [...registered.values()],
+    }
+    const toolCall = (): StreamChunk[] => [
+      {
+        type: 'block-end',
+        index: 0,
+        block: { type: 'tool-call', id: brandString<ToolCallId>('c-lookup'), name: 'echo', arguments: '{"text":"喵"}' },
+      },
+      { type: 'finish', reason: { kind: 'tool-calls' } },
+    ]
+    const { llm, requests } = mockLlm([
+      toolCall(),
+      [{ type: 'text-delta', index: 0, text: 'first' }, finishStop()],
+      toolCall(),
+      [{ type: 'text-delta', index: 0, text: 'second' }, finishStop()],
+    ])
+
+    const present = new AgentLoop({ definition: DEFINITION, llm, tools: lookup })
+    const first = await collect(present.run({ text: 'hi' }, { workspaceRoot: process.cwd() }))
+    expect(first[0]).toMatchObject({ type: 'tool-call-start', name: 'echo' })
+    expect((first[1] as { result: ToolResult }).result.content).toBe('echo: 喵')
+    expect(requests[0]?.tools?.map((tool) => tool.name)).toEqual(['echo'])
+
+    // 注册表清空后再建一轮：白名单名字相同，但工具已不可见/不可调用。
+    registered.clear()
+    const missing = new AgentLoop({ definition: DEFINITION, llm, tools: lookup })
+    const second = await collect(missing.run({ text: 'hi' }, { workspaceRoot: process.cwd() }))
+    expect(requests[2]?.tools).toBeUndefined()
+    const result = second.find((event) => {
+      return event.type === 'tool-result'
+    })
+    expect(result).toMatchObject({ type: 'tool-result', name: 'echo', isError: true })
+    expect((result as { result: ToolResult }).result.content).toContain('unknown tool')
+  })
+
   it('reports unknown tools and bad JSON as error results instead of throwing', async () => {
     const { llm } = mockLlm([
       [
@@ -267,7 +307,7 @@ describe('AgentLoop 循环内上下文上限', () => {
         return block.type === 'text' ? block.text : ''
       })
       .join('')
-    expect(text.length).toBeLessThanOrEqual(MAX_LOOP_CONTEXT_CHARS)
+    expect(estimateTokens(text)).toBeLessThanOrEqual(MAX_LOOP_CONTEXT_TOKENS + 64)
     expect(text).toContain('已截断')
     expect(text.startsWith('x')).toBe(true)
     // UI 侧拿到的是未裁剪的原始结果：落库与展开依赖它。
@@ -285,7 +325,7 @@ describe('AgentLoop 循环内上下文上限', () => {
         return toolCall(`c${i}`)
       }).concat([[{ type: 'text-delta', index: 0, text: 'done' }, finishStop()]]),
     )
-    // 每步 40k 字符：8 步共 320k，必然超过 120k 预算。
+    // 每步 10k token（40k ASCII 字符）：8 步共 80k，必然超过 30k 预算。
     const loop = new AgentLoop({ definition, llm, tools: [hugeTool(40_000)] })
     await collect(loop.run({ text: 'hi' }, { workspaceRoot: process.cwd() }))
     const toolMessages = (requests[requests.length - 1]?.messages ?? []).filter((message) => {
@@ -296,14 +336,91 @@ describe('AgentLoop 循环内上下文上限', () => {
       return (
         sum +
         message.content.reduce((inner, block) => {
-          return inner + (block.type === 'text' ? block.text.length : 0)
+          return inner + (block.type === 'text' ? estimateTokens(block.text) : 0)
         }, 0)
       )
     }, 0)
-    expect(total).toBeLessThanOrEqual(MAX_LOOP_CONTEXT_CHARS + steps * 64) // 耗尽后每条只留一条约 24 字符的标注
-    expect(total).toBeGreaterThan(MAX_LOOP_CONTEXT_CHARS - 200) // 预算基本用满，没有提前放弃
+    expect(total).toBeLessThanOrEqual(MAX_LOOP_CONTEXT_TOKENS + steps * 64) // 耗尽后每条只留一条标注
+    expect(total).toBeGreaterThan(MAX_LOOP_CONTEXT_TOKENS - 200) // 预算基本用满，没有提前放弃
     // 预算耗尽后退化为一条标注，tool_call/tool_result 配对不破。
     const last = toolMessages.at(-1) as Message
     expect(last.content[0]).toEqual({ type: 'text', text: '…[已截断：本轮工具输出已用满上下文预算]' })
+  })
+})
+
+/**
+ * 思考强度从 agent 定义流到请求。
+ *
+ * 回归点是「能力有出口」：内置目录里已经有支持 reasoning_effort 的模型、运行时也会
+ * 校验档位，但 loop 从来不读 definition 上的这个字段——用户设了、模型支持了，请求里
+ * 却没有，于是设置静默失效。
+ */
+describe('AgentLoop 思考强度', () => {
+  const answer: StreamChunk[] = [{ type: 'text-delta', index: 0, text: '好' }, finishStop()]
+
+  it('definition 配了档位，请求里就带上', async () => {
+    const { llm, requests } = mockLlm([answer])
+    const loop = new AgentLoop({ definition: { ...DEFINITION, reasoningEffort: 'high' }, llm, tools: [echoTool] })
+    await collect(loop.run({ text: 'hi' }, { workspaceRoot: process.cwd() }))
+    expect(requests[0]?.reasoningEffort).toBe('high')
+  })
+
+  it('没配档位就不发字段：模型用自己默认，永远不会 400', async () => {
+    const { llm, requests } = mockLlm([answer])
+    const loop = new AgentLoop({ definition: DEFINITION, llm, tools: [echoTool] })
+    await collect(loop.run({ text: 'hi' }, { workspaceRoot: process.cwd() }))
+    expect(requests[0]?.reasoningEffort).toBeUndefined()
+  })
+})
+
+/**
+ * identity 钩子：用户在「我的」页起的名字要真的排进系统提示。
+ *
+ * 排第一而不是排在角色设定之后，是因为模型读到「你是 Ryen…」再读到「与你对话的
+ * 人叫小明」和反过来，服从程度不一样；更重要的是它必须排在记忆与经验手册之前——
+ * 那两块是检索拼上来的，把「你是谁」夹在中间会被当成一条普通事实。
+ */
+describe('AgentLoop 身份句', () => {
+  /** 跑一轮，拿回真正发出去的那条请求的 system。 */
+  async function systemOf(identity?: () => string | undefined): Promise<string> {
+    const { llm, requests } = mockLlm([
+      [
+        { type: 'block-start', index: 0, blockType: 'text' },
+        { type: 'text-delta', index: 0, text: '在的' },
+        { type: 'block-end', index: 0, block: { type: 'text', text: '在的' } },
+        finishStop(),
+      ],
+    ])
+    const loop = new AgentLoop({
+      definition: DEFINITION,
+      llm,
+      tools: [],
+      ...(identity === undefined ? {} : { identity }),
+    })
+    await collect(loop.run({ text: '在吗' }, { workspaceRoot: process.cwd() }))
+    return requests[0]?.system ?? ''
+  }
+
+  it('身份句排在角色设定之前', async () => {
+    const system = await systemOf(() => '与你对话的人叫「小明」。')
+    expect(system).toContain('小明')
+    expect(system.indexOf('小明')).toBeLessThan(system.indexOf(DEFINITION.systemPrompt))
+  })
+
+  it('钩子返回 undefined 时不注入（老调用方不传也不受影响）', async () => {
+    expect(await systemOf()).toBe(DEFINITION.systemPrompt)
+    expect(await systemOf(() => undefined)).toBe(DEFINITION.systemPrompt)
+  })
+
+  it('钩子返回空串同样按不注入处理', async () => {
+    expect(await systemOf(() => '')).toBe(DEFINITION.systemPrompt)
+  })
+
+  it('每轮现取：改了名字下一句就生效，不必重启', async () => {
+    let name = '小明'
+    const first = await systemOf(() => `与你对话的人叫「${name}」。`)
+    expect(first).toContain('小明')
+    name = '小红'
+    expect(await systemOf(() => `与你对话的人叫「${name}」。`)).toContain('小红')
   })
 })

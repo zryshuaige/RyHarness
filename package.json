@@ -1,10 +1,18 @@
 {
-  "name": "ryagent-root",
+  "name": "ryharness-root",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "RyAgent：单机多 Agent 即时通讯桌面应用（Electron + React + cordis 内核）",
+  "description": "RyHarness：单机多 Agent 即时通讯桌面应用（Electron + React + cordis 内核）",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zryshuaige/RyHarness.git"
+  },
+  "homepage": "https://github.com/zryshuaige/RyHarness#readme",
+  "bugs": {
+    "url": "https://github.com/zryshuaige/RyHarness/issues"
+  },
   "packageManager": "pnpm@11.7.0",
   "engines": {
     "node": "^22.19 || >=24"
@@ -12,6 +20,15 @@
   "scripts": {
     "typecheck": "pnpm -r --filter \"./vendor/**\" run build && tsc -p tsconfig.typecheck.json",
     "lint": "biome check .",
+    "verify": "node scripts/verify-no-unknown-casts.mjs && node scripts/verify-package-deps.mjs && node scripts/verify-duplication.mjs && node scripts/verify-biome-budget.mjs && node scripts/verify-notice.mjs",
+    "verify:notice": "node scripts/verify-notice.mjs",
+    "verify:casts": "node scripts/verify-no-unknown-casts.mjs",
+    "verify:deps": "node scripts/verify-package-deps.mjs",
+    "verify:dup": "node scripts/verify-duplication.mjs",
+    "verify:biome": "node scripts/verify-biome-budget.mjs",
+    "verify:biome:freeze": "node scripts/verify-biome-budget.mjs --freeze",
+    "bench": "tsx scripts/bench.ts",
+    "perf": "vitest run --config vitest.perf.config.ts",
     "test": "vitest run",
     "build": "pnpm -r run build",
     "version:check": "node scripts/bump.mjs --check",

@@ -9,22 +9,22 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { Context } from '@ryagent/cordis'
-import type { EvolveService } from '@ryagent/evolve'
-import { EvolveService as EvolveServiceImpl } from '@ryagent/evolve'
-import type { GenerateOptions, StreamChunk } from '@ryagent/llm'
-import { LlmAdapter } from '@ryagent/llm'
-import { MemoryService as MemoryServiceImpl } from '@ryagent/memory'
-import type { ServerOptions } from '@ryagent/server'
-import { RyAgentServer } from '@ryagent/server'
+import type { Context } from '@ryharness/cordis'
+import type { EvolveService } from '@ryharness/evolve'
+import { EvolveService as EvolveServiceImpl } from '@ryharness/evolve'
+import type { GenerateOptions, StreamChunk } from '@ryharness/llm'
+import { LlmAdapter } from '@ryharness/llm'
+import { MemoryService as MemoryServiceImpl } from '@ryharness/memory'
+import type { ServerOptions } from '@ryharness/server'
+import { RyHarnessServer } from '@ryharness/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { composeProactiveMessage, localDayKey, PROACTIVE_BLOCK_TYPE } from '../src/proactive.ts'
 
 const tmpDirs: string[] = []
-const running: RyAgentServer[] = []
+const running: RyHarnessServer[] = []
 
 function tempDataDir(prefix: string): string {
-  const dir = mkdtempSync(join(tmpdir(), `ryagent-proactive-${prefix}-`))
+  const dir = mkdtempSync(join(tmpdir(), `ryharness-proactive-${prefix}-`))
   tmpDirs.push(dir)
   return dir
 }
@@ -127,9 +127,9 @@ async function startServer(
     memory?: MemoryServiceImpl | null
     evolution?: EvolveServiceImpl | null
   } & Partial<ServerOptions> = {},
-): Promise<{ server: RyAgentServer; memory?: MemoryServiceImpl; evolution?: EvolveServiceImpl }> {
+): Promise<{ server: RyHarnessServer; memory?: MemoryServiceImpl; evolution?: EvolveServiceImpl }> {
   const dataDir = options.dataDir ?? tempDataDir('server')
-  const server = await RyAgentServer.create({
+  const server = await RyHarnessServer.create({
     port: 0,
     dataDir,
     memory: options.memory === undefined ? null : options.memory,
@@ -210,9 +210,9 @@ describe('启动那一次：有内容就发', () => {
     const dataDir = tempDataDir('facts')
     // 先把「昨天发生的事」摆好：一条新记忆 + 一条经验手册条目（都要在服务起来之前，
     // 启动检查就在 create() 里跑，晚一步就轮不到这一轮窗口了）。
-    const memory = new MemoryServiceImpl({ dbPath: join(dataDir, 'ryagent.db') })
+    const memory = new MemoryServiceImpl({ dbPath: join(dataDir, 'ryharness.db') })
     memory.store.insert({ agentId: 'ryen', kind: 'fact', content: '咖啡机在阳台左边' })
-    const evolution = new EvolveServiceImpl({ dbPath: join(dataDir, 'ryagent.db') })
+    const evolution = new EvolveServiceImpl({ dbPath: join(dataDir, 'ryharness.db') })
     evolution.store.insertEntry({ agentId: 'ryen', section: 'strategy', content: '先复述一遍需求再动手' })
 
     const { server } = await startServer({ dataDir, memory, evolution })
@@ -237,7 +237,7 @@ describe('启动那一次：有内容就发', () => {
   it('别的会话里有未读时，回顾里报出来的那一条是真有未读', async () => {
     freezeAt('2026-03-02T07:00:00')
     const dataDir = tempDataDir('unread')
-    const memory = new MemoryServiceImpl({ dbPath: join(dataDir, 'ryagent.db') })
+    const memory = new MemoryServiceImpl({ dbPath: join(dataDir, 'ryharness.db') })
     const { server } = await startServer({ dataDir, memory })
     // 启动那一刻还没有任何未读（检查是无内容的静默通过），补一条再把时钟拨到发送时刻。
     const coding = server.store.createConversation({
@@ -267,7 +267,7 @@ describe('一天一次', () => {
   it('启动那一次先发；同一天再查也不重发，跨到第二天且过了发送时刻才发第二条', async () => {
     freezeAt('2026-03-02T07:00:00')
     const dataDir = tempDataDir('daily')
-    const memory = new MemoryServiceImpl({ dbPath: join(dataDir, 'ryagent.db') })
+    const memory = new MemoryServiceImpl({ dbPath: join(dataDir, 'ryharness.db') })
     memory.store.insert({ agentId: 'ryen', kind: 'fact', content: '咖啡机在阳台左边' })
     const { server } = await startServer({ dataDir, memory })
     // 启动那一次不等发送时刻：应用刚起来就该把上一次的回顾补上。
@@ -317,7 +317,7 @@ describe('没有内容就安静', () => {
   it('时间窗口内的事都发生在上次发送之前，就不再重复报一次', async () => {
     freezeAt('2026-03-02T07:00:00')
     const dataDir = tempDataDir('window')
-    const memory = new MemoryServiceImpl({ dbPath: join(dataDir, 'ryagent.db') })
+    const memory = new MemoryServiceImpl({ dbPath: join(dataDir, 'ryharness.db') })
     memory.store.insert({ agentId: 'ryen', kind: 'fact', content: '咖啡机在阳台左边' })
     const { server } = await startServer({ dataDir, memory })
     vi.setSystemTime(new Date('2026-03-02T09:05:00'))
@@ -336,7 +336,7 @@ describe('用户可以关掉', () => {
   it('启动就关掉：连启动那一次也不发', async () => {
     freezeAt('2026-03-02T09:30:00')
     const dataDir = tempDataDir('off')
-    const memory = new MemoryServiceImpl({ dbPath: join(dataDir, 'ryagent.db') })
+    const memory = new MemoryServiceImpl({ dbPath: join(dataDir, 'ryharness.db') })
     memory.store.insert({ agentId: 'ryen', kind: 'fact', content: '咖啡机在阳台左边' })
     const { server } = await startServer({ dataDir, memory, proactive: false })
 
@@ -348,7 +348,7 @@ describe('用户可以关掉', () => {
   it('运行中关掉：之后几天都不再发', async () => {
     freezeAt('2026-03-02T07:00:00')
     const dataDir = tempDataDir('off-later')
-    const memory = new MemoryServiceImpl({ dbPath: join(dataDir, 'ryagent.db') })
+    const memory = new MemoryServiceImpl({ dbPath: join(dataDir, 'ryharness.db') })
     const { server } = await startServer({ dataDir, memory })
     memory.store.insert({ agentId: 'ryen', kind: 'fact', content: '咖啡机在阳台左边' })
     vi.setSystemTime(new Date('2026-03-02T09:05:00'))
@@ -366,7 +366,7 @@ describe('用户可以关掉', () => {
 
     // 关掉的那份设置落盘了：重启也不会又自己打开。
     // 重新起一个服务（新的记忆连接），并补一条新内容——真发出去才说明设置没留住。
-    const restartedMemory = new MemoryServiceImpl({ dbPath: join(dataDir, 'ryagent.db') })
+    const restartedMemory = new MemoryServiceImpl({ dbPath: join(dataDir, 'ryharness.db') })
     restartedMemory.store.insert({ agentId: 'ryen', kind: 'fact', content: '换机之后重新学到的偏好' })
     const restarted = await startServer({ dataDir, memory: restartedMemory })
     await ticks(20, 4)
@@ -379,7 +379,7 @@ describe('观测面', () => {
   it('GET /api/proactive 回答「上次什么时候发的、今天发过没有」', async () => {
     freezeAt('2026-03-02T07:00:00')
     const dataDir = tempDataDir('observe')
-    const memory = new MemoryServiceImpl({ dbPath: join(dataDir, 'ryagent.db') })
+    const memory = new MemoryServiceImpl({ dbPath: join(dataDir, 'ryharness.db') })
     const { server } = await startServer({ dataDir, memory })
 
     // 启动那一刻还没发生任何事：快照如实说「今天还没发」。

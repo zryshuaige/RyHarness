@@ -1,5 +1,5 @@
-import { defineProperty } from '@ryagent/cosmokit'
-import type { Promisify } from '@ryagent/cosmokit'
+import { defineProperty } from '@ryharness/cosmokit'
+import type { Promisify } from '@ryharness/cosmokit'
 import { Context } from './context.ts'
 import { Fiber, FiberState } from './fiber.ts'
 import { DisposableList, symbols } from './utils.ts'

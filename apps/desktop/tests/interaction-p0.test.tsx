@@ -18,7 +18,8 @@ import { AvatarPicker, CreateGroupModal } from '../renderer/src/components/Conta
 import { RightPanel } from '../renderer/src/components/RightPanel.tsx'
 import { getToasts, toast } from '../renderer/src/lib/toast.ts'
 import { LEAVE_MS } from '../renderer/src/lib/useLeaving.ts'
-import { ChatStore } from '../renderer/src/store.ts'
+import { bucketOf, ChatStore, type ConversationBucket } from '../renderer/src/store.ts'
+import { currentValue, listedValues, pickOption, selectTrigger, triggerLabel } from './select-dom.tsx'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -116,6 +117,7 @@ function typeInto(node: HTMLTextAreaElement, value: string): void {
 
 describe('停止生成失败：不许假死', () => {
   let store: ChatStore
+  let bucket: ConversationBucket
   let push: (event: WsEvent) => void
   let cancelCalls: number
 
@@ -150,7 +152,7 @@ describe('停止生成失败：不许假死', () => {
   async function render(cancel: () => Promise<{ cancelled: boolean }>): Promise<void> {
     await act(async () => {
       root = createRoot(container)
-      root.render(<ChatView api={fakeApi(cancel)} conversation={conversation} agents={[agent]} store={store} />)
+      root.render(<ChatView api={fakeApi(cancel)} conversation={conversation} agents={[agent]} bucket={bucket} />)
       await Promise.resolve()
     })
     act(() => {
@@ -169,6 +171,7 @@ describe('停止生成失败：不许假死', () => {
 
   beforeEach(() => {
     store = new ChatStore()
+    bucket = bucketOf(store)
     cancelCalls = 0
   })
 
@@ -250,9 +253,9 @@ describe('会话 token 用量：右栏一行带过', () => {
     const label = [...container.querySelectorAll('dt')].map((node) => node.textContent)
     expect(label).toContain('本会话用量')
     const line = [...container.querySelectorAll('dd')].map((node) => node.textContent).join(' ')
-    expect(line).toContain('12.4k')
-    expect(line).toContain('9.1k')
-    expect(line).toContain('3.3k')
+    expect(line).toContain('1.2 万字')
+    expect(line).toContain('9.1 千字')
+    expect(line).toContain('3.3 千字')
   })
 
   it('还没有任何一轮用量时不占那一行；读失败也不报错、不挡其它信息', async () => {
@@ -301,6 +304,7 @@ describe('欢迎页首条消息：先订阅、后发送', () => {
       },
     } as unknown as ApiClient
     const store = new ChatStore()
+    const bucket = bucketOf(store)
     await act(async () => {
       root = createRoot(container)
       root.render(
@@ -308,7 +312,7 @@ describe('欢迎页首条消息：先订阅、后发送', () => {
           api={api}
           conversation={conversation}
           agents={[agent]}
-          store={store}
+          bucket={bucket}
           pendingSend={{ conversationId: 'c1', text: '帮我整理本周周报' }}
           onPendingSendDone={() => {
             done += 1
@@ -359,7 +363,7 @@ describe('欢迎页首条消息：先订阅、后发送', () => {
           api={api}
           conversation={conversation}
           agents={[agent]}
-          store={new ChatStore()}
+          bucket={bucketOf(new ChatStore())}
           pendingSend={{ conversationId: 'other', text: '不该发出去' }}
         />,
       )
@@ -547,8 +551,9 @@ describe('建群：调度员只能是已勾选的成员', () => {
   function checkbox(index: number): HTMLInputElement {
     return container.querySelectorAll<HTMLInputElement>('.member-checks input[type="checkbox"]')[index]!
   }
-  function dispatcher(): HTMLSelectElement {
-    return container.querySelector<HTMLSelectElement>('select')!
+  /** 调度员那一格的下拉触发器（自绘下拉，不再是原生 `<select>`）。 */
+  function dispatcher(): HTMLButtonElement {
+    return selectTrigger(container, '调度员')
   }
   function createButton(): HTMLButtonElement {
     return [...container.querySelectorAll<HTMLButtonElement>('button')].find((node) => {
@@ -560,22 +565,24 @@ describe('建群：调度员只能是已勾选的成员', () => {
     await renderModal()
     // 默认勾了 Ryen。
     expect(checkbox(0).checked).toBe(true)
-    expect(dispatcher().value).toBe('ryen')
-    expect([...dispatcher().options].map((option) => option.value)).toEqual(['ryen'])
+    expect(currentValue(container, '调度员')).toBe('ryen')
+    expect(listedValues(container, '调度员')).toEqual(['ryen'])
 
     // 取消勾选调度员本人：下拉只剩还没勾的人，state 必须跟着走。
+    // 这时没人可派，触发器显示的是占位说明而不是一个空框（原生 <select> 会退回空白）。
     act(() => {
       checkbox(0).click()
     })
-    expect(dispatcher().value).toBe('')
+    expect(triggerLabel(container, '调度员')).toBe('先勾选成员')
+    expect(dispatcher().disabled).toBe(true)
     expect(createButton().disabled).toBe(true)
 
     // 勾上 CodeBot：调度员落到第一个已勾成员，建群按钮解禁。
     act(() => {
       checkbox(1).click()
     })
-    expect([...dispatcher().options].map((option) => option.value)).toEqual(['coder'])
-    expect(dispatcher().value).toBe('coder')
+    expect(listedValues(container, '调度员')).toEqual(['coder'])
+    expect(currentValue(container, '调度员')).toBe('coder')
     expect(createButton().disabled).toBe(false)
 
     await act(async () => {
@@ -592,15 +599,11 @@ describe('建群：调度员只能是已勾选的成员', () => {
       checkbox(1).click()
       checkbox(2).click()
     })
-    expect([...dispatcher().options].map((option) => option.value)).toEqual(['ryen', 'coder', 'writer'])
+    expect(listedValues(container, '调度员')).toEqual(['ryen', 'coder', 'writer'])
     // 用户可以改调度员。
-    act(() => {
-      const select = dispatcher()
-      const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!
-      setter.call(select, 'writer')
-      select.dispatchEvent(new Event('change', { bubbles: true }))
-    })
-    expect(dispatcher().value).toBe('writer')
+    pickOption(container, '调度员', 'writer')
+    expect(triggerLabel(container, '调度员')).toBe('小笔')
+    expect(currentValue(container, '调度员')).toBe('writer')
   })
 
   it('一个成员都不勾时不许建群，下拉说明为什么', async () => {
@@ -616,9 +619,13 @@ describe('建群：调度员只能是已勾选的成员', () => {
 
 describe('头像选择器：品牌橘猫可达（回归护栏）', () => {
   it('橘猫是第一格且用的是 Cat 母版，不是首字母色块', () => {
-    const html = renderToStaticMarkup(<AvatarPicker value="db:dylan:seed1" onChange={() => {}} />)
-    expect(html.indexOf('title="橘猫（RyAgent 品牌）"')).toBeLessThan(html.indexOf('title="人物（CC BY 4.0）"'))
+    const html = renderToStaticMarkup(<AvatarPicker value="dog" onChange={() => {}} />)
+    // 这一屏只列动物立绘 + 吉祥物（人像插画族已移出，否则三套画风同排）；
+    // 顺序仍是品牌橘猫 → 立绘 → DiceBear。
+    expect(html.indexOf('title="橘猫（RyHarness 品牌）"')).toBeLessThan(
+      html.indexOf('title="吉祥物：随机生成的彩色表情脸'),
+    )
     expect(html).toContain('avatar-cat')
-    expect(html).toContain('<svg class="cat"')
+    expect(html).toContain('<img class="cat cat-circle"')
   })
 })

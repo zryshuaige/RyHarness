@@ -9,13 +9,13 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { EvolveServiceOptions, MemorySweep } from '@ryagent/evolve'
-import { EvolveService } from '@ryagent/evolve'
+import type { EvolveServiceOptions, MemorySweep } from '@ryharness/evolve'
+import { EvolveService } from '@ryharness/evolve'
 import { afterEach, describe, expect, it } from 'vitest'
 
 const dirs: string[] = []
 function service(options: Partial<EvolveServiceOptions> = {}): EvolveService {
-  const dir = mkdtempSync(join(tmpdir(), 'ryagent-consolidate-'))
+  const dir = mkdtempSync(join(tmpdir(), 'ryharness-consolidate-'))
   dirs.push(dir)
   return new EvolveService({ dbPath: join(dir, 'e.db'), logger: () => {}, ...options })
 }

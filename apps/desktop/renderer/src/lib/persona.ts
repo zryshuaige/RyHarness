@@ -1,13 +1,13 @@
 /**
- * 渲染层的人格逻辑：与 @ryagent/session 的 persona.ts 同一套分档、文案与拼接顺序。
+ * 渲染层的人格逻辑：与 @ryharness/session 的 persona.ts 同一套分档、文案与拼接顺序。
  *
- * 为什么不直接 import 服务端那份：渲染层打包进浏览器，`@ryagent/session` 的入口
+ * 为什么不直接 import 服务端那份：渲染层打包进浏览器，`@ryharness/session` 的入口
  * 会把 store（node:sqlite）一起拖进来。这里只留纯函数，并用
- * `apps/desktop/tests/persona-parity.test.ts` 锁住两边的输出必须逐字相同——
- * 用户在编辑器看到的预览，必须等于模型真正收到的那段提示。
+ * `apps/desktop/tests/persona-ui.test.tsx`（"两套人格必须逐字同源"）锁住两边的输出
+ * 必须逐字相同——用户在编辑器看到的预览，必须等于模型真正收到的那段提示。
  */
 
-import type { AgentPersona, VoicePreset } from '../api.ts'
+import type { AgentPersona } from '../api.ts'
 
 /** 性格四维的键，顺序即展示与拼接顺序。 */
 export const TRAIT_KEYS = ['extroversion', 'rigor', 'humor', 'initiative'] as const
@@ -78,20 +78,8 @@ export const TRAIT_META: readonly TraitMeta[] = [
   },
 ] as const
 
-/**
- * 音色目录（与服务端 GET /api/agent-voices 同表）。
- *
- * 尚未接入 TTS：这里只登记"这个助理该是什么声音"，界面上如实说明还没法播。
- */
-export const VOICE_PRESETS: readonly VoicePreset[] = [
-  { id: 'none', name: '暂不设定', provider: 'none' },
-  { id: 'siliconflow:warm-female', name: '暖橘女声（SiliconFlow）', provider: 'siliconflow' },
-  { id: 'siliconflow:steady-male', name: '沉稳男声（SiliconFlow）', provider: 'siliconflow' },
-  { id: 'openai:alloy', name: 'Alloy（OpenAI）', provider: 'openai' },
-  { id: 'openai:shimmer', name: 'Shimmer（OpenAI）', provider: 'openai' },
-  { id: 'elevenlabs:gentle-female', name: '柔和女声（ElevenLabs）', provider: 'elevenlabs' },
-  { id: 'local:qwen3-tts', name: '本地 Qwen3-TTS（Ollama）', provider: 'local' },
-] as const
+/** 「不朗读」：与服务端 `normalizeVoiceId` 的特例同一个字面量。 */
+export const NO_VOICE_ID = 'none'
 
 /** 亲密度分档（切在 20/45/70）。 */
 export interface AffinityTier {
@@ -142,7 +130,7 @@ export const PERSONA_DEFAULTS: AgentPersona = {
   initiative: 50,
   catchphrase: '',
   affinity: 0,
-  voiceId: 'none',
+  voiceId: NO_VOICE_ID,
   appearance: '',
 }
 
@@ -158,33 +146,86 @@ export function clampTrait(value: unknown): number {
 /** 分档查询。 */
 export function traitBand(meta: TraitMeta, value: number): TraitBand {
   const score = clampTrait(value)
+  // 末档的 max 恒为 100，而 clampTrait 已把分数夹进 [0,100]，所以循环必然命中；
+  // 这里的兜底只是为了让返回类型收口，不依赖运行期数据。分档表为空属于编程错误，
+  // 直接抛而不是悄悄返回 undefined 让它流到界面上。
+  const last = meta.bands.at(-1)
+  if (last === undefined) throw new Error(`traitBand: ${meta.key} 的分档表为空`)
   for (const band of meta.bands) {
     if (score <= band.max) return band
   }
-  return meta.bands[meta.bands.length - 1]!
+  return last
 }
 
 /** 按 key 取维度定义。 */
 export function traitMeta(key: TraitKey): TraitMeta {
-  return TRAIT_META.find((meta) => {
-    return meta.key === key
-  })!
+  const meta = TRAIT_META.find((candidate) => {
+    return candidate.key === key
+  })
+  // key 的类型就是 TRAIT_META 的键集合，查不到说明调用方拼错了字符串——抛出来比
+  // 返回 undefined 让下游在别处炸掉更容易定位。
+  if (meta === undefined) throw new Error(`traitMeta: 未知维度 ${key}`)
+  return meta
 }
 
 /** 亲密度分档查询。 */
 export function affinityTier(affinity: number): AffinityTier {
   const score = clampTrait(affinity)
+  const last = AFFINITY_TIERS.at(-1)
+  if (last === undefined) throw new Error('affinityTier: 亲密度分档表为空')
   for (const tier of AFFINITY_TIERS) {
     if (score <= tier.max) return tier
   }
-  return AFFINITY_TIERS[AFFINITY_TIERS.length - 1]!
+  return last
 }
 
-/** 音色显示名；未知 id 回落到"未知音色"。 */
-export function voiceName(voiceId: string): string {
-  return VOICE_PRESETS.find((preset) => {
-    return preset.id === voiceId
-  })?.name ?? '未知音色'
+/**
+ * 生日归一：只保留月日（`MM-DD`）。
+ *
+ * 与 @ryharness/session 的同名函数同源（那边是权威版）——两套必须逐字一致，
+ * 由 apps/desktop/tests/persona-ui.test.tsx 锁住。
+ *
+ * 生日不需要年份，而日期控件（`<input type="date">`）要完整日期——中间用 2000
+ * 当占位年。旧数据里可能是 `YYYY-MM-DD`（手敲的），这里统一砍成 `MM-DD`。
+ */
+export function normalizeBirthday(value: string): string | undefined {
+  const trimmed = value.trim()
+  if (trimmed.length === 0) return undefined
+  const md = /^(\d{1,2})-(\d{1,2})$/.exec(trimmed)
+  if (md) {
+    const month = Number(md[1])
+    const day = Number(md[2])
+    if (month < 1 || month > 12 || day < 1 || day > 31) return undefined
+    return `${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+  }
+  const ymd = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed)
+  if (ymd) {
+    const month = Number(ymd[2])
+    const day = Number(ymd[3])
+    if (month < 1 || month > 12 || day < 1 || day > 31) return undefined
+    return `${ymd[2]}-${ymd[3]}`
+  }
+  return undefined
+}
+
+/**
+ * 生日 → 日期控件的值（`YYYY-MM-DD`）。
+ *
+ * 控件要完整日期，生日只有月日，所以补一个 2000 当占位年。
+ */
+export function birthdayInputValue(birthday: string | undefined): string {
+  const normalized = birthday === undefined ? undefined : normalizeBirthday(birthday)
+  if (normalized === undefined) return ''
+  return `2000-${normalized}`
+}
+
+/**
+ * 日期控件的值 → 生日（只留月日）；清空时返回 undefined。
+ */
+export function birthdayFromInput(value: string): string | undefined {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim())
+  if (match === null) return undefined
+  return `${match[2]}-${match[3]}`
 }
 
 /** 把任意来源的人格补齐成完整一份（缺字段按默认值）。 */
@@ -194,21 +235,20 @@ export function normalizePersona(value: AgentPersona | undefined): AgentPersona 
     const raw = record[key as keyof AgentPersona]
     return typeof raw === 'string' ? raw.trim() : ''
   }
-  const birthday = text('birthday')
+  const birthday = normalizeBirthday(text('birthday'))
   const voiceId = text('voiceId')
   return {
     extroversion: clampTrait(record.extroversion ?? PERSONA_DEFAULTS.extroversion),
     rigor: clampTrait(record.rigor ?? PERSONA_DEFAULTS.rigor),
     humor: clampTrait(record.humor ?? PERSONA_DEFAULTS.humor),
     initiative: clampTrait(record.initiative ?? PERSONA_DEFAULTS.initiative),
-    ...(birthday.length === 0 ? {} : { birthday }),
+    ...(birthday === undefined ? {} : { birthday }),
     catchphrase: text('catchphrase'),
     affinity: clampTrait(record.affinity ?? PERSONA_DEFAULTS.affinity),
-    voiceId: VOICE_PRESETS.some((preset) => {
-      return preset.id === voiceId
-    })
-      ? voiceId
-      : PERSONA_DEFAULTS.voiceId,
+    // 目录在服务端（GET /api/voice/catalog），渲染层不另抄一份 id 清单。旧值原样
+    // 保留：编辑器让它作为「未知音色」选项可见，保存时由内核的 normalizeVoiceId
+    // 做迁移/回落，界面不替它猜。
+    voiceId: voiceId.length === 0 ? PERSONA_DEFAULTS.voiceId : voiceId,
     appearance: text('appearance'),
   }
 }

@@ -9,14 +9,14 @@ import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { RyAgentServer } from '@ryagent/server'
+import { RyHarnessServer } from '@ryharness/server'
 import { afterEach, describe, expect, it } from 'vitest'
 
 const tmpDirs: string[] = []
 const httpServers: Server[] = []
 
 function tempDataDir(prefix: string): string {
-  const dir = mkdtempSync(join(tmpdir(), `ryagent-verify-${prefix}-`))
+  const dir = mkdtempSync(join(tmpdir(), `ryharness-verify-${prefix}-`))
   tmpDirs.push(dir)
   return dir
 }
@@ -100,7 +100,7 @@ describe('POST /api/providers/:id/verify', () => {
     const fake = await startFakeProvider((path) => {
       return path === '/v1/models' ? 200 : 404
     })
-    const server = await RyAgentServer.create({ port: 0, dataDir: tempDataDir('ok') })
+    const server = await RyHarnessServer.create({ port: 0, dataDir: tempDataDir('ok') })
     try {
       const created = await sendJson(server.url, '/api/providers', 'POST', {
         displayName: '假网关',
@@ -128,7 +128,7 @@ describe('POST /api/providers/:id/verify', () => {
       return 401
     })
     const deadUrl = await closedPortBaseUrl()
-    const server = await RyAgentServer.create({ port: 0, dataDir: tempDataDir('fail') })
+    const server = await RyHarnessServer.create({ port: 0, dataDir: tempDataDir('fail') })
     try {
       const badKey = await sendJson(server.url, '/api/providers', 'POST', {
         displayName: '假网关',
@@ -164,7 +164,7 @@ describe('POST /api/providers/:id/verify', () => {
       const badHost = await sendJson(server.url, '/api/providers', 'POST', {
         displayName: '不存在的域名',
         protocol: 'openai',
-        baseUrl: 'http://ryagent-no-such-host.invalid/v1',
+        baseUrl: 'http://ryharness-no-such-host.invalid/v1',
         models: ['m1'],
         apiKey: 'sk-any',
       })
@@ -185,7 +185,7 @@ describe('POST /api/providers/:id/verify', () => {
     const fake = await startFakeProvider(() => {
       return 429
     })
-    const server = await RyAgentServer.create({ port: 0, dataDir: tempDataDir('ratelimit') })
+    const server = await RyHarnessServer.create({ port: 0, dataDir: tempDataDir('ratelimit') })
     try {
       const created = await sendJson(server.url, '/api/providers', 'POST', {
         displayName: '限流的网关',
@@ -210,7 +210,7 @@ describe('POST /api/providers/:id/verify', () => {
     const fake = await startFakeProvider(() => {
       return 404
     })
-    const server = await RyAgentServer.create({ port: 0, dataDir: tempDataDir('notfound') })
+    const server = await RyHarnessServer.create({ port: 0, dataDir: tempDataDir('notfound') })
     try {
       const created = await sendJson(server.url, '/api/providers', 'POST', {
         displayName: '地址写错了',
@@ -233,7 +233,7 @@ describe('POST /api/providers/:id/verify', () => {
       // 只认原生面：命中 /api/tags 才算"服务在跑"。
       return path === '/api/tags' ? 200 : 404
     })
-    const server = await RyAgentServer.create({ port: 0, dataDir: tempDataDir('ollama'), verifyTimeoutMs: 3000 })
+    const server = await RyHarnessServer.create({ port: 0, dataDir: tempDataDir('ollama'), verifyTimeoutMs: 3000 })
     try {
       const alive = await sendJson(server.url, '/api/providers', 'POST', {
         displayName: '本地 Ollama',
@@ -263,7 +263,7 @@ describe('POST /api/providers/:id/verify', () => {
   })
 
   it('没配 Key 时直接给出人话提示，不去打网络；未知供应商 404', async () => {
-    const server = await RyAgentServer.create({ port: 0, dataDir: tempDataDir('nokey') })
+    const server = await RyHarnessServer.create({ port: 0, dataDir: tempDataDir('nokey') })
     try {
       const noKey = await sendJson<VerifyBody>(server.url, '/api/providers/siliconflow/verify', 'POST')
       expect(noKey.status).toBe(200)
@@ -283,7 +283,7 @@ describe('POST /api/providers/:id/verify', () => {
 describe('供应商的引用关系（usedBy）', () => {
   it('GET /api/providers 每项带 usedBy；删除被引用的供应商回 409 并附引用者', async () => {
     const dataDir = tempDataDir('usedby')
-    const server = await RyAgentServer.create({ port: 0, dataDir })
+    const server = await RyHarnessServer.create({ port: 0, dataDir })
     try {
       const created = await sendJson(server.url, '/api/providers', 'POST', {
         displayName: '私有网关',
@@ -351,7 +351,7 @@ describe('供应商的引用关系（usedBy）', () => {
 describe('DELETE /api/settings/api-key/:id', () => {
   it('移除凭据并从 0600 文件里消失，适配器热更新后不再"已配置"', async () => {
     const dataDir = tempDataDir('delkey')
-    const server = await RyAgentServer.create({ port: 0, dataDir })
+    const server = await RyHarnessServer.create({ port: 0, dataDir })
     try {
       expect(
         (
@@ -390,14 +390,14 @@ describe('DELETE /api/settings/api-key/:id', () => {
 
   it('删掉应用内 key 后跨重启依然是没有配（api-keys.json 是唯一事实源）', async () => {
     const dataDir = tempDataDir('delkey-restart')
-    const first = await RyAgentServer.create({ port: 0, dataDir })
+    const first = await RyHarnessServer.create({ port: 0, dataDir })
     try {
       await sendJson(first.url, '/api/settings/api-key', 'POST', { providerId: 'siliconflow', apiKey: 'sk-silicon' })
       expect((await sendJson(first.url, '/api/settings/api-key/siliconflow', 'DELETE')).status).toBe(200)
     } finally {
       await first.close()
     }
-    const second = await RyAgentServer.create({ port: 0, dataDir })
+    const second = await RyHarnessServer.create({ port: 0, dataDir })
     try {
       const providers = (await fetch(`${second.url}/api/providers`).then((r) => {
         return r.json()

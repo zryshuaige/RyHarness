@@ -1,28 +1,63 @@
 /**
- * 供应商设置面：预设目录、新增/删除自定义供应商、热注册适配器、凭据落盘权限。
+ * 供应商设置面：预设目录、新增/删除自定义供应商、热注册适配器、凭据落盘权限、
+ * 以及模型发现（verify 顺带回目录 / 未保存草稿的 discover）。
  *
  * 全部走真实 HTTP + 真实文件读写（临时目录），不触网：只到"路由与凭据就位"
- * 为止，不真的向任何供应商发请求。
+ * 为止，不真的向任何供应商发请求。模型发现的探测打在测试进程自己起的回环服务上。
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { createServer, type Server } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { loadProvidersConfig, type ProvidersConfigFile, RyAgentServer } from '@ryagent/server'
-import { SessionStore } from '@ryagent/session'
+import { DEFAULT_PROVIDERS, loadProvidersConfig, type ProvidersConfigFile, RyHarnessServer } from '@ryharness/server'
+import { SessionStore } from '@ryharness/session'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Router } from '../src/router.ts'
-import { registerProviderRoutes } from '../src/routes/providers.ts'
+import { parseDiscoveredModels, registerProviderRoutes } from '../src/routes/providers.ts'
 
 const tmpDirs: string[] = []
+const httpServers: Server[] = []
 
 function tempDataDir(prefix: string): string {
-  const dir = mkdtempSync(join(tmpdir(), `ryagent-providers-${prefix}-`))
+  const dir = mkdtempSync(join(tmpdir(), `ryharness-providers-${prefix}-`))
   tmpDirs.push(dir)
   return dir
 }
 
-afterEach(() => {
+/**
+ * 起一个假的模型服务：按路径给出正文，并记录收到的 Authorization 头。
+ *
+ * 发现与探测都打在这上面，真 socket、真状态码，不会触达任何真实服务商。
+ */
+async function startFakeModelService(
+  routes: Record<string, { status?: number; body: string }>,
+): Promise<{ baseUrl: string; authHeaders: (string | undefined)[] }> {
+  const authHeaders: (string | undefined)[] = []
+  const server = createServer((req, res) => {
+    authHeaders.push(req.headers.authorization)
+    const hit = routes[req.url ?? ''] ?? { status: 404, body: '{}' }
+    res.statusCode = hit.status ?? 200
+    res.end(hit.body)
+  })
+  httpServers.push(server)
+  await new Promise<void>((resolve) => {
+    server.listen(0, '127.0.0.1', resolve)
+  })
+  const address = server.address() as AddressInfo
+  return { baseUrl: `http://127.0.0.1:${address.port}/v1`, authHeaders }
+}
+
+afterEach(async () => {
+  while (httpServers.length > 0) {
+    const server = httpServers.pop() as Server
+    await new Promise<void>((resolve) => {
+      server.close(() => {
+        resolve()
+      })
+    })
+  }
   while (tmpDirs.length > 0) {
     try {
       rmSync(tmpDirs.pop() as string, { recursive: true, force: true, maxRetries: 5 })
@@ -37,19 +72,19 @@ async function getJson(base: string, path: string): Promise<{ status: number; bo
   return { status: response.status, body: (await response.json()) as Record<string, unknown> }
 }
 
-async function sendJson(
+async function sendJson<T = Record<string, unknown>>(
   base: string,
   path: string,
   method: 'POST' | 'DELETE' | 'PATCH',
   payload?: unknown,
-): Promise<{ status: number; body: Record<string, unknown> }> {
+): Promise<{ status: number; body: T }> {
   const response = await fetch(`${base}${path}`, {
     method,
     ...(payload === undefined
       ? {}
       : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }),
   })
-  return { status: response.status, body: (await response.json()) as Record<string, unknown> }
+  return { status: response.status, body: (await response.json()) as T }
 }
 
 function readJsonFile(path: string): Record<string, unknown> {
@@ -90,9 +125,208 @@ async function listProviders(base: string): Promise<ProviderRow[]> {
   return res.body.providers as ProviderRow[]
 }
 
+/** verify / discover 的回执：连通性结论 + 模型目录。 */
+interface ProbeBody {
+  ok: boolean
+  code: string
+  message: string
+  latencyMs: number
+  /** verify 叫 discovered，discover 叫 models。 */
+  discovered?: { id: string; name?: string }[]
+  models?: { id: string; name?: string }[]
+}
+
+/** OpenAI 兼容的 /v1/models 正文：只回 id，别的什么都不说。 */
+const OPENAI_MODELS_BODY = JSON.stringify({
+  object: 'list',
+  data: [{ id: 'gpt-4o-mini' }, { id: 'deepseek-chat' }, { id: 'gpt-4o-mini' }],
+})
+
+/**
+ * 模型发现：此前探测端点把 `/v1/models` 的响应体拿到手就直接丢掉，界面只能让
+ * 用户手打精确的 model id。这里钉住"请求早就发了，正文要拿回来用"。
+ */
+describe('模型发现', () => {
+  it('verify 顺带回 discovered：解析 OpenAI 兼容的 data[]，去重且不猜 contextWindow', async () => {
+    const fake = await startFakeModelService({ '/v1/models': { body: OPENAI_MODELS_BODY } })
+    const server = await RyHarnessServer.create({ port: 0, dataDir: tempDataDir('discover-verify') })
+    try {
+      const created = await sendJson(server.url, '/api/providers', 'POST', {
+        displayName: '假网关',
+        protocol: 'openai',
+        baseUrl: fake.baseUrl,
+        models: ['m1'],
+        apiKey: 'sk-test-key',
+      })
+      const providerId = (created.body as { provider: { id: string } }).provider.id
+      const res = await sendJson<ProbeBody>(server.url, `/api/providers/${providerId}/verify`, 'POST')
+      expect(res.status).toBe(200)
+      expect(res.body.ok).toBe(true)
+      // 按端点顺序去重；只有端点真报出来的字段，没有 contextWindow / 价格。
+      expect(res.body.discovered).toEqual([{ id: 'gpt-4o-mini' }, { id: 'deepseek-chat' }])
+      expect(JSON.stringify(res.body)).not.toContain('contextWindow')
+      // 发现只是附赠：原来的连通性结论一个字没变。
+      expect(res.body.code).toBe('ok')
+      expect(res.body.message).toContain('API Key')
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('Ollama 原生 tags：认 models[].name，探不通时 discovered 为空', async () => {
+    const fake = await startFakeModelService({
+      '/api/tags': {
+        body: JSON.stringify({
+          models: [
+            { name: 'qwen2.5:7b', model: 'qwen2.5:7b' },
+            { name: 'llama3.2:3b', details: { parameter_size: '3B' } },
+          ],
+        }),
+      },
+    })
+    const server = await RyHarnessServer.create({
+      port: 0,
+      dataDir: tempDataDir('discover-ollama'),
+      verifyTimeoutMs: 3000,
+    })
+    try {
+      const created = await sendJson(server.url, '/api/providers', 'POST', {
+        displayName: '本地 Ollama',
+        protocol: 'ollama',
+        baseUrl: fake.baseUrl,
+        models: ['qwen2.5:7b'],
+      })
+      const providerId = (created.body as { provider: { id: string } }).provider.id
+      const res = await sendJson<ProbeBody>(server.url, `/api/providers/${providerId}/verify`, 'POST')
+      expect(res.body.ok).toBe(true)
+      // name 就是 id 的那一份不重复带（界面上多显示一遍同样的字没有意义）。
+      expect(res.body.discovered).toEqual([{ id: 'qwen2.5:7b' }, { id: 'llama3.2:3b' }])
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('探测失败仍回中文诊断，模型目录为空（连接不通就是没有目录可给）', async () => {
+    const fake = await startFakeModelService({ '/v1/models': { status: 401, body: '{}' } })
+    const server = await RyHarnessServer.create({ port: 0, dataDir: tempDataDir('discover-fail') })
+    try {
+      const created = await sendJson(server.url, '/api/providers', 'POST', {
+        displayName: '假网关',
+        protocol: 'openai',
+        baseUrl: fake.baseUrl,
+        models: ['m1'],
+        apiKey: 'sk-wrong',
+      })
+      const providerId = (created.body as { provider: { id: string } }).provider.id
+      const res = await sendJson<ProbeBody>(server.url, `/api/providers/${providerId}/verify`, 'POST')
+      expect(res.body.ok).toBe(false)
+      expect(res.body.code).toBe('bad-key')
+      expect(res.body.discovered).toEqual([])
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('POST /api/providers/discover：还没保存的草稿也能拉目录，凭据一次性使用', async () => {
+    const fake = await startFakeModelService({ '/v1/models': { body: OPENAI_MODELS_BODY } })
+    const dataDir = tempDataDir('discover-draft')
+    const server = await RyHarnessServer.create({ port: 0, dataDir })
+    try {
+      const res = await sendJson<ProbeBody>(server.url, '/api/providers/discover', 'POST', {
+        baseUrl: `${fake.baseUrl}/`, // 归一：去尾部斜杠
+        protocol: 'openai',
+        apiKey: 'sk-draft-only',
+      })
+      expect(res.status).toBe(200)
+      expect(res.body.ok).toBe(true)
+      expect(res.body.models).toEqual([{ id: 'gpt-4o-mini' }, { id: 'deepseek-chat' }])
+      // 凭据只用于这一次请求，不落盘、不进供应商配置。
+      expect(fake.authHeaders).toEqual(['Bearer sk-draft-only'])
+      expect(readFileSync(join(dataDir, 'config', 'providers.json'), 'utf8')).not.toContain('sk-draft-only')
+      expect(existsSync(join(dataDir, 'config', 'api-keys.json'))).toBe(false)
+      expect(
+        (await listProviders(server.url)).map((row) => {
+          return row.id
+        }),
+      ).toEqual(['siliconflow'])
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('discover 的白名单：非绝对地址 / 未知协议 400；免 key 的本地服务照常探', async () => {
+    const fake = await startFakeModelService({
+      '/api/tags': { body: JSON.stringify({ models: [{ name: 'qwen2.5:7b' }] }) },
+    })
+    const server = await RyHarnessServer.create({
+      port: 0,
+      dataDir: tempDataDir('discover-invalid'),
+      verifyTimeoutMs: 3000,
+    })
+    try {
+      const bad = async (payload: unknown): Promise<number> => {
+        return (await sendJson(server.url, '/api/providers/discover', 'POST', payload)).status
+      }
+      expect(await bad({ baseUrl: 'api.example.com/v1' })).toBe(400)
+      expect(await bad({ baseUrl: 'https://x.dev/v1', protocol: 'anthropic' })).toBe(400)
+      // 云端协议缺 Key 时说人话，而不是拿一个假 token 去换一个看不懂的 401。
+      const noKey = await sendJson<ProbeBody>(server.url, '/api/providers/discover', 'POST', {
+        baseUrl: 'https://api.deepseek.com/v1',
+      })
+      expect(noKey.body.code).toBe('no-key')
+      expect(noKey.body.models).toEqual([])
+      // 免 key 的本地服务不需要凭据，直接问。
+      const local = await sendJson<ProbeBody>(server.url, '/api/providers/discover', 'POST', {
+        baseUrl: fake.baseUrl,
+        protocol: 'ollama',
+      })
+      expect(local.body.ok).toBe(true)
+      expect(local.body.models).toEqual([{ id: 'qwen2.5:7b' }])
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('端点回的不是 JSON：探测照旧算通过，模型目录为空（附加信息不该推翻已成立的结论）', async () => {
+    const fake = await startFakeModelService({ '/v1/models': { body: '<html>not json</html>' } })
+    const server = await RyHarnessServer.create({ port: 0, dataDir: tempDataDir('discover-garbage') })
+    try {
+      const created = await sendJson(server.url, '/api/providers', 'POST', {
+        displayName: '假网关',
+        protocol: 'openai',
+        baseUrl: fake.baseUrl,
+        models: ['m1'],
+        apiKey: 'sk-test-key',
+      })
+      const providerId = (created.body as { provider: { id: string } }).provider.id
+      const res = await sendJson<ProbeBody>(server.url, `/api/providers/${providerId}/verify`, 'POST')
+      expect(res.body.ok).toBe(true)
+      expect(res.body.discovered).toEqual([])
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('解析器本身：只认列表形状，畸形条目丢掉，其余原样透出', () => {
+    expect(parseDiscoveredModels({ data: [{ id: 'a' }, { nope: 1 }, null, 'b'] }, 'openai')).toEqual([
+      { id: 'a' },
+      { id: 'b' },
+    ])
+    // 少数网关只回 models 而不是 data。
+    expect(parseDiscoveredModels({ models: [{ id: 'x' }] }, 'openai')).toEqual([{ id: 'x' }])
+    // 名字与 id 不同才带：Ollama 的 name 就是 id。
+    expect(parseDiscoveredModels({ models: [{ name: 'q', model: 'q' }] }, 'ollama')).toEqual([{ id: 'q' }])
+    expect(parseDiscoveredModels({ models: [{ id: 'q', name: 'Qwen' }] }, 'openai')).toEqual([
+      { id: 'q', name: 'Qwen' },
+    ])
+    expect(parseDiscoveredModels(null, 'openai')).toEqual([])
+    expect(parseDiscoveredModels({ data: 'not-an-array' }, 'openai')).toEqual([])
+  })
+})
+
 describe('供应商预设', () => {
   it('GET /api/provider-presets 返回常用服务商，字段齐全', async () => {
-    const server = await RyAgentServer.create({ port: 0, dataDir: tempDataDir('presets') })
+    const server = await RyHarnessServer.create({ port: 0, dataDir: tempDataDir('presets') })
     try {
       const res = await getJson(server.url, '/api/provider-presets')
       expect(res.status).toBe(200)
@@ -130,6 +364,15 @@ describe('供应商预设', () => {
         expect(preset.docsUrl ?? '').toMatch(/^https:\/\//)
       }
       expect(presets.find((preset) => preset.id === 'ollama')?.protocol).toBe('ollama')
+      // DeepSeek 预设与官方文档对齐：base_url 不带 /v1，模型名是 deepseek-flash
+      // （即 DeepSeek-V4.1-Flash，2026-10 升级后模型名不变）——预设过期会让用户
+      // 对着文档配出一个 404 的模型。
+      const deepseek = presets.find((preset) => {
+        return preset.id === 'deepseek'
+      })
+      expect(deepseek?.baseUrl).toBe('https://api.deepseek.com')
+      expect(deepseek?.models).toContain('deepseek-flash')
+      expect(deepseek?.models).toContain('deepseek-v4-pro')
     } finally {
       await server.close()
     }
@@ -139,7 +382,7 @@ describe('供应商预设', () => {
 describe('新增供应商', () => {
   it('POST /api/providers：路由落 providers.json、key 落 api-keys.json（0600）、适配器热注册', async () => {
     const dataDir = tempDataDir('create')
-    const server = await RyAgentServer.create({ port: 0, dataDir })
+    const server = await RyHarnessServer.create({ port: 0, dataDir })
     try {
       // 启动时只有内置 SiliconFlow 一条路由。
       expect(
@@ -209,7 +452,7 @@ describe('新增供应商', () => {
 
   it('Ollama 允许空 key：建成免 key 供应商，且不影响适配器构造', async () => {
     const dataDir = tempDataDir('ollama')
-    const server = await RyAgentServer.create({ port: 0, dataDir })
+    const server = await RyHarnessServer.create({ port: 0, dataDir })
     try {
       const created = await sendJson(server.url, '/api/providers', 'POST', {
         displayName: '本地 Ollama',
@@ -237,7 +480,7 @@ describe('新增供应商', () => {
   })
 
   it('白名单校验：非法 protocol / baseUrl / 空模型 / 未知预设一律 400', async () => {
-    const server = await RyAgentServer.create({ port: 0, dataDir: tempDataDir('invalid') })
+    const server = await RyHarnessServer.create({ port: 0, dataDir: tempDataDir('invalid') })
     try {
       const bad = async (payload: unknown): Promise<number> => {
         return (await sendJson(server.url, '/api/providers', 'POST', payload)).status
@@ -272,7 +515,7 @@ describe('新增供应商', () => {
   })
 
   it('同一个预设加第二次：换个 id 存下，不覆盖已有路由', async () => {
-    const server = await RyAgentServer.create({ port: 0, dataDir: tempDataDir('dup') })
+    const server = await RyHarnessServer.create({ port: 0, dataDir: tempDataDir('dup') })
     try {
       const first = await sendJson(server.url, '/api/providers', 'POST', {
         displayName: 'DeepSeek 官方',
@@ -305,7 +548,7 @@ describe('新增供应商', () => {
   })
 
   it('同一个 baseUrl 不给建第二条：点已存在的预设回 409，而不是退化成 custom-xxxxxxxx', async () => {
-    const server = await RyAgentServer.create({ port: 0, dataDir: tempDataDir('dup-endpoint') })
+    const server = await RyHarnessServer.create({ port: 0, dataDir: tempDataDir('dup-endpoint') })
     try {
       // 内置 SiliconFlow 就指向这个地址：再点一次它的预设必须被挡住，
       // 否则用户会得到一条丢品牌图标、id 是随机串的重复项。
@@ -344,7 +587,7 @@ describe('新增供应商', () => {
 
   it('落盘时剥掉合并进来的明文 key：改过 key 后再增删供应商也不会把它抄进 providers.json', async () => {
     const dataDir = tempDataDir('no-leak')
-    const server = await RyAgentServer.create({ port: 0, dataDir })
+    const server = await RyHarnessServer.create({ port: 0, dataDir })
     try {
       await sendJson(server.url, '/api/settings/api-key', 'POST', {
         providerId: 'siliconflow',
@@ -406,7 +649,7 @@ describe('新增供应商', () => {
       }),
       'utf8',
     )
-    const server = await RyAgentServer.create({ port: 0, dataDir })
+    const server = await RyHarnessServer.create({ port: 0, dataDir })
     try {
       expect(await server.llm.listModels('broken')).toHaveLength(1)
       expect(await server.llm.listModels('local')).toHaveLength(1)
@@ -425,7 +668,7 @@ describe('新增供应商', () => {
 describe('删除供应商', () => {
   it('DELETE /api/providers/:id 摘掉路由与 key，内置条目 409，未知 404', async () => {
     const dataDir = tempDataDir('delete')
-    const server = await RyAgentServer.create({ port: 0, dataDir })
+    const server = await RyHarnessServer.create({ port: 0, dataDir })
     try {
       await sendJson(server.url, '/api/providers', 'POST', {
         displayName: '私有网关',
@@ -475,7 +718,7 @@ describe('删除供应商', () => {
 describe('编辑供应商', () => {
   it('PATCH /api/providers/:id 改名字 / 地址 / 模型 / 协议并热注册：不用删了重建', async () => {
     const dataDir = tempDataDir('patch')
-    const server = await RyAgentServer.create({ port: 0, dataDir })
+    const server = await RyHarnessServer.create({ port: 0, dataDir })
     try {
       const created = await sendJson(server.url, '/api/providers', 'POST', {
         displayName: '私有网关',
@@ -529,7 +772,7 @@ describe('编辑供应商', () => {
 
   it('只认 displayName / baseUrl / models / protocol：凭据与归属标记改了也无效', async () => {
     const dataDir = tempDataDir('patch-whitelist')
-    const server = await RyAgentServer.create({ port: 0, dataDir })
+    const server = await RyHarnessServer.create({ port: 0, dataDir })
     try {
       await sendJson(server.url, '/api/settings/api-key', 'POST', { providerId: 'siliconflow', apiKey: 'sk-silicon' })
       const patched = await sendJson(server.url, '/api/providers/siliconflow', 'PATCH', {
@@ -553,7 +796,7 @@ describe('编辑供应商', () => {
   })
 
   it('校验：空名字 / 相对地址 / 清空模型列表 / 未知 id 一律 400 或 404', async () => {
-    const server = await RyAgentServer.create({ port: 0, dataDir: tempDataDir('patch-invalid') })
+    const server = await RyHarnessServer.create({ port: 0, dataDir: tempDataDir('patch-invalid') })
     try {
       const patch = async (payload: unknown): Promise<number> => {
         return (await sendJson(server.url, '/api/providers/siliconflow', 'PATCH', payload)).status
@@ -577,7 +820,7 @@ describe('编辑供应商', () => {
   })
 
   it('改成另一条已存在的 baseUrl：回 409 并点名那一条（不静默产生重复项）', async () => {
-    const server = await RyAgentServer.create({ port: 0, dataDir: tempDataDir('patch-dup') })
+    const server = await RyHarnessServer.create({ port: 0, dataDir: tempDataDir('patch-dup') })
     try {
       const created = await sendJson(server.url, '/api/providers', 'POST', {
         displayName: '私有网关',
@@ -604,7 +847,7 @@ describe('编辑供应商', () => {
   })
 
   it('删掉还挂在 agent 上的模型：回 409 并点名是哪个 agent 在用（而不是静默变砖）', async () => {
-    const server = await RyAgentServer.create({ port: 0, dataDir: tempDataDir('patch-model-in-use') })
+    const server = await RyHarnessServer.create({ port: 0, dataDir: tempDataDir('patch-model-in-use') })
     try {
       const created = await sendJson(server.url, '/api/providers', 'POST', {
         displayName: '私有网关',
@@ -663,7 +906,7 @@ describe('编辑供应商', () => {
 
 describe('内置供应商视图', () => {
   it('GET /api/providers 的 ProviderInfo 带 custom / protocol / baseUrl，内置条目 custom=false', async () => {
-    const server = await RyAgentServer.create({ port: 0, dataDir: tempDataDir('builtin') })
+    const server = await RyHarnessServer.create({ port: 0, dataDir: tempDataDir('builtin') })
     try {
       const builtin = (await listProviders(server.url)).find((row) => {
         return row.id === 'siliconflow'
@@ -675,16 +918,14 @@ describe('内置供应商视图', () => {
         baseUrl: 'https://api.siliconflow.cn/v1',
         custom: false,
         apiKeyConfigured: false, // 未设 SILICONFLOW_API_KEY
-        models: [
-          { id: 'deepseek-ai/DeepSeek-V3', name: 'DeepSeek-V3', contextWindow: 64_000 },
-          { id: 'deepseek-ai/DeepSeek-R1', name: 'DeepSeek-R1', contextWindow: 64_000 },
-          { id: 'Qwen/Qwen2.5-72B-Instruct', name: 'Qwen2.5-72B', contextWindow: 32_000 },
-        ],
+        // 模型目录本身由 provider-model-catalog.test.ts 钉住（真实 id / 上下文长度），
+        // 这里只证明 HTTP 视图原样带出它，不再抄一份十几条的清单。
+        models: DEFAULT_PROVIDERS.siliconflow?.models,
         usedBy: [
           // 内置小队三位都走这条路由（Ryen + 首启种下的两位常驻成员）。
           { agentId: 'ryen', agentName: 'Ryen' },
-          { agentId: 'ryen-team-coding', agentName: '阿码' },
-          { agentId: 'ryen-team-organizer', agentName: '阿屉' },
+          { agentId: 'ryen-team-coding', agentName: '工程师' },
+          { agentId: 'ryen-team-writing', agentName: '文案' },
         ],
       })
     } finally {
@@ -694,7 +935,7 @@ describe('内置供应商视图', () => {
 
   it('自定义供应商跨重启仍在（providers.json 是唯一事实源）', async () => {
     const dataDir = tempDataDir('persist')
-    const first = await RyAgentServer.create({ port: 0, dataDir })
+    const first = await RyHarnessServer.create({ port: 0, dataDir })
     try {
       await sendJson(first.url, '/api/providers', 'POST', {
         displayName: 'OpenRouter',
@@ -707,7 +948,7 @@ describe('内置供应商视图', () => {
     } finally {
       await first.close()
     }
-    const second = await RyAgentServer.create({ port: 0, dataDir })
+    const second = await RyHarnessServer.create({ port: 0, dataDir })
     try {
       const openrouter = (await listProviders(second.url)).find((row) => {
         return row.id === 'openrouter'
@@ -722,7 +963,7 @@ describe('内置供应商视图', () => {
   })
 
   it('POST /api/settings/api-key 热更新凭据，不重启（重复挂适配器会撞 DUPLICATE_ADAPTER）', async () => {
-    const server = await RyAgentServer.create({ port: 0, dataDir: tempDataDir('apikey') })
+    const server = await RyHarnessServer.create({ port: 0, dataDir: tempDataDir('apikey') })
     try {
       const saved = await sendJson(server.url, '/api/settings/api-key', 'POST', {
         providerId: 'siliconflow',

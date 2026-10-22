@@ -1,5 +1,5 @@
 {
-  "name": "@ryagent/agent",
+  "name": "@ryharness/agent",
   "version": "0.1.0",
   "type": "module",
   "license": "MIT",
@@ -17,6 +17,9 @@
     "build": "tsdown"
   },
   "dependencies": {
-    "@ryagent/llm": "workspace:*"
+    "@ryharness/llm": "workspace:*"
+  },
+  "devDependencies": {
+    "@ryharness/brand": "workspace:*"
   }
 }

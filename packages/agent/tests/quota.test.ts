@@ -1,7 +1,7 @@
-import type { AgentDefinition, AgentLoopEvent, SessionQuota, Tool, ToolResult } from '@ryagent/agent'
-import { AgentLoop, createSessionQuota, DEFAULT_SESSION_QUOTA_LIMITS } from '@ryagent/agent'
-import { brandString } from '@ryagent/brand'
-import type { GenerateOptions, LlmRuntime, StreamChunk, ToolCallId } from '@ryagent/llm'
+import type { AgentDefinition, AgentLoopEvent, SessionQuota, Tool, ToolResult } from '@ryharness/agent'
+import { AgentLoop, createSessionQuota, DEFAULT_SESSION_QUOTA_LIMITS } from '@ryharness/agent'
+import { brandString } from '@ryharness/brand'
+import type { GenerateOptions, LlmRuntime, StreamChunk, ToolCallId } from '@ryharness/llm'
 import { describe, expect, it } from 'vitest'
 
 /** 脚本化假 LLM：每步消耗一段录制 chunk。 */

@@ -1,7 +1,7 @@
-/** Content-block structure helpers. @module @ryagent/llm/content */
+/** Content-block structure helpers. @module @ryharness/llm/content */
 
-import type { FileAttachmentRef, ImageAttachmentRef } from '@ryagent/attachment'
-import { assertNever } from '@ryagent/util-values'
+import type { FileAttachmentRef, ImageAttachmentRef } from '@ryharness/attachment'
+import { assertNever } from '@ryharness/util-values'
 import type { Message } from './message.ts'
 import type { ContentBlock, RequestMessage, ToolHistory, ToolSchema, ToolUpdate } from './types.ts'
 

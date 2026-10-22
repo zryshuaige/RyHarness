@@ -6,13 +6,13 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { EvolveLlm, MemorySweep, PlaybookDelta } from '@ryagent/evolve'
-import { EvolveService, seedIfEmpty } from '@ryagent/evolve'
+import type { EvolveLlm, MemorySweep, PlaybookDelta } from '@ryharness/evolve'
+import { EvolveService, seedIfEmpty } from '@ryharness/evolve'
 import { afterEach, describe, expect, it } from 'vitest'
 
 const dirs: string[] = []
 function service(llm?: EvolveLlm): EvolveService {
-  const dir = mkdtempSync(join(tmpdir(), 'ryagent-origin-'))
+  const dir = mkdtempSync(join(tmpdir(), 'ryharness-origin-'))
   dirs.push(dir)
   return new EvolveService({ dbPath: join(dir, 'e.db'), llm, logger: () => {}, limits: { consolidationSliceMs: 5 } })
 }

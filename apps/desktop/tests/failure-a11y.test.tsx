@@ -17,7 +17,7 @@ import { MessageBubble } from '../renderer/src/components/MessageBubble.tsx'
 import { PlaybookPanel } from '../renderer/src/components/PlaybookPanel.tsx'
 import { WelcomeHome } from '../renderer/src/components/WelcomeHome.tsx'
 import { getToasts, toast } from '../renderer/src/lib/toast.ts'
-import { ChatStore, type UiMessage } from '../renderer/src/store.ts'
+import { bucketOf, ChatStore, type UiMessage } from '../renderer/src/store.ts'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -160,12 +160,14 @@ describe('经验手册：停用/恢复失败要出声', () => {
   it('读手册失败就地报错，不装成"手册还是空的"', async () => {
     const { getPlaybook } = await renderPanel({
       getPlaybook: () => {
-        return Promise.reject(new Error('后端没起来'))
+        return Promise.reject(new Error('not found: GET /api/evolve/playbook'))
       },
     })
     await settle()
     const alert = container.querySelector('[role="alert"]')
-    expect(alert?.textContent).toContain('经验手册没读出来：后端没起来')
+    // 服务端英文原话不上屏：这句说的是「这版服务端没有这条路由」。
+    expect(alert?.textContent).toContain('本机服务没有这个接口')
+    expect(alert?.textContent).not.toContain('not found')
     expect(container.textContent).not.toContain('手册还是空的')
     // 读不出来也留着重试口。
     click(container.querySelector('.apikey-error button'))
@@ -216,10 +218,18 @@ describe('「我的」页：改昵称失败要出声', () => {
   }
 
   async function rename(value: string): Promise<void> {
-    click(container.querySelector('.me-inline-edit'))
-    const input = container.querySelector<HTMLInputElement>('.me-name-inline')!
+    // 限定在猫管家那一行：用户卡现在也有一个可点的名字（`.me-inline-edit`），
+    // 全局取第一个会点到「你」身上去，于是输入框根本不出现。
+    const butler = container.querySelector('.me-butler')
+    if (butler === null) throw new Error('猫管家那一行没有渲染出来')
+    click(butler.querySelector('.me-inline-edit'))
+    const input = butler.querySelector<HTMLInputElement>('.me-name-inline')
+    if (input === null) throw new Error('改名输入框没有渲染出来')
     await act(async () => {
-      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+      // React 受控输入要绕过 setter 直接派发 input 才会认这次改动，所以必须拿到
+      // 原型上的原生 setter。取不到说明 jsdom 环境不对，直接失败好过静默改名失败。
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+      if (setter === undefined) throw new Error('HTMLInputElement.prototype.value 缺少 setter')
       setter.call(input, value)
       input.dispatchEvent(new Event('input', { bubbles: true }))
     })
@@ -322,13 +332,13 @@ describe('首屏：删示例的每条分支都有回音', () => {
   const demo: Conversation = {
     id: 'demo-1',
     kind: 'group',
-    title: '示例 · Ryen、阿码一起定晚饭',
+    title: '示例 · Ryen、阿码一起做季度报告',
     memberAgentIds: ['ryen'],
     dispatcherAgentId: 'ryen',
     lastReadSeq: 0,
     createdAt: 1,
     updatedAt: 2,
-    lastMessagePreview: '那就定周三晚。',
+    lastMessagePreview: '报告已经放进工作区。',
   }
 
   function renderWelcome(): void {
@@ -351,10 +361,10 @@ describe('首屏：删示例的每条分支都有回音', () => {
   }
 
   function deleteButton(): Element {
-    const button = [...container.querySelectorAll('button')].find((node) => {
-      return node.textContent === '删掉示例'
-    })
-    expect(button).toBeDefined()
+    // 删除键是行尾那个图标按钮：它默认只是低透明度，不是 display:none，
+    // 所以读屏与键盘仍然走得到（本文件盯的正是这一点）。
+    const button = container.querySelector('.welcome-demo-clear')
+    expect(button, '首屏没有删除示例的按键').not.toBeNull()
     return button as Element
   }
 
@@ -369,7 +379,11 @@ describe('首屏：删示例的每条分支都有回音', () => {
       await Promise.resolve()
       await Promise.resolve()
     })
-    expect(toastTexts().join('|')).toContain('示例会话已删掉')
+    // 服务端删的是**软删**（消息还在库里，restore 端点一直在）：提示必须说清还能撤销，
+    // 不能写"删不回来"那种绝对化断言——那是在骗人。
+    expect(toastTexts().join('|')).toContain('示例会话已删除')
+    expect(toastTexts().join('|')).toContain('撤销')
+    expect(toastTexts().join('|')).not.toContain('删不回来')
   })
 
   it('还没拿到本机服务地址时也要说话，而不是点了没反应', async () => {
@@ -399,6 +413,30 @@ describe('首屏：删示例的每条分支都有回音', () => {
     expect(html).toContain('<div class="welcome-cat" aria-hidden="true">')
   })
 })
+
+/**
+ * 起壳用的最小后端：四个列表接口给最小真值，其余一律空包。
+ * 栏 1 的两条用例共用它——同一套 fetch 抄两遍，只会各自漂移。
+ */
+function stubBootApi(): void {
+  window.history.replaceState({}, '', '/?api=http://127.0.0.1:32100')
+  vi.stubGlobal('fetch', async (input: string) => {
+    const path = new URL(String(input)).pathname
+    const reply = (body: unknown): Response =>
+      ({
+        ok: true,
+        status: 200,
+        json: () => {
+          return Promise.resolve(body)
+        },
+      }) as unknown as Response
+    if (path === '/api/agents') return reply({ agents: [agent] })
+    if (path === '/api/agent-templates') return reply({ templates: [] })
+    if (path === '/api/providers') return reply({ providers: [] })
+    if (path === '/api/conversations') return reply({ conversations: [] })
+    return reply({})
+  })
+}
 
 describe('可访问性：读屏能定位到新增内容与当前所在', () => {
   function chatApi(): ApiClient {
@@ -435,7 +473,9 @@ describe('可访问性：读屏能定位到新增内容与当前所在', () => {
     window.history.replaceState({}, '', '/?api=http://127.0.0.1:32100')
     await act(async () => {
       root = createRoot(container)
-      root.render(<ChatView api={chatApi()} conversation={conversation} agents={[agent]} store={new ChatStore()} />)
+      root.render(
+        <ChatView api={chatApi()} conversation={conversation} agents={[agent]} bucket={bucketOf(new ChatStore())} />,
+      )
       await Promise.resolve()
       await Promise.resolve()
     })
@@ -484,23 +524,7 @@ describe('可访问性：读屏能定位到新增内容与当前所在', () => {
   })
 
   it('主导航当前页带 aria-current，且只有一个', async () => {
-    window.history.replaceState({}, '', '/?api=http://127.0.0.1:32100')
-    vi.stubGlobal('fetch', async (input: string) => {
-      const path = new URL(String(input)).pathname
-      const reply = (body: unknown): Response =>
-        ({
-          ok: true,
-          status: 200,
-          json: () => {
-            return Promise.resolve(body)
-          },
-        }) as unknown as Response
-      if (path === '/api/agents') return reply({ agents: [agent] })
-      if (path === '/api/agent-templates') return reply({ templates: [] })
-      if (path === '/api/providers') return reply({ providers: [] })
-      if (path === '/api/conversations') return reply({ conversations: [] })
-      return reply({})
-    })
+    stubBootApi()
     await act(async () => {
       root = createRoot(container)
       root.render(<App />)
@@ -524,5 +548,37 @@ describe('可访问性：读屏能定位到新增内容与当前所在', () => {
     )
     expect(current()).toHaveLength(1)
     expect(current()[0]!.textContent).toContain('通讯录')
+  })
+
+  it('栏 1 四个页签同一套线性图标、同一档尺寸，品牌猫只留在 logo 槽', async () => {
+    stubBootApi()
+    await act(async () => {
+      root = createRoot(container)
+      root.render(<App />)
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const nav = container.querySelector('nav[aria-label="主导航"]')!
+    // 按槽位定位，不按品牌组件的类名：换成别的品牌组件时这条断言仍然成立。
+    const slotWidth = (label: string): number => {
+      const tab = [...nav.querySelectorAll('.rail-tab')].find((node) => {
+        return node.textContent?.includes(label)
+      })
+      return Number(tab?.querySelector('.rail-icon svg')?.getAttribute('width') ?? Number.NaN)
+    }
+    const widths = ['聊天', '通讯录', '插件', '我的'].map((label) => {
+      return [label, slotWidth(label)] as const
+    })
+    for (const [label, width] of widths) {
+      expect(width, `「${label}」槽位没渲染出线���图标`).toBeGreaterThan(0)
+      expect([16, 20, 24], `栏 1 图标尺寸 ${width} 不在 16/20/24 三档上`).toContain(width)
+    }
+    // 四个页签是同一套图形语言：尺寸必须一致，不能一个 20 一个 16。
+    expect(new Set(widths.map(([, w]) => w)).size, '页签图标尺寸不一致').toBe(1)
+    // 品牌猫是产品标识，只出现在 logo 槽；混进导航既不是同一套语言，在 20px 槽位里
+    // 也压不住旁边的描边图标（「我的」曾挂过 16px 的猫）。
+    expect(nav.querySelector('.rail-tab img'), '页签里不该出现品牌猫').toBeNull()
+    expect(container.querySelector('.rail-logo img'), '栏顶 logo 应当是品牌猫').not.toBeNull()
   })
 })

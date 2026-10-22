@@ -1,0 +1,10 @@
+# 资助渠道占位。
+#
+# 本仓目前没有接入任何资助平台，所以这里刻意不填具体账号：填一个不存在或不属于本项目
+# 的账号，比不显示 Sponsor 按钮更糟——它会让以为项目在收钱的人白等一次。
+# 公开后请改成真实账号（GitHub Sponsors 填用户名，或用 custom 放一个自己盯着的链接）：
+#
+#   github: [你的 GitHub 用户名]
+#   # 或者
+#   custom: ["https://example.org/donate"]
+github: []

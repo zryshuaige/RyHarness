@@ -2,7 +2,7 @@
 //
 // 前置条件：
 //   1. 以远程调试端口启动应用，例如：
-//        RYAGENT_DEV_SERVER_URL=http://localhost:5173 electron . --remote-debugging-port=9333
+//        RYHARNESS_DEV_SERVER_URL=http://localhost:5173 electron . --remote-debugging-port=9333
 //      （端口 9333 在本文件内硬编码，改动需同步）
 //   2. 依赖根 devDependency `ws`（CDP WebSocket 客户端）。
 //
@@ -45,33 +45,88 @@ ws.on('message', (d) => {
   }
 })
 ws.on('open', async () => {
-  const api = new URL(await evaluate('new URLSearchParams(location.search).get("api")'))
+  // 开发模式 API 地址在 ?api= 查询串；生产模式（loadFile）主进程把地址写进
+  // window.__RYHARNESS_API_BASE__（见 electron/main.ts 的注入段）。两种都要能驱动。
+  const apiRaw = await evaluate(
+    'new URLSearchParams(location.search).get("api") ?? window.__RYHARNESS_API_BASE__ ?? null',
+  )
+  if (typeof apiRaw !== 'string' || apiRaw.length === 0) {
+    console.error('拿不到 API 地址：既无 ?api= 查询串也无 window.__RYHARNESS_API_BASE__')
+    process.exit(1)
+  }
+  const api = new URL(apiRaw)
   const base = api.origin
 
   if (action === 'setup') {
-    // 建单聊 + 群（经页面内 fetch，带同源 api 地址）
+    // 成员 id 从 /api/agents 现取：内置助理的 id 是 seed 出来的（ryen / ryen-team-*），
+    // 早先这里硬编码的 codebot / owl 在任何真实数据目录里都不存在，建群必然 400。
+    const members = await evaluate(
+      `fetch('${base}/api/agents', {headers:{'authorization':'Bearer '+window.__RYHARNESS_API_TOKEN__}}).then(r=>r.json()).then(j=>j.agents.map(a=>a.id))`,
+    )
+    const memberIds = Array.isArray(members) ? members.slice(0, 3) : []
+    if (memberIds.length < 2) {
+      console.error(`可用助理不足 2 个，建不了群：${JSON.stringify(members)}`)
+      process.exit(1)
+    }
+    const auth = `'authorization':'Bearer '+window.__RYHARNESS_API_TOKEN__`
     const dm = await evaluate(
-      `fetch('${base}/api/conversations', {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({kind:'direct',agentId:'ryen'})}).then(r=>r.json())`,
+      `fetch('${base}/api/conversations', {method:'POST',headers:{'content-type':'application/json',${auth}},body:JSON.stringify({kind:'direct',agentId:'${memberIds[0]}'})}).then(r=>r.json())`,
     )
     const grp = await evaluate(
-      `fetch('${base}/api/conversations', {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({kind:'group',memberAgentIds:['ryen','codebot','owl'],dispatcherAgentId:'ryen',title:'真实验证群'})}).then(r=>r.json())`,
+      `fetch('${base}/api/conversations', {method:'POST',headers:{'content-type':'application/json',${auth}},body:JSON.stringify({kind:'group',memberAgentIds:${JSON.stringify(memberIds)},dispatcherAgentId:'${memberIds[0]}',title:'真实验证群'})}).then(r=>r.json())`,
     )
-    console.log(JSON.stringify({ dm: dm.conversation.id, group: grp.conversation.id }))
+    console.log(
+      JSON.stringify({
+        dm: dm.conversation?.id,
+        group: grp.conversation?.id,
+        members: memberIds,
+        dmError: dm.error,
+        grpError: grp.error,
+      }),
+    )
+  }
+
+  if (action === 'reload') {
+    await cmd('Page.enable')
+    await cmd('Page.reload', { ignoreCache: true })
+    console.log('reloaded')
   }
 
   if (action === 'send') {
     // arg = "conversationId|文本"：UI 输入发送
     const [cid, text] = arg.split('|')
+    // 点可点的那一层：外层 .conversation-item 只是容器，事件挂在 .conversation-item-main 上，
+    // 点容器不会切换会话（消息会静默发进上一个会话——这坑真实踩过一次）。
     await evaluate(`(function(){
       const items = document.querySelectorAll('.conversation-item')
-      items.forEach(function(i){ if(i.textContent.includes('${cid === 'DM' ? 'Ryen' : '真实验证群'}')) i.click() })
+      items.forEach(function(i){
+        if (!i.textContent.includes('${cid === 'DM' ? 'Ryen' : '真实验证群'}')) return
+        const main = i.querySelector('.conversation-item-main') || i
+        main.click()
+      })
     })()`)
     await new Promise((r) => setTimeout(r, 900))
+    // 必须核对当前会话真的切过去了：会话项列表是异步刷新的，刚建完群时那一项可能
+    // 还没渲染，点了个寂寞——消息会静默落进上一个会话（曾因此把群聊测试跑成了单聊，
+    // 白等两轮模型）。核对不过就报错退出，不要发出一条错位的消息。
+    const header = await evaluate(
+      `(document.querySelector('.chat-header') || document.querySelector('.chat-col') || document.body).textContent || ''`,
+    )
+    const expectTitle = cid === 'DM' ? 'Ryen' : '真实验证群'
+    if (!String(header).includes(expectTitle)) {
+      console.error(`没切到「${expectTitle}」会话（当前头部：${String(header).slice(0, 60)}），放弃发送`)
+      process.exit(2)
+    }
     await cmd('Runtime.evaluate', { expression: `document.querySelector('.chat-input-box textarea').focus()` })
     await cmd('Input.insertText', { text })
     await new Promise((r) => setTimeout(r, 300))
     await evaluate(`Array.from(document.querySelectorAll('.send-btn')).forEach(function(b){b.click()})`)
     console.log('sent')
+  }
+
+  if (action === 'eval') {
+    // 通用读页面状态：导航点按、插件区/开关态这类一次性核对不必每次改驱动。
+    console.log(JSON.stringify(await evaluate(arg)))
   }
 
   if (action === 'wait-done') {
@@ -80,7 +135,7 @@ ws.on('open', async () => {
     const t0 = Date.now()
     while (Date.now() - t0 < 90_000) {
       const done = await evaluate(
-        `document.querySelectorAll('.bubble-row[data-sender="ryen"], .bubble-row[data-sender="codebot"], .bubble-row[data-sender="owl"]').length`,
+        `document.querySelectorAll('.bubble-row[data-sender]:not([data-sender="user"]):not([data-sender="system"])').length`,
       )
       const typing = await evaluate(`!!document.querySelector('.typing-indicator')`)
       if (Number(done) >= target && !typing) {
@@ -89,7 +144,10 @@ ws.on('open', async () => {
       }
       await new Promise((r) => setTimeout(r, 1500))
     }
-    console.log('timeout, agent messages =', await evaluate(`document.querySelectorAll('.bubble-row[data-sender]`))
+    console.log(
+      'timeout, agent messages =',
+      await evaluate(`document.querySelectorAll('.bubble-row[data-sender]').length`),
+    )
   }
 
   if (action === 'text') {

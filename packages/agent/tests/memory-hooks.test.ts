@@ -1,6 +1,6 @@
-import type { AgentDefinition, AgentMemoryHooks } from '@ryagent/agent'
-import { AgentLoop } from '@ryagent/agent'
-import type { LlmRuntime, StreamChunk } from '@ryagent/llm'
+import type { AgentDefinition, AgentMemoryHooks } from '@ryharness/agent'
+import { AgentLoop } from '@ryharness/agent'
+import type { LlmRuntime, StreamChunk } from '@ryharness/llm'
 import { describe, expect, it } from 'vitest'
 
 const DEFINITION: AgentDefinition = {
@@ -87,6 +87,33 @@ describe('AgentLoop × 长期记忆', () => {
       events.push(event.type)
     }
     expect(events).toEqual(['text-delta', 'done'])
+  })
+
+  it('同步召回与后台补正都按 agent 空间调用（回灌按空间隔离的前提）', async () => {
+    const calls: string[] = []
+    const memory: AgentMemoryHooks = {
+      async recall(agentId, inputText) {
+        return `${agentId}:${inputText}`
+      },
+      recallSync(agentId, inputText) {
+        calls.push(`sync ${agentId}:${inputText}`)
+        return '[记忆] 同步块'
+      },
+      async recallRefine(agentId, inputText) {
+        calls.push(`refine ${agentId}:${inputText}`)
+        return true
+      },
+      enqueueExtraction() {},
+    }
+    const loop = new AgentLoop({ definition: DEFINITION, llm: mockLlm(), tools: [], memory })
+    for await (const _ of loop.run({ text: '帮我照顾猫' }, { workspaceRoot: process.cwd() })) {
+      /* drain */
+    }
+    // 补正是 fire-and-forget：断言它被调用过，不等它落地。
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0)
+    })
+    expect(calls).toEqual(['sync a1:帮我照顾猫', 'refine a1:帮我照顾猫'])
   })
 
   it('无 memory 选项时行为与此前一致（向后兼容）', async () => {

@@ -3,7 +3,7 @@
  *
  * 单独一个域而不是塞进设置路由：这条消息由服务端自己发起，用户的开关与「今天发过
  * 没有」是同一件事的两面，放在一起才不会各自记一份状态。
- * @module @ryagent/server/routes/proactive
+ * @module @ryharness/server/routes/proactive
  */
 import type { ProactiveDigest, ProactiveSnapshot } from '../proactive.ts'
 import { HttpRequestError, json, type Router } from '../router.ts'

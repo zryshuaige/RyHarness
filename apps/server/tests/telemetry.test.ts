@@ -8,18 +8,18 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { AgentMemoryHooks } from '@ryagent/agent'
-import type { Context } from '@ryagent/cordis'
-import type { GenerateOptions, StreamChunk } from '@ryagent/llm'
-import { LlmAdapter } from '@ryagent/llm'
-import { RyAgentServer } from '@ryagent/server'
+import type { AgentMemoryHooks } from '@ryharness/agent'
+import type { Context } from '@ryharness/cordis'
+import type { GenerateOptions, StreamChunk } from '@ryharness/llm'
+import { LlmAdapter } from '@ryharness/llm'
+import { RyHarnessServer } from '@ryharness/server'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Telemetry } from '../src/telemetry.ts'
 
 const tmpDirs: string[] = []
 
 function tempDataDir(prefix: string): string {
-  const dir = mkdtempSync(join(tmpdir(), `ryagent-telemetry-${prefix}-`))
+  const dir = mkdtempSync(join(tmpdir(), `ryharness-telemetry-${prefix}-`))
   tmpDirs.push(dir)
   return dir
 }
@@ -66,8 +66,8 @@ function fakeMemory(): AgentMemoryHooks {
   }
 }
 
-async function startServer(memory?: AgentMemoryHooks): Promise<RyAgentServer> {
-  return RyAgentServer.create({
+async function startServer(memory?: AgentMemoryHooks): Promise<RyHarnessServer> {
+  return RyHarnessServer.create({
     port: 0,
     dataDir: tempDataDir('server'),
     ...(memory === undefined ? {} : { memory }),

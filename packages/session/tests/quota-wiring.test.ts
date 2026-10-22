@@ -4,15 +4,15 @@
  * AgentLoop 每轮新建、闸也每轮自建，额度实际按轮计。这里验证协调器按
  * conversationId 缓存同一个闸并传进去之后的行为：同一会话跨轮累计、群聊成员
  * 共用一份、并发会话互不干扰、会话删除后额度归还、缓存有上界且不留残留。
- * @module @ryagent/session/tests/quota-wiring
+ * @module @ryharness/session/tests/quota-wiring
  */
 
-import type { AgentDefinition, AgentLoopEvent, Tool, ToolResult } from '@ryagent/agent'
-import { DEFAULT_SESSION_QUOTA_LIMITS } from '@ryagent/agent'
-import { brandString } from '@ryagent/brand'
-import type { GroupEvent } from '@ryagent/group'
-import type { GenerateOptions, LlmRuntime, StreamChunk, ToolCallId } from '@ryagent/llm'
-import { SessionCoordinator, SessionStore } from '@ryagent/session'
+import type { AgentDefinition, AgentLoopEvent, Tool, ToolResult } from '@ryharness/agent'
+import { DEFAULT_SESSION_QUOTA_LIMITS } from '@ryharness/agent'
+import { brandString } from '@ryharness/brand'
+import type { GroupEvent } from '@ryharness/group'
+import type { GenerateOptions, LlmRuntime, StreamChunk, ToolCallId } from '@ryharness/llm'
+import { SessionCoordinator, SessionStore } from '@ryharness/session'
 import { describe, expect, it } from 'vitest'
 
 const AGENT: AgentDefinition = {

@@ -7,12 +7,12 @@
  * - 未执行的 tool_call 绝不随中断落库：重建历史时会出现没有配对 tool 结果的
  *   悬空调用，供应商会直接拒绝下一轮请求。
  * - usage chunk 不能被丢弃：每次模型调用的用量随产出它的消息一起交出去。
- * @module @ryagent/agent/tests/loop-cancel-usage
+ * @module @ryharness/agent/tests/loop-cancel-usage
  */
 
-import type { AgentDefinition, AgentLoopEvent, Tool } from '@ryagent/agent'
-import { ABORTED_CODE, AgentLoop, isAbortedError } from '@ryagent/agent'
-import type { AssistantMessage, GenerateOptions, LlmRuntime, StreamChunk, TokenUsage, ToolCallId } from '@ryagent/llm'
+import type { AgentDefinition, AgentLoopEvent, Tool } from '@ryharness/agent'
+import { ABORTED_CODE, AgentLoop, isAbortedError } from '@ryharness/agent'
+import type { AssistantMessage, GenerateOptions, LlmRuntime, StreamChunk, TokenUsage, ToolCallId } from '@ryharness/llm'
 import { describe, expect, it } from 'vitest'
 
 const DEFINITION: AgentDefinition = {

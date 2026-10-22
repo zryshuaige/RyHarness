@@ -9,9 +9,15 @@ import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CreateProviderInput, ProviderInfo, ProviderPreset } from '../renderer/src/api.ts'
 import { MePage } from '../renderer/src/components/MePage.tsx'
-import type { ProviderApi, UpdateProviderInput } from '../renderer/src/components/ProviderSettings.tsx'
+import type {
+  CreateProviderForm,
+  ProviderApi,
+  ProviderModelEntry,
+  UpdateProviderInput,
+} from '../renderer/src/components/ProviderSettings.tsx'
 import { ProviderSettings } from '../renderer/src/components/ProviderSettings.tsx'
 import { getToasts, toast } from '../renderer/src/lib/toast.ts'
+import { currentValue, listedValues, openSelect, optionLabels, pickOption, triggerLabel } from './select-dom.tsx'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -126,6 +132,24 @@ function typeInto(node: HTMLInputElement | HTMLTextAreaElement, value: string): 
   })
 }
 
+/**
+ * 按字段标签取控件。
+ *
+ * 此前这些断言按 `querySelectorAll('input')[1]` 的下标定位，协议从文本框换成下拉之后
+ * 下标整体错位——测试报的却是「Base URL 的值不对」，把人引向错误的方向。按标签取，
+ * 字段控件换实现（input ↔ 下拉 ↔ textarea）时断言不用动。
+ */
+function fieldOf<T extends HTMLElement>(form: ParentNode, label: string): T {
+  const found = [...form.querySelectorAll('.field')].find((field) => {
+    return field.querySelector(':scope > span')?.textContent?.trim() === label
+  })
+  if (found === undefined) throw new Error(`找不到字段：${label}`)
+  // 协议那一格是自绘下拉：触发器是 .select-trigger，不是原生 <select>。
+  const control = found.querySelector('input, select, textarea, .select-trigger')
+  if (control === null) throw new Error(`字段没有控件：${label}`)
+  return control as T
+}
+
 function buttonByText(text: string, scope: ParentNode = container): HTMLButtonElement {
   const found = [...scope.querySelectorAll('button')].find((node) => {
     return node.textContent?.trim() === text || node.textContent?.includes(text)
@@ -166,15 +190,20 @@ describe('供应商区块：分组与状态', () => {
       return node.textContent?.includes('SiliconFlow')
     })!
     expect(silicon.textContent).toContain('内置')
-    expect(silicon.textContent).toContain('openai')
+    // 协议徽标说人话：openai 是接口方言，不是用户要读的英文标识。
+    expect(silicon.textContent).toContain('OpenAI 兼容')
     // 有 key 不等于这家认：没测过之前只能是「凭据已备（未验证）」，更不能给绿点。
     expect(silicon.textContent).toContain('凭据已备（未验证）')
     expect(silicon.textContent).not.toContain('已验证')
     expect(silicon.textContent).toContain('2 个模型')
     expect(silicon.querySelector('.status-dot.ok')).toBeNull()
     expect(silicon.querySelector('.status-dot.warn')).not.toBeNull()
-    // 图标是内联 SVG 字母标，不引外部资源。
-    expect(silicon.querySelector('.provider-logo svg')).not.toBeNull()
+    // 真实品牌标识：走打包进产物的本地图片，不引外部资源。
+    const brandLogo = silicon.querySelector<HTMLImageElement>('.provider-logo img')
+    expect(brandLogo).not.toBeNull()
+    expect(brandLogo?.getAttribute('src')).toBeTruthy()
+    // 打包进来的资源在产物里是本地路径；远程 URL 会让离线/内网环境直接空图。
+    expect(brandLogo?.getAttribute('src')).not.toMatch(/^https?:/i)
 
     const ollama = heads.find((node) => {
       return node.textContent?.includes('Ollama')
@@ -190,6 +219,9 @@ describe('供应商区块：分组与状态', () => {
     expect(custom.textContent).toContain('自定义')
     expect(custom.textContent).toContain('未配置凭据')
     expect(custom.querySelector('.status-dot.warn')).not.toBeNull()
+    // 没有品牌标识的供应商退回首字母标，且是内联 SVG —— 自定义服务永远不悬空。
+    expect(custom.querySelector('.provider-logo img')).toBeNull()
+    expect(custom.querySelector('.provider-logo svg')).not.toBeNull()
   })
 
   it('未配置的行展开后可直接填 key，保存走 setApiKey 并触发刷新', async () => {
@@ -233,7 +265,7 @@ describe('供应商区块：分组与状态', () => {
     expect(toastTexts()).toContain('「我的私有服务」的 key 已存到本机')
   })
 
-  it('保存失败时错误就地显示（role=alert），文案沿用服务端给的原因', async () => {
+  it('保存失败时错误就地显示（role=alert），文案说人话而不是服务端原话', async () => {
     const api = fakeApi({
       setApiKey: () => {
         return Promise.reject(new Error('unknown provider: custom-abc'))
@@ -251,7 +283,8 @@ describe('供应商区块：分组与状态', () => {
     })
     const error = body.querySelector('.apikey-error')!
     expect(error.getAttribute('role')).toBe('alert')
-    expect(error.textContent).toContain('unknown provider: custom-abc')
+    expect(error.textContent).toContain('这家模型服务已经不在供应商列表里')
+    expect(error.textContent).not.toContain('unknown provider')
     expect(toastTexts()).not.toContain('「我的私有服务」的 key 已存到本机')
   })
 
@@ -296,19 +329,18 @@ describe('添加供应商向导', () => {
     const subs = [...container.querySelectorAll('.provider-preset-sub')].map((node) => {
       return node.textContent
     })
-    expect(subs).toEqual(['openai · 2 个模型', 'ollama · 免 key', '手动填写'])
+    expect(subs).toEqual(['OpenAI 兼容 · 2 个模型', '本地 Ollama · 免 key', '手动填写'])
 
     await act(async () => {
       buttonByText('DeepSeek', container.querySelector('.provider-preset-grid')!).click()
       await Promise.resolve()
     })
     const form = container.querySelector('.provider-form')!
-    const inputs = [...form.querySelectorAll('input')]
     // 名称 / 协议 / Base URL / API Key：预设已预填前三项。
-    expect(inputs[0]!.value).toBe('DeepSeek')
-    expect(inputs[1]!.value).toBe('openai')
-    expect(inputs[2]!.value).toBe('https://api.deepseek.com/v1')
-    expect(form.querySelector('textarea')!.value).toBe('deepseek-chat\ndeepseek-reasoner')
+    expect(fieldOf<HTMLInputElement>(form, '名称').value).toBe('DeepSeek')
+    expect(currentValue(form, '协议')).toBe('openai')
+    expect(fieldOf<HTMLInputElement>(form, 'Base URL').value).toBe('https://api.deepseek.com/v1')
+    expect(fieldOf<HTMLTextAreaElement>(form, '模型列表').value).toBe('deepseek-chat\ndeepseek-reasoner')
     // 非免 key 预设：有 key 输入与官网链接。
     expect(form.querySelector('input[type="password"]')).not.toBeNull()
     expect(form.querySelector('a[href="https://platform.deepseek.com"]')).not.toBeNull()
@@ -323,7 +355,8 @@ describe('添加供应商向导', () => {
         displayName: 'DeepSeek',
         protocol: 'openai',
         baseUrl: 'https://api.deepseek.com/v1',
-        models: ['deepseek-chat', 'deepseek-reasoner'],
+        // 模型条目一律对象形状（服务端两种都收）：带上用户补录的上下文长度时有地方放。
+        models: [{ id: 'deepseek-chat' }, { id: 'deepseek-reasoner' }],
         apiKey: 'sk-deepseek',
         presetId: 'deepseek',
       },
@@ -363,7 +396,7 @@ describe('添加供应商向导', () => {
       displayName: 'Ollama',
       protocol: 'ollama',
       baseUrl: 'http://127.0.0.1:11434/v1',
-      models: ['qwen2.5:7b'],
+      models: [{ id: 'qwen2.5:7b' }],
       presetId: 'ollama',
     })
     expect(created[0]).not.toHaveProperty('apiKey')
@@ -388,14 +421,13 @@ describe('添加供应商向导', () => {
       await Promise.resolve()
     })
     const form = container.querySelector('.provider-form')!
-    const inputs = [...form.querySelectorAll('input')]
-    expect(inputs[0]!.value).toBe('')
+    expect(fieldOf<HTMLInputElement>(form, '名称').value).toBe('')
     const save = buttonByText('保存', form)
     // 必填项为空时不可保存。
     expect(save.disabled).toBe(true)
-    typeInto(inputs[0]!, '内部网关')
-    typeInto(inputs[2]!, 'https://llm.internal/v1')
-    typeInto(form.querySelector('textarea')!, 'model-a, model-b')
+    typeInto(fieldOf<HTMLInputElement>(form, '名称'), '内部网关')
+    typeInto(fieldOf<HTMLInputElement>(form, 'Base URL'), 'https://llm.internal/v1')
+    typeInto(fieldOf<HTMLTextAreaElement>(form, '模型列表'), 'model-a, model-b')
     await act(async () => {
       buttonByText('保存', form).click()
       await Promise.resolve()
@@ -439,7 +471,7 @@ describe('添加供应商向导', () => {
       return tile.querySelector('.provider-preset-name')?.textContent === 'Ollama'
     })!
     expect(ollama.disabled).toBe(false)
-    expect(ollama.querySelector('.provider-preset-sub')?.textContent).toBe('ollama · 免 key')
+    expect(ollama.querySelector('.provider-preset-sub')?.textContent).toBe('本地 Ollama · 免 key')
 
     await act(async () => {
       deepseek.click()
@@ -531,9 +563,9 @@ describe('添加供应商向导', () => {
       await Promise.resolve()
     })
     const form = container.querySelector('form.provider-form')!
-    typeInto(form.querySelectorAll('input')[0]!, '内部网关')
-    typeInto(form.querySelectorAll('input')[2]!, 'https://llm.internal/v1')
-    typeInto(form.querySelector('textarea')!, 'model-a')
+    typeInto(fieldOf<HTMLInputElement>(form, '名称'), '内部网关')
+    typeInto(fieldOf<HTMLInputElement>(form, 'Base URL'), 'https://llm.internal/v1')
+    typeInto(fieldOf<HTMLTextAreaElement>(form, '模型列表'), 'model-a')
     expect(buttonByText('保存', form).disabled).toBe(true)
     expect(form.querySelector('.apikey-error')?.textContent).toContain('还没有「新增供应商」的能力')
   })
@@ -557,9 +589,9 @@ describe('添加供应商向导', () => {
       await Promise.resolve()
     })
     const form = container.querySelector('form.provider-form')!
-    typeInto(form.querySelectorAll('input')[0]!, '内部网关')
-    typeInto(form.querySelectorAll('input')[2]!, 'https://llm.internal/v1')
-    typeInto(form.querySelector('textarea')!, 'model-a')
+    typeInto(fieldOf<HTMLInputElement>(form, '名称'), '内部网关')
+    typeInto(fieldOf<HTMLInputElement>(form, 'Base URL'), 'https://llm.internal/v1')
+    typeInto(fieldOf<HTMLTextAreaElement>(form, '模型列表'), 'model-a')
     await act(async () => {
       buttonByText('保存', form).click()
       await Promise.resolve()
@@ -657,17 +689,18 @@ describe('编辑供应商', () => {
     })
     const form = container.querySelector('form.provider-form')!
     // 预填的是这条路由现在的值（不是预设，也不是空表单）。
-    const inputs = [...form.querySelectorAll('input')]
-    expect(inputs[0]!.value).toBe('SiliconFlow')
-    expect(inputs[1]!.value).toBe('openai')
-    expect(inputs[2]!.value).toBe('https://api.siliconflow.cn/v1')
-    expect(form.querySelector('textarea')!.value).toBe('deepseek-ai/DeepSeek-V3\nQwen/Qwen2.5-7B-Instruct')
+    expect(fieldOf<HTMLInputElement>(form, '名称').value).toBe('SiliconFlow')
+    expect(currentValue(form, '协议')).toBe('openai')
+    expect(fieldOf<HTMLInputElement>(form, 'Base URL').value).toBe('https://api.siliconflow.cn/v1')
+    expect(fieldOf<HTMLTextAreaElement>(form, '模型列表').value).toBe(
+      'deepseek-ai/DeepSeek-V3\nQwen/Qwen2.5-7B-Instruct',
+    )
     // 编辑时不提供改 key 的入口：那是行内「更换 Key」的事，两处混在一起会说不清谁生效。
     expect(form.querySelector('input[type="password"]')).toBeNull()
 
-    typeInto(inputs[0]!, 'SiliconFlow 公司版')
-    typeInto(inputs[2]!, 'https://gw.internal/v1')
-    typeInto(form.querySelector('textarea')!, 'internal-chat\ninternal-reason')
+    typeInto(fieldOf<HTMLInputElement>(form, '名称'), 'SiliconFlow 公司版')
+    typeInto(fieldOf<HTMLInputElement>(form, 'Base URL'), 'https://gw.internal/v1')
+    typeInto(fieldOf<HTMLTextAreaElement>(form, '模型列表'), 'internal-chat\ninternal-reason')
     await act(async () => {
       buttonByText('保存修改', form).click()
       await Promise.resolve()
@@ -679,13 +712,84 @@ describe('编辑供应商', () => {
           displayName: 'SiliconFlow 公司版',
           protocol: 'openai',
           baseUrl: 'https://gw.internal/v1',
-          models: ['internal-chat', 'internal-reason'],
+          models: [{ id: 'internal-chat' }, { id: 'internal-reason' }],
         },
       ],
     ])
     expect(changed).toBe(1)
     expect(container.querySelector('.modal')).toBeNull()
     expect(toastTexts()).toContain('「SiliconFlow」已更新')
+  })
+
+  /**
+   * 编辑已有供应商时上下文长度的保存往返必须无损：服务端现存的值进输入框，保存时
+   * 原样回传。此前这里读的是一份与服务端脱节的覆盖层，重新拉一次目录重建表单就把
+   * 用户刚填的数字静默清空——值还在本机躺着，但这条路由从此按「未知」算预算。
+   */
+  it('编辑时上下文长度随服务端值预填，保存无损回传（不碰不丢，改了才变）', async () => {
+    const stored: ProviderInfo = {
+      ...builtinProvider,
+      models: [{ id: 'deepseek-ai/DeepSeek-V3', contextWindow: 64_000 }, { id: 'Qwen/Qwen2.5-7B-Instruct' }],
+    }
+    const patched: Array<[string, UpdateProviderInput]> = []
+    const api = fakeApi({
+      updateProvider: (id: string, patch: UpdateProviderInput) => {
+        patched.push([id, patch])
+        return Promise.resolve({ provider: stored })
+      },
+    })
+    await renderSettings(api, [stored], () => {})
+    act(() => {
+      buttonByText('SiliconFlow').click()
+    })
+    act(() => {
+      buttonByText('编辑', container.querySelector('.provider-body')!).click()
+    })
+    const form = container.querySelector('form.provider-form')!
+    // 现存的 64000 如实进框，没存过的明说未知（空串），不猜。
+    expect(
+      form.querySelector<HTMLInputElement>('input[aria-label="deepseek-ai/DeepSeek-V3 的上下文长度（token）"]')?.value,
+    ).toBe('64000')
+    expect(
+      form.querySelector<HTMLInputElement>('input[aria-label="Qwen/Qwen2.5-7B-Instruct 的上下文长度（token）"]')?.value,
+    ).toBe('')
+
+    // 不动长度、只改名字：两条模型（含那条 64000）原样回传，往返无损。
+    typeInto([...form.querySelectorAll('input')][0]!, 'SiliconFlow（改名）')
+    await act(async () => {
+      buttonByText('保存修改', form).click()
+      await Promise.resolve()
+    })
+    expect(patched).toEqual([
+      [
+        'siliconflow',
+        {
+          displayName: 'SiliconFlow（改名）',
+          protocol: 'openai',
+          baseUrl: 'https://api.siliconflow.cn/v1',
+          models: [{ id: 'deepseek-ai/DeepSeek-V3', contextWindow: 64_000 }, { id: 'Qwen/Qwen2.5-7B-Instruct' }],
+        },
+      ],
+    ])
+
+    // 第二条补上 32k 再存：PATCH 带上新值，旧那条不动。
+    patched.length = 0
+    act(() => {
+      buttonByText('编辑', container.querySelector('.provider-body')!).click()
+    })
+    const again = container.querySelector('form.provider-form')!
+    typeInto(
+      again.querySelector<HTMLInputElement>('input[aria-label="Qwen/Qwen2.5-7B-Instruct 的上下文长度（token）"]')!,
+      '32k',
+    )
+    await act(async () => {
+      buttonByText('保存修改', again).click()
+      await Promise.resolve()
+    })
+    expect(patched[0]?.[1].models).toEqual([
+      { id: 'deepseek-ai/DeepSeek-V3', contextWindow: 64_000 },
+      { id: 'Qwen/Qwen2.5-7B-Instruct', contextWindow: 32_000 },
+    ])
   })
 
   it('保存失败：原因就地显示且拿到焦点，用户刚填的内容原样留着', async () => {
@@ -704,8 +808,7 @@ describe('编辑供应商', () => {
       buttonByText('编辑', container.querySelector('.provider-body')!).click()
     })
     const form = container.querySelector('form.provider-form')!
-    const inputs = [...form.querySelectorAll('input')]
-    typeInto(inputs[0]!, '我的私有服务（改了名）')
+    typeInto(fieldOf<HTMLInputElement>(form, '名称'), '我的私有服务（改了名）')
     typeInto(form.querySelector('textarea')!, 'm-new')
     await act(async () => {
       buttonByText('保存修改', form).click()
@@ -932,7 +1035,7 @@ describe('凭据生命周期', () => {
       buttonByText('测试连接', container.querySelector('.provider-body')!).click()
       await Promise.resolve()
     })
-    expect(container.querySelector('.provider-body')?.textContent).toContain('还没有「测试连接」')
+    expect(container.querySelector('.provider-body')?.textContent).toContain('这一版还不支持「测试连接」')
   })
 
   it('更换 Key：行内重新填 → setApiKey → 状态退回未验证', async () => {
@@ -1008,7 +1111,7 @@ describe('凭据生命周期', () => {
     })
     const button = buttonByText('移除凭据', container.querySelector('.provider-body')!) as HTMLButtonElement
     expect(button.disabled).toBe(true)
-    expect(button.title).toContain('还不能移除凭据')
+    expect(button.title).toContain('这一版还不支持「移除凭据」')
   })
 
   it('没人用的供应商照样能删（usedBy 只是提示，不是永久禁用）', async () => {
@@ -1124,5 +1227,268 @@ describe('删除供应商前先看谁在用', () => {
         return text.includes('改绑') && !text.includes('in use')
       }),
     ).toBe(true)
+  })
+})
+
+/**
+ * 模型列表的录入方式与协议的选取方式。
+ *
+ * 这两条此前都是「用户得先知道规矩才能填对」：协议是个自由文本框，拼错要到真的
+ * 发请求失败才暴露；模型列表要求「一行一个」，从各家控制台复制来的空格分隔清单
+ * 粘进去就等于建出了一堆不存在的模型。
+ */
+/** 模型条目有两种写法（纯 id，或带上下文长度的对象）；断言只看 id。 */
+function modelId(entry: ProviderModelEntry): string {
+  return typeof entry === 'string' ? entry : entry.id
+}
+
+describe('协议与模型列表的录入', () => {
+  /** 走到自定义表单并填好必填项，回包由调用方给。 */
+  async function openCustomForm(
+    create: (input: CreateProviderForm) => Promise<{ provider: ProviderInfo }>,
+  ): Promise<HTMLFormElement> {
+    const api = fakeApi({
+      providerPresets: () => {
+        return Promise.resolve({ presets: [] })
+      },
+      createProvider: create,
+    })
+    await renderSettings(api, [])
+    await act(async () => {
+      buttonByText('添加供应商').click()
+      await Promise.resolve()
+    })
+    await act(async () => {
+      buttonByText('自定义', container.querySelector('.provider-preset-grid')!).click()
+      await Promise.resolve()
+    })
+    return container.querySelector('form.provider-form')!
+  }
+
+  it('协议是下拉，且只有服务端真支持的那两个', async () => {
+    const form = await openCustomForm(() => {
+      return Promise.resolve({ provider: customProvider })
+    })
+    const select = fieldOf<HTMLButtonElement>(form, '协议')
+    expect(select.classList.contains('select-trigger')).toBe(true)
+    expect(select.getAttribute('aria-label')).toBe('协议')
+    expect(listedValues(form, '协议')).toEqual(['openai', 'ollama'])
+    // 给的是人话，不是标识符。
+    expect(optionLabels(openSelect(form, '协议'))[0]).not.toBe('openai')
+  })
+
+  it('选了 ollama 就发 ollama（不是让用户敲标识）', async () => {
+    let sent: unknown
+    const form = await openCustomForm((input) => {
+      sent = input
+      return Promise.resolve({ provider: customProvider })
+    })
+    typeInto(fieldOf<HTMLInputElement>(form, '名称'), '本地模型')
+    typeInto(fieldOf<HTMLInputElement>(form, 'Base URL'), 'http://localhost:11434/v1')
+    pickOption(form, '协议', 'ollama')
+    expect(triggerLabel(form, '协议')).toContain('Ollama')
+    typeInto(fieldOf<HTMLTextAreaElement>(form, '模型列表'), 'qwen3:8b')
+    await act(async () => {
+      buttonByText('保存', form).click()
+      await Promise.resolve()
+    })
+    expect(sent).toMatchObject({ protocol: 'ollama' })
+  })
+
+  it('模型列表用空格分隔也认（控制台复制来的清单直接粘）', async () => {
+    let sent: CreateProviderForm | undefined
+    const form = await openCustomForm((input) => {
+      sent = input
+      return Promise.resolve({ provider: customProvider })
+    })
+    typeInto(fieldOf<HTMLInputElement>(form, '名称'), '网关')
+    typeInto(fieldOf<HTMLInputElement>(form, 'Base URL'), 'https://gw.internal/v1')
+    typeInto(fieldOf<HTMLTextAreaElement>(form, '模型列表'), 'model-a model-b  model-c')
+    await act(async () => {
+      buttonByText('保存', form).click()
+      await Promise.resolve()
+    })
+    expect((sent?.models ?? []).map(modelId)).toEqual(['model-a', 'model-b', 'model-c'])
+  })
+
+  it('混合分隔符与重复项都会被归一（重复只留第一次）', async () => {
+    let sent: CreateProviderForm | undefined
+    const form = await openCustomForm((input) => {
+      sent = input
+      return Promise.resolve({ provider: customProvider })
+    })
+    typeInto(fieldOf<HTMLInputElement>(form, '名称'), '网关')
+    typeInto(fieldOf<HTMLInputElement>(form, 'Base URL'), 'https://gw.internal/v1')
+    typeInto(fieldOf<HTMLTextAreaElement>(form, '模型列表'), 'model-a, model-b；model-a\nmodel-c、model-b')
+    await act(async () => {
+      buttonByText('保存', form).click()
+      await Promise.resolve()
+    })
+    expect((sent?.models ?? []).map(modelId)).toEqual(['model-a', 'model-b', 'model-c'])
+  })
+
+  it('失焦时整理成一行一个，但不打断正在输入的人', async () => {
+    const form = await openCustomForm(() => {
+      return Promise.resolve({ provider: customProvider })
+    })
+    const area = fieldOf<HTMLTextAreaElement>(form, '模型列表')
+    typeInto(area, 'model-a model-b')
+    expect(area.value).toBe('model-a model-b')
+    await act(async () => {
+      // React 17+ 的 onBlur 走 focusout 委托，直接派发 blur 事件它收不到。
+      area.dispatchEvent(new FocusEvent('focusout', { bubbles: true }))
+      await Promise.resolve()
+    })
+    expect(area.value).toBe('model-a\nmodel-b')
+  })
+})
+
+/**
+ * 「我的」页的用户卡：名字与头像都能改，且改完真的落库。
+ *
+ * 这块此前是写死的「你」+ 一枚随机色块。写死的后果不只是不好看——服务端把资料
+ * 拼进 agent 的系统提示，用户没有入口去改，就等于这个能力整条链路是死的。
+ */
+describe('用户卡可改', () => {
+  async function renderMe(api: Partial<Parameters<typeof MePage>[0]['api']>): Promise<void> {
+    await act(async () => {
+      root = createRoot(container)
+      root.render(
+        <MePage
+          api={{
+            listAgentMemories: () => {
+              return Promise.resolve({ agent: [], shared: [] })
+            },
+            patchAgent: () => {
+              return Promise.resolve({
+                agent: {
+                  id: 'ryen',
+                  name: 'Ryen',
+                  systemPrompt: '',
+                  provider: 'siliconflow',
+                  model: 'm',
+                  tools: [],
+                  isBuiltin: true,
+                },
+              })
+            },
+            setApiKey: () => {
+              return Promise.resolve({ providerId: 'x', configured: true })
+            },
+            workspace: () => {
+              return Promise.resolve({ path: 'C:/data/workspace' })
+            },
+            ...api,
+          }}
+          ryen={undefined}
+          providers={[builtinProvider]}
+          theme="light"
+          onThemeChange={() => {}}
+        />,
+      )
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+  }
+
+  it('显示服务端给的名字，不显示写死的「你」', async () => {
+    await renderMe({
+      profile: () => {
+        return Promise.resolve({ profile: { name: '小明', avatar: '' } })
+      },
+    })
+    expect(container.querySelector('.me-name')?.textContent).toContain('小明')
+  })
+
+  it('改名字走 PATCH，落库后卡片显示新名字', async () => {
+    const saved: unknown[] = []
+    await renderMe({
+      profile: () => {
+        return Promise.resolve({ profile: { name: '你', avatar: '' } })
+      },
+      saveProfile: (patch) => {
+        saved.push(patch)
+        return Promise.resolve({ profile: { name: '小明', avatar: '' } })
+      },
+    })
+    await act(async () => {
+      // 直接取 .me-name：头像兜底色块里的首字母也是「你」，按文本找会点到头像上去。
+      container.querySelector<HTMLButtonElement>('.me-usercard .me-name')!.click()
+      await Promise.resolve()
+    })
+    const input = container.querySelector<HTMLInputElement>('.me-usercard .me-name-inline')
+    expect(input).not.toBeNull()
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+      setter.call(input, '小明')
+      input?.dispatchEvent(new Event('input', { bubbles: true }))
+      input?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(saved).toEqual([{ name: '小明' }])
+    expect(container.querySelector('.me-name')?.textContent).toContain('小明')
+  })
+
+  it('空名字不提交（服务端也会拒）', async () => {
+    const saved: unknown[] = []
+    await renderMe({
+      profile: () => {
+        return Promise.resolve({ profile: { name: '小明', avatar: '' } })
+      },
+      saveProfile: (patch) => {
+        saved.push(patch)
+        return Promise.resolve({ profile: { name: '小明', avatar: '' } })
+      },
+    })
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('.me-usercard .me-name')!.click()
+      await Promise.resolve()
+    })
+    const input = container.querySelector<HTMLInputElement>('.me-usercard .me-name-inline')
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+      setter.call(input, '   ')
+      input?.dispatchEvent(new Event('input', { bubbles: true }))
+      input?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+      await Promise.resolve()
+    })
+    expect(saved).toEqual([])
+  })
+
+  it('保存失败时卡片退回服务端那份，不显示一个没存上的名字', async () => {
+    await renderMe({
+      profile: () => {
+        return Promise.resolve({ profile: { name: '小明', avatar: '' } })
+      },
+      saveProfile: () => {
+        return Promise.reject(new Error('disk full'))
+      },
+    })
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('.me-usercard .me-name')!.click()
+      await Promise.resolve()
+    })
+    const input = container.querySelector<HTMLInputElement>('.me-usercard .me-name-inline')
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+      setter.call(input, '小红')
+      input?.dispatchEvent(new Event('input', { bubbles: true }))
+      input?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(container.querySelector('.me-name')?.textContent).toContain('小明')
+  })
+
+  it('服务端没有这条能力时名字仍读得出，但点不动并说明原因', async () => {
+    await renderMe({
+      profile: () => {
+        return Promise.resolve({ profile: { name: '小明', avatar: '' } })
+      },
+    })
+    const nameButton = container.querySelector<HTMLButtonElement>('.me-usercard .me-name')
+    expect(nameButton?.disabled).toBe(true)
+    expect(nameButton?.title).toContain('还不支持')
   })
 })

@@ -8,15 +8,16 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { RyAgentServer } from '@ryagent/server'
+import { RyHarnessServer } from '@ryharness/server'
 import { afterEach, describe, expect, it } from 'vitest'
+import { MAX_BODY_BYTES } from '../src/router.ts'
 
 const tmpDirs: string[] = []
 
-async function startServer(): Promise<RyAgentServer> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'ryagent-errors-'))
+async function startServer(): Promise<RyHarnessServer> {
+  const dataDir = mkdtempSync(join(tmpdir(), 'ryharness-errors-'))
   tmpDirs.push(dataDir)
-  return RyAgentServer.create({ port: 0, dataDir, memory: null, evolution: null })
+  return RyHarnessServer.create({ port: 0, dataDir, memory: null, evolution: null })
 }
 
 async function postJson(
@@ -77,15 +78,43 @@ describe('错误响应形状', () => {
     }
   })
 
+  it('请求体超过上限是 413 + PAYLOAD_TOO_LARGE（不给内存留无底洞）', async () => {
+    const server = await startServer()
+    try {
+      // 超一点点就够：这条用例要证明的是"有上限"，不是"上限算得准"。
+      const padded = `{"kind":"direct","agentId":"ryen","pad":"${'x'.repeat(MAX_BODY_BYTES)}"}`
+      const res = await postJson(server.url, '/api/conversations', padded)
+      expect(res.status).toBe(413)
+      expect(res.body.code).toBe('PAYLOAD_TOO_LARGE')
+    } finally {
+      await server.close()
+    }
+  })
+
   it('落库失败是 500 + INTERNAL，不再伪装成 400', async () => {
     const server = await startServer()
+    // 这一条会故意把服务端打成报错路径，服务端照例 console.error 记一笔。
+    // 不接住它，整份测试日志里就会挂着一行 `POST failed: statement has been
+    // finalized`——那是本用例**故意造出来的**失败，不是别人的用例漏了东西。
+    // 接住顺手还变成断言：故障路径确实被记录过。
+    const logged: string[] = []
+    const realError = console.error
+    console.error = (...args: unknown[]): void => {
+      logged.push(args.map(String).join(' '))
+    }
     try {
       // 关掉 SQLite 制造一次真实的写失败：请求体本身完全合法。
       server.store.close()
       const res = await postJson(server.url, '/api/conversations', JSON.stringify({ kind: 'direct', agentId: 'ryen' }))
       expect(res.status).toBe(500)
       expect(res.body.code).toBe('INTERNAL')
+      expect(
+        logged.some((line) => {
+          return line.includes('POST failed')
+        }),
+      ).toBe(true)
     } finally {
+      console.error = realError
       await server.close().catch(() => {})
     }
   })

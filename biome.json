@@ -6,14 +6,36 @@
       "**/*.tsx",
       "**/*.mjs",
       "**/*.json",
-      "!**/lib",
       "!**/dist",
       "!**/main",
+      "!**/coverage",
       "!**/node_modules",
       "!vendor",
       "!docs",
       "!.zcode",
-      "!**/data"
+      "!.tmp-icons",
+      "!.zwork",
+      "!RyHarness-release",
+      "!**/data",
+      "!**/release",
+      "!apps/desktop/release-fresh",
+      "!apps/desktop/release-installer",
+      "!apps/desktop/release-final",
+      "!apps/desktop/release-v2",
+      "!apps/desktop/release-v3",
+      "!apps/desktop/release-v4",
+      "!apps/desktop/release-v5",
+      "!apps/desktop/release-ryharness",
+      "!apps/desktop/ryharness-release",
+      "!apps/desktop/release-verify",
+      "!apps/desktop/release-shell-check",
+      "!apps/desktop/release-shell-check2",
+      "!apps/desktop/release-shell-check3",
+      "!apps/desktop/release-shell-check4",
+      "!packages/*/lib",
+      "!packages/*/*/lib",
+      "!apps/*/lib",
+      "!apps/*/*/lib"
     ]
   },
   "formatter": {
@@ -39,17 +61,18 @@
     "rules": {
       "preset": "recommended",
       "style": {
-        "noNonNullAssertion": "off",
-        "useConst": "off"
+        "noNonNullAssertion": "warn",
+        "useConst": "off",
+        "useTemplate": "error"
       },
       "suspicious": {
-        "noExplicitAny": "off",
+        "noExplicitAny": "warn",
         "noArrayIndexKey": "off"
       },
       "correctness": {
-        "noUnusedVariables": "off",
-        "noUnusedImports": "off",
-        "useExhaustiveDependencies": "warn"
+        "noUnusedVariables": "error",
+        "noUnusedImports": "error",
+        "useExhaustiveDependencies": "error"
       }
     }
   },
@@ -60,6 +83,71 @@
         "rules": {
           "complexity": {
             "noBannedTypes": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["apps/desktop/tests/perf/streaming.perf.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "useTemplate": "warn"
+          }
+        }
+      }
+    },
+    {
+      "includes": [
+        "apps/desktop/renderer/src/components/ChatView.tsx",
+        "apps/desktop/renderer/src/components/ChatInput.tsx",
+        "apps/desktop/renderer/src/components/RightPanel.tsx"
+      ],
+      "linter": {
+        "rules": {
+          "correctness": {
+            "useExhaustiveDependencies": "warn"
+          }
+        }
+      }
+    },
+    {
+      "includes": [
+        "apps/desktop/renderer/src/components/ContactsPage.tsx",
+        "apps/desktop/tests/avatars.test.tsx",
+        "apps/desktop/tests/proactive-message.test.tsx",
+        "apps/server/src/app.ts",
+        "apps/server/src/routes/providers.ts",
+        "apps/server/tests/proactive.test.ts",
+        "apps/server/tests/server.test.ts",
+        "packages/agent/src/loop.ts",
+        "packages/session/tests/coordinator-wiring.test.ts",
+        "scripts/check-embedding.ts",
+        "scripts/smoke-siliconflow.ts"
+      ],
+      "linter": {
+        "rules": {
+          "correctness": {
+            "noUnusedImports": "warn"
+          }
+        }
+      }
+    },
+    {
+      "includes": [
+        "apps/desktop/renderer/src/components/ContactsPage.tsx",
+        "apps/desktop/renderer/src/components/Markdown.tsx",
+        "apps/desktop/tests/conversation-list.test.tsx",
+        "apps/desktop/tests/memory-health-usage.test.tsx",
+        "packages/agent/tests/memory-hooks.test.ts",
+        "packages/evolve/src/service.ts",
+        "packages/group/tests/fanout.test.ts",
+        "packages/session/tests/store-prepared.test.ts"
+      ],
+      "linter": {
+        "rules": {
+          "correctness": {
+            "noUnusedVariables": "warn"
           }
         }
       }

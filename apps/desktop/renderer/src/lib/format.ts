@@ -69,3 +69,16 @@ export function formatTime(ts: number): string {
     ? formatterOf(TIME_FORMAT).format(date)
     : formatterOf(DATE_FORMAT).format(date)
 }
+
+/**
+ * 字节数的人话写法（B / KB / MB）。
+ *
+ * 为什么从 store.ts 搬过来：它是一个纯格式化函数，与「状态」无关。此前它住在
+ * 状态模块里，被四个组件（气泡、右栏、预览、输入框）与一个测试直接 import——
+ * 等于渲染层的 store 成了公共库，谁都能往里塞东西。
+ */
+export function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}

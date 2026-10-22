@@ -1,5 +1,5 @@
 {
-  "name": "@ryagent/tools",
+  "name": "@ryharness/tools",
   "version": "0.1.0",
   "type": "module",
   "license": "MIT",
@@ -17,6 +17,9 @@
     "build": "tsdown"
   },
   "dependencies": {
-    "@ryagent/agent": "workspace:*"
+    "@ryharness/agent": "workspace:*"
+  },
+  "peerDependencies": {
+    "@ryharness/cordis": "workspace:*"
   }
 }

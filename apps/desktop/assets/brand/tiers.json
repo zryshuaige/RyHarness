@@ -1,45 +1,49 @@
 {
+  "master": "mark.png",
+  "masterSize": 953,
+  "plateRadius": 0.245,
   "tray": "icon-16.png",
   "trayHiDpi": "icon-24.png",
   "window": "icon-256.png",
-  "favicon": "favicon.svg",
-  "faviconPng": "favicon-32.png",
-  "mono": "icon-mono.svg",
-  "tuning": {
+  "brand": "cat.png",
+  "favicon": "favicon-32.png",
+  "faviconLarge": "favicon-128.png",
+  "icons": {
     "16": {
-      "eye": 3.4,
-      "mouth": 0,
-      "nose": 1
+      "file": "icon-16.png",
+      "masked": true
     },
     "24": {
-      "eye": 3.1,
-      "mouth": 2.7,
-      "nose": 1.15
+      "file": "icon-24.png",
+      "masked": true
     },
     "32": {
-      "eye": 2.9,
-      "mouth": 2.4,
-      "nose": 1
+      "file": "icon-32.png",
+      "masked": true
     },
     "48": {
-      "eye": 2.8,
-      "mouth": 2.1,
-      "nose": 1
+      "file": "icon-48.png",
+      "masked": true
     },
     "64": {
-      "eye": 2.7,
-      "mouth": 1.9,
-      "nose": 1
+      "file": "icon-64.png",
+      "masked": true
     },
     "128": {
-      "eye": 2.7,
-      "mouth": 1.9,
-      "nose": 1
+      "file": "icon-128.png",
+      "masked": true
     },
     "256": {
-      "eye": 2.7,
-      "mouth": 1.9,
-      "nose": 1
+      "file": "icon-256.png",
+      "masked": true
+    },
+    "512": {
+      "file": "icon-512.png",
+      "masked": true
+    },
+    "1024": {
+      "file": "icon-1024.png",
+      "masked": true
     }
   }
 }

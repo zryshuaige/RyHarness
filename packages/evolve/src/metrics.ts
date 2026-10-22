@@ -4,7 +4,7 @@
  *
  * 刻意不引外部依赖、不落盘：环形缓冲留在内存里（默认留最近 100 轮），
  * 历史趋势由拿到数据的调用方自己聚合。埋点自身零分配压力（每轮一条小对象）。
- * @module @ryagent/evolve/metrics
+ * @module @ryharness/evolve/metrics
  */
 
 /** 埋点种类。 */

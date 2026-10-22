@@ -1,4 +1,4 @@
-# @ryagent/evolve
+# @ryharness/evolve
 
 自我进化系统：ACE 式 playbook + Reflexion 反思 + 用户反馈闭环 + 巩固调度（调研落地组合的自我进化部分，见 `docs/research/agent-memory-self-evolution-survey.md` §2.2/§2.3/§2.5）。
 
@@ -70,7 +70,7 @@ server（HTTP + WS + 在途对话）一起冻住。三处重活都有边界：
   promise 挂 catch，不会变成 unhandledRejection）。
 - **归档切片依赖记忆面透传片长**：`MemorySweep.archiveDormant /
   archiveColdSuperseded` 的第三个参数 `limit` 必须由接线方原样转发给
-  `MemoryStore.archiveDormant / archiveColdSuperseded`（@ryagent/memory 的实现
+  `MemoryStore.archiveDormant / archiveColdSuperseded`（@ryharness/memory 的实现
   按 rowid 分片）。漏传时本包会退化成一次性整段归档（行为仍正确，但那一段会
   同步阻塞主循环），这是接线时唯一要盯的一行。
 
@@ -130,7 +130,7 @@ server（HTTP + WS + 在途对话）一起冻住。三处重活都有边界：
 
 - `AgentLoop`：`evolution` 选项——组装前 compile、finally 入队（失败轮无文本也入队）。
 - `SessionCoordinator`/`GroupDispatcher`：透传并绑定 conversationId。
-- `@ryagent/server`：`POST /api/feedback`、`GET /api/agents/:id/playbook`、
+- `@ryharness/server`：`POST /api/feedback`、`GET /api/agents/:id/playbook`、
   `POST /api/playbook/:id/status`（手动 deprecate/恢复）、`POST /api/evolve/consolidate`；
   按环境构建（有 key 全管线/无 key 仅确定性计数）；周期调度可关（`consolidationIntervalMs: 0`）。
   服务端侧可接的三个新读口：`explain(entryId)`、`metrics()`、

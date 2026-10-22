@@ -1,11 +1,11 @@
 /**
  * 进化子系统 schema 与迁移（evolve_meta 自管版本轴，只追加规则）。
- * @module @ryagent/evolve/schema
+ * @module @ryharness/evolve/schema
  */
 
 import type { DatabaseSync } from 'node:sqlite'
 
-export const EVOLVE_SCHEMA_VERSION = 2
+export const EVOLVE_SCHEMA_VERSION = 3
 
 /** playbook 条目的 section 分类。 */
 export type PlaybookSection = 'strategy' | 'pitfall' | 'preference' | 'tooling'
@@ -96,7 +96,19 @@ function migrateV2(db: DatabaseSync): void {
   `)
 }
 
-const MIGRATIONS: Readonly<Record<number, (db: DatabaseSync) => void>> = { 1: migrateV1, 2: migrateV2 }
+const MIGRATIONS: Readonly<Record<number, (db: DatabaseSync) => void>> = { 1: migrateV1, 2: migrateV2, 3: migrateV3 }
+
+/**
+ * 反馈事件补上来源消息 id：/api/feedback 按 (message_id, signal) 去重——
+ * 同一消息同一信号重复提交只计一次（亲密度与进化归因都不许多记）。
+ * 旧行 message_id 为 NULL，不参与去重（历史数据不会变成「永远重复」）。
+ */
+function migrateV3(db: DatabaseSync): void {
+  db.exec(`
+    ALTER TABLE feedback_events ADD COLUMN message_id TEXT;
+    CREATE INDEX idx_feedback_message ON feedback_events (message_id, signal);
+  `)
+}
 
 /** 迁移到 EVOLVE_SCHEMA_VERSION；幂等。 */
 export function migrateEvolve(db: DatabaseSync): void {
@@ -118,7 +130,7 @@ export function migrateEvolve(db: DatabaseSync): void {
   try {
     for (let version = current + 1; version <= EVOLVE_SCHEMA_VERSION; version++) {
       const migration = MIGRATIONS[version]
-      if (migration === undefined) throw new Error(`@ryagent/evolve: missing migration to version ${version}`)
+      if (migration === undefined) throw new Error(`@ryharness/evolve: missing migration to version ${version}`)
       migration(db)
     }
     db.prepare(

@@ -74,6 +74,19 @@ jobs:
       - name: Test
         run: npx vitest run
 
+      - name: Guardrails (类型逃逸 / 包依赖缺失 / 重复代码 / lint 棘轮 / NOTICE 总账)
+        # 与 CI 同一套硬门禁：发布构建不允许带着「PR 通道会拦下」的问题出厂。
+        # 此前这一步只在 ci.yml 里有，于是一次 tag 推送可以打出带类型逃逸、
+        # 重复代码、NOTICE 漂移的安装包——发布通道比 PR 通道松，是最难发现的那种红。
+        run: |
+          pnpm verify
+          node scripts/verify-notice.mjs
+
+      - name: Coverage
+        # 覆盖率棘轮同样只在 CI 里跑。发布路径必须过它：棘轮拦下的正是
+        # "新写的文件一行测试都没有"这类退化。
+        run: npx vitest run --coverage
+
       - name: Version consistency
         # 根 package.json / 20 个工作区包 / 「我的」页展示版本 / CHANGELOG 四处必须
         # 与 tag 对得上，否则安装包文件名会和依赖图互相矛盾。
@@ -109,27 +122,27 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build workspace
-        # 必须走根的 -r：desktop 的 tsdown 把 @ryagent/* 标成 external，装包时靠
+        # 必须走根的 -r：desktop 的 tsdown 把 @ryharness/* 标成 external，装包时靠
         # node_modules 解析，所以 server 等包要先有 dist。
         run: pnpm build
 
       - name: Package (unpacked)
-        run: pnpm --filter @ryagent/desktop exec electron-builder --win --dir
+        run: pnpm --filter @ryharness/desktop exec electron-builder --win --dir
 
       - name: Smoke test the unpacked build
         shell: pwsh
         run: |
-          $exe = Join-Path $env:GITHUB_WORKSPACE 'apps\desktop\release\win-unpacked\RyAgent.exe'
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'apps\desktop\release\win-unpacked\RyHarness.exe'
           if (-not (Test-Path $exe)) { throw "解包产物缺失：$exe" }
-          $dataDir = Join-Path $env:RUNNER_TEMP 'ryagent-smoke-data'
+          $dataDir = Join-Path $env:RUNNER_TEMP 'ryharness-smoke-data'
           Remove-Item -Recurse -Force $dataDir -ErrorAction SilentlyContinue
-          $env:RYAGENT_DATA_DIR = $dataDir
+          $env:RYHARNESS_DATA_DIR = $dataDir
           # 固定端口：默认随机，冒烟脚本没法预测该打哪个口。
-          $env:RYAGENT_PORT = '32199'
+          $env:RYHARNESS_PORT = '32199'
           # 后端默认鉴权（一次性 token），冒烟脚本在进程外访问，必须自带 token。
-          $env:RYAGENT_API_TOKEN = 'release-smoke-token'
+          $env:RYHARNESS_API_TOKEN = 'release-smoke-token'
           $env:ELECTRON_ENABLE_LOGGING = '1'
-          $log = Join-Path $env:RUNNER_TEMP 'ryagent-smoke.log'
+          $log = Join-Path $env:RUNNER_TEMP 'ryharness-smoke.log'
           $proc = Start-Process -FilePath $exe -PassThru -RedirectStandardOutput $log -RedirectStandardError "$log.err"
           try {
             $deadline = (Get-Date).AddSeconds(180)
@@ -153,7 +166,7 @@ jobs:
               }
               try {
                 $agents = (Invoke-RestMethod -Uri 'http://127.0.0.1:32199/api/agents' -TimeoutSec 5 `
-                    -Headers @{ authorization = "Bearer $env:RYAGENT_API_TOKEN" }).agents
+                    -Headers @{ authorization = "Bearer $env:RYHARNESS_API_TOKEN" }).agents
                 break
               } catch {
                 Start-Sleep -Seconds 2
@@ -169,12 +182,12 @@ jobs:
             # /T 连渲染/工具子进程一起收，否则 runner 上会留一串孤儿 electron。
             & taskkill /PID $proc.Id /T /F | Out-Null
           }
-          if (-not (Test-Path (Join-Path $dataDir 'ryagent.db'))) {
-            throw "冒烟跑完数据目录里没有 ryagent.db：$dataDir"
+          if (-not (Test-Path (Join-Path $dataDir 'ryharness.db'))) {
+            throw "冒烟跑完数据目录里没有 ryharness.db：$dataDir"
           }
 
       - name: Package (NSIS)
-        run: pnpm --filter @ryagent/desktop exec electron-builder --win nsis
+        run: pnpm --filter @ryharness/desktop exec electron-builder --win nsis
 
       - name: Upload installer
         uses: actions/upload-artifact@v4
@@ -242,8 +255,8 @@ jobs:
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
           elif [ "$HAS_NOTES" = "true" ]; then
-            gh release create "$RELEASE_TAG" "${assets[@]}" --title "RyAgent $RELEASE_TAG" --notes-file RELEASE_NOTES.md
+            gh release create "$RELEASE_TAG" "${assets[@]}" --title "RyHarness $RELEASE_TAG" --notes-file RELEASE_NOTES.md
           else
-            gh release create "$RELEASE_TAG" "${assets[@]}" --title "RyAgent $RELEASE_TAG" --generate-notes
+            gh release create "$RELEASE_TAG" "${assets[@]}" --title "RyHarness $RELEASE_TAG" --generate-notes
           fi
           gh release view "$RELEASE_TAG" --json url,tagName,assets

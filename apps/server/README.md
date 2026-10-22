@@ -1,17 +1,17 @@
-# @ryagent/server
+# @ryharness/server
 
-RyAgent 本地后端：HTTP API + WebSocket 推送。可被 Electron 主进程内嵌（`RyAgentServer.create()`），也可独立启动：
+RyHarness 本地后端：HTTP API + WebSocket 推送。可被 Electron 主进程内嵌（`RyHarnessServer.create()`），也可独立启动：
 
 ```sh
 pnpm dev          # 等价于 tsx src/main.ts（在 apps/server 目录）
-# 或仓库根：环境变量 RYAGENT_PORT / RYAGENT_HOST / RYAGENT_DATA_DIR
+# 或仓库根：环境变量 RYHARNESS_PORT / RYHARNESS_HOST / RYHARNESS_DATA_DIR
 ```
 
 - 默认监听 `127.0.0.1:32100`（仅本机，安全边界依赖 OS 账户）。
 - **Origin 白名单**：HTTP 与 WS upgrade 只放行空 Origin（Electron file://、curl/Node 客户端）或回环源（127.0.0.1 / localhost / ::1）；其余源 HTTP 回 403、WS 拒绝升级。
-- 数据目录 `<dataDir>/`（默认 `<cwd>/data`，已 gitignore）：`ryagent.db`（SQLite）、`config/providers.json`（首启写入内置 SiliconFlow 条目，key 走 `SILICONFLOW_API_KEY` 环境变量，配置文件不存明文）、`config/api-keys.json`（应用内配置的明文 key，0600）、`proactive.json`（主动消息开关与每日发送时刻）、`conversation-state.json`（置顶/静音/改名等界面态）、`workspace/`（工具工作区与产物目录）。配置文件都按 0600 原子写入（先 `.tmp` 再 rename）。
+- 数据目录 `<dataDir>/`（默认 `<cwd>/data`，已 gitignore）：`ryharness.db`（SQLite）、`config/providers.json`（首启写入内置 SiliconFlow 条目，key 走 `SILICONFLOW_API_KEY` 环境变量，配置文件不存明文）、`config/api-keys.json`（应用内配置的明文 key，0600）、`proactive.json`（主动消息开关与每日发送时刻）、`conversation-state.json`（置顶/静音/改名等界面态）、`workspace/`（工具工作区与产物目录）。配置文件都按 0600 原子写入（先 `.tmp` 再 rename）。
 - 首启种子：内置 Ryen 保证存在于 agents 表。
-- 优雅停机：`RyAgentServer.close()` 幂等（重复调用复用同一停机流程）；先等在途 turn 完成（默认 10s 超时兜底，`shutdownTimeoutMs` 可调），再断 WS 客户端、关 HTTP server、关 SQLite；独立模式 SIGINT/SIGTERM 自动触发。
+- 优雅停机：`RyHarnessServer.close()` 幂等（重复调用复用同一停机流程）；先等在途 turn 完成（默认 10s 超时兜底，`shutdownTimeoutMs` 可调），再断 WS 客户端、关 HTTP server、关 SQLite；独立模式 SIGINT/SIGTERM 自动触发。
 
 ## HTTP API
 
@@ -40,7 +40,7 @@ pnpm dev          # 等价于 tsx src/main.ts（在 apps/server 目录）
 | `GET /api/conversations/:id/stream-seq` | 该会话当前的事件序号（WS 握手前取基线用）。 |
 | `POST /api/conversations/:id/messages` | body `{ "text": "..." }` → **202** `{accepted:true, conversationId, streamSeq}`；处理异步进行，过程经 WS 推送。 |
 
-消息行结构（StoredMessage）：`{ id, seq, conversationId, senderType: 'user'|'agent'|'system', senderId?, contentBlocks, mentions, toolCallId?, turnIndex, usage?, createdAt }`。`contentBlocks` 为 @ryagent/llm 的 ContentBlock JSON；`usage` 只挂在模型调用产出的 assistant 消息上（`{inputTokens, outputTokens, totalTokens?, …}`），`GET /api/usage` 的账单就是从这里聚合出来的。
+消息行结构（StoredMessage）：`{ id, seq, conversationId, senderType: 'user'|'agent'|'system', senderId?, contentBlocks, mentions, toolCallId?, turnIndex, usage?, createdAt }`。`contentBlocks` 为 @ryharness/llm 的 ContentBlock JSON；`usage` 只挂在模型调用产出的 assistant 消息上（`{inputTokens, outputTokens, totalTokens?, …}`），`GET /api/usage` 的账单就是从这里聚合出来的。
 
 ### Memories & 进化
 
@@ -52,8 +52,8 @@ pnpm dev          # 等价于 tsx src/main.ts（在 apps/server 目录）
 | `POST /api/memory/restore` | body `{id}`：把一条归档记忆拉回 active（重新入检索与 FTS 索引）。不存在回 **404**，非归档状态回 **409**（软删不能靠 id 复活），记忆系统关闭回 **409**。 |
 | `POST /api/memory/reembed` | 重建向量索引：为存量记忆回填当前 embedding 模型的向量（换模型后旧向量会被检索侧排除，不回填等于旧记忆静默退化成只走 BM25），返回 `{reembedded: n}`。无 embedding 凭据（纯 FTS5）或记忆系统关闭回 **409**——不假装"重建成功 0 条"。 |
 | `GET /api/memory/stats` | 记忆统计 + embedding 可用性 + `recentLearned`（近 24h 新增）+ `consolidation`（周期与上次巩固时间）。 |
-| `GET /api/memory/health` | 记忆库整体健康度（一次请求给全，不用再去拼 stats / archived / telemetry 三条）：`{ enabled:true, total, archived, missingVectors, bySpace, dbBytes, embeddings:{label,model,dim?}, lastRecall? }`。`total` 含归档与软删链（口径同 `/api/memory/stats`），`missingVectors` 只数 active + inactive 中缺**当前** embedding 模型向量的条目，`dim` 在一条向量都没有时缺省而不猜；`lastRecall` 取遥测环形缓冲里最近一轮真的注入了记忆的轮次（`{conversationId, items, ms, at}`，只存在于本次运行内）。`dbBytes` 是 `<dataDir>` 下库文件（含 WAL）的总字节——记忆与会话/进化共用同一个 `ryagent.db`，这是"数据一共多大"而非"记忆独占多少"。记忆系统关闭回 **200** `{enabled:false}`，未知查询参数回 **400**。 |
-| `POST /api/feedback` | `{conversationId, agentId, signal: thumb_up\|thumb_down}`——👎 即时反思 + 归因 harmful；👍 归因 helpful。 |
+| `GET /api/memory/health` | 记忆库整体健康度（一次请求给全，不用再去拼 stats / archived / telemetry 三条）：`{ enabled:true, total, archived, missingVectors, bySpace, dbBytes, embeddings:{label,model,dim?}, lastRecall? }`。`total` 含归档与软删链（口径同 `/api/memory/stats`），`missingVectors` 只数 active + inactive 中缺**当前** embedding 模型向量的条目，`dim` 在一条向量都没有时缺省而不猜；`lastRecall` 取遥测环形缓冲里最近一轮真的注入了记忆的轮次（`{conversationId, items, ms, at}`，只存在于本次运行内）。`dbBytes` 是 `<dataDir>` 下库文件（含 WAL）的总字节——记忆与会话/进化共用同一个 `ryharness.db`，这是"数据一共多大"而非"记忆独占多少"。记忆系统关闭回 **200** `{enabled:false}`，未知查询参数回 **400**。 |
+| `POST /api/feedback` | `{conversationId, agentId, signal: thumb_up\|thumb_down, messageId?}`——👎 即时反思 + 归因 harmful；👍 归因 helpful。亲密度 bump 内联在这里做（反馈被接受才涨），回包带更新后的 `agent`。带 `messageId` 时按 messageId+signal 防刷去重：同一消息同一信号重复提交幂等返回 `{recorded:false, duplicate:true}`，不动亲密度、不进进化通道；换信号算改主意，照常接受。进化系统关闭回 **409**。 |
 | `GET /api/agents/:id/playbook` | 经验手册：playbook 条目（section 分组计数）+ 待验证教训。 |
 | `POST /api/playbook/:id/status` | `{status: active\|deprecated}` 手动停用/恢复条目。 |
 | `POST /api/evolve/consolidate` | 手动触发巩固（到期清理/重复记忆合并/dormant 统计）。 |
@@ -87,11 +87,23 @@ agent 每天至多主动说一次：把**确实发生过**的变化（手册新�
 |---|---|
 | `GET /api/providers` | 当前配置的供应商与模型清单：`{ id, displayName, protocol, baseUrl, custom, apiKeyConfigured, models }`。`custom` 区分内置/用户添加（决定 UI 分组与删除入口）；凭据只回答"配没配"，不回显值。 |
 | `GET /api/provider-presets` | 添加供应商向导的预设目录：SiliconFlow / DeepSeek / Moonshot / 智谱 GLM / MiniMax / OpenRouter / OpenAI / Ollama，各含 `{ id, displayName, protocol, baseUrl, models, docsUrl }`。 |
-| `POST /api/providers` | 新增供应商：body `{ displayName, protocol, baseUrl, models[], apiKey?, presetId? }` → **201** `{provider: ProviderInfo}`。路由写 `providers.json`，明文 key 写 `api-keys.json`（0600）；随后**热注册**适配器，不重启。校验失败（缺 displayName / 非法 protocol / 非 http(s) baseUrl / 空 models / 未知 presetId）回 **400**。`protocol: 'ollama'` 允许不填 key；其余也允许先留空（缺 key 的路由指向预留环境变量 `RYAGENT_API_KEY_<ID>`，真正用到时以"缺凭据"在本地失败，而不是发假 token 换回 401）。id 取未占用的 `presetId`，否则 `custom-<8位>`。 |
+| `POST /api/providers` | 新增供应商：body `{ displayName, protocol, baseUrl, models[], apiKey?, presetId? }` → **201** `{provider: ProviderInfo}`。路由写 `providers.json`，明文 key 写 `api-keys.json`（0600）；随后**热注册**适配器，不重启。校验失败（缺 displayName / 非法 protocol / 非 http(s) baseUrl / 空 models / 未知 presetId）回 **400**。`protocol: 'ollama'` 允许不填 key；其余也允许先留空（缺 key 的路由指向预留环境变量 `RYHARNESS_API_KEY_<ID>`，真正用到时以"缺凭据"在本地失败，而不是发假 token 换回 401）。id 取未占用的 `presetId`，否则 `custom-<8位>`。 |
 | `DELETE /api/providers/:id` | 删除用户添加的供应商（路由 + 其 key 一起清掉并热摘适配器）；内置条目回 **409**，未知 id 回 **404**。 |
 | `POST /api/settings/api-key` | `{providerId, apiKey}`：写 `api-keys.json`（0600）并热更新适配器配置；未知 provider 回 **404**。 |
-| `GET /api/files/:name` | 下载 `workspace/.ryagent-artifacts/` 下的产物文件；只允许叶子文件名（含 `/`、`\` 返回 **400**），MIME 按扩展名推断。 |
+| `GET /api/plugins` | 插件清单：`{ plugins:[{ id, name, description, group?, capabilities?:{tools?,routes?}, impact?, enabled, core, status, error? }] }`。`group` 给设置页分组（`core`/`feature`/`voice`/`tool`），`capabilities` 声明该插件提供的工具名与 HTTP 路由，`impact` 是关闭后果的一句人话；`status` 是运行态（`running`/`stopped`/`error`），不是配置文件里的愿望值。 |
+| `PATCH /api/plugins/:id` | body `{ enabled: boolean }` → **200** `{plugin}`。切换会**真实卸载/重挂**该插件的 cordis fiber（注册表里的工具与模型路由同时增减），不是只写配置；`core` 插件（`core-tools`、`llm-openai`）回 **403** `CORE_PLUGIN`，未知 id 回 **404**。开关落盘在 `<dataDir>/config/plugins.json`（缺省=启用）。 |
+| `GET /api/questions?conversationId=<id>&status=pending` | `ask_user` 的问题列表：`{ questions:[{ id, conversationId, agentId?, question, options?, multiple?, askedAt, answer?, selected?, answeredAt?, deliveredAt? }] }`。`status` 取 `pending`/`answered`/`all`（缺省 all）；会话不存在回 **404**。 |
+| `POST /api/questions/:id/answer` | body `{ text, selected?: string[] }` → **200** 问题对象。`text` 非空；回答写入 `<dataDir>/questions.json`，下一轮用户消息会把它注入发起提问的 agent。未知 id 回 **404**。 |
+| `GET /api/files/:name` | 下载 `workspace/.ryharness-artifacts/` 下的产物文件；只允许叶子文件名（含 `/`、`\` 返回 **400**），MIME 按扩展名推断。 |
+| `GET /api/files/:name/info` | 产物预览的元数据 `{name, path, size, mime}`；`path` 是工作区内的**绝对路径**，渲染层靠它做「用系统程序打开 / 复制路径」。只允许叶子文件名，另走 fs 工具那一份 `resolveTarget`（工作区里的符号链接指到外面回 **403**）。 |
+| `GET /api/files/:name/raw` | 产物预览的原始字节，`Content-Disposition: inline`（`?download=1` 改成 attachment）。给内嵌预览的 `<img src>` / `<iframe src>` 直接消费；超过 32MB 回 **413**（整份拒，不截断——截断出来的 PDF 看起来正常、其实缺内容）。边界校验同 `/info`。 |
 | `POST /api/conversations/:id/files` | 上传附件：body `{name, mime?, data(base64)}` → `{name, size, mime}`。字节与消息体走同一条 JSON 通路，解码后落进工作区产物目录（与 `file_produce` 的产物同一份）；同名自动加 `-2`/`-3` 后缀不覆盖，上限 20MB（超限 **413**），base64 必须规范，文件名只放行叶子名。 |
+| `POST /api/vibe` | 开一次 RyVibe：body `{ requirement }`（≤500 字）→ **201** `{ session }`。服务端建一个群会话并给它挂上「盘问与落地」这套方法（skill）与两个工具：盘问（每题必带选项）与落盘（把方案写成项目骨架）。需求为空或超长回 **400**；通讯录里没有助理回 **409**。 |
+| `GET /api/vibe/:id` | 这次 RyVibe 的当前状态：`{ session, questions[], output[], todos[] }`。`output` 只回 `?after=<seq>` 之后的新产出（增量轮询，别把整份方案重发一遍）；`questions` 含已答的（答完折成一行留在页面上，用户要能核对「AI 到底问过我什么」）；`todos` 是落盘时写进待办的那几条任务。未知 id 回 **404**。 |
+| `GET /api/vibe/:id/file?name=<文件名>` | 读项目骨架里的一个文件 → `{ name, size, content }`。**只认落盘时记下的那份文件清单**：目录名与文件名都来自模型，这条路不能变成任意文件读取的口子（清单外的名字回 **404**），超过 512KB 回 **413**。 |
+| `POST /api/vibe/:id/answer` | 回答盘问：body `{ answers: [{questionId, selected[]}], skipped? }` → **200** `{ session }`。**一次交上整张卡**（分四次请求会让小队跑两遍），答案写进小队共同看到的那条正文里——问是全队一起问的，答案也得全队一起看见。题 id 不属于这次 RyVibe 回 **404**。 |
+| `POST /api/vibe/:id/retry` | 重来一次：带着已经答过的答案重新排队一轮 → **202** `{ session }`。失败之后用户最需要的就是这条。 |
+| `GET /api/vibe` | 最近几次 RyVibe（新→旧，最多 10 条）：`{ sessions[] }`，给页面挂载时「回到上次」用。 |
 
 ## WebSocket 事件契约（M4b 按此开发）
 
@@ -114,15 +126,19 @@ agent 每天至多主动说一次：把**确实发生过**的变化（手册新�
 
 ## 组装与扩展点
 
-`RyAgentServer.create(options)`：
+`RyHarnessServer.create(options)`：
 - `mountLlm(ctx)`：替换默认 OpenAI 适配器挂载（测试注入 mock）；
+- `plugins`：在全部内置插件之后追加的插件清单（`core-tools`、`llm-openai`、`voice`、`voice-piper`、`todo`、`ask-user`、`web-read`），用于测试注入与预留的用户插件位；
 - `providersConfig`：内存覆盖 providers.json；
 - `llm`（只读）：`LlmRuntime`，用于查已注册的供应商路由与模型目录；
+- `tools`（只读）：`ToolRegistry`，当前注册的工具（按 agent 白名单逐轮解析）；
 - `port: 0` 取随机端口（`server.url` 读实际地址）；
 - `consolidationIntervalMs`：巩固周期（默认 6 小时，0 = 关闭）；
 - `proactive: false`：关掉主动消息（默认开，见「主动消息」一节）；`proactiveHour` 覆盖每日发送时刻，`proactiveIntervalMs: 0` 只保留启动那一次（测试用小值把每日检查拉成毫秒级）。
 
-供应商的热注册：服务自己 `registerAdapter` 并持有句柄（重复 `registerAdapter` 会撞 `DUPLICATE_ADAPTER`），增删供应商时原地换适配器配置内容并 `replace` 路由集合——在途 turn 不受影响，每个请求在发出那一刻现读配置。
+插件装配：`ctx.plugin(LlmRuntime)` → `ctx.plugin(ToolRegistry)` → 按清单顺序 `await ctx.plugin(entry.apply, entry.config)`；关闭时 `PluginHost` 逆序 dispose 各插件 fiber。`core-tools` 在 apply 里把四个基础工具注册进 `ctx.tools`，`llm-openai` 首次挂载供应商路由并把 `replace` 句柄交回服务；`ask-user` 注册 `ask_user` 工具与问题路由，`web-read` 注册 `read_url` 工具（无 HTTP 面）。
+
+供应商的热注册：服务持有 `llm-openai` 插件交回的 `AdapterRegistrationHandle`（重复 `registerAdapter` 会撞 `DUPLICATE_ADAPTER`），增删供应商时原地换适配器配置内容并 `replace` 路由集合——在途 turn 不受影响，每个请求在发出那一刻现读配置。启动时零路由（插件 dormant）后新增第一个供应商，则走 `mountOpenAiAdapters` 补挂。
 
 ## 测试
 

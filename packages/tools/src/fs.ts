@@ -5,12 +5,12 @@
  * 一次真实路径校验——工作区里一个指向外部的符号链接/junction，词法层完全看不出来，
  * 却能让模型读到（或写穿）工作区外的一切。写目标还不存在，所以 realpath 从最深
  * 的**已存在**祖先开始解析，剩下的段按原样接回。
- * @module @ryagent/tools/fs
+ * @module @ryharness/tools/fs
  */
 
 import { closeSync, mkdirSync, openSync, readSync, realpathSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, sep } from 'node:path'
-import { type Tool, type ToolResult, throwIfAborted } from '@ryagent/agent'
+import { type Tool, type ToolResult, throwIfAborted } from '@ryharness/agent'
 import { PathEscapeError, resolveInWorkspace, truncateOutput } from './workspace.ts'
 
 const MAX_READ_CHARS = 64_000
@@ -51,8 +51,11 @@ function isInside(root: string, candidate: string): boolean {
  * @param path - 调用方给的路径。
  * @returns 规范化后的绝对路径（仍用词法结果，调用方按它读写）。
  * @throws PathEscapeError - 词法逃逸，或真实路径逃出工作区（符号链接/junction）。
+ *
+ * 导出不只给工具用：服务端按名字读产物字节的路由也走它，于是「工作区里读到的文件」
+ * 在两条通路上是同一套边界，不需要另写一份弱化版。
  */
-function resolveTarget(root: string, path: string): string {
+export function resolveTarget(root: string, path: string): string {
   const target = resolveInWorkspace(root, path)
   // 根目录本身也走一遍：根是符号链接时（macOS 的 /tmp、工作区指到别处），
   // 拿词法根去比真实路径会误判成逃逸。

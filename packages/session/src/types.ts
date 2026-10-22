@@ -1,11 +1,11 @@
 /**
  * Session 持久化类型：Agent 定义、会话、消息、群聊调度事件。
- * @module @ryagent/session/types
+ * @module @ryharness/session/types
  */
 
 import type { AgentPersona } from './persona.ts'
 
-/** 持久化的 Agent 定义（与 @ryagent/agent 的 AgentDefinition 同构，常用字段展开便于 SQL 查询）。 */
+/** 持久化的 Agent 定义（与 @ryharness/agent 的 AgentDefinition 同构，常用字段展开便于 SQL 查询）。 */
 export interface StoredAgent {
   id: string
   name: string
@@ -14,6 +14,8 @@ export interface StoredAgent {
   provider: string
   model: string
   temperature?: number
+  /** 思考强度档位（low / medium / high）；缺省 = 模型自己的默认。 */
+  reasoningEffort?: string
   /** 工具名白名单。 */
   tools: string[]
   /**
@@ -69,7 +71,19 @@ export interface UsageTotals {
   messages: number
 }
 
-/** 一条消息；contentBlocks 与 mentions 以 JSON 存储，保持 @ryagent/llm 的 ContentBlock 结构。 */
+/** 一条消息携带的产物卡片：工具结果里的 ProduceCard 加上关联的工具调用 id，随消息落库。 */
+export interface MessageArtifact {
+  /** 产出该产物的工具调用 id。 */
+  callId: string
+  /** 展示名（含扩展名；中文名原样保留）。 */
+  name: string
+  /** 文件字节数。 */
+  size: number
+  /** MIME 类型。 */
+  mime: string
+}
+
+/** 一条消息；contentBlocks 与 mentions 以 JSON 存储，保持 @ryharness/llm 的 ContentBlock 结构。 */
 export interface StoredMessage {
   id: string
   /** 单调递增序号，分页游标。 */
@@ -78,7 +92,7 @@ export interface StoredMessage {
   senderType: SenderType
   /** user/agent 时为对应 id；system 时为空。 */
   senderId?: string
-  /** 内容块数组（@ryagent/llm 的 ContentBlock JSON）。 */
+  /** 内容块数组（@ryharness/llm 的 ContentBlock JSON）。 */
   contentBlocks: unknown[]
   /** 群聊 @提及的 agent id 列表。 */
   mentions: string[]
@@ -88,6 +102,8 @@ export interface StoredMessage {
   turnIndex: number
   /** 关联模型调用的 token 用量（assistant 消息才有）。 */
   usage?: StoredUsage
+  /** 工具结果消息携带的产物卡片（其他消息为空）。 */
+  artifacts?: MessageArtifact[]
   createdAt: number
 }
 

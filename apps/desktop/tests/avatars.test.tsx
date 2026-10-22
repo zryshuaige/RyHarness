@@ -1,11 +1,16 @@
 // @vitest-environment jsdom
 
 import { renderToStaticMarkup } from 'react-dom/server'
+import sharp from 'sharp'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Avatar } from '../renderer/src/components/avatars/Avatar.tsx'
 import {
+  AGENT_HUE_GRAPHIC,
+  AGENT_HUE_TEXT_DARK,
+  AGENT_HUE_TEXT_LIGHT,
   AVATAR_STYLE_BY_KEY,
   AVATAR_STYLES,
+  agentHues,
   BRAND_AVATAR,
   dicebearSvg,
   fallbackColor,
@@ -132,6 +137,188 @@ describe('DiceBear 头像体系', () => {
   })
 })
 
+/**
+ * 栅格化工具：把 dicebearSvg 的产物当成浏览器里的 40px 圆形头像画一遍。
+ * 「有输出」「色相稳定」这类断言量的是字符串，不是画面——真机那次破图（空白圆盘 + 左上角
+ * 一小块蓝）就是在这类断言下长期挂着的：字符串完全正常，只有画出来才知道缺了九成。
+ */
+async function rasterize(svg: string, px: number) {
+  const sized = svg.replace('width="100%" height="100%"', `width="${px}" height="${px}"`)
+  const { data } = await sharp(Buffer.from(sized), { density: 600 })
+    .resize(px, px, { fit: 'fill' })
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true })
+  const channels = 4
+  const at = (x: number, y: number) => {
+    const i = (y * px + x) * channels
+    return [data[i] as number, data[i + 1] as number, data[i + 2] as number, data[i + 3] as number]
+  }
+  return { px, at }
+}
+
+/** 四角不透明 = 底色铺满整个视口（画布没有被裁出透明的角）。 */
+function opaqueCorners(r: Awaited<ReturnType<typeof rasterize>>): boolean {
+  const { px, at } = r
+  return [
+    [0, 0],
+    [px - 1, 0],
+    [0, px - 1],
+    [px - 1, px - 1],
+  ].every(([x, y]) => at(x as number, y as number)[3] === 255)
+}
+
+/** 非底色像素的包围盒（占画布的比例 + 中心偏移），也就是「脸画在哪」。 */
+function artBox(r: Awaited<ReturnType<typeof rasterize>>) {
+  const { px, at } = r
+  const bg = at(0, 0)
+  let minX = px
+  let minY = px
+  let maxX = -1
+  let maxY = -1
+  for (let y = 0; y < px; y++) {
+    for (let x = 0; x < px; x++) {
+      const p = at(x, y)
+      if (p[3] < 250) continue
+      if (Math.abs(p[0] - bg[0]) + Math.abs(p[1] - bg[1]) + Math.abs(p[2] - bg[2]) < 24) continue
+      minX = Math.min(minX, x)
+      minY = Math.min(minY, y)
+      maxX = Math.max(maxX, x)
+      maxY = Math.max(maxY, y)
+    }
+  }
+  // 一格底色都没有时返回一组必定挂掉断言的占位值，省掉调用点的非空断言。
+  if (maxX < 0) return { empty: true, w: 0, h: 0, offX: 1, offY: 1 }
+  const w = (maxX - minX + 1) / px
+  const h = (maxY - minY + 1) / px
+  return {
+    empty: false,
+    w,
+    h,
+    offX: (minX + (maxX - minX + 1) / 2) / px - 0.5,
+    offY: (minY + (maxY - minY + 1) / 2) / px - 0.5,
+  }
+}
+
+describe('DiceBear 渲染级不变量', () => {
+  /** 内置 agent「阿屁」用的就是 mascot/hoarder，真机破图就是它。 */
+  const seeds = ['hoarder', 'nightowl', 'scribe', 'ry1', 'ry2']
+  const PX = 64
+
+  it('两族的 SVG 都不再带文档全局 id（真机破图的根因）', async () => {
+    for (const style of ['dylan', 'mascot']) {
+      await loadAvatarStyle(style)
+      for (const seed of seeds) {
+        const svg = dicebearSvg(style, seed) ?? ''
+        // DiceBear v9 给每张头像都发一个 <mask id="viewboxMask">，id 是文档全局的：
+        // 同屏第二枚及以后的头像会引用到第一枚的遮罩，于是只剩左上角一块可见。
+        expect(svg, `${style}/${seed}`).not.toContain('id="viewboxMask"')
+        expect(svg, `${style}/${seed}`).not.toContain('url(#viewboxMask)')
+      }
+    }
+  })
+
+  it('viewBox 与满幅底色 rect 覆盖整块画布（不能只断言「有输出」）', async () => {
+    for (const style of ['dylan', 'mascot']) {
+      await loadAvatarStyle(style)
+      for (const seed of seeds) {
+        const svg = dicebearSvg(style, seed) ?? ''
+        const tag = `${style}/${seed}`
+        const box = /viewBox="(-?[\d.]+) (-?[\d.]+) ([\d.]+) ([\d.]+)"/.exec(svg)
+        expect(box, `${tag} 没有 viewBox`).not.toBeNull()
+        const [vx, vy, vw, vh] = (box as RegExpExecArray).slice(1).map(Number) as [number, number, number, number]
+        expect(vw, `${tag} viewBox 宽度`).toBeGreaterThan(0)
+        const rect = /<rect\b[^>]*>/.exec(svg)
+        expect(rect, `${tag} 没有底色 rect`).not.toBeNull()
+        const attr = (name: string) => {
+          return Number(new RegExp(`${name}="(-?[\\d.]+)"`).exec(rect?.[0] ?? '')?.[1] ?? 0)
+        }
+        expect(attr('x'), `${tag} 底色左沿`).toBeLessThanOrEqual(vx)
+        expect(attr('y'), `${tag} 底色上沿`).toBeLessThanOrEqual(vy)
+        expect(attr('x') + attr('width'), `${tag} 底色右沿`).toBeGreaterThanOrEqual(vx + vw)
+        expect(attr('y') + attr('height'), `${tag} 底色下沿`).toBeGreaterThanOrEqual(vy + vh)
+      }
+    }
+  })
+
+  it('真渲染：底色铺满四角，脸铺开并居中（破图 = 只剩左上角一块）', async () => {
+    // 阈值不是拍的：35 个 seed × 两族实测，横向最窄 0.688（mascot）/0.797（dylan），
+    // 纵向最矮 0.391，横向中心最大偏移 0.016，纵向最大偏移 0.133。四角不透明 0 例外。
+    // 破图状态下包围盒塌成 0.34×0.34 且中心偏到 -0.33，两条都挂。
+    for (const style of ['dylan', 'mascot']) {
+      await loadAvatarStyle(style)
+      for (const seed of seeds) {
+        const svg = dicebearSvg(style, seed) ?? ''
+        const r = await rasterize(svg, PX)
+        const tag = `${style}/${seed}`
+        expect(opaqueCorners(r), `${tag} 四角透明：底色没铺满视口`).toBe(true)
+        const box = artBox(r)
+        expect(box.empty, `${tag} 一格底色都没有`).toBe(false)
+        expect(box.w, `${tag} 美术横向铺得太窄`).toBeGreaterThan(0.6)
+        expect(box.h, `${tag} 美术纵向铺得太矮`).toBeGreaterThan(0.35)
+        expect(Math.abs(box.offX), `${tag} 美术横向偏心`).toBeLessThan(0.05)
+        expect(Math.abs(box.offY), `${tag} 美术纵向偏心`).toBeLessThan(0.2)
+      }
+    }
+  })
+})
+
+describe('身份色：图形与正文分两套 token', () => {
+  /** WCAG 相对亮度与对比度。 */
+  const relativeLuminance = (hexColor: string) => {
+    const n = parseInt(hexColor.slice(1), 16)
+    const channel = (v: number) => {
+      const c = v / 255
+      return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
+    }
+    return 0.2126 * channel((n >> 16) & 255) + 0.7152 * channel((n >> 8) & 255) + 0.0722 * channel(n & 255)
+  }
+  const contrast = (a: string, b: string) => {
+    const [hi, lo] = [relativeLuminance(a), relativeLuminance(b)].sort((p, q) => q - p)
+    return (hi + 0.05) / (lo + 0.05)
+  }
+  /** 气泡底色：styles.css 的 --bubble-peer，浅色主题 #FFFFFF、暗色主题 #1C1E23。 */
+  const BUBBLE_LIGHT = '#FFFFFF'
+  const BUBBLE_DARK = '#1C1E23'
+
+  it('图形色（1.4.11，3:1）对两套气泡底都成立', () => {
+    for (const color of AGENT_HUE_GRAPHIC) {
+      expect(contrast(color, BUBBLE_LIGHT), `${color} 对白底`).toBeGreaterThanOrEqual(3)
+      expect(contrast(color, BUBBLE_DARK), `${color} 对暗底`).toBeGreaterThanOrEqual(3)
+    }
+  })
+
+  it('正文色（1.4.3，4.5:1）各对自己的主题底色成立', () => {
+    for (const color of AGENT_HUE_TEXT_LIGHT) {
+      expect(contrast(color, BUBBLE_LIGHT), `${color} 对白底`).toBeGreaterThanOrEqual(4.5)
+    }
+    for (const color of AGENT_HUE_TEXT_DARK) {
+      expect(contrast(color, BUBBLE_DARK), `${color} 对暗底`).toBeGreaterThanOrEqual(4.5)
+    }
+  })
+
+  it('两套 token 确实不同：图形色当不了正文色（这正是要拆的原因）', () => {
+    expect(AGENT_HUE_TEXT_LIGHT).not.toBe(AGENT_HUE_GRAPHIC)
+    expect(AGENT_HUE_TEXT_DARK).not.toBe(AGENT_HUE_GRAPHIC)
+    // 同一个值满足不了 4.5:1 × 两套底色：亮底要 L ≤ 0.183，暗底要 L ≥ 0.203，没有交集。
+    expect(
+      AGENT_HUE_GRAPHIC.some((color) => contrast(color, BUBBLE_LIGHT) < 4.5),
+      '图形色板必须仍然有达不到正文 4.5:1 的条目，否则这套拆分已无必要',
+    ).toBe(true)
+    // 同一个 seed 的三套 token 必须同色相（按名字稳定，且不串台）：同一下标即同族。
+    for (const seed of ['CodeBot', '阿码', 'Ryen', 'x', '']) {
+      const hues = agentHues(seed)
+      expect(hues.graphic, seed).toBe(fallbackColor(seed))
+      const i = (AGENT_HUE_GRAPHIC as readonly string[]).indexOf(hues.graphic)
+      expect(i, `${seed} 的图形色不在色板里`).toBeGreaterThanOrEqual(0)
+      expect(AGENT_HUE_TEXT_LIGHT[i] as string, seed).toBe(hues.textLight)
+      expect(AGENT_HUE_TEXT_DARK[i] as string, seed).toBe(hues.textDark)
+    }
+    expect(agentHues('CodeBot')).toEqual(agentHues('CodeBot'))
+    expect(agentHues('A').graphic).not.toBe(agentHues('B').graphic)
+  })
+})
+
 describe('Avatar 组件', () => {
   it('DiceBear 懒加载：未就绪渲染等尺寸骨架，就绪后替换为 SVG（不产生布局抖动）', async () => {
     vi.resetModules()
@@ -161,7 +348,7 @@ describe('Avatar 组件', () => {
 
     const cat = renderToStaticMarkup(<Avatar avatarKey="cat" name="Ryen" size={40} />)
     expect(cat).toContain('avatar-cat')
-    expect(cat).toContain('<svg class="cat"')
+    expect(cat).toContain('<img class="cat cat-circle"')
     expect(cat).not.toContain('avatar-fallback')
 
     // 旧库值（emoji / 手绘 key / 已收敛的 DiceBear 风格）平滑回退首字符块

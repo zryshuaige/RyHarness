@@ -68,9 +68,10 @@ function push(kind: ToastKind, text: string, options: ToastOptions = {}): number
     { id, kind, text, duration, ...(action === undefined ? {} : { action }) },
   ]
   emit()
-  if (duration > 0) setTimeout(() => {
-    remove(id)
-  }, duration)
+  if (duration > 0)
+    setTimeout(() => {
+      remove(id)
+    }, duration)
   return id
 }
 

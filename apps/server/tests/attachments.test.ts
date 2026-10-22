@@ -8,17 +8,17 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { Context } from '@ryagent/cordis'
-import type { GenerateOptions, StreamChunk } from '@ryagent/llm'
-import { LlmAdapter } from '@ryagent/llm'
-import { RyAgentServer } from '@ryagent/server'
+import type { Context } from '@ryharness/cordis'
+import type { GenerateOptions, StreamChunk } from '@ryharness/llm'
+import { LlmAdapter } from '@ryharness/llm'
+import { RyHarnessServer } from '@ryharness/server'
 import { afterEach, describe, expect, it } from 'vitest'
 
 const tmpDirs: string[] = []
-const running: RyAgentServer[] = []
+const running: RyHarnessServer[] = []
 
 function tempDataDir(prefix: string): string {
-  const dir = mkdtempSync(join(tmpdir(), `ryagent-attach-${prefix}-`))
+  const dir = mkdtempSync(join(tmpdir(), `ryharness-attach-${prefix}-`))
   tmpDirs.push(dir)
   return dir
 }
@@ -48,9 +48,9 @@ class QuietAdapter extends LlmAdapter {
   }
 }
 
-async function startServer(): Promise<{ server: RyAgentServer; dataDir: string; artifactsDir: string }> {
+async function startServer(): Promise<{ server: RyHarnessServer; dataDir: string; artifactsDir: string }> {
   const dataDir = tempDataDir('server')
-  const server = await RyAgentServer.create({
+  const server = await RyHarnessServer.create({
     port: 0,
     dataDir,
     memory: null,
@@ -61,10 +61,10 @@ async function startServer(): Promise<{ server: RyAgentServer; dataDir: string; 
     },
   })
   running.push(server)
-  return { server, dataDir, artifactsDir: join(dataDir, 'workspace', '.ryagent-artifacts') }
+  return { server, dataDir, artifactsDir: join(dataDir, 'workspace', '.ryharness-artifacts') }
 }
 
-async function newConversation(server: RyAgentServer): Promise<string> {
+async function newConversation(server: RyHarnessServer): Promise<string> {
   const response = await fetch(`${server.url}/api/conversations`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -75,7 +75,7 @@ async function newConversation(server: RyAgentServer): Promise<string> {
 }
 
 async function upload(
-  server: RyAgentServer,
+  server: RyHarnessServer,
   conversationId: string,
   payload: Record<string, unknown>,
 ): Promise<{ status: number; body: Record<string, unknown> }> {

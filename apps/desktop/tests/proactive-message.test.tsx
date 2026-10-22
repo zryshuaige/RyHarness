@@ -14,7 +14,13 @@ import type { AgentDef, ApiClient, Conversation, MessageRow } from '../renderer/
 import { ChatView, fromHistory } from '../renderer/src/components/ChatView.tsx'
 import { ConversationList, type ConversationRow } from '../renderer/src/components/ConversationList.tsx'
 import { WelcomeHome } from '../renderer/src/components/WelcomeHome.tsx'
-import { ChatStore, isProactiveRow, PROACTIVE_BLOCK_TYPE } from '../renderer/src/store.ts'
+import {
+  bucketOf,
+  ChatStore,
+  type ConversationBucket,
+  isProactiveRow,
+  PROACTIVE_BLOCK_TYPE,
+} from '../renderer/src/store.ts'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -74,6 +80,7 @@ function agentRow(seq: number): MessageRow {
 let container: HTMLDivElement
 let root: ReturnType<typeof createRoot>
 let store: ChatStore
+let bucket: ConversationBucket
 let history: MessageRow[]
 /** 带主动标记的会话行（服务端 GET /api/conversations 附带的 proactive 那一维）。 */
 const rows: ConversationRow[] = [
@@ -110,7 +117,7 @@ function fakeApi(): ApiClient {
 async function renderChat(): Promise<void> {
   await act(async () => {
     root = createRoot(container)
-    root.render(<ChatView api={fakeApi()} conversation={conversation} agents={[agent]} store={store} />)
+    root.render(<ChatView api={fakeApi()} conversation={conversation} agents={[agent]} bucket={bucket} />)
     await Promise.resolve()
     await Promise.resolve()
   })
@@ -120,6 +127,7 @@ beforeEach(() => {
   container = document.createElement('div')
   document.body.appendChild(container)
   store = new ChatStore()
+  bucket = bucketOf(store)
   history = [agentRow(1)]
 })
 
@@ -167,6 +175,21 @@ describe('聊天区里的主动标识', () => {
     history = [agentRow(1), agentRow(2)]
     await renderChat()
     expect(container.querySelectorAll('[data-proactive="true"]')).toHaveLength(0)
+  })
+
+  it('标识上的名字跟着改过的昵称走，不写死品牌名', async () => {
+    history = [agentRow(1), proactiveRow(2)]
+    await act(async () => {
+      root = createRoot(container)
+      root.render(
+        <ChatView api={fakeApi()} conversation={conversation} agents={[{ ...agent, name: '团子' }]} bucket={bucket} />,
+      )
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const badge = container.querySelector('[data-proactive="true"]')?.textContent ?? ''
+    expect(badge).toContain('团子 主动找你')
+    expect(badge).not.toContain('Ryen')
   })
 })
 

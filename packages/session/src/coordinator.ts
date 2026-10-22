@@ -19,7 +19,7 @@
  * conversationId 缓存同一个闸并传进去——单聊给 AgentLoop.quota，群聊给
  * GroupDispatcher.quota（本轮所有成员共用），额度才是"每会话"。缓存有上界
  * 且宿主删会话时可 {@link SessionCoordinator.releaseConversation} 释放。
- * @module @ryagent/session/coordinator
+ * @module @ryharness/session/coordinator
  */
 
 import type {
@@ -29,12 +29,12 @@ import type {
   AgentMemoryHooks,
   SessionQuota,
   SessionQuotaLimits,
-  Tool,
-} from '@ryagent/agent'
-import { AgentLoop, createSessionQuota } from '@ryagent/agent'
-import { brandString } from '@ryagent/brand'
-import type { GroupEvent, GroupHistoryEntry } from '@ryagent/group'
-import { GroupDispatcher, parseMentions } from '@ryagent/group'
+  ToolSource,
+} from '@ryharness/agent'
+import { AgentLoop, createSessionQuota, DEFAULT_HISTORY_BUDGET_TOKENS } from '@ryharness/agent'
+import { brandString } from '@ryharness/brand'
+import type { GroupEvent, GroupHistoryEntry } from '@ryharness/group'
+import { GroupDispatcher, parseMentions } from '@ryharness/group'
 import type {
   ContentBlock,
   GenerateOptions,
@@ -44,8 +44,10 @@ import type {
   StreamChunk,
   TokenUsage,
   ToolCallId,
-} from '@ryagent/llm'
+} from '@ryharness/llm'
+import { estimateMessageTokens, estimateTokens } from '@ryharness/llm'
 import { composePersonaPrompt } from './persona.ts'
+import { repairToolCallPairing } from './repair.ts'
 import type { SessionStore } from './store.ts'
 import type { StoredAgent, StoredMessage, StoredUsage } from './types.ts'
 
@@ -63,8 +65,8 @@ function personaAgent(agent: StoredAgent): AgentDefinition {
 export interface CoordinatorOptions {
   store: SessionStore
   llm: LlmRuntime
-  /** 可用工具全集（AgentLoop 按 agent 定义白名单过滤）。 */
-  tools: readonly Tool[]
+  /** 可用工具全集：数组或按名注册表（AgentLoop 按 agent 定义白名单逐轮解析）。 */
+  tools: ToolSource
   /** 长期记忆（可选）：每个发言 agent 用自己的空间 + 共享画像。 */
   memory?: AgentMemoryHooks
   /** 自我进化（可选）：playbook 注入 + 每轮 delta/反思。 */
@@ -73,6 +75,46 @@ export interface CoordinatorOptions {
   quotaLimits?: SessionQuotaLimits
   /** 内存中同时保留的会话配额闸数（可选，默认 128；超出按 LRU 淘汰）。 */
   quotaCacheSize?: number
+  /**
+   * 下一轮问答注入（可选）：由 ask-user 插件提供。
+   *
+   * 每轮组装系统提示时按 agent 调一次；返回的文本会被追加到该 agent 的系统
+   * 提示末尾。`commit` 在该 agent 真的跑过之后调用——群聊里被 @ 的成员不一定
+   * 每一位都发言，提前标记会让「只该给一个人的回答」悄悄消失。
+   */
+  questionContext?: (conversationId: string, agentId: string) => ContextInjection | undefined
+  /**
+   * 会话级**工作法**（可选）：一段可复用的方法，按会话与 agent 注入系统提示。
+   *
+   * 与 questionContext 的区别是「性质」：问答是**这一轮的事实**（问过什么、答了什么），
+   * 工作法是**做事的方法**（盘问的套路、产出物的格式）。RyVibe 就靠它把「grill me」
+   * 这套方法只装进那一个会话，不去改任何助理的常驻人设。
+   *
+   * 方法与它依赖的工具**必须一起走**：方法说"用 grill 问用户"，白名单里却没有
+   * grill，模型就会把问题当普通文字复述出来——用户永远等不到问题卡，这一轮静静
+   * 卡死，而且**不报任何错**。所以工具名挂在方法上，装方法时一并放行。
+   *
+   * 返回 undefined = 这轮不装任何方法。
+   */
+  conversationMethod?: (
+    conversationId: string,
+    agentId: string,
+  ) => { skill: string; tools: readonly string[] } | undefined
+  /**
+   * 「你在跟谁说话」身份句（可选）：每轮组装系统提示时取一次，排在最前面。
+   *
+   * 由装配层从个人资料读出来传进来（见 apps/server/src/routes/profile.ts）：
+   * 用户在「我的」页改的名字要让 agent 真的知道，而资料存在服务端，不该由内核
+   * 自己认存储。返回 undefined / 空串 = 不注入。
+   */
+  identity?: () => string | undefined
+}
+
+/** 一次性上下文注入：文本 + 送达确认。 */
+export interface ContextInjection {
+  text: string
+  /** 该 agent 的模型调用真的发生过后调用（幂等由提供方负责）。 */
+  commit?(): void
 }
 
 /**
@@ -95,26 +137,87 @@ export interface RunContext {
   onUsage?: (report: UsageReport) => void
 }
 
-const HISTORY_PAGE_SIZE = 1000
+/**
+ * 一轮对话的公共选项。
+ *
+ * `turnIndex` 是**外部指定**本轮的轮次序号，缺省按库里的最大值推。
+ *
+ * 为什么要有这个口子：库里 max(turn_index)+1 只能反映"已经落库的那几轮"。同一会话
+ * 串行排队时，后面几轮在**入队那一刻**还都没落库，按库里最大值推会拿到同一个号——
+ * 两轮共用一个轮次序号，气泡的键、事件的对帧、渲染层的分组全都会串。调用方
+ * （server 的轮次链）在入队时就把号预占下来，执行时原样传进来，两边才对得上。
+ */
+export interface ChatTurnOptions {
+  /** 重放：库里已经有那条用户消息了，本轮不再追加一条新的。 */
+  replay?: boolean
+  /** 本轮的轮次序号（缺省按库里最大值推）。 */
+  turnIndex?: number
+}
+
 /** 工具结果消息文本前缀（也是历史格式化时识别工具消息的标志）。 */
 const TOOL_RESULT_PREFIX = '〔tool〕'
+/**
+ * 工具结果消息里的失败标记块（只留在库里给回放看，不进模型上下文）。
+ *
+ * 工具结果的正文本来就落库（`〔tool〕<name>: <content>`），但失败态只活在实时事件里：
+ * 从历史加载一条失败的调用，气泡上就只剩一行「已读文件」，用户回看时完全看不出当时
+ * 错在哪。标记做成独立的零长度块而不是往正文里插前缀，是因为正文要原样回填给模型，
+ * 而"这次调用失败了"这件事对模型没有新增信息（它自己知道上一轮拿到的就是错误结果）。
+ * 渲染层据此把工具行画成失败态并默认展开（见 ChatView 的 fromHistory）。
+ */
+export const TOOL_ERROR_BLOCK_TYPE = 'tool-error'
 
-/** 把 store 的消息行重建为 @ryagent/llm 的 Message（单聊历史用）。 */
+/** 一条工具结果消息的内容块：正文 + 失败时的标记块。 */
+function toolResultBlocks(name: string, content: string, isError: boolean): unknown[] {
+  const blocks: unknown[] = [{ type: 'text', text: `${TOOL_RESULT_PREFIX}${name}: ${content}` }]
+  if (isError) blocks.push({ type: TOOL_ERROR_BLOCK_TYPE })
+  return blocks
+}
+
+/** 这条历史消息是不是一条失败的工具结果。 */
+export function isToolErrorRow(row: { contentBlocks: unknown[] }): boolean {
+  return row.contentBlocks.some((block) => {
+    return (block as { type?: unknown }).type === TOOL_ERROR_BLOCK_TYPE
+  })
+}
+
+/**
+ * 消息行里会随历史一起回填给模型的内容块。
+ *
+ * reasoning 在这里被剔掉：本仓的 OpenAI 序列化明确不回放它（llm/openai/serialize.ts
+ * 说 chat/completions 没有 reasoning 槽位，塞进可见正文等于把模型的思考说成答案）。
+ * 它留在库里只给前端回放看——既不占供应商的输入预算，也不该继续回填进下一次请求。
+ * 失败标记块（{@link TOOL_ERROR_BLOCK_TYPE}）同理：它是渲染层需要的，不是模型需要的。
+ * 重建与计量共用这一个函数，两边一漂，"增量读窗口 = 全量裁剪窗口"就不再成立。
+ */
+function modelBlocks(row: StoredMessage): ContentBlock[] {
+  const blocks: ContentBlock[] = []
+  for (const raw of row.contentBlocks) {
+    // 存储层会带上渲染层专用的块（reasoning、工具失败标记），它们不是模型的内容块，
+    // 所以先按未知形状读 type 判掉，再收进模型侧的那一份。
+    const type = (raw as { type?: unknown }).type
+    if (type === 'reasoning' || type === TOOL_ERROR_BLOCK_TYPE) continue
+    blocks.push(raw as ContentBlock)
+  }
+  return blocks
+}
+
+/** 把 store 的消息行重建为 @ryharness/llm 的 Message（单聊历史用）。 */
 function rebuildMessage(row: StoredMessage, agent: AgentDefinition): Message | undefined {
   const id = brandString<MessageId>(row.id)
-  const blocks = row.contentBlocks as ContentBlock[]
+  const content = modelBlocks(row)
   if (row.senderType === 'user') {
-    return { id, role: 'user', content: blocks, source: { kind: 'user' } }
+    return { id, role: 'user', content, source: { kind: 'user' } }
   }
   if (row.senderType === 'agent') {
     if (row.toolCallId !== undefined) {
       const callId = brandString<ToolCallId>(row.toolCallId)
-      return { id, role: 'tool', toolCallId: callId, content: blocks, source: { kind: 'tool', callId } }
+      return { id, role: 'tool', toolCallId: callId, content, source: { kind: 'tool', callId } }
     }
     return {
       id,
       role: 'assistant',
-      content: blocks,
+      content,
       source: { kind: 'model', provider: agent.provider, model: agent.model },
     }
   }
@@ -140,6 +243,52 @@ function toGroupEntry(row: StoredMessage, agentNames: Map<string, string>): Grou
         ? (agentNames.get(row.senderId) ?? row.senderId)
         : 'agent'
   return { speaker, text }
+}
+
+/**
+ * 历史增量读的窗口预算（token）。
+ *
+ * 量纲必须与 {@link historyRowWeight} 一致，也就是与 AgentLoop 的入口历史裁剪一致：
+ * 循环自己按模型上下文窗口算（resolveRequestBudget），这里的静态值只是"从库里取
+ * 多少行"的上限，两边不同口径时"窗口已裁好、循环侧是兜底"就是假的。群聊窗口走
+ * {@link groupHistoryRowWeight}，调度器侧的再裁（buildGroupContext）也是同一个
+ * token 口径——三处同值同单位，见 packages/session/tests/budget-unit.test.ts 的
+ * 不变量断言。
+ */
+export const HISTORY_BUDGET_TOKENS = DEFAULT_HISTORY_BUDGET_TOKENS
+
+/**
+ * 单聊历史的逐行预算权重（token）：与 @ryharness/agent 的 trimHistoryToBudget →
+ * estimateMessageTokens 同一口径（role 开销 + 每块的块结构开销，中文一字一 token）。
+ *
+ * 这是"增量读窗口 = 旧全量裁剪窗口"逐条等价的前提，tests/history-read 用真实的
+ * trimHistoryToBudget 断言这一不变量——权重一漂，等价断言立刻红。
+ *
+ * measurement 消息统一取 role 'user'：estimateMessageTokens 只读 content，role 开销
+ * 对所有角色同值，为它伪造一条 source 只会让"这一行到底是什么角色"在 rebuildMessage
+ * 之外再写一遍。system 行不属于历史（rebuildMessage 会丢弃它）。
+ */
+export function historyRowWeight(row: StoredMessage): number | undefined {
+  if (row.senderType === 'system') return undefined
+  return estimateMessageTokens({
+    id: brandString<MessageId>(row.id),
+    role: 'user',
+    content: modelBlocks(row),
+    source: { kind: 'user' },
+  })
+}
+
+/**
+ * 群聊历史的逐行预算权重（token）：条目行 `${speaker}: ${text}` 的估算 token，
+ * 外加 1 个 token 的行分隔换行（与 toGroupEntry 拼出的行逐条对应）。
+ *
+ * 与单聊同理走真 token 而不是字符数：中文一字一 token，字符口径下同一份预算
+ * 实际多送 4 倍。system、tool 结果与纯空白行不属于群历史（toGroupEntry 会丢弃它们）。
+ */
+export function groupHistoryRowWeight(row: StoredMessage, agentNames: Map<string, string>): number | undefined {
+  const entry = toGroupEntry(row, agentNames)
+  if (entry === undefined) return undefined
+  return estimateTokens(`${entry.speaker}: ${entry.text}`) + 1
 }
 
 /** 一段用量累加器（可重置取走），零值即"没有 usage 事件"。 */
@@ -350,10 +499,22 @@ export class SessionCoordinator {
 
   /**
    * 单聊：用户消息落库 → 从 store 恢复历史 → AgentLoop → 发言落库。
+   *
+   * `replay: true` = **重放**：库里已经有那条用户消息了（"编辑并重发"改写过的，
+   * 或"重新生成"要重跑的那条），本轮不再追加一条新的，只把库里那一条原样交给
+   * 模型再答一次。
+   *
+   * 实现是"加载历史时把末尾那条用户消息摘掉"：AgentLoop 每次 run 都会把自己
+   * 那条 user 消息推进历史（loop.ts 的 history.push），摘掉再让它推回去，模型
+   * 看到的历史与首次发送时**逐条相同**，而库里的那条用户消息**一条没动**
+   * （用户那句话的 seq 因此不变）。
+   *
    * @param conversationId - 会话 id。
    * @param agentId - 响应的 agent id。
-   * @param text - 用户输入。
+   * @param text - 用户输入（重放时是库里那条用户消息的正文）。
    * @param context - 工作区根目录等。
+   * @param options - `replay` = 重放已有那条用户消息，不追加新的；`turnIndex` = 本轮
+   *   的轮次序号（缺省按库里最大值推）。
    * @returns AgentLoop 事件流（透传）。
    */
   async *chatDirect(
@@ -361,26 +522,39 @@ export class SessionCoordinator {
     agentId: string,
     text: string,
     context: RunContext,
+    options: ChatTurnOptions = {},
   ): AsyncGenerator<AgentLoopEvent> {
     const { store, llm, tools } = this.options
     const stored = store.getAgent(agentId)
-    if (stored === undefined) throw new Error(`@ryagent/session: unknown agent "${agentId}"`)
+    if (stored === undefined) throw new Error(`@ryharness/session: unknown agent "${agentId}"`)
     // 人格在这一刻才拼进系统提示：库里的 systemPrompt 保持"用户写的原话"，
     // 拼出来的版本只在本次调用里用，编辑器预览与实际发送因此永远一致。
-    const agent = personaAgent(stored)
+    // 问答注入接在人格之后：它是本轮的事实补充，不是 agent 人设的一部分。
+    const { agent, commit: commitQuestion } = this.injectTurnContext(personaAgent(stored), conversationId)
     const conversation = store.getConversation(conversationId)
-    if (conversation === undefined) throw new Error(`@ryagent/session: unknown conversation "${conversationId}"`)
+    if (conversation === undefined) throw new Error(`@ryharness/session: unknown conversation "${conversationId}"`)
 
-    const turnIndex = store.nextTurnIndex(conversationId)
-    // 先恢复历史（不含本条用户消息），再落库用户消息，避免历史里出现重复输入。
+    const turnIndex = options.turnIndex ?? store.nextTurnIndex(conversationId)
     const history = this.loadDirectHistory(conversationId, agent)
-    store.appendMessage({
-      conversationId,
-      senderType: 'user',
-      senderId: 'user',
-      contentBlocks: [{ type: 'text', text }],
-      turnIndex,
-    })
+    if (options.replay === true) {
+      // 重放：库里末尾那条用户消息就是这一轮要重放的。摘掉它，让 AgentLoop
+      // 把它原样推回去——用户那句话留在库里、seq 不变，模型看到的历史与首次
+      // 发送时逐条相同。
+      const last = history.at(-1)
+      if (last === undefined || last.role !== 'user') {
+        throw new Error('@ryharness/session: replay needs the conversation to end with the user message')
+      }
+      history.pop()
+    } else {
+      // 先恢复历史（不含本条用户消息），再落库用户消息，避免历史里出现重复输入。
+      store.appendMessage({
+        conversationId,
+        senderType: 'user',
+        senderId: 'user',
+        contentBlocks: [{ type: 'text', text }],
+        turnIndex,
+      })
+    }
 
     const memory = this.bindMemory(conversationId)
     const evolution = this.bindEvolution(conversationId)
@@ -413,27 +587,44 @@ export class SessionCoordinator {
       },
       // 按会话缓存的闸：额度跨轮累计，不随这一轮的 AgentLoop 重建而清零。
       quota: this.quotas.take(conversationId),
+      ...(this.options.identity === undefined ? {} : { identity: this.options.identity }),
       ...(memory === undefined ? {} : { memory }),
       ...(evolution === undefined ? {} : { evolution }),
     })
 
     let failed: { message: string; code: string } | undefined
+    /** 本轮的模型调用真的产生了事件；只有它才能证明问答注入被送到了模型。 */
+    let sawEvent = false
     try {
-      for await (const event of loop.run({ text }, context)) {
+      // 会话 id 作为工具上下文的一部分下发：待办等按会话落数据的工具无法自己知道
+      // 当前在与谁说话，也不该从全局「当前会话」里猜（并发会话会串）。
+      for await (const event of loop.run({ text }, { ...context, conversationId })) {
+        // 文本/工具/完成事件能证明请求真的发出去过；单条 error 也可能发生在
+        // 发起请求之前（例如没有可用路由），那不算模型看到了注入。
+        if (event.type !== 'error') sawEvent = true
         yield event
         if (event.type === 'tool-result') {
           store.appendMessage({
             conversationId,
             senderType: 'agent',
             senderId: agentId,
-            contentBlocks: [{ type: 'text', text: `${TOOL_RESULT_PREFIX}${event.name}: ${event.result.content}` }],
+            // 失败态一起落库：正文与标记都在，回看时工具行仍是失败态而不是一行"已完成"。
+            contentBlocks: toolResultBlocks(event.name, event.result.content, event.isError === true),
             toolCallId: event.callId,
+            // 产物卡片随消息落库：WS 的 produce-card 只覆盖实时渲染，不落库
+            // 的话刷新/重开后历史里就查不到这份产物（产品链路断点）。
+            ...(event.result.produce === undefined
+              ? {}
+              : { artifacts: [{ callId: event.callId, ...event.result.produce }] }),
             turnIndex,
           })
         }
         if (event.type === 'error') failed = { message: event.message, code: event.code }
       }
     } finally {
+      // 本轮确实产出了事件（模型调用成功、报错或取消后仍有半截输出），问答才
+      // 算送达；在发请求前就失败的 turn 不能吃掉回答。
+      if (sawEvent) commitQuestion?.()
       // 取消时循环会抛 AbortedError：未挂到消息上的那次调用用量不能丢。
       this.settleUsage(lastAssistant, usage.takeCall(), usage, turnIndex, context)
     }
@@ -458,46 +649,94 @@ export class SessionCoordinator {
    * GroupDispatcher 调度链 → 每条 dispatch 落 dispatch_events，每条完成的
    * agent 发言与其工具结果落 messages，错误以 system 消息收尾。
    * @param conversationId - 群会话 id。
-   * @param text - 用户输入。
+   * @param text - 用户输入（重放时是库里那条用户消息的正文）。
    * @param context - 工作区根目录等。
+   * @param options - `replay` = 重放已有那条用户消息，不追加新的；`turnIndex` = 本轮
+   *   的轮次序号（缺省按库里最大值推）。
    * @returns GroupDispatcher 事件流（透传）。
    */
-  async *chatGroup(conversationId: string, text: string, context: RunContext): AsyncGenerator<GroupEvent> {
+  async *chatGroup(
+    conversationId: string,
+    text: string,
+    context: RunContext,
+    options: ChatTurnOptions = {},
+  ): AsyncGenerator<GroupEvent> {
     const { store, llm, tools } = this.options
     const conversation = store.getConversation(conversationId)
-    if (conversation === undefined) throw new Error(`@ryagent/session: unknown conversation "${conversationId}"`)
+    if (conversation === undefined) throw new Error(`@ryharness/session: unknown conversation "${conversationId}"`)
     if (conversation.kind !== 'group') {
-      throw new Error(`@ryagent/session: conversation "${conversationId}" is not a group`)
+      throw new Error(`@ryharness/session: conversation "${conversationId}" is not a group`)
     }
     const members: AgentDefinition[] = []
+    /** 每个成员待确认的问答注入：事件里第一次出现该成员时再标记送达。 */
+    const questionCommits = new Map<string, () => void>()
     for (const id of conversation.memberAgentIds) {
-      const agent = store.getAgent(id)
-      if (agent !== undefined) members.push(personaAgent(agent))
+      const stored = store.getAgent(id)
+      if (stored === undefined) continue
+      const { agent, commit } = this.injectTurnContext(personaAgent(stored), conversationId)
+      if (commit !== undefined) questionCommits.set(agent.id, commit)
+      members.push(agent)
     }
-    if (members.length === 0) throw new Error(`@ryagent/session: group "${conversationId}" has no resolvable members`)
+    if (members.length === 0) throw new Error(`@ryharness/session: group "${conversationId}" has no resolvable members`)
     const dispatcherId = conversation.dispatcherAgentId ?? members[0]!.id
+    const markAgentRan = (agentId: string): void => {
+      const commit = questionCommits.get(agentId)
+      if (commit === undefined) return
+      questionCommits.delete(agentId)
+      commit()
+    }
 
-    const turnIndex = store.nextTurnIndex(conversationId)
-    const mentions = parseMentions(text, members).map((member) => {
-      return member.id
-    })
-    store.appendMessage({
-      conversationId,
-      senderType: 'user',
-      senderId: 'user',
-      contentBlocks: [{ type: 'text', text }],
-      mentions,
-      turnIndex,
-    })
+    const turnIndex = options.turnIndex ?? store.nextTurnIndex(conversationId)
+    /**
+     * 重放时历史要从"要重放的那一轮"之前取起。
+     *
+     * 群聊的历史是按 turn_index 切段的（`beforeTurnIndex`），重放的那一轮正是
+     * 库里末尾那条用户消息所在的那一轮——把它整轮排除，调度器看到的就与首次
+     * 发送时一致（当前输入单独递给它，不在历史里出现第二遍）。
+     */
+    let historyBeforeTurn = turnIndex
+    if (options.replay === true) {
+      const last = store.listMessages(conversationId, { limit: 1 })[0]
+      if (last === undefined || last.senderType !== 'user') {
+        throw new Error('@ryharness/session: replay needs the conversation to end with the user message')
+      }
+      historyBeforeTurn = last.turnIndex
+    } else {
+      const mentions = parseMentions(text, members).map((member) => {
+        return member.id
+      })
+      store.appendMessage({
+        conversationId,
+        senderType: 'user',
+        senderId: 'user',
+        contentBlocks: [{ type: 'text', text }],
+        mentions,
+        turnIndex,
+      })
+    }
 
     const agentNames = new Map(
       members.map((member) => {
         return [member.id, member.name]
       }),
     )
+    // 历史增量读：按预算从最新往回取"本 turn 之前"的行（内核评审 P0-2：不再整读
+    // 1000 行）。keepNewest=false：群历史允许裁空；beforeTurnIndex 排除本轮已落库的
+    // 行。窗口内行数受预算约束，二次格式化开销可忽略。
+    //
+    // 口径必须是 token：行权重走 {@link groupHistoryRowWeight}，调度器侧的再裁
+    // （@ryharness/group 的 buildGroupContext）也是同一个 token 预算与同样的逐行
+    // 权重，因此这里取出的窗口在它那里是 no-op——字符口径曾经让它在 ASCII 群聊
+    // 上再收一刀（30k 字符 ≈ 7.5k token），中文群聊则整个窗口放行。
+    const historyRows = store.listMessagesForHistory(conversationId, HISTORY_BUDGET_TOKENS, {
+      weightOf: (row) => {
+        return groupHistoryRowWeight(row, agentNames)
+      },
+      keepNewest: false,
+      beforeTurnIndex: historyBeforeTurn,
+    })
     const history: GroupHistoryEntry[] = []
-    for (const row of store.listMessages(conversationId, { limit: HISTORY_PAGE_SIZE })) {
-      if (row.turnIndex === turnIndex) break // 只取本 turn 之前的历史
+    for (const row of historyRows) {
       const entry = toGroupEntry(row, agentNames)
       if (entry !== undefined) history.push(entry)
     }
@@ -515,6 +754,7 @@ export class SessionCoordinator {
       tools,
       ...(this.bindMemory(conversationId) === undefined ? {} : { memory: this.bindMemory(conversationId) }),
       ...(this.bindEvolution(conversationId) === undefined ? {} : { evolution: this.bindEvolution(conversationId) }),
+      ...(this.options.identity === undefined ? {} : { identity: this.options.identity }),
       // 调度器把同一个闸分给本轮所有成员：接力链变长不会放大工具预算。
       quota: this.quotas.take(conversationId),
     })
@@ -523,9 +763,13 @@ export class SessionCoordinator {
         text,
         history,
         workspaceRoot: context.workspaceRoot,
+        conversationId,
         turnIndex,
         ...(context.signal === undefined ? {} : { signal: context.signal }),
       })) {
+        // 只有真的产生了事件（文本/工具/发言）才算这位成员跑过；dispatch 事件
+        // 在护栏拦截时也会出现，不能拿它当「模型已看到注入」的证据。
+        if ('agentId' in event) markAgentRan(event.agentId)
         yield event
         switch (event.type) {
           case 'dispatch':
@@ -558,8 +802,12 @@ export class SessionCoordinator {
               conversationId,
               senderType: 'agent',
               senderId: event.agentId,
-              contentBlocks: [{ type: 'text', text: `${TOOL_RESULT_PREFIX}${event.name}: ${event.result.content}` }],
+              contentBlocks: toolResultBlocks(event.name, event.result.content, event.isError === true),
               toolCallId: event.callId,
+              // 与单聊路径同一契约：产物卡片随工具结果消息落库。
+              ...(event.result.produce === undefined
+                ? {}
+                : { artifacts: [{ callId: event.callId, ...event.result.produce }] }),
               turnIndex,
             })
             break
@@ -603,10 +851,48 @@ export class SessionCoordinator {
     context.onUsage?.({ conversationId: message.conversationId, turnIndex, usage, turnTotal })
   }
 
+  /**
+   * 把该 agent 的**会话级补充**接到定义上：问答上下文、工作法、额外工具。
+   *
+   * 注入点选在协调器组装 agent 定义时：单聊与群聊都从这里拿到最终定义，不必
+   * 触碰 AgentLoop 的循环/压缩；群聊按成员各调一次，问题只回到问它的那个人。
+   *
+   * 顺序有讲究：**工作法（怎么做事）在前、问答（这一轮的事实）在后**——先告诉
+   * 它按什么方法做事，再把刚收到的答案摆到它面前；反过来读着像先给结论再补规则。
+   */
+  private injectTurnContext(
+    agent: AgentDefinition,
+    conversationId: string,
+  ): { agent: AgentDefinition; commit?: () => void } {
+    const injection = this.options.questionContext?.(conversationId, agent.id)
+    const method = this.options.conversationMethod?.(conversationId, agent.id)
+    const parts: string[] = []
+    if (method !== undefined && method.skill.trim().length > 0) parts.push(method.skill.trim())
+    if (injection !== undefined && injection.text.trim().length > 0) parts.push(injection.text.trim())
+    // 工具白名单按「名字」解析（见 AgentLoop 的 resolveAllowedTools）：这里加名即可，
+    // 不必拿到工具实例——插件热重挂后实例会换，名字不会。
+    const extra = method?.tools ?? []
+    const tools = extra.length === 0 ? agent.tools : [...new Set([...agent.tools, ...extra])]
+    if (parts.length === 0 && tools === agent.tools) return { agent }
+    return {
+      agent: {
+        ...agent,
+        ...(parts.length === 0 ? {} : { systemPrompt: `${agent.systemPrompt}\n\n${parts.join('\n\n')}` }),
+        ...(tools === agent.tools ? {} : { tools }),
+      },
+      ...(injection?.commit === undefined ? {} : { commit: injection.commit }),
+    }
+  }
+
   /** 绑定会话 id 的记忆钩子（AgentLoop 不关心 conversationId，由这里注入）。 */
   private bindMemory(conversationId: string): AgentMemoryHooks | undefined {
     const memory = this.options.memory
     if (memory === undefined) return undefined
+    // bind 不是多余动作：memory 可能是 MemoryService（原型方法 + this 状态，
+    // recallRefine 还有 this 相关的默认参数），裸取出来调用会在进入函数体之前就抛
+    // TypeError，再被 catch 吞成「本轮没注入记忆」——静默失效比崩更难查。
+    const sync = memory.recallSync?.bind(memory)
+    const refine = memory.recallRefine?.bind(memory)
     return {
       recall: (agentId, inputText) => {
         return memory.recall(agentId, inputText)
@@ -614,6 +900,24 @@ export class SessionCoordinator {
       enqueueExtraction: (agentId, agentName, _conversationId, turnText) => {
         memory.enqueueExtraction(agentId, agentName, conversationId, turnText)
       },
+      // 同步召回与后台补正必须原样透传：漏掉它们，AgentLoop 就退回 await 路径，
+      // 首 token 前白白多等一次 embedding 网络往返。条件展开而不是恒定转发——补一个
+      // 永远返回 undefined 的 recallSync 会让循环以为"同步路径跑过了"从而跳过 await
+      // 兜底，记忆直接静默失效。
+      ...(sync === undefined
+        ? {}
+        : {
+            recallSync: (agentId: string, inputText: string) => {
+              return sync(agentId, inputText)
+            },
+          }),
+      ...(refine === undefined
+        ? {}
+        : {
+            recallRefine: (agentId: string, inputText: string, deadlineMs?: number) => {
+              return refine(agentId, inputText, deadlineMs)
+            },
+          }),
     }
   }
 
@@ -632,8 +936,18 @@ export class SessionCoordinator {
   }
 
   private loadDirectHistory(conversationId: string, agent: AgentDefinition): Message[] {
+    // 历史增量读：按预算从最新往回取（内核评审 P0-2），预算与权重同为 token 口径
+    // （{@link HISTORY_BUDGET_TOKENS} / {@link historyRowWeight}）；取出的窗口已在其
+    // 内，loop 侧 trimHistoryToBudget 成为兜底（窗口权重 ≤ 预算或仅剩 1 条时为 no-op）。
+    const rows = repairToolCallPairing(
+      this.options.store.listMessagesForHistory(conversationId, HISTORY_BUDGET_TOKENS, {
+        weightOf: historyRowWeight,
+      }),
+    )
+    // 崩溃恢复：上次可能在 assistant 消息（含 tool_call 块）落库后、工具结果落库前
+    // 死掉，重建历史先过一遍配对修复（见 repair.ts），否则供应商按断配对拒掉整个请求。
     const messages: Message[] = []
-    for (const row of this.options.store.listMessages(conversationId, { limit: HISTORY_PAGE_SIZE })) {
+    for (const row of rows) {
       const rebuilt = rebuildMessage(row, agent)
       if (rebuilt !== undefined) messages.push(rebuilt)
     }

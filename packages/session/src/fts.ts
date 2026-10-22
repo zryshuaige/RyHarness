@@ -5,11 +5,11 @@
  * 只能把整库消息拉进内存做子串匹配（每页都要 JSON.parse + 全文扫）。这里给
  * 正文建一份 FTS5 索引，搜索变成一次 MATCH。
  *
- * 分词与查询串的写法照搬 @ryagent/memory 的同名实现（unicode61 不切 CJK，
+ * 分词与查询串的写法照搬 @ryharness/memory 的同名实现（unicode61 不切 CJK，
  * 相邻两字一个 token；token 逐个加引号防元字符），但**刻意不依赖那个包**：
  * 记忆与会话虽共用一个 SQLite 文件，本包不引入跨包依赖，重复的两百行文本工具
  * 比一条包依赖便宜。
- * @module @ryagent/session/fts
+ * @module @ryharness/session/fts
  */
 
 /**

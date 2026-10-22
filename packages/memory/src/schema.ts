@@ -1,16 +1,16 @@
 /**
  * 记忆子系统 schema 与迁移。
  *
- * 与 @ryagent/session 共用同一 SQLite 文件，但版本号不归 PRAGMA user_version
+ * 与 @ryharness/session 共用同一 SQLite 文件，但版本号不归 PRAGMA user_version
  * 管（那是 session 的演进轴）——本包用 `memory_meta` 表自管版本，同样遵守
  * 只追加迁移的规则。
- * @module @ryagent/memory/schema
+ * @module @ryharness/memory/schema
  */
 
 import type { DatabaseSync } from 'node:sqlite'
 
 /** 本包 schema 版本（独立于 session 的 SCHEMA_VERSION）。 */
-export const MEMORY_SCHEMA_VERSION = 4
+export const MEMORY_SCHEMA_VERSION = 5
 
 /** 共享用户画像空间的 agent_id（写隔离、读共享，调研 §3.6）。 */
 export const SHARED_SPACE = '*shared*'
@@ -142,11 +142,46 @@ function migrateV4(db: DatabaseSync): void {
   `)
 }
 
+/**
+ * v5：记忆第一次有了**反向信号**。
+ *
+ * 在此之前 recall 是单向棘轮——命中即 access_count+1，排序增益 `1 + log1p(access_count)`
+ * 单调不减，没有任何东西能把一条错误记忆拉下来：用户对着一条胡说的记忆点了 👎，
+ * 系统听不见，于是它下一轮照常注入、再被"证实"一次、又注入一次，越用越牢固。
+ *
+ * 两个计数都是用户反馈的直接落点（👍/👎 由 EvolveService.recordFeedback 回灌，
+ * 见 @ryharness/memory/service 的 {@link MemoryService.recordFeedback}），排序时
+ * 以同权重的对数增益加减（{@link module:@ryharness/memory/service} 的 recallGain），
+ * 增益下界为 0——反馈足够多时这条记忆的排序分归零，等于退出竞争而不必软删：
+ * 用户没有说它错到该删，只是说它没用。
+ *
+ * 加列前先看有没有：ALTER TABLE ADD COLUMN 不是幂等的，遇到「列已在、版本号还没跟上」
+ * 的库（回滚过的备份、手工拨过 memory_meta 的排查现场、把这套迁移当工具复用的场景）
+ * 会直接抛 duplicate column name，把整份记忆库卡在打不开的状态。检测一次的成本是一行
+ * PRAGMA，远低于「用户的长期记忆打不开了」。
+ */
+function migrateV5(db: DatabaseSync): void {
+  const existing = new Set(
+    (db.prepare('PRAGMA table_info(memories)').all() as { name: string }[]).map((column) => {
+      return column.name
+    }),
+  )
+  const adds = ['helpful_count', 'harmful_count']
+    .filter((column) => {
+      return !existing.has(column)
+    })
+    .map((column) => {
+      return `ALTER TABLE memories ADD COLUMN ${column} INTEGER NOT NULL DEFAULT 0;`
+    })
+  if (adds.length > 0) db.exec(adds.join('\n'))
+}
+
 export const MIGRATIONS: Readonly<Record<number, (db: DatabaseSync) => void>> = {
   1: migrateV1,
   2: migrateV2,
   3: migrateV3,
   4: migrateV4,
+  5: migrateV5,
 }
 
 function metaVersion(db: DatabaseSync): number {
@@ -169,7 +204,7 @@ export function migrateMemory(db: DatabaseSync): void {
   try {
     for (let version = current + 1; version <= MEMORY_SCHEMA_VERSION; version++) {
       const migration = MIGRATIONS[version]
-      if (migration === undefined) throw new Error(`@ryagent/memory: missing migration to version ${version}`)
+      if (migration === undefined) throw new Error(`@ryharness/memory: missing migration to version ${version}`)
       migration(db)
     }
     db.prepare(

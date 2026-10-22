@@ -21,7 +21,7 @@ export interface AgentAvatarRef {
 }
 
 export interface AgentIndex {
-  /** agent 名；查不到时退回 id，保证界面上永远有一行可读的署名。 */
+  /** agent 名；查不到时退回「已删除的助理」，绝不把内部 id 摆到署名位置上。 */
   nameOf: (id: string) => string
   agentById: (id: string) => AgentDef | undefined
   /** 按 id 顺序取成员，自动剔除已删除的 agent（会话数据可以比通讯录新）。 */
@@ -35,8 +35,32 @@ export function agentById(agents: readonly AgentDef[], id: string): AgentDef | u
   })
 }
 
+/**
+ * 内置 agent 卡片上的徽标文案（非内置返回 undefined，调用处据此不渲染）。
+ *
+ * 名字本身就是职能的助理（工程师 / 文案 / 翻译 / 管家）不需要额外标注——名字已经
+ * 说清了它是干什么的；内置总管 Ryen 是品牌名不是职能名，徽标补一句它的定位，
+ * 否则通讯录与资料卡上只有「Ryen」两个字，用户无从判断该找它办什么事。
+ */
+/** 已删除助理在聊天记录里留下的中性署名。 */
+export const DELETED_AGENT_LABEL = '已删除的助理'
+
+export function builtinBadge(agent: Pick<AgentDef, 'id' | 'isBuiltin'>): string | undefined {
+  if (!agent.isBuiltin) return undefined
+  return agent.id === 'ryen' ? '内置 · 总管' : '内置'
+}
+
+/**
+ * 名字回退：查不到就说「已删除的助理」，不退回 id。
+ *
+ * 退回 id 是把内部标识原样上屏——用户自建的助理 id 是 randomUUID，历史消息在
+ * 删掉助理之后仍然留在会话里（删除确认框也这么承诺），于是那一整段聊天的署名
+ * 全变成一串机器 id。一句中性标签既诚实（那位确实不在了）又可读。
+ *
+ * 保留原始 id 的地方是详情面板与排查路径，不是在署名单行。
+ */
 export function nameOf(agents: readonly AgentDef[], id: string): string {
-  return agentById(agents, id)?.name ?? id
+  return agentById(agents, id)?.name ?? DELETED_AGENT_LABEL
 }
 
 export function membersOf(agents: readonly AgentDef[], ids: readonly string[]): AgentDef[] {

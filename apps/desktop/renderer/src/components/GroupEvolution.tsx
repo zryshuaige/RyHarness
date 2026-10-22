@@ -10,7 +10,7 @@
  */
 import { useState } from 'react'
 import type { AgentDef, EntryExplanation, EntryOriginRow, PlaybookEntryRow } from '../api.ts'
-import { isGuardRelay, relayLabel } from '../lib/relay-labels.ts'
+import { isGuardRelay, relayLabel, relayTimelineSummary } from '../lib/relay-labels.ts'
 import type { RelayItem } from '../store.ts'
 import { Avatar } from './avatars/Avatar.tsx'
 import { Icon } from './Icon.tsx'
@@ -43,7 +43,7 @@ export function GroupEvolution({
                   onShowMemories(member)
                 }}
               >
-                <Icon name="brain" size={12} /> 记忆
+                <Icon name="brain" size={16} /> 记忆
               </button>
               <button
                 type="button"
@@ -53,7 +53,7 @@ export function GroupEvolution({
                   onShowPlaybook(member)
                 }}
               >
-                <Icon name="check" size={12} /> 经验手册
+                <Icon name="check" size={16} /> 经验手册
               </button>
             </span>
           </li>
@@ -63,19 +63,51 @@ export function GroupEvolution({
   )
 }
 
-/** 调度轨迹：原因一律走中文口径，护栏拦截用警示色标出。 */
+/**
+ * 调度轨迹：默认折叠，只留一行可点的摘要（派了几次、最后谁交付）。
+ *
+ * 轨迹是调度器的内部机制，绝大多数会话里用户并不关心谁把活转给了谁，此前却默认
+ * 整条展开、一轮就把右栏吃掉大半屏。折起来不等于删——排查"它为什么这么答"时
+ * 仍要看这条链，所以保留可展开。展开后 reason 一律走中文口径，护栏拦截用警示色。
+ */
 export function RelayTimeline({ relays, nameOf }: { relays: readonly RelayItem[]; nameOf: (id: string) => string }) {
-  if (relays.length === 0) return <p className="panel-empty">本轮还没有调度事件</p>
+  const [open, setOpen] = useState(false)
+  if (relays.length === 0) {
+    return (
+      <>
+        <h4>调度轨迹</h4>
+        <p className="panel-empty">本轮还没有调度事件</p>
+      </>
+    )
+  }
   return (
-    <ul className="relay-list">
-      {relays.map((relay, index) => (
-        <li key={`${relay.reason}-${index}`} className={isGuardRelay(relay.reason) ? 'is-guard' : ''}>
-          {relay.fromAgent !== undefined ? `${nameOf(relay.fromAgent)} → ` : ''}@{nameOf(relay.toAgent)}
-          <em>{relayLabel(relay.reason)}</em>
-          <small>第 {relay.turnIndex + 1} 轮</small>
-        </li>
-      ))}
-    </ul>
+    <>
+      <h4>
+        <button
+          type="button"
+          className="relay-toggle"
+          aria-expanded={open}
+          onClick={() => {
+            setOpen(!open)
+          }}
+        >
+          <Icon name="chevron-right" size={16} className="relay-caret" />
+          调度轨迹
+          <span className="relay-toggle-summary">{relayTimelineSummary(relays, nameOf)}</span>
+        </button>
+      </h4>
+      {open && (
+        <ul className="relay-list">
+          {relays.map((relay, index) => (
+            <li key={`${relay.reason}-${index}`} className={isGuardRelay(relay.reason) ? 'is-guard' : ''}>
+              {relay.fromAgent !== undefined ? `${nameOf(relay.fromAgent)} → ` : ''}@{nameOf(relay.toAgent)}
+              <em>{relayLabel(relay.reason)}</em>
+              <small>第 {relay.turnIndex + 1} 轮</small>
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
   )
 }
 
@@ -85,7 +117,7 @@ const ORIGIN_LABELS: Record<EntryOriginRow['kind'], string> = {
   reflection: '教训',
   feedback: '反馈',
   memory: '记忆',
-  seed: '种子',
+  seed: '预置',
 }
 
 /** 可解释性要读的数据面；缺这条方法 = 服务端还没这版路由，界面据此降级。 */
@@ -98,6 +130,15 @@ function isOriginKind(value: unknown): value is EntryOriginRow['kind'] {
     value === 'trajectory' || value === 'reflection' || value === 'feedback' || value === 'memory' || value === 'seed'
   )
 }
+
+/**
+ * 服务端还没登记过的来源种类（新版内核加了枚举时的落点）。
+ *
+ * 原值是机器枚举（`curation` / `rollout` 之类），上屏等于把内部实现的分类甩给用户，
+ * 而用户在这里只想知道"这条经验是从哪冒出来的"。说清"认不出"并把原值留在 title 上，
+ * 与 relayLabel / humanMime 同一套做法。
+ */
+const UNKNOWN_ORIGIN = '其他来源'
 
 /**
  * 经验手册条目的「它从哪来」：点开看证据链（来自哪次对话 / 哪条教训 / 哪次反馈 /
@@ -149,13 +190,13 @@ export function EntryExplain({ api, entry }: { api: EntryExplainApi; entry: Play
         title="这条经验从哪来"
         onClick={toggle}
       >
-        <Icon name="chevron-right" size={11} />
+        <Icon name="chevron-right" size={16} />
         它从哪来
       </button>
       {open && (
         <span className="entry-explain-body">
           {loading && <span className="entry-explain-note">查来源…</span>}
-          {failed && <span className="entry-explain-note">来历暂时查不到（服务端还没有这条数据）。</span>}
+          {failed && <span className="entry-explain-note">来源查不到。</span>}
           {explanation !== undefined && <OriginList explanation={explanation} />}
         </span>
       )}
@@ -168,16 +209,19 @@ function OriginList({ explanation }: { explanation: EntryExplanation }) {
     <span className="entry-explain-list">
       <span className="entry-explain-summary">{explanation.summary}</span>
       {explanation.origins.length === 0 ? (
-        <span className="entry-explain-note">没有记录到具体来源（多半是种子或手动写入）。</span>
+        <span className="entry-explain-note">没有来源记录。</span>
       ) : (
         <ul className="entry-origin-list">
           {explanation.origins.map((origin, index) => {
-            const label = isOriginKind(origin.kind) ? ORIGIN_LABELS[origin.kind] : origin.kind
+            const known = isOriginKind(origin.kind)
+            const label = known ? ORIGIN_LABELS[origin.kind] : UNKNOWN_ORIGIN
             return (
-              <li key={`${origin.kind}-${origin.refId}-${index}`} className="entry-origin" title={origin.refId}>
-                <span className={`entry-origin-kind is-${isOriginKind(origin.kind) ? origin.kind : 'unknown'}`}>
-                  {label}
-                </span>
+              <li
+                key={`${origin.kind}-${origin.refId}-${index}`}
+                className="entry-origin"
+                title={known ? origin.refId : `${origin.kind} · ${origin.refId}`}
+              >
+                <span className={`entry-origin-kind is-${known ? origin.kind : 'unknown'}`}>{label}</span>
                 <span className="entry-origin-detail">
                   {origin.detail === undefined || origin.detail.length === 0 ? label : origin.detail}
                 </span>

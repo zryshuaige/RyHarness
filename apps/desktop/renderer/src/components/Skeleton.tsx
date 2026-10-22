@@ -34,3 +34,23 @@ export function PanelSkeleton({ rows = 3 }: { rows?: number }) {
     </div>
   )
 }
+
+/**
+ * 通讯录骨架：形状贴合联系人卡（头像圆 + 名字 + 两行摘要），
+ * 让「正在读联系人」和「通讯录还是空的」在屏幕上长得不一样。
+ */
+export function ContactSkeleton({ rows = 4 }: { rows?: number }) {
+  return (
+    <div className="contact-grid" role="status" aria-label="加载中">
+      {Array.from({ length: rows }, (_, index) => (
+        <div key={index} className="contact-card" style={stagger(index)}>
+          <span className="skeleton" style={{ width: 56, height: 56, borderRadius: '50%' }} />
+          <span className="skeleton" style={{ width: '52%', height: 16 }} />
+          <span className="skeleton" style={{ width: '78%', height: 12 }} />
+          <span className="skeleton" style={{ width: '64%', height: 12 }} />
+          <span className="skeleton" style={{ width: 72, height: 28, borderRadius: 'var(--radius-md)' }} />
+        </div>
+      ))}
+    </div>
+  )
+}

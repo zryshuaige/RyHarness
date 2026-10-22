@@ -9,13 +9,13 @@
  * 助手、retry-stream 的分类器、freezeMessage、call-config 等）不进 barrel。
  * 新增导出前先确认有消费方。
  *
- * @module @ryagent/llm
+ * @module @ryharness/llm
  */
 
-import type { FileAttachmentRef } from '@ryagent/attachment'
-import type { Context } from '@ryagent/cordis'
-import { Remote, RemoteError, TypertRemoteService } from '@ryagent/typert-protocol'
-import { deepFreeze } from '@ryagent/util-values'
+import type { FileAttachmentRef } from '@ryharness/attachment'
+import type { Context } from '@ryharness/cordis'
+import { Remote, RemoteError, TypertRemoteService } from '@ryharness/typert-protocol'
+import { deepFreeze } from '@ryharness/util-values'
 import { normalizeLlmFailure } from './adapter-failure.ts'
 import { normalizeApiKey } from './api-key.ts'
 import type { ProviderRequestId } from './brand.ts'
@@ -56,6 +56,9 @@ import type {
 export { BlockAssembler } from './assembler.ts'
 export { attributionHeaders } from './attribution.ts'
 export type { MessageId, ToolCallId } from './brand.ts'
+// ReasoningEffortId 在 brand.ts 里同时是 branded 类型与它的构造函数，`export {}`
+// 会把两个含义一并带走，适配器据此才能造出合法的 id 字面量。
+export { ProviderRequestId, ReasoningEffortId } from './brand.ts'
 export {
   EMPTY_RESPONSE_CODE,
   errorChain,
@@ -75,11 +78,19 @@ export {
 export type { ResolvedRetryPolicy } from './retry-policy.ts'
 export { resolveRetryPolicy } from './retry-policy.ts'
 export { streamWithRetry } from './retry-stream.ts'
+export {
+  estimateContentTokens,
+  estimateMessageTokens,
+  estimateTokens,
+  estimateToolsTokens,
+} from './token-estimate.ts'
 export type {
   ContentBlock,
   FinishReason,
   GenerateOptions,
   LlmModelInfo,
+  LlmModelReasoningInfo,
+  LlmReasoningEffortInfo,
   LlmResolvedModelInfo,
   RequestMessage,
   StreamChunk,
@@ -88,7 +99,7 @@ export type {
   ToolSchema,
 } from './types.ts'
 
-declare module '@ryagent/cordis' {
+declare module '@ryharness/cordis' {
   interface Context {
     llm: LlmRuntime
   }

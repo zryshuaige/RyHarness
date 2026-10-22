@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { ChatStore, composeMessageText, formatSize } from '../renderer/src/store.ts'
+import { formatSize } from '../renderer/src/lib/format.ts'
+import { ChatStore, composeMessageText } from '../renderer/src/store.ts'
 
 function collect(store: ChatStore) {
   const events: unknown[] = []
@@ -76,7 +77,7 @@ describe('ChatStore 事件折叠', () => {
   it('queued 事件置排队状态，message-done 解除', () => {
     const store = new ChatStore()
     expect(store.getSnapshot().queueing).toBe(false)
-    store.apply({ type: 'queued', conversationId: 'c', senderId: 'user', turnIndex: 1 })
+    store.apply({ type: 'queued', conversationId: 'c', senderId: 'user' })
     expect(store.getSnapshot().queueing).toBe(true)
     store.apply({ type: 'message-done', conversationId: 'c', senderId: 'ryen', turnIndex: 0 })
     expect(store.getSnapshot().queueing).toBe(false)

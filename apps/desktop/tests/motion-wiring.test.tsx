@@ -1,4 +1,7 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -12,6 +15,13 @@ import { ConversationSkeleton } from '../renderer/src/components/Skeleton.tsx'
 import type { UiMessage } from '../renderer/src/store.ts'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '../renderer/src')
+
+/** ChatView 的源码（切会话补间接在它内部）。 */
+function findChatViewSource(): string {
+  return readFileSync(resolve(SRC, 'components/ChatView.tsx'), 'utf8')
+}
 
 const agents: AgentDef[] = [
   {
@@ -81,6 +91,40 @@ describe('消息进场动画', () => {
       <MessageBubble message={message('hist:m1')} fileUrl={fileUrl} animated={false} />,
     )
     expect(history).not.toContain('is-new')
+  })
+})
+
+describe('切会话的进场补间', () => {
+  /**
+   * 聊天区**不按 conversationId 重挂**（桶缓存让同一个 id 拿同一个桶），所以
+   * 「换桶」不会重播任何 CSS 动画——切会话此前就是一次纯粹的瞬换。
+   *
+   * 补间由 ChatView 在会话 id 变化时打一个一次性的 .is-switching 触发。
+   * animation-name 在两个同内容的 keyframes 之间交替：CSS 动画只在
+   * animation-name 变化或元素重建时才重新开始，而「摘 class 再加回来」在 React
+   * 里不保证产生两次提交（连续切换时 class 名可能压根没变）。
+   */
+  it('切会话时聊天区挂上 is-switching，动画播完摘掉', () => {
+    const chatView = findChatViewSource()
+    expect(chatView).toContain('is-switching')
+    // 两个同内容的 keyframes：名字交替，浏览器必然重播
+    expect(chatView).toMatch(/chat-swap-\$\{switchSeq % 2\}/)
+  })
+
+  it('样式表里两个 chat-swap keyframes 内容相同（交替只为触发重播）', () => {
+    const css = readFileSync(resolve(SRC, 'styles.css'), 'utf8')
+    const frames = [...css.matchAll(/@keyframes (chat-swap-\d)\s*\{([^}]*)\}/g)].map((match) => {
+      return { name: match[1] as string, body: (match[2] as string).replace(/\s+/g, ' ').trim() }
+    })
+    expect(frames.length).toBe(2)
+    expect(frames[0]?.body).toBe(frames[1]?.body)
+  })
+
+  it('.chat-view 上不再挂着无条件的 fade-rise（它只在首次挂载时播一次，切会话播不到）', () => {
+    const css = readFileSync(resolve(SRC, 'styles.css'), 'utf8')
+    const rule = /(^|\})\s*\.chat-view\s*\{([^}]*)\}/m.exec(css)
+    expect(rule).not.toBeNull()
+    expect(rule?.[2]).not.toContain('animation')
   })
 })
 

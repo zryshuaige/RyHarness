@@ -1,6 +1,6 @@
 /**
  * 运行时可观测性路由（GET /api/telemetry）。
- * @module @ryagent/server/routes/telemetry
+ * @module @ryharness/server/routes/telemetry
  */
 
 import type { ProactiveSnapshot } from '../proactive.ts'

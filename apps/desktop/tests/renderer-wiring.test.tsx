@@ -146,9 +146,9 @@ describe('经验手册：每条经验都能问「它从哪来」', () => {
       [...container.querySelectorAll('.entry-origin-kind')].map((node) => {
         return node.textContent
       }),
-    ).toEqual(['对话', '教训', '反馈', '记忆', '种子'])
+    ).toEqual(['对话', '教训', '反馈', '记忆', '预置'])
     // detail 缺失时回落到种类标签，不留空白
-    expect(container.querySelectorAll('.entry-origin-detail')[4]?.textContent).toBe('种子')
+    expect(container.querySelectorAll('.entry-origin-detail')[4]?.textContent).toBe('预置')
     // 手册的其余部分没被溯源挤掉：停用按钮还在
     expect(container.querySelectorAll('.memory-delete')).toHaveLength(2)
   })
@@ -170,7 +170,7 @@ describe('经验手册：每条经验都能问「它从哪来」', () => {
       await Promise.resolve()
       await Promise.resolve()
     })
-    expect(container.textContent).toContain('来历暂时查不到')
+    expect(container.textContent).toContain('来源查不到')
     expect(container.querySelector('.entry-origin-list')).toBeNull()
     expect(container.textContent).toContain('改完配置先读一遍再动手')
   })
@@ -189,7 +189,7 @@ describe('经验手册：每条经验都能问「它从哪来」', () => {
       await Promise.resolve()
     })
     expect(container.querySelector('.entry-explain-body')).not.toBeNull()
-    expect(container.textContent).toContain('来历暂时查不到')
+    expect(container.textContent).toContain('来源查不到')
   })
 })
 

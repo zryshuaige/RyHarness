@@ -9,19 +9,19 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { Context } from '@ryagent/cordis'
-import type { GenerateOptions, StreamChunk } from '@ryagent/llm'
-import { LlmAdapter } from '@ryagent/llm'
-import { HashEmbeddings, MemoryService, NullEmbeddings } from '@ryagent/memory'
-import type { ProvidersConfigFile } from '@ryagent/server'
-import { RyAgentServer } from '@ryagent/server'
+import type { Context } from '@ryharness/cordis'
+import type { GenerateOptions, StreamChunk } from '@ryharness/llm'
+import { LlmAdapter } from '@ryharness/llm'
+import { HashEmbeddings, MemoryService, NullEmbeddings } from '@ryharness/memory'
+import type { ProvidersConfigFile } from '@ryharness/server'
+import { RyHarnessServer } from '@ryharness/server'
 import { afterEach, describe, expect, it } from 'vitest'
 
 const tmpDirs: string[] = []
 const DAY_MS = 86_400_000
 
 function tempDataDir(prefix: string): string {
-  const dir = mkdtempSync(join(tmpdir(), `ryagent-usage-${prefix}-`))
+  const dir = mkdtempSync(join(tmpdir(), `ryharness-usage-${prefix}-`))
   tmpDirs.push(dir)
   return dir
 }
@@ -125,10 +125,10 @@ class SimpleAdapter extends LlmAdapter {
 async function startWithMemory(
   prefix: string,
   embeddings: HashEmbeddings | NullEmbeddings = new HashEmbeddings(16),
-): Promise<{ server: RyAgentServer; memory: MemoryService }> {
+): Promise<{ server: RyHarnessServer; memory: MemoryService }> {
   const dataDir = tempDataDir(prefix)
-  const memory = new MemoryService({ dbPath: join(dataDir, 'ryagent.db'), embeddings })
-  const server = await RyAgentServer.create({
+  const memory = new MemoryService({ dbPath: join(dataDir, 'ryharness.db'), embeddings })
+  const server = await RyHarnessServer.create({
     port: 0,
     dataDir,
     memory,
@@ -204,7 +204,7 @@ describe('GET /api/memory/health', () => {
   })
 
   it('记忆系统关闭：回 200 {enabled:false}（面板每次打开都拉，不该报错）', async () => {
-    const server = await RyAgentServer.create({
+    const server = await RyHarnessServer.create({
       port: 0,
       dataDir: tempDataDir('health-off'),
       memory: null,
@@ -279,8 +279,8 @@ const USAGE_PROVIDERS: ProvidersConfigFile = {
   },
 }
 
-async function startUsageServer(prefix: string): Promise<RyAgentServer> {
-  return RyAgentServer.create({
+async function startUsageServer(prefix: string): Promise<RyHarnessServer> {
+  return RyHarnessServer.create({
     port: 0,
     dataDir: tempDataDir(prefix),
     providersConfig: USAGE_PROVIDERS,
@@ -298,7 +298,7 @@ async function createAgent(base: string, id: string, name: string, provider: str
 
 /** 往会话里塞一条带用量（或不带用量）的 agent 消息。 */
 async function appendUsage(
-  server: RyAgentServer,
+  server: RyHarnessServer,
   conversationId: string,
   senderId: string,
   usage?: { inputTokens: number; outputTokens: number; totalTokens?: number },

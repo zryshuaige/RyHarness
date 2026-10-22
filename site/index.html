@@ -1,0 +1,1312 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>RyHarness · 一群会跟你熟起来的 AI 助理</title>
+<meta name="description" content="RyHarness 是类微信的多 Agent 桌面应用：性格能调、亲密度会累积，助理在群聊里互相接力，长期记忆留在本机。Electron + React + SQLite，MIT 开源。" />
+<meta property="og:type" content="website" />
+<meta property="og:title" content="RyHarness · 一群会跟你熟起来的 AI 助理" />
+<meta property="og:description" content="类微信的多 Agent 桌面应用。性格可编辑，助理会互相接力。MIT 开源。" />
+<meta property="og:image" content="assets/logo.png" />
+<link rel="icon" href="assets/favicon.png" />
+<style>
+/* ============================================================
+   RyHarness 官网 — 单文件静态站
+   调色板沿用产品的 warm-amber 设计规范（docs/research/warm-amber-chat-ui-design-spec.md）
+   ============================================================ */
+
+:root{
+  --bg:#FAF7F2;
+  --bg-elev:#FFFFFF;
+  --bg-subtle:#F3EFE7;
+  --bg-sunk:#EFE9DE;
+  --ink:#292524;
+  --ink-2:#57534E;
+  --ink-3:#8A8279;
+  --line:#E7E0D3;
+  --line-soft:#EFE9DD;
+  --amber:#F59E0B;
+  --amber-600:#D97706;
+  --amber-700:#B45309;
+  --amber-tint:#FEF3C7;
+  --amber-wash:#FDF6E7;
+  --green:#22C55E;
+  --shadow-sm:0 1px 2px rgba(41,37,36,.05), 0 1px 3px rgba(41,37,36,.04);
+  --shadow-md:0 4px 16px rgba(41,37,36,.06), 0 1px 3px rgba(41,37,36,.05);
+  --shadow-lg:0 24px 60px -20px rgba(120,80,20,.28), 0 8px 24px -12px rgba(41,37,36,.14);
+  --nav-bg:rgba(250,247,242,.82);
+  --radius:16px;
+  --maxw:1180px;
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI Variable","Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei UI","Microsoft YaHei","Source Han Sans SC","Noto Sans SC",sans-serif;
+  --mono:"JetBrains Mono","SF Mono",Consolas,"Cascadia Mono",Menlo,monospace;
+}
+
+[data-theme="dark"]{
+  --bg:#171310;
+  --bg-elev:#221E1A;
+  --bg-subtle:#2A2521;
+  --bg-sunk:#12100E;
+  --ink:#E8E4DF;
+  --ink-2:#B5AEA5;
+  --ink-3:#7E766D;
+  --line:#332D28;
+  --line-soft:#2A2521;
+  --amber:#FCD34D;
+  --amber-600:#F59E0B;
+  --amber-700:#FBBF24;
+  --amber-tint:rgba(252,211,77,.14);
+  --amber-wash:rgba(252,211,77,.06);
+  --green:#4ADE80;
+  --shadow-sm:0 1px 2px rgba(0,0,0,.3);
+  --shadow-md:0 4px 16px rgba(0,0,0,.35);
+  --shadow-lg:0 24px 60px -20px rgba(0,0,0,.7), 0 8px 24px -12px rgba(0,0,0,.5);
+  --nav-bg:rgba(23,19,16,.8);
+}
+
+*,*::before,*::after{box-sizing:border-box}
+html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
+body{
+  margin:0;
+  background:var(--bg);
+  color:var(--ink);
+  font-family:var(--font);
+  font-size:16px;
+  line-height:1.68;
+  -webkit-font-smoothing:antialiased;
+  -moz-osx-font-smoothing:grayscale;
+  overflow-x:hidden;
+}
+img{max-width:100%;display:block}
+a{color:inherit;text-decoration:none}
+button{font:inherit;color:inherit;border:0;background:none;cursor:pointer}
+::selection{background:var(--amber-tint);color:var(--ink)}
+
+h1,h2,h3,h4{margin:0;line-height:1.14;letter-spacing:-.02em;font-weight:700}
+p{margin:0}
+code,pre{font-family:var(--mono)}
+
+/* ---------- layout ---------- */
+.wrap{width:100%;max-width:var(--maxw);margin:0 auto;padding:0 28px}
+section{padding:clamp(72px,9vw,128px) 0}
+.eyebrow{
+  display:inline-flex;align-items:center;gap:8px;
+  font-size:12.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--amber-700);
+}
+.eyebrow::before{
+  content:"";width:18px;height:1.5px;border-radius:2px;
+  background:linear-gradient(90deg,var(--amber),var(--amber-600));
+}
+.sec-head{max-width:760px;margin-bottom:clamp(40px,5vw,64px)}
+.sec-head h2{font-size:clamp(28px,4.2vw,46px);margin:16px 0 0;font-weight:800;letter-spacing:-.03em}
+.sec-head p{margin-top:18px;font-size:clamp(15px,1.5vw,17.5px);color:var(--ink-2);max-width:640px}
+.sec-head.center{margin-left:auto;margin-right:auto;text-align:center}
+.sec-head.center p{margin-left:auto;margin-right:auto}
+
+/* ---------- nav ---------- */
+.nav{
+  position:fixed;inset:0 0 auto 0;z-index:100;
+  background:var(--nav-bg);
+  backdrop-filter:saturate(180%) blur(16px);
+  -webkit-backdrop-filter:saturate(180%) blur(16px);
+  border-bottom:1px solid transparent;
+  transition:border-color .3s ease,background .3s ease;
+}
+.nav.scrolled{border-bottom-color:var(--line)}
+.nav-inner{display:flex;align-items:center;gap:14px;height:66px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:17px;letter-spacing:-.02em}
+.brand img{width:30px;height:30px;border-radius:9px}
+.brand .ver{font-size:11px;font-weight:600;color:var(--ink-3);letter-spacing:0;padding:2px 6px;border:1px solid var(--line);border-radius:6px}
+.nav-links{display:flex;gap:4px;margin-left:auto}
+.nav-links a{
+  padding:7px 13px;border-radius:8px;font-size:14.5px;color:var(--ink-2);
+  transition:background .2s ease,color .2s ease;
+}
+.nav-links a:hover{background:var(--bg-subtle);color:var(--ink)}
+.nav-act .menu-btn{display:none}
+.menu-panel{
+  position:fixed;top:66px;left:0;right:0;z-index:99;
+  background:var(--bg-elev);border-bottom:1px solid var(--line);
+  box-shadow:var(--shadow-md);display:none;padding:10px 28px 18px;
+}
+.menu-panel.on{display:block}
+.menu-panel a{
+  display:block;padding:11px 12px;border-radius:9px;
+  font-size:15px;font-weight:500;color:var(--ink-2);
+}
+.menu-panel a:hover{background:var(--bg-subtle);color:var(--ink)}
+.menu-panel .ext{color:var(--amber-700)}
+@media (max-width:880px){
+  .nav-links{display:none}
+  .nav-act .menu-btn{display:grid}
+}
+@media (max-width:560px){
+  .nav-act .gh{display:none}
+}
+@media (max-width:420px){
+  .brand .ver{display:none}
+}
+.nav-act{display:flex;align-items:center;gap:10px;margin-left:8px}
+.icon-btn{
+  width:34px;height:34px;display:grid;place-items:center;border-radius:9px;
+  border:1px solid var(--line);color:var(--ink-2);
+  transition:background .2s ease,color .2s ease,border-color .2s ease;
+}
+.icon-btn:hover{background:var(--bg-subtle);color:var(--ink)}
+[data-theme="dark"] .theme-sun{display:none}
+[data-theme="light"] .theme-moon{display:none}
+
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  height:42px;padding:0 20px;border-radius:11px;
+  font-size:14.5px;font-weight:600;letter-spacing:-.01em;
+  transition:transform .18s cubic-bezier(.2,.8,.3,1),box-shadow .2s ease,background .2s ease,border-color .2s ease,color .2s ease;
+  white-space:nowrap;
+}
+.btn:active{transform:translateY(1px)}
+.btn-primary{
+  background:linear-gradient(135deg,#FBBF24,#F59E0B 55%,#D97706);
+  color:#3D2E12;
+  box-shadow:0 1px 2px rgba(120,80,10,.16),0 6px 18px -8px rgba(217,119,6,.6);
+}
+.btn-primary:hover{box-shadow:0 2px 4px rgba(120,80,10,.18),0 10px 26px -8px rgba(217,119,6,.7)}
+.btn-ghost{border:1px solid var(--line);color:var(--ink);background:var(--bg-elev)}
+.btn-ghost:hover{border-color:var(--ink-3);background:var(--bg-subtle)}
+.btn-sm{height:34px;padding:0 14px;font-size:13.5px;border-radius:9px}
+.btn-lg{height:50px;padding:0 26px;font-size:16px;border-radius:13px}
+
+/* ---------- hero ---------- */
+.hero{position:relative;padding-top:clamp(120px,15vw,176px);padding-bottom:clamp(60px,7vw,96px);overflow:hidden}
+.hero::before{
+  content:"";position:absolute;left:50%;top:-280px;translate:-50% 0;
+  width:1100px;height:900px;pointer-events:none;
+  background:radial-gradient(ellipse at center,rgba(245,158,11,.16),rgba(245,158,11,.05) 42%,transparent 68%);
+  filter:blur(8px);
+}
+[data-theme="dark"] .hero::before{background:radial-gradient(ellipse at center,rgba(252,211,77,.13),transparent 66%)}
+.hero-inner{position:relative;text-align:center;max-width:900px;margin:0 auto}
+.badge{
+  display:inline-flex;align-items:center;gap:9px;
+  padding:6px 14px 6px 7px;border-radius:999px;
+  background:var(--bg-elev);border:1px solid var(--line);
+  font-size:13px;color:var(--ink-2);box-shadow:var(--shadow-sm);
+}
+.badge b{font-weight:600;color:var(--ink)}
+.badge .dot{width:6px;height:6px;border-radius:50%;background:var(--green);margin-left:5px}
+.badge .chip{
+  padding:2px 9px;border-radius:999px;font-size:11.5px;font-weight:700;letter-spacing:.04em;
+  background:var(--amber-tint);color:var(--amber-700);
+}
+.hero h1{
+  margin:26px 0 0;
+  font-size:clamp(34px,6.4vw,66px);
+  font-weight:800;letter-spacing:-.035em;line-height:1.08;
+}
+.hero h1 .accent{
+  background:linear-gradient(135deg,#FBBF24,#F59E0B 50%,#D97706);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+}
+[data-theme="dark"] .hero h1 .accent{background:linear-gradient(135deg,#FDE68A,#FCD34D 50%,#F59E0B);-webkit-background-clip:text;background-clip:text;color:transparent}
+.lead{
+  margin:26px auto 0;max-width:660px;
+  font-size:clamp(15.5px,1.7vw,18.5px);color:var(--ink-2);line-height:1.72;
+}
+.hero-cta{display:flex;flex-wrap:wrap;gap:12px;justify-content:center;margin-top:34px}
+.hero-meta{
+  margin-top:22px;display:flex;flex-wrap:wrap;gap:8px 20px;justify-content:center;
+  font-size:13.5px;color:var(--ink-3);
+}
+.hero-meta span{display:inline-flex;align-items:center;gap:7px}
+.hero-meta svg{opacity:.7}
+
+/* app frame */
+.frame-wrap{position:relative;margin-top:clamp(44px,6vw,76px)}
+.frame{
+  position:relative;border-radius:18px;overflow:hidden;
+  border:1px solid var(--line);
+  background:var(--bg-elev);
+  box-shadow:var(--shadow-lg);
+  text-align:left;
+}
+.frame-bar{
+  display:flex;align-items:center;gap:10px;
+  height:42px;padding:0 14px;
+  background:var(--bg-subtle);border-bottom:1px solid var(--line);
+}
+.frame-bar img{width:19px;height:19px;border-radius:6px}
+.frame-bar .t{font-size:13px;font-weight:600;color:var(--ink-2)}
+.frame-bar .sp{flex:1}
+.frame-bar .pill{
+  font-size:11.5px;font-weight:600;color:var(--ink-3);
+  padding:3px 9px;border:1px solid var(--line);border-radius:999px;background:var(--bg-elev);
+}
+.frame img.shot{width:100%;height:auto;display:block}
+.glow{
+  position:absolute;left:12%;right:12%;bottom:-42px;height:120px;z-index:-1;
+  background:radial-gradient(ellipse at center,rgba(245,158,11,.30),transparent 70%);
+  filter:blur(26px);
+}
+[data-theme="dark"] .glow{background:radial-gradient(ellipse at center,rgba(252,211,77,.18),transparent 70%)}
+
+/* ---------- film ---------- */
+.film-card{max-width:1040px;margin:0 auto}
+.film-v{display:block;width:100%;height:auto;aspect-ratio:16/9;background:#0E0C0B;object-fit:cover}
+.frame-bar.bottom{border-bottom:0;border-top:1px solid var(--line)}
+.film-ctrl{display:flex;align-items:center;gap:6px}
+.fc-btn{
+  width:28px;height:28px;display:grid;place-items:center;border-radius:8px;
+  color:var(--ink-2);transition:background .2s ease,color .2s ease;
+}
+.fc-btn:hover{background:var(--bg-elev);color:var(--ink)}
+.fc-btn .ic-play,.fc-btn .ic-on{display:none}
+.fc-btn.is-paused .ic-pause{display:none}
+.fc-btn.is-paused .ic-play{display:block}
+.fc-btn.is-muted .ic-off{display:none}
+.fc-btn.is-muted .ic-on{display:block}
+
+/* ---------- relationship ---------- */
+.bond-grid{display:grid;grid-template-columns:1fr 1.06fr;gap:clamp(26px,4vw,56px);align-items:start}
+@media (max-width:900px){.bond-grid{grid-template-columns:1fr}}
+.trait{margin-bottom:20px}
+.trait:last-child{margin-bottom:0}
+.trait .tname{display:flex;align-items:baseline;gap:10px;font-size:15.5px;font-weight:700}
+.trait .tname em{font-style:normal;font-size:11px;font-weight:600;color:var(--ink-3);letter-spacing:.1em;text-transform:uppercase}
+.trait .tbar{margin-top:9px;height:8px;border-radius:99px;background:var(--bg-subtle);border:1px solid var(--line-soft);overflow:hidden}
+.trait .tbar i{display:block;height:100%;width:var(--v);border-radius:99px;background:linear-gradient(90deg,#FBBF24,#F59E0B)}
+.trait .tdesc{margin-top:7px;font-size:13px;color:var(--ink-3)}
+
+.prompt{border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--bg-elev);box-shadow:var(--shadow-md)}
+.prompt .pbar{display:flex;align-items:center;gap:7px;padding:11px 16px;background:var(--bg-subtle);border-bottom:1px solid var(--line)}
+.prompt .pbar i{width:9px;height:9px;border-radius:50%;background:var(--line);display:block}
+.prompt .pbar span{margin-left:5px;font-size:11.5px;color:var(--ink-3);font-family:var(--mono)}
+.prompt .pbar .hint{margin-left:auto;font-family:var(--font);letter-spacing:0}
+.prompt pre{padding:18px 20px;font-size:13px;line-height:2.05;color:var(--ink-2);white-space:pre-wrap;word-break:break-word}
+.prompt .k{color:var(--amber-700);font-weight:700}
+
+.ladder{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:clamp(32px,4vw,56px)}
+@media (max-width:820px){.ladder{grid-template-columns:repeat(2,1fr)}}
+@media (max-width:470px){.ladder{grid-template-columns:1fr}}
+.rung{position:relative;padding:22px 22px 20px;border-radius:14px;background:var(--bg-elev);border:1px solid var(--line);overflow:hidden}
+.rung::before{content:"";position:absolute;left:0;right:0;top:0;height:3px;background:linear-gradient(90deg,#FBBF24,#F59E0B);opacity:var(--o,1)}
+.rung .rstep{font-size:11px;font-weight:700;letter-spacing:.1em;color:var(--ink-3);font-family:var(--mono)}
+.rung .rname{margin-top:8px;font-size:17.5px;font-weight:800;letter-spacing:-.02em}
+.rung .rdesc{margin-top:9px;font-size:13.5px;color:var(--ink-2);line-height:1.65}
+
+/* ---------- stats ---------- */
+.stats{padding-top:0}
+.stat-grid{
+  display:grid;grid-template-columns:repeat(5,1fr);
+  gap:1px;background:var(--line);
+  border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;
+}
+.stat{background:var(--bg-elev);padding:28px 24px}
+@media (max-width:1040px){
+  .stat-grid{grid-template-columns:repeat(2,1fr)}
+  .stat:last-child{grid-column:span 2}
+}
+@media (max-width:520px){
+  .stat-grid{grid-template-columns:1fr}
+  .stat:last-child{grid-column:auto}
+}
+.stat .n{
+  font-size:clamp(26px,3.2vw,36px);font-weight:800;letter-spacing:-.03em;
+  font-variant-numeric:tabular-nums;line-height:1.1;
+}
+.stat .n small{font-size:.52em;font-weight:700;margin-left:2px;color:var(--ink-2)}
+.stat .l{margin-top:8px;font-size:13.5px;color:var(--ink-2);line-height:1.5}
+.stat .s{margin-top:3px;font-size:12px;color:var(--ink-3)}
+
+/* ---------- compare ---------- */
+.cmp{border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:var(--bg-elev)}
+.cmp-row{
+  display:grid;grid-template-columns:132px 1fr 1.12fr;gap:0;
+  border-bottom:1px solid var(--line-soft);
+}
+.cmp-row:last-child{border-bottom:0}
+.cmp-row.head{background:var(--bg-subtle)}
+.cmp-row.head .c-alt,.cmp-row.head .c-us{font-size:12.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.cmp-row.head .c-us{color:var(--amber-700)}
+.cmp-k{
+  padding:20px 18px;font-size:13.5px;font-weight:700;color:var(--ink);
+  background:var(--bg-subtle);border-right:1px solid var(--line-soft);
+}
+.cmp-alt{padding:20px 22px;font-size:14.5px;color:var(--ink-3)}
+.cmp-us{
+  padding:20px 22px;font-size:14.5px;color:var(--ink);font-weight:500;
+  background:var(--amber-wash);border-left:1px solid var(--line-soft);
+}
+.cmp-us b{font-weight:700}
+@media (max-width:820px){
+  .cmp-row{grid-template-columns:1fr;padding:0}
+  .cmp-row.head{display:none}
+  .cmp-k{border-right:0;border-bottom:1px solid var(--line-soft);padding:16px 18px 6px;background:transparent}
+  .cmp-alt{padding:4px 18px 10px;font-size:13.5px}
+  .cmp-us{padding:0 18px 18px;border-left:0;font-size:14px}
+  .cmp-us::before{content:"→ ";color:var(--amber-600);font-weight:700}
+}
+
+/* ---------- capability cards ---------- */
+.caps{display:grid;grid-template-columns:repeat(2,1fr);gap:20px}
+@media (max-width:700px){.caps{grid-template-columns:1fr}}
+.cap{
+  padding:30px 28px 28px;border:1px solid var(--line);border-radius:var(--radius);
+  background:var(--bg-elev);box-shadow:var(--shadow-sm);
+  transition:transform .25s cubic-bezier(.2,.8,.3,1),box-shadow .25s ease,border-color .25s ease;
+}
+.cap:hover{transform:translateY(-3px);box-shadow:var(--shadow-md);border-color:var(--line)}
+.cap-ico{
+  width:40px;height:40px;border-radius:11px;display:grid;place-items:center;
+  background:var(--amber-tint);color:var(--amber-700);margin-bottom:18px;
+}
+.cap h3{font-size:18.5px;font-weight:700;letter-spacing:-.02em}
+.cap p{margin-top:11px;font-size:14.5px;color:var(--ink-2);line-height:1.72}
+.cap .tags{display:flex;flex-wrap:wrap;gap:7px;margin-top:18px}
+.cap .tags span{
+  font-size:11.5px;font-weight:600;color:var(--ink-3);
+  padding:3px 9px;border-radius:6px;background:var(--bg-subtle);border:1px solid var(--line-soft);
+}
+
+/* ---------- showcase ---------- */
+.tabs{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:26px;padding:5px;background:var(--bg-subtle);border:1px solid var(--line);border-radius:13px;width:fit-content;max-width:100%}
+.tab{
+  padding:8px 16px;border-radius:9px;font-size:14px;font-weight:600;color:var(--ink-3);
+  transition:background .2s ease,color .2s ease,box-shadow .2s ease;
+}
+.tab:hover{color:var(--ink)}
+.tab.on{background:var(--bg-elev);color:var(--ink);box-shadow:var(--shadow-sm)}
+.panel{display:none}
+.panel.on{display:block;animation:fade .45s cubic-bezier(.2,.8,.3,1)}
+@keyframes fade{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+.panel-grid{display:grid;grid-template-columns:1fr 1.15fr;gap:clamp(28px,4vw,56px);align-items:center}
+@media (max-width:900px){.panel-grid{grid-template-columns:1fr}}
+.panel h3{font-size:clamp(22px,2.8vw,30px);font-weight:800;letter-spacing:-.025em}
+.panel .pd{margin-top:14px;color:var(--ink-2);font-size:15.5px;line-height:1.75}
+.panel ul{margin:20px 0 0;padding:0;list-style:none;display:grid;gap:10px}
+.panel ul li{position:relative;padding-left:22px;font-size:14.5px;color:var(--ink-2);line-height:1.6}
+.panel ul li code{font-size:.9em;white-space:nowrap}
+.panel ul li::before{
+  content:"";position:absolute;left:1px;top:9px;width:6px;height:6px;border-radius:50%;
+  background:var(--amber);
+}
+.shot-frame{border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--bg-elev);box-shadow:var(--shadow-lg)}
+.shot-frame img{width:100%;height:auto}
+.pets{display:flex;align-items:center;gap:10px;margin-top:22px;flex-wrap:wrap}
+.pets img{width:44px;height:44px;border-radius:50%;background:var(--bg-subtle);border:1px solid var(--line-soft);object-fit:cover}
+.hues{display:flex;gap:6px;margin-left:6px}
+.hues i{width:17px;height:17px;border-radius:50%;display:block;border:1px solid rgba(0,0,0,.08)}
+
+/* ---------- memory (dark band) ---------- */
+.band{
+  background:var(--bg-sunk);color:var(--ink);
+  border-top:1px solid var(--line);border-bottom:1px solid var(--line);
+}
+[data-theme="dark"] .band{background:#100E0C;border-color:var(--line)}
+.band .sec-head p{color:var(--ink-2)}
+.flow{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin-top:8px}
+.flow-step{
+  padding:24px 22px;border-radius:14px;
+  background:var(--bg-elev);border:1px solid var(--line);
+}
+[data-theme="dark"] .flow-step{background:#1C1815}
+.flow-step .no{
+  font-size:11.5px;font-weight:700;letter-spacing:.1em;color:var(--amber-700);
+  font-variant-numeric:tabular-nums;
+}
+.flow-step h4{margin-top:10px;font-size:16.5px;font-weight:700}
+.flow-step p{margin-top:9px;font-size:13.5px;color:var(--ink-2);line-height:1.68}
+.honest{
+  margin-top:22px;padding:24px 26px;border-radius:14px;
+  background:var(--bg-elev);border:1px solid var(--line);border-left:3px solid var(--amber);
+}
+[data-theme="dark"] .honest{background:#1C1815}
+.honest h4{font-size:15.5px;font-weight:700;display:flex;align-items:center;gap:9px}
+.honest h4 .tag{
+  font-size:10.5px;font-weight:700;letter-spacing:.05em;padding:2px 7px;border-radius:5px;
+  background:var(--amber-tint);color:var(--amber-700);
+}
+.honest p{margin-top:11px;font-size:14px;color:var(--ink-2);line-height:1.75}
+.honest a{color:var(--amber-700);font-weight:600;border-bottom:1px solid var(--amber-tint)}
+
+/* ---------- architecture ---------- */
+.arch{display:grid;gap:12px}
+.layer{
+  display:grid;grid-template-columns:210px 1fr;gap:0;
+  border:1px solid var(--line);border-radius:13px;overflow:hidden;background:var(--bg-elev);
+}
+@media (max-width:760px){.layer{grid-template-columns:1fr}}
+.layer .lt{
+  padding:20px 20px;background:var(--bg-subtle);border-right:1px solid var(--line-soft);
+}
+@media (max-width:760px){.layer .lt{border-right:0;border-bottom:1px solid var(--line-soft)}}
+.layer .lt b{display:block;font-size:15px;font-weight:700;letter-spacing:-.01em}
+.layer .lt span{display:block;margin-top:4px;font-size:12px;color:var(--ink-3);font-family:var(--mono)}
+.layer .lc{padding:20px 22px;display:flex;flex-wrap:wrap;gap:9px;align-content:center}
+.layer .lc em{
+  font-style:normal;font-size:13px;font-weight:500;color:var(--ink-2);
+  padding:5px 11px;border-radius:8px;background:var(--bg-subtle);border:1px solid var(--line-soft);
+}
+.layer.base .lc em{background:var(--amber-wash);border-color:var(--amber-tint);color:var(--ink)}
+.layer .lc em a{color:inherit;border-bottom:1px dashed var(--amber-600)}
+.layer .lc em a:hover{border-bottom-style:solid}
+
+/* ---------- perf ---------- */
+.perf-table{
+  border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:var(--bg-elev);
+}
+.pr{display:grid;grid-template-columns:1.6fr .9fr 1.1fr;gap:0;border-bottom:1px solid var(--line-soft);align-items:center}
+.pr:last-child{border-bottom:0}
+.pr.head{background:var(--bg-subtle)}
+.pr.head span{font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);padding:13px 20px}
+.pr>div{padding:15px 20px;font-size:14px;color:var(--ink-2)}
+.pr .k{color:var(--ink);font-weight:500}
+.pr .v{font-variant-numeric:tabular-nums;font-weight:700;color:var(--ink)}
+.pr .v.good{color:var(--amber-700)}
+@media (max-width:760px){
+  .pr{grid-template-columns:1fr;padding:4px 0}
+  .pr.head{display:none}
+  .pr>div{padding:4px 18px}
+  .pr .v{font-size:16px}
+}
+.note{margin-top:16px;font-size:12.5px;color:var(--ink-3);line-height:1.7}
+
+/* ---------- security ---------- */
+.sec-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
+@media (max-width:1100px){.sec-grid{grid-template-columns:repeat(2,1fr)}}
+@media (max-width:620px){.sec-grid{grid-template-columns:1fr}}
+.sec-item{
+  display:flex;gap:14px;padding:22px 24px;border-radius:13px;
+  background:var(--bg-elev);border:1px solid var(--line);
+}
+.sec-item .ico{flex:0 0 auto;width:34px;height:34px;border-radius:9px;display:grid;place-items:center;background:var(--bg-subtle);color:var(--ink-2)}
+.sec-item h4{font-size:15px;font-weight:700;margin-bottom:6px}
+.sec-item p{font-size:13.5px;color:var(--ink-2);line-height:1.68}
+
+/* ---------- open source ---------- */
+.oss-links{display:flex;flex-wrap:wrap;gap:10px;margin-top:26px}
+.chips{display:flex;flex-wrap:wrap;gap:9px;margin-top:26px}
+.chip{
+  font-size:13px;font-weight:600;color:var(--ink-2);
+  padding:7px 14px;border-radius:9px;
+  background:var(--bg-elev);border:1px solid var(--line);
+}
+.code{
+  margin-top:28px;border-radius:13px;overflow:hidden;border:1px solid var(--line);background:var(--bg-elev);
+}
+.code .bar{display:flex;align-items:center;gap:8px;padding:11px 16px;background:var(--bg-subtle);border-bottom:1px solid var(--line)}
+.code .bar i{width:10px;height:10px;border-radius:50%;background:var(--line);display:block}
+.code .bar span{margin-left:6px;font-size:12px;color:var(--ink-3);font-family:var(--mono)}
+.code pre{padding:18px 20px;overflow-x:auto;font-size:13.5px;line-height:1.85;color:var(--ink-2)}
+.code .cm{color:var(--ink-3)}
+.code .kw{color:var(--amber-700);font-weight:600}
+
+/* ---------- cta ---------- */
+.cta{
+  position:relative;overflow:hidden;
+  border-radius:22px;padding:clamp(44px,6vw,76px) clamp(28px,5vw,64px);
+  background:linear-gradient(135deg,#FBBF24,#F59E0B 48%,#D97706);
+  color:#3D2E12;text-align:center;
+  box-shadow:var(--shadow-lg);
+}
+.cta::after{
+  content:"";position:absolute;left:50%;top:-160px;translate:-50% 0;width:700px;height:420px;
+  background:radial-gradient(ellipse at center,rgba(255,255,255,.34),transparent 66%);
+  pointer-events:none;
+}
+.cta>*{position:relative;z-index:1}
+.cta h2{font-size:clamp(26px,4vw,42px);font-weight:800;letter-spacing:-.03em}
+.cta p{margin:16px auto 0;max-width:560px;font-size:16px;color:#4A3510;line-height:1.7}
+.cta-btns{display:flex;flex-wrap:wrap;gap:12px;justify-content:center;margin-top:30px}
+.cta .btn-dark{background:#3D2E12;color:#FEF3C7;box-shadow:0 6px 20px -8px rgba(61,46,18,.6)}
+.cta .btn-dark:hover{background:#2E2210}
+.cta .btn-line{border:1px solid rgba(61,46,18,.28);color:#3D2E12;background:rgba(255,255,255,.28)}
+.cta .btn-line:hover{background:rgba(255,255,255,.45)}
+.cta small{display:block;margin-top:22px;font-size:12.5px;color:#4A3510;opacity:.92}
+
+/* ---------- footer ---------- */
+footer{border-top:1px solid var(--line);padding:52px 0 44px;background:var(--bg-elev)}
+.foot{display:flex;flex-wrap:wrap;gap:36px;justify-content:space-between;align-items:flex-start}
+.foot-brand{max-width:300px}
+.foot-brand .brand{margin-bottom:12px}
+.foot-brand p{font-size:13.5px;color:var(--ink-3);line-height:1.7}
+.foot-cols{display:flex;gap:clamp(28px,5vw,64px);flex-wrap:wrap}
+.foot-col h5{margin:0 0 12px;font-size:12.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3)}
+.foot-col a{display:block;font-size:14px;color:var(--ink-2);padding:5px 0;transition:color .2s ease}
+.foot-col a:hover{color:var(--amber-700)}
+.foot-bot{
+  margin-top:40px;padding-top:22px;border-top:1px solid var(--line-soft);
+  display:flex;flex-wrap:wrap;gap:12px 24px;justify-content:space-between;
+  font-size:12.5px;color:var(--ink-3);
+}
+
+/* ---------- reveal ---------- */
+/* 只有 JS 可用时才隐藏内容；脚本没跑起来时整页照常显示 */
+html.js-reveal .reveal{opacity:0;transform:translateY(20px);transition:opacity .75s cubic-bezier(.2,.75,.3,1),transform .75s cubic-bezier(.2,.75,.3,1)}
+html.js-reveal .reveal.in{opacity:1;transform:none}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  html.js-reveal .reveal{opacity:1;transform:none;transition:none}
+  .panel.on{animation:none}
+}
+</style>
+<script>
+  /* 在首帧渲染前打标记：有 JS 才启用滚动淡入 */
+  document.documentElement.className += " js-reveal";
+</script>
+</head>
+<body>
+
+<header class="nav" id="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="#top">
+      <img src="assets/logo.png" alt="" />
+      RyHarness
+      <span class="ver">0.1.0</span>
+    </a>
+    <nav class="nav-links">
+      <a href="#bond">关系</a>
+      <a href="#why">区别</a>
+      <a href="#caps">能力</a>
+      <a href="#showcase">界面</a>
+      <a href="#memory">记忆</a>
+      <a href="#arch">架构</a>
+      <a href="#oss">开源</a>
+    </nav>
+    <div class="nav-act">
+      <button class="icon-btn menu-btn" id="menuBtn" aria-label="目录" aria-expanded="false">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+      </button>
+      <button class="icon-btn" id="themeBtn" aria-label="切换主题" title="切换明暗">
+        <svg class="theme-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        <svg class="theme-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+      </button>
+      <a class="btn btn-ghost btn-sm gh" href="https://github.com/ryharness/ryharness" target="_blank" rel="noopener">GitHub</a>
+      <a class="btn btn-primary btn-sm" href="#get">下载</a>
+    </div>
+  </div>
+</header>
+
+<div class="menu-panel" id="menuPanel">
+  <a href="#bond">关系</a>
+  <a href="#why">区别</a>
+  <a href="#caps">能力</a>
+  <a href="#showcase">界面</a>
+  <a href="#memory">记忆</a>
+  <a href="#arch">架构</a>
+  <a href="#perf">性能</a>
+  <a href="#oss">开源</a>
+  <a href="#get">下载</a>
+  <a class="ext" href="https://github.com/ryharness/ryharness" target="_blank" rel="noopener">GitHub 源码 ↗</a>
+  <a class="ext" href="https://github.com/deepseek-ai/deepseek-harness" target="_blank" rel="noopener">内核底座 dsh ↗</a>
+</div>
+
+<main id="top">
+
+  <!-- ============ HERO ============ -->
+  <section class="hero">
+    <div class="wrap">
+      <div class="hero-inner reveal in">
+        <span class="badge">
+          <span class="chip">v0.1.0</span>
+          <span class="btxt"><b>类微信</b>的多 Agent 桌面应用</span>
+          <span class="dot"></span>
+        </span>
+        <h1>一群会跟你<span class="accent">熟起来</span>的<br />AI 助理</h1>
+        <p class="lead">
+          现在的 Agent 大多是一个助手、一个输入框。RyHarness 是一群助理：性格能调，
+          亲密度会累积，一起经历过的事会留下来。他们像微信里的联系人一样跟你相处，
+          也像同事一样把活干完交给你。
+        </p>
+        <div class="hero-cta">
+          <a class="btn btn-primary btn-lg" href="#get">
+            下载 Windows 版
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+          </a>
+          <a class="btn btn-ghost btn-lg" href="https://github.com/ryharness/ryharness" target="_blank" rel="noopener">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
+            看源码
+          </a>
+          <a class="btn btn-ghost btn-lg" href="#showcase">看界面 →</a>
+        </div>
+        <div class="hero-meta">
+          <span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>Windows / macOS</span>
+          <span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>MIT 开源</span>
+          <span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 7h-9M20 12h-5M20 17h-9"/><circle cx="6" cy="7" r="2"/><circle cx="6" cy="17" r="2"/></svg>任意 OpenAI 兼容供应商</span>
+          <span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>数据留在本机</span>
+        </div>
+      </div>
+
+      <div class="frame-wrap reveal in">
+        <div class="frame film-card">
+          <video class="film-v" id="heroFilm" poster="assets/film-poster.jpg" preload="auto" muted loop playsinline autoplay>
+            <source src="assets/ryharness-film.mp4" type="video/mp4" />
+            你的浏览器不支持内嵌视频，可以
+            <a href="assets/ryharness-film.mp4" download>直接下载宣传片</a>。
+          </video>
+          <div class="frame-bar bottom">
+            <img src="assets/logo.png" alt="" />
+            <span class="t">RyHarness 宣传片 · 15 秒</span>
+            <span class="sp"></span>
+            <div class="film-ctrl">
+              <button class="fc-btn" id="heroToggle" aria-label="暂停宣传片">
+                <svg class="ic-pause" width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="4.5" width="4" height="15" rx="1.2"/><rect x="14" y="4.5" width="4" height="15" rx="1.2"/></svg>
+                <svg class="ic-play" width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.14v13.72L19 12 8 5.14z"/></svg>
+              </button>
+              <button class="fc-btn is-muted" id="heroSound" aria-label="开启声音">
+                <svg class="ic-off" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="m23 9-6 6M17 9l6 6"/></svg>
+                <svg class="ic-on" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="glow" aria-hidden="true"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ STATS ============ -->
+  <section class="stats">
+    <div class="wrap">
+      <div class="stat-grid reveal">
+        <div class="stat"><div class="n">4<small>维</small></div><div class="l">性格滑杆</div><div class="s">外向 / 严谨 / 幽默 / 主动</div></div>
+        <div class="stat"><div class="n">4<small>档</small></div><div class="l">亲密度</div><div class="s">初识 → 熟面孔 → 亲近 → 挚友</div></div>
+        <div class="stat"><div class="n">194</div><div class="l">测试文件</div><div class="s">vitest 全量通过</div></div>
+        <div class="stat"><div class="n">4.52<small>MB</small></div><div class="l">安装包 asar 体积</div><div class="s">较早期 16.37 MB 降 72.4%</div></div>
+        <div class="stat"><div class="n">0.25<small>ms</small></div><div class="l">会话列表单查询</div><div class="s">含预览与未读</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ RELATIONSHIP ============ -->
+  <section id="bond">
+    <div class="wrap">
+      <div class="sec-head center reveal">
+        <span class="eyebrow">Relationship</span>
+        <h2>他们会跟你熟起来</h2>
+        <p>四条性格滑杆（外向 / 严谨 / 幽默 / 主动）直接改写系统提示，拖一下就能在预览里看到提示词跟着变。亲密度靠聊天轮次和 👍 / 👎 慢慢累积，跨过档位的时候，称呼和主动性会一起变。</p>
+      </div>
+
+      <div class="bond-grid">
+        <div class="reveal">
+          <div class="trait">
+            <div class="tname">外向 <em>Extravert</em></div>
+            <div class="tbar"><i style="--v:82%"></i></div>
+            <div class="tdesc">群里先开口，话多，主动接话</div>
+          </div>
+          <div class="trait">
+            <div class="tname">严谨 <em>Rigorous</em></div>
+            <div class="tbar"><i style="--v:42%"></i></div>
+            <div class="tdesc">少拍板，先确认，结论给依据</div>
+          </div>
+          <div class="trait">
+            <div class="tname">幽默 <em>Humor</em></div>
+            <div class="tbar"><i style="--v:66%"></i></div>
+            <div class="tdesc">口语、轻松一点，但事说清楚</div>
+          </div>
+          <div class="trait">
+            <div class="tname">主动 <em>Proactive</em></div>
+            <div class="tbar"><i style="--v:74%"></i></div>
+            <div class="tdesc">不等你喊，先把下一步推一步</div>
+          </div>
+        </div>
+
+        <div class="prompt reveal">
+          <div class="pbar"><i></i><i></i><i></i><span>system prompt</span><span class="hint">滑杆一动，这里立刻变</span></div>
+<pre><span class="k">你是</span>「阿狐」，住在 zry 的电脑里。
+<span class="k">性格</span>  外向 0.8 · 严谨 0.4 · 幽默 0.7 · 主动 0.7
+<span class="k">关系</span>  熟面孔（认识 42 天）
+<span class="k">当前</span>  群聊「产品三人组」· 3 位助理
+<span class="k">记得</span>  上次改需求，他会先问一版时间线
+<span class="k">语气</span>  口语、短句、不写套话</pre>
+        </div>
+      </div>
+
+      <div class="ladder reveal">
+        <div class="rung" style="--o:.34"><div class="rstep">01</div><div class="rname">初识</div><div class="rdesc">直呼名字，先把事办了</div></div>
+        <div class="rung" style="--o:.6"><div class="rstep">02</div><div class="rname">熟面孔</div><div class="rdesc">记得你上次是怎么做的</div></div>
+        <div class="rung" style="--o:.82"><div class="rstep">03</div><div class="rname">亲近</div><div class="rdesc">不用你喊，自己先开口</div></div>
+        <div class="rung" style="--o:1"><div class="rstep">04</div><div class="rname">挚友</div><div class="rdesc">称呼换了，姿态也换了</div></div>
+      </div>
+      <p class="note reveal" style="text-align:center;margin-top:20px">
+        亲密度是聊天轮次和 👍 / 👎 攒出来的。我们没做「好感度 +5」那种数值游戏——档位靠你们之间真实发生的事跨过去。
+      </p>
+    </div>
+  </section>
+
+  <!-- ============ WHY / COMPARE ============ -->
+  <section id="why">
+    <div class="wrap">
+      <div class="sec-head center reveal">
+        <span class="eyebrow">Difference</span>
+        <h2>和一般的 Agent 差在哪</h2>
+        <p>现在能用的 Agent 产品，基本都是一个通用助手加一个输入框。RyHarness 想做的是另一件事：助理有各自的性格，之间能互相接力，干完的活留在那儿，记忆归你自己管。</p>
+      </div>
+
+      <div class="cmp reveal">
+        <div class="cmp-row head">
+          <div></div>
+          <div class="c-alt">常见 Agent 产品</div>
+          <div class="c-us">RyHarness</div>
+        </div>
+        <div class="cmp-row">
+          <div class="cmp-k">关系</div>
+          <div class="cmp-alt">一个助手，人格写在 system prompt 里</div>
+          <div class="cmp-us"><b>一群助理</b>，人格是结构化数据——四维性格 / 生日 / 口头禅 / 亲密度，可编辑、可 fork</div>
+        </div>
+        <div class="cmp-row">
+          <div class="cmp-k">协作</div>
+          <div class="cmp-alt">单线程对话</div>
+          <div class="cmp-us"><b>群聊 + 调度接力</b>：<code>@</code> 直路由，没有 <code>@</code> 时调度员按自然语言选路，接力链可视化</div>
+        </div>
+        <div class="cmp-row">
+          <div class="cmp-k">交付</div>
+          <div class="cmp-alt">回答结束就结束</div>
+          <div class="cmp-us"><b>产物是可回顾的文件</b>——卡片在消息流与右栏都留得住，重启、切会话、翻页都还在</div>
+        </div>
+        <div class="cmp-row">
+          <div class="cmp-k">记忆</div>
+          <div class="cmp-alt">无，或者藏在云端</div>
+          <div class="cmp-us"><b>本地长期记忆 + 经验手册</b>：抽取、混合检索、时间衰减、可见可编辑，反馈驱动进化</div>
+        </div>
+        <div class="cmp-row">
+          <div class="cmp-k">数据</div>
+          <div class="cmp-alt">云端账号</div>
+          <div class="cmp-us"><b>全部留在本机</b>：SQLite + 系统密钥库，API 走回环并带一次性 token</div>
+        </div>
+      </div>
+
+      <p class="note reveal" style="margin-top:22px;text-align:center">
+        有些事我们不做：不做通用云端助理，不做内容审查型社交，不做「假装有记忆」的演示。
+      </p>
+    </div>
+  </section>
+
+  <!-- ============ CAPABILITIES ============ -->
+  <section id="caps" class="band">
+    <div class="wrap">
+      <div class="sec-head reveal">
+        <span class="eyebrow">Capabilities</span>
+        <h2>做了什么</h2>
+        <p>不是一个通用壳子套上模型。这四块是自己写的，也互相咬合。</p>
+      </div>
+      <div class="caps">
+        <article class="cap reveal">
+          <div class="cap-ico">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
+          </div>
+          <h3>性格能调</h3>
+          <p>四条滑杆（外向 / 严谨 / 幽默 / 主动）直接改写系统提示，拖动就能在预览里看到变化。生日、口头禅、亲密度都是能编辑的字段，不用去改提示词。</p>
+          <div class="tags"><span>四维性格</span><span>亲密度</span><span>可 fork</span></div>
+        </article>
+
+        <article class="cap reveal">
+          <div class="cap-ico">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13A4 4 0 0 1 16 11"/></svg>
+          </div>
+          <h3>助理之间会接力</h3>
+          <p><code>@</code> 某人就是直接发给谁；没写 <code>@</code> 的时候，调度员读你这句话挑人。回复里的 <code>@</code> 就是交给下一个人的信号，接力链和调度轨迹一直挂在右栏。</p>
+          <div class="tags"><span>自然语言选路</span><span>接力链</span><span>loop-guard</span></div>
+        </article>
+
+        <article class="cap reveal">
+          <div class="cap-ico">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a7 7 0 0 0-4 12.7V17a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-2.3A7 7 0 0 0 12 2z"/><path d="M9 22h6"/></svg>
+          </div>
+          <h3>记忆看得见，也能改</h3>
+          <p>抽出来的候选事实会比对相似度，决定新增、更新、删除还是跳过。召回时 embedding 余弦和 FTS5 各出一路，用 RRF 合并，再按时间衰减。<code>👍</code> <code>👎</code> 会直接影响经验手册里的条目升不升级，每条都能追到具体哪一轮。</p>
+          <div class="tags"><span>混合检索</span><span>RRF</span><span>ACE 手册</span></div>
+        </article>
+
+        <article class="cap reveal">
+          <div class="cap-ico">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v6l-5 8a2 2 0 0 0 1.8 3h12.4a2 2 0 0 0 1.8-3l-5-8V3"/><path d="M8 3h8M7.5 14h9"/></svg>
+          </div>
+          <h3>内核可插拔</h3>
+          <p>内核用 <code>@ryharness/cordis</code> 做依赖装配，effect 可逆。工具注册在 <code>ctx.tools</code>，路由注册在 <code>RouteRegistry</code>。在设置页关掉一个插件，它的工具和路由会真的被卸掉，不是改个配置文件糊弄过去。</p>
+          <div class="tags"><span>cordis</span><span>真实装卸</span><span>6 个内置插件</span></div>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ SHOWCASE ============ -->
+  <section id="showcase">
+    <div class="wrap">
+      <div class="sec-head reveal">
+        <span class="eyebrow">Interface</span>
+        <h2>界面长这样</h2>
+        <p>三栏主界面：左边是像通讯录一样的助理，中间是聊天，右边是记忆、经验手册、调度轨迹和本会话产物。</p>
+      </div>
+
+      <div class="tabs reveal" role="tablist">
+        <button class="tab on" data-tab="t1">群聊接力</button>
+        <button class="tab" data-tab="t2">通讯录</button>
+        <button class="tab" data-tab="t3">形象定制</button>
+        <button class="tab" data-tab="t4">首屏</button>
+      </div>
+
+      <div class="panel on" id="t1">
+        <div class="panel-grid">
+          <div>
+            <h3>一句话，多个助理接力做完</h3>
+            <p class="pd">没有指定谁来做的时候，调度员读你的自然语言选路，回复里的 <code>@</code> 就是交给下一个人的信号。</p>
+            <ul>
+              <li>右栏实时显示调度轨迹：谁被选、为什么被选、第几轮</li>
+              <li>接力链以可视化节点呈现，<code>loop-guard</code> 与 <code>max-turns</code> 触发时用警示色标出</li>
+              <li>产物落库，重启、切会话后仍能打开下载</li>
+            </ul>
+          </div>
+          <div class="shot-frame">
+            <img src="assets/shot-group.png" alt="群聊界面：助理之间接力，右栏显示成员与调度轨迹" />
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" id="t2">
+        <div class="panel-grid">
+          <div>
+            <h3>他们都在通讯录里</h3>
+            <p class="pd">每个助理就是通讯录里的一条：头像、性格关键词、亲密度档位、现在用的哪个模型，一眼扫得完。</p>
+            <ul>
+              <li>性格关键词直接写在卡片上，不用点进去猜</li>
+              <li>可新建、可编辑、可删除、可 fork</li>
+              <li>6 种动物 × 8 种毛色，转头像时能看到真的侧脸</li>
+            </ul>
+          </div>
+          <div class="shot-frame">
+            <img src="assets/shot-contacts.png" alt="通讯录：多个助理卡片，带动物头像、人格关键词与亲密度" />
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" id="t3">
+        <div class="panel-grid">
+          <div>
+            <h3>形象也能换</h3>
+            <p class="pd">6 种动物 × 8 种毛色，一共 48 种。染色在 GPU 上跑，不额外打包资源，切换是实时的。</p>
+            <ul>
+              <li>照片级 3D 渲染，不是位移贴图糊出来的假侧脸</li>
+              <li>闲置时偶尔笑一下或眨一下眼，指针停上去会抬爪打招呼</li>
+              <li>毛色用一条 CSS filter 链染色，同一个色相下六只动物不会各转各的</li>
+            </ul>
+            <div class="pets">
+              <img src="assets/animal-bear.webp" alt="熊" />
+              <img src="assets/animal-dog.webp" alt="柴犬" />
+              <img src="assets/animal-fox.webp" alt="狐狸" />
+              <img src="assets/animal-mouse.webp" alt="老鼠" />
+              <img src="assets/animal-panda.webp" alt="熊猫" />
+              <img src="assets/animal-rabbit.webp" alt="兔子" />
+              <span class="hues">
+                <i style="background:#F59E0B"></i><i style="background:#EF4444"></i><i style="background:#EC4899"></i>
+                <i style="background:#A855F7"></i><i style="background:#3B82F6"></i><i style="background:#10B981"></i>
+                <i style="background:#F97316"></i><i style="background:#6B7280"></i>
+              </span>
+            </div>
+          </div>
+          <div class="shot-frame">
+            <img src="assets/shot-studio.png" alt="形象定制面板：动物与毛色选择" />
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" id="t4">
+        <div class="panel-grid">
+          <div>
+            <h3>开箱就有东西可玩</h3>
+            <p class="pd">首启落种四个演示 agent 和一段演示会话——界面、记忆、经验手册都能点，只有真发消息才需要配供应商。</p>
+            <ul>
+              <li>「试过这些」把上次的偏好做成可点条目</li>
+              <li>主区直接列出你的助理小队，<code>@</code> 谁就发给谁</li>
+              <li>输入框上方永远是你选的那一群，不是空接口</li>
+            </ul>
+          </div>
+          <div class="shot-frame">
+            <img src="assets/shot-home.png" alt="首屏：助理小队与快捷入口" />
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ MEMORY ============ -->
+  <section id="memory" class="band">
+    <div class="wrap">
+      <div class="sec-head reveal">
+        <span class="eyebrow">Memory</span>
+        <h2>记忆是怎么工作的</h2>
+        <p>它有自己的一条管线：抽事实、召回、按时间衰减、反思、固化成手册。最后你都能看见，能改，能删。</p>
+      </div>
+
+      <div class="flow">
+        <div class="flow-step reveal">
+          <div class="no">STEP 01</div>
+          <h4>抽取</h4>
+          <p>mem0 式异步抽取：候选事实 → 相似度比对 → ADD / UPDATE / DELETE / NOOP。同一条事实被改写时不静默覆盖。</p>
+        </div>
+        <div class="flow-step reveal">
+          <div class="no">STEP 02</div>
+          <h4>召回</h4>
+          <p>embedding 余弦 + FTS5 BM25（中文 bigram）双路召回，RRF 融合。用户画像单独注入每一轮提示。</p>
+        </div>
+        <div class="flow-step reveal">
+          <div class="no">STEP 03</div>
+          <h4>衰减</h4>
+          <p>放久了的旧事实权重会往下掉。召回有总预算，超了就这一轮不注入——宁可少召回，也不能拖慢第一个字。</p>
+        </div>
+        <div class="flow-step reveal">
+          <div class="no">STEP 04</div>
+          <h4>进化</h4>
+          <p>ACE 式经验手册 + Reflexion 确定性反思 + <code>👍</code><code>👎</code> 反馈归因 + 定时巩固，每条经验都能追到出处。</p>
+        </div>
+      </div>
+
+      <div class="honest reveal">
+        <h4>先说清楚我们不如谁 <span class="tag">诚实对比</span></h4>
+        <p>
+          论记忆引擎的深度，腾讯混元开源的
+          <a href="https://github.com/Tencent-Hunyuan/Hy-Memory" target="_blank" rel="noopener">Hy-Memory 2.0</a>
+          做得比我们深：L0–L7 八层写模型、事实版本化与冲突调和、任务/代码型记忆、图记忆，benchmark 也排在开源第一梯队。
+        </p>
+        <p style="margin-top:9px">
+          我们强在别处：装完就能跑，不需要向量库、图数据库或 Python 运行时，断网也用得了；
+          记忆在界面里看得见、改得了，<code>👍</code> <code>👎</code> 直接影响它升不升级；
+          召回有首 token 预算，embedding 的网络往返挪到开始输出之后才发生——这是桌面端「点了就有反应」的前提，引擎型方案一般不背这个约束。
+        </p>
+        <p style="margin-top:9px">两者不冲突。我们把「事实版本化 + 冲突消解、经验卡结构化、意图记忆与过期降级」三件事列进了路线图。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ ARCHITECTURE ============ -->
+  <section id="arch">
+    <div class="wrap">
+      <div class="sec-head reveal">
+        <span class="eyebrow">Architecture</span>
+        <h2>代码结构</h2>
+        <p>模型层用的是 OpenAI 兼容适配器。路由、记忆、调度、工具循环、持久化都是自己写的——这些市面上没有能直接接的。</p>
+      </div>
+
+      <div class="arch reveal">
+        <div class="layer">
+          <div class="lt"><b>桌面端</b><span>apps/desktop</span></div>
+          <div class="lc"><em>Electron 44 + React 19</em><em>三栏主界面</em><em>ChatStore（40ms 合并）</em><em>View Transitions</em><em>增量 Markdown</em></div>
+        </div>
+        <div class="layer">
+          <div class="lt"><b>服务端</b><span>apps/server</span></div>
+          <div class="lc"><em>REST + WebSocket</em><em>事件总线</em><em>一次性 token</em><em>CORS 回环白名单</em></div>
+        </div>
+        <div class="layer">
+          <div class="lt"><b>自有内核</b><span>packages/*</span></div>
+          <div class="lc"><em>agent</em><em>group</em><em>session</em><em>memory</em><em>evolve</em><em>tools</em><em>llm</em><em>llm-openai</em><em>voice</em><em>attachment</em></div>
+        </div>
+        <div class="layer base">
+          <div class="lt"><b>底层</b><span>vendor/ · dsh 裁剪魔改</span></div>
+          <div class="lc"><em><a href="https://github.com/deepseek-ai/deepseek-harness" target="_blank" rel="noopener">cordis (DI) ↗</a></em><em>cosmokit</em><em>schemastery</em><em>typert</em><em>util</em></div>
+        </div>
+      </div>
+
+      <div class="honest reveal" style="border-left-color:var(--amber)">
+        <h4>底层来自 dsh <span class="tag">来路说明</span></h4>
+        <p>
+          最底下这层来自 <b>dsh</b>（DeepSeek 开源的
+          <a href="https://github.com/deepseek-ai/deepseek-harness" target="_blank" rel="noopener">deepseek-harness</a>）。
+          <code>vendor/</code> 里是它的 DI 部分（cordis）和工具库，裁剪之后重命名成 <code>@ryharness/cordis</code> 之类。
+          dsh 和 <a href="https://github.com/earendil-works/pi" target="_blank" rel="noopener">pi</a> 两个仓库的代码我们一行没改，
+          MIT 法条都留在各 vendor 目录的 LICENSE 里。
+        </p>
+        <p style="margin-top:9px">
+          中间两层是我们自己写的：路由、记忆、调度、工具循环、持久化。这些市面上没有能直接接的，只能自己来。
+        </p>
+      </div>
+
+      <div class="perf-table reveal" style="margin-top:26px">
+        <div class="pr head"><span>包</span><span>职责</span><span>要点</span></div>
+        <div class="pr"><div class="k"><code>@ryharness/agent</code></div><div class="k">Agent 定义、消息/工具循环</div><div class="k">token 预算与压缩、AbortSignal</div></div>
+        <div class="pr"><div class="k"><code>@ryharness/group</code></div><div class="k">群聊调度器</div><div class="k">直路由 / 自然语言选路 / 护栏</div></div>
+        <div class="pr"><div class="k"><code>@ryharness/session</code></div><div class="k">SQLite 持久化</div><div class="k">单调迁移、历史增量读、产物落库</div></div>
+        <div class="pr"><div class="k"><code>@ryharness/memory</code></div><div class="k">长期记忆</div><div class="k">抽取、混合召回、时间衰减</div></div>
+        <div class="pr"><div class="k"><code>@ryharness/evolve</code></div><div class="k">自我进化</div><div class="k">ACE 手册、反思、反馈、巩固</div></div>
+        <div class="pr"><div class="k"><code>@ryharness/tools</code></div><div class="k">内置工具</div><div class="k">fs_read / fs_write / shell_exec / file_produce</div></div>
+        <div class="pr"><div class="k"><code>@ryharness/llm</code></div><div class="k">LLM 契约</div><div class="k">Adapter / Runtime / StreamChunk</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ PERFORMANCE ============ -->
+  <section id="perf" class="band">
+    <div class="wrap">
+      <div class="sec-head reveal">
+        <span class="eyebrow">Performance</span>
+        <h2>实测数据</h2>
+        <p>每一行都能用仓库里的脚本复现。桌面端要「点了就有反应」，毫秒级的差别就是体感的差别。</p>
+      </div>
+
+      <div class="perf-table reveal">
+        <div class="pr head"><span>指标</span><span>数字</span><span>对比 / 出处</span></div>
+        <div class="pr"><div class="k">会话列表（含预览 + 未读，单查询）</div><div class="v good">0.25 ms</div><div class="k">docs/performance.md</div></div>
+        <div class="pr"><div class="k">记忆召回：纯 FTS5 降级</div><div class="v good">2.5 ms</div><div class="k">无网络时的兜底路径</div></div>
+        <div class="pr"><div class="k">流式 Markdown 单帧词法</div><div class="v good">0.047 ms</div><div class="k">整篇重算 0.754 ms，约 16×</div></div>
+        <div class="pr"><div class="k">长会话流式：时间线重算（5000 条 × 40 帧）</div><div class="v good">0.61 ms</div><div class="k">旧路径 33.98 ms，快 55×</div></div>
+        <div class="pr"><div class="k">2000 个流式 delta 的界面重绘</div><div class="v good">2 次</div><div class="k">40 ms 合并窗口</div></div>
+        <div class="pr"><div class="k">冷启到窗口 loaded</div><div class="v good">0.47 s</div><div class="k">首绘 0.51 s</div></div>
+        <div class="pr"><div class="k">安装包 asar 体积</div><div class="v good">4.52 MB</div><div class="k">此前 16.37 MB，−72.4%</div></div>
+      </div>
+      <p class="note reveal">
+        复现方式：<code>pnpm bench</code> / <code>pnpm perf</code> / <code>pnpm --filter @ryharness/desktop capture</code>。
+        记忆召回的 embedding 冷启动为早期观测（164 ms，带 800 ms 超时与预算兜底），未复现，仅作量级参考。
+      </p>
+    </div>
+  </section>
+
+  <!-- ============ SECURITY ============ -->
+  <section id="security">
+    <div class="wrap">
+      <div class="sec-head reveal">
+        <span class="eyebrow">Security</span>
+        <h2>安全</h2>
+        <p>凭据存在系统密钥库里，API 每次启动换一把新钥匙，浏览器权限默认全部拒绝。这些是代码里写死的，不是宣传语。</p>
+      </div>
+      <div class="sec-grid">
+        <div class="sec-item reveal">
+          <div class="ico"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></div>
+          <div><h4>凭据不进数据库</h4><p>只走系统密钥库（Electron <code>safeStorage</code>）或环境变量。不进数据库、不进日志、不随安装包分发。</p></div>
+        </div>
+        <div class="sec-item reveal">
+          <div class="ico"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/></svg></div>
+          <div><h4>本地 API 每次启动换一把钥匙</h4><p>随机生成 256 位一次性 token，WS 与 REST 都校验；渲染层 <code>sandbox</code> + <code>contextIsolation</code>，无 Node 集成。</p></div>
+        </div>
+        <div class="sec-item reveal">
+          <div class="ico"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>
+          <div><h4>权限默认全部拒绝</h4><p>渲染层浏览器权限默认拒绝（Electron 默认是自动批准一切），只放行写剪贴板。<code>shell_exec</code> 默认不在任何模板的白名单里。</p></div>
+        </div>
+        <div class="sec-item reveal">
+          <div class="ico"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h18M3 12h18M3 17h18"/></svg></div>
+          <div><h4>备份就是拷目录</h4><p>消息、记忆、经验手册、反馈全在一个 SQLite 文件里。资源服务带 <code>X-Frame-Options: DENY</code>，别的网页不能把界面套进 iframe。</p></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ OSS ============ -->
+  <section id="oss" class="band">
+    <div class="wrap">
+      <div class="sec-head reveal">
+        <span class="eyebrow">Open Source</span>
+        <h2>MIT 协议，代码在 GitHub 上</h2>
+        <p>没有闭源壳子，也没有遥测。fork 走，改成你自己的样子也行。</p>
+      </div>
+      <div class="chips reveal">
+        <span class="chip">Electron 44</span><span class="chip">React 19</span><span class="chip">TypeScript 6</span>
+        <span class="chip">SQLite · node:sqlite</span><span class="chip">cordis</span><span class="chip">Vite</span>
+        <span class="chip">vitest</span><span class="chip">biome</span><span class="chip">pnpm 11</span>
+      </div>
+
+      <div class="oss-links reveal">
+        <a class="btn btn-primary" href="https://github.com/ryharness/ryharness" target="_blank" rel="noopener">
+          RyHarness 源码
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7M9 7h8v8"/></svg>
+        </a>
+        <a class="btn btn-ghost" href="https://github.com/deepseek-ai/deepseek-harness" target="_blank" rel="noopener">
+          内核底座 · deepseek-harness (dsh)
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7M9 7h8v8"/></svg>
+        </a>
+        <a class="btn btn-ghost" href="https://github.com/earendil-works/pi" target="_blank" rel="noopener">工程纪律借鉴 · pi</a>
+        <a class="btn btn-ghost" href="https://github.com/ryharness/ryharness/blob/master/NOTICE.md" target="_blank" rel="noopener">NOTICE.md · 许可与署名</a>
+        <a class="btn btn-ghost" href="https://github.com/ryharness/ryharness/issues" target="_blank" rel="noopener">提 Issue</a>
+      </div>
+
+      <div class="code reveal">
+        <div class="bar"><i></i><i></i><i></i><span>terminal</span></div>
+<pre><span class="cm"># 需要 Node ^22.19 或 &gt;=24（持久化依赖内置 node:sqlite）与 pnpm 11</span>
+<span class="kw">git clone</span> https://github.com/ryharness/ryharness.git
+<span class="kw">cd</span> RyHarness
+<span class="kw">pnpm</span> install
+<span class="kw">pnpm</span> build
+<span class="kw">pnpm</span> --filter @ryharness/desktop start   <span class="cm"># 生产模式</span>
+<span class="kw">pnpm</span> --filter @ryharness/desktop dev     <span class="cm"># 开发模式（Vite HMR + Electron）</span></pre>
+      </div>
+      <p class="note reveal">
+        提交前请跑 <code>pnpm verify</code>（五条门禁：类型逃逸 / 包依赖 / 重复代码 / biome 预算 / NOTICE 审计）与 <code>pnpm test</code>。
+        内核地基裁剪自 dsh，裁剪与改名的逐项记录在 NOTICE.md。
+      </p>
+    </div>
+  </section>
+
+  <!-- ============ CTA ============ -->
+  <section id="get">
+    <div class="wrap">
+      <div class="cta reveal">
+        <h2>把活交给你认识的那一群</h2>
+        <p>免安装版双击就能跑，不写注册表，不装服务。装不装都行，两个版本共用一个数据目录。</p>
+        <div class="cta-btns">
+          <a class="btn btn-dark btn-lg" href="https://github.com/ryharness/ryharness/releases" target="_blank" rel="noopener">
+            下载最新版本
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+          </a>
+          <a class="btn btn-line btn-lg" href="https://github.com/ryharness/ryharness" target="_blank" rel="noopener">GitHub 源码</a>
+        </div>
+        <small>Windows 10/11 · 需 Node ^22.19 或 &gt;=24 才能从源码启动 · 安装包暂未做代码签名</small>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="foot">
+      <div class="foot-brand">
+        <div class="brand"><img src="assets/logo.png" alt="" /> RyHarness</div>
+        <p>一群会跟你熟起来的 AI 助理，住在你的电脑里。性格能调，记忆会自己长。</p>
+      </div>
+      <div class="foot-cols">
+        <div class="foot-col">
+          <h5>产品</h5>
+          <a href="#why">区别</a>
+          <a href="#caps">能力</a>
+          <a href="#showcase">界面</a>
+          <a href="#memory">记忆</a>
+          <a href="#perf">性能</a>
+        </div>
+        <div class="foot-col">
+          <h5>开发者</h5>
+          <a href="#arch">架构</a>
+          <a href="#oss">快速开始</a>
+          <a href="https://github.com/ryharness/ryharness" target="_blank" rel="noopener">源码仓库</a>
+          <a href="https://github.com/deepseek-ai/deepseek-harness" target="_blank" rel="noopener">内核底座 dsh</a>
+          <a href="https://github.com/ryharness/ryharness/issues" target="_blank" rel="noopener">提交 Issue</a>
+        </div>
+        <div class="foot-col">
+          <h5>安全</h5>
+          <a href="#security">安全模型</a>
+          <a href="https://github.com/ryharness/ryharness/blob/master/SECURITY.md" target="_blank" rel="noopener">披露漏洞</a>
+          <a href="https://github.com/ryharness/ryharness/blob/master/LICENSE" target="_blank" rel="noopener">MIT 许可</a>
+        </div>
+      </div>
+    </div>
+    <div class="foot-bot">
+      <span>© 2026 RyHarness contributors · MIT License</span>
+      <span>界面与图标源自仓库内已随包提供的素材 · 致谢 deepseek-harness / pi / DiceBear / Lucide / marked</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ---- 刷新后回到顶部：锚点导航页不需要浏览器恢复滚动位置 ---- */
+  if ("scrollRestoration" in history) history.scrollRestoration = "manual";
+  if (!location.hash) {
+    try { window.scrollTo({ top: 0, left: 0, behavior: "instant" }); }
+    catch (e) { window.scrollTo(0, 0); }
+  }
+
+  /* ---- theme ---- */
+  var root = document.documentElement;
+  var KEY = "ryharness-site-theme";
+  var saved = null;
+  try { saved = localStorage.getItem(KEY); } catch (e) {}
+  if (saved === "dark" || saved === "light") {
+    root.setAttribute("data-theme", saved);
+  } else if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) {
+    root.setAttribute("data-theme", "dark");
+  }
+  var btn = document.getElementById("themeBtn");
+  if (btn) {
+    btn.addEventListener("click", function(){
+      var next = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
+      root.setAttribute("data-theme", next);
+      try { localStorage.setItem(KEY, next); } catch (e) {}
+    });
+  }
+
+  /* ---- sticky nav border ---- */
+  var nav = document.getElementById("nav");
+  var onScroll = function(){ nav.classList.toggle("scrolled", window.scrollY > 8); };
+  window.addEventListener("scroll", onScroll, { passive: true });
+  onScroll();
+
+  /* ---- tabs ---- */
+  var tabs = document.querySelectorAll(".tab");
+  Array.prototype.forEach.call(tabs, function(t){
+    t.addEventListener("click", function(){
+      Array.prototype.forEach.call(tabs, function(x){ x.classList.remove("on"); });
+      t.classList.add("on");
+      var panels = document.querySelectorAll(".panel");
+      Array.prototype.forEach.call(panels, function(p){ p.classList.remove("on"); });
+      var target = document.getElementById(t.getAttribute("data-tab"));
+      if (target) target.classList.add("on");
+    });
+  });
+
+  /* ---- mobile 目录 ---- */
+  var menuBtn = document.getElementById("menuBtn");
+  var menuPanel = document.getElementById("menuPanel");
+  if (menuBtn && menuPanel) {
+    var closeMenu = function () {
+      menuPanel.classList.remove("on");
+      menuBtn.setAttribute("aria-expanded", "false");
+    };
+    menuBtn.addEventListener("click", function () {
+      var open = menuPanel.classList.toggle("on");
+      menuBtn.setAttribute("aria-expanded", open ? "true" : "false");
+    });
+    menuPanel.addEventListener("click", function (e) {
+      if (e.target.closest("a")) closeMenu();
+    });
+    window.addEventListener("scroll", closeMenu, { passive: true });
+    window.addEventListener("resize", function () {
+      if (window.innerWidth > 880) closeMenu();
+    });
+  }
+
+  /* ---- 首屏宣传片 ---- */
+  var heroFilm = document.getElementById("heroFilm");
+  var heroToggle = document.getElementById("heroToggle");
+  var heroSound = document.getElementById("heroSound");
+  if (heroFilm && heroToggle && heroSound) {
+    var reduced = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduced) {
+      // 系统要求减少动效：不自动播，停在封面
+      heroFilm.removeAttribute("autoplay");
+      heroFilm.pause();
+      try { heroFilm.currentTime = 0; } catch (e) {}
+      heroToggle.classList.add("is-paused");
+      heroToggle.setAttribute("aria-label", "播放宣传片");
+    }
+    heroToggle.addEventListener("click", function () {
+      if (heroFilm.paused) {
+        var p = heroFilm.play();
+        if (p && p.catch) p.catch(function () {});
+        heroToggle.classList.remove("is-paused");
+        heroToggle.setAttribute("aria-label", "暂停宣传片");
+      } else {
+        heroFilm.pause();
+        heroToggle.classList.add("is-paused");
+        heroToggle.setAttribute("aria-label", "播放宣传片");
+      }
+    });
+    heroSound.addEventListener("click", function () {
+      var next = !heroFilm.muted;
+      heroFilm.muted = next;
+      heroSound.classList.toggle("is-muted", next);
+      heroSound.setAttribute("aria-label", next ? "开启声音" : "静音");
+    });
+  }
+
+  /* ---- reveal on scroll ---- */
+  var reveals = document.querySelectorAll(".reveal");
+  if ("IntersectionObserver" in window) {
+    var io = new IntersectionObserver(function(entries){
+      entries.forEach(function(e){
+        if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); }
+      });
+    }, { threshold: 0.08, rootMargin: "0px 0px -6% 0px" });
+    Array.prototype.forEach.call(reveals, function(el){ io.observe(el); });
+  } else {
+    Array.prototype.forEach.call(reveals, function(el){ el.classList.add("in"); });
+  }
+})();
+</script>
+</body>
+</html>

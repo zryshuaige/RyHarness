@@ -1,0 +1,75 @@
+name: Bug 报告
+description: 描述一个可复现的错误行为
+title: '[Bug] '
+labels: ['bug']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提交前请先搜一遍已有 issue。**涉及凭据泄漏、本机文件越权访问的问题不要开公开 issue**，
+        走 [SECURITY.md](https://github.com/ryharness/ryharness/blob/master/SECURITY.md) 的私密通道。
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 发生了什么
+      description: 期望的行为 vs 实际的行为。
+      placeholder: |
+        期望：点「新建 Agent」后弹窗在 150% DPI 下完整显示
+        实际：弹窗底部按钮被裁掉一截
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现步骤
+      description: 从冷启动开始，一步一步写。命令行请贴可粘贴的原文。
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      placeholder: 0.1.0（应用内「我的」页底部，或 `git rev-parse --short HEAD`）
+    validations:
+      required: true
+
+  - type: dropdown
+    id: launch
+    attributes:
+      label: 从哪里启动的
+      options:
+        - 安装版（RyHarness Setup *.exe）
+        - 源码启动（pnpm --filter @ryharness/desktop start）
+        - 源码启动（pnpm --filter @ryharness/desktop dev）
+        - 只跑后端（pnpm --filter @ryharness/server dev）
+    validations:
+      required: true
+
+  - type: textarea
+    id: env
+    attributes:
+      label: 环境
+      description: |
+        Windows 版本、Node、pnpm、模型/供应商（**不要贴 API key**）、
+        界面缩放比例（125% / 150% 这类差异经常是根因）。
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: screenshot
+    attributes:
+      label: 截图
+      description: 只截窗口矩形，别整屏（`scripts/capture-window.ps1`）；贴前确认没有桌面通知、聊天工具等私人信息。
+    render: text
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关日志
+      description: 启动日志路径见 README「本地数据与凭据」。贴之前先检查里面有没有 token / key。
+      render: shell

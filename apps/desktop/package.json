@@ -1,11 +1,11 @@
 {
-  "name": "@ryagent/desktop",
+  "name": "@ryharness/desktop",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "license": "MIT",
-  "description": "RyAgent 桌面应用：单机多 Agent 即时通讯（Electron + React）",
-  "author": "RyAgent contributors",
+  "description": "RyHarness 桌面应用：单机多 Agent 即时通讯（Electron + React）",
+  "author": "RyHarness contributors",
   "main": "./main/main.mjs",
   "scripts": {
     "build:main": "tsdown --config tsdown.config.mjs",
@@ -16,17 +16,18 @@
     "capture": "node scripts/capture.mjs",
     "gen:icon": "node scripts/gen-icon.mjs",
     "package": "pnpm run build && electron-builder --win",
-    "package:dir": "pnpm run build && electron-builder --win --dir"
+    "package:dir": "pnpm run build && electron-builder --win --dir",
+    "package:release": "node scripts/package-release.mjs",
+    "smoke:release": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-packaged.ps1",
+    "smoke:portable": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-portable.ps1"
   },
   "dependencies": {
-    "@dicebear/collection": "^9.4.2",
-    "@dicebear/core": "^9.4.3",
-    "@ryagent/server": "workspace:*",
-    "marked": "^18.1.0",
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "@ryharness/server": "workspace:*"
   },
   "devDependencies": {
+    "@dicebear/collection": "^9.4.2",
+    "@dicebear/core": "^9.4.3",
+    "@ryharness/session": "workspace:*",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "@vitejs/plugin-react": "^5.0.0",
@@ -34,14 +35,17 @@
     "electron-builder": "^26.17.0",
     "jsdom": "^26.0.0",
     "lucide-static": "^1.55.0",
+    "marked": "^18.1.0",
     "png-to-ico": "^3.0.2",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
     "sharp": "^0.35.5",
     "vite": "^6.0.0"
   },
   "build": {
-    "appId": "com.ryagent.desktop",
-    "productName": "RyAgent",
-    "copyright": "Copyright (c) 2026 RyAgent contributors",
+    "appId": "com.ryharness.desktop",
+    "productName": "RyHarness",
+    "copyright": "Copyright (c) 2026 RyHarness contributors",
     "directories": {
       "output": "release"
     },
@@ -49,10 +53,18 @@
       "main/**/*",
       "renderer/dist/**/*",
       "assets/**/*",
+      "!assets/animals-raw/**",
       "package.json",
-      "!**/*.map"
+      "!**/*.map",
+      "!node_modules/@ryharness/**/src{,/**/*}",
+      "!node_modules/@ryharness/**/tsconfig.json",
+      "!node_modules/@ryharness/**/tsdown.config.mjs"
     ],
     "extraResources": [
+      {
+        "from": "assets/icon.ico",
+        "to": "icon.ico"
+      },
       {
         "from": "../../LICENSE",
         "to": "LICENSE"
@@ -64,7 +76,9 @@
     ],
     "win": {
       "target": [
-        "nsis"
+        "nsis",
+        "portable",
+        "zip"
       ],
       "icon": "assets/icon.ico"
     },
@@ -73,6 +87,9 @@
       "allowToChangeInstallationDirectory": true,
       "perMachine": false,
       "license": "../../LICENSE"
+    },
+    "portable": {
+      "artifactName": "RyHarness-portable.exe"
     }
   }
 }

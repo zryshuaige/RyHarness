@@ -6,7 +6,7 @@
  * 这条约束是 Electron 的硬规则，不是风格问题：Electron 20 起渲染进程默认
  * `sandbox: true`，而 sandbox 下的 preload 只按 CommonJS 装载。喂一份 ESM 产物
  * （import/export 语句）过去后，Electron 抛的错只进 `preload-error` 事件——
- * 渲染层拿不到任何提示，`window.ryagentDesktop` 直接不存在，「打开所在目录」
+ * 渲染层拿不到任何提示，`window.ryharnessDesktop` 直接不存在，「打开所在目录」
  * 永远退化成「路径已复制」，看起来像功能没做，而不是像坏了。
  *
  * 此前 tsdown 把 main 与 preload 合成一次 ESM 构建（preload.mjs），桥在真机上
@@ -83,7 +83,7 @@ function stripComments(code: string): string {
 }
 
 const PRELOAD_ARTIFACT = artifactName(preloadConfig)
-const BUILT_IN = mkdtempSync(join(tmpdir(), 'ryagent-preload-artifact-'))
+const BUILT_IN = mkdtempSync(join(tmpdir(), 'ryharness-preload-artifact-'))
 let builtPreload = ''
 
 // 用真实的 tsdown 配置构建一次（输出到临时目录，不碰仓库里的 main/），

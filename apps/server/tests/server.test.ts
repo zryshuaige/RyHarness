@@ -2,11 +2,11 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { connect } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { Context } from '@ryagent/cordis'
-import type { GenerateOptions, StreamChunk } from '@ryagent/llm'
-import LlmRuntime, { LlmAdapter } from '@ryagent/llm'
-import type { WsEvent } from '@ryagent/server'
-import { RyAgentServer } from '@ryagent/server'
+import type { Context } from '@ryharness/cordis'
+import type { GenerateOptions, StreamChunk } from '@ryharness/llm'
+import LlmRuntime, { LlmAdapter } from '@ryharness/llm'
+import type { WsEvent } from '@ryharness/server'
+import { RyHarnessServer } from '@ryharness/server'
 import { afterEach, describe, expect, it } from 'vitest'
 import WebSocket from 'ws'
 
@@ -57,11 +57,11 @@ class MockAdapter extends LlmAdapter {
 
 const tmpDirs: string[] = []
 
-async function startServer(replies: string[]): Promise<{ server: RyAgentServer; adapter: MockAdapter; base: string }> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'ryagent-server-test-'))
+async function startServer(replies: string[]): Promise<{ server: RyHarnessServer; adapter: MockAdapter; base: string }> {
+  const dataDir = mkdtempSync(join(tmpdir(), 'ryharness-server-test-'))
   tmpDirs.push(dataDir)
   const adapter = new MockAdapter(replies)
-  const server = await RyAgentServer.create({
+  const server = await RyHarnessServer.create({
     port: 0,
     dataDir,
     mountLlm: (ctx: Context) => {
@@ -156,7 +156,7 @@ async function waitFor(cond: () => boolean): Promise<void> {
   }
 }
 
-describe('RyAgentServer', () => {
+describe('RyHarnessServer', () => {
   it('serves templates, agents CRUD with builtin protection, and providers', async () => {
     const { server, base } = await startServer([])
     try {
@@ -193,6 +193,60 @@ describe('RyAgentServer', () => {
 
       const badTemplate = await postJson(base, '/api/agents', { templateKey: 'nope' })
       expect(badTemplate.status).toBe(400)
+    } finally {
+      await server.close()
+    }
+  })
+
+  /**
+   * 重名要拦：通讯录、群成员选择、气泡署名全都按名字认人，两个都叫「Coder」
+   * 的 Agent 根本没法区分。内置 Agent 也在名单里，所以叫「Ryen」同样被挡。
+   */
+  it('重名拦下：新建撞已有 Agent、改名撞别人，都 409 且不落库', async () => {
+    const { server, base } = await startServer([])
+    try {
+      const created = await postJson(base, '/api/agents', { templateKey: 'coding', name: 'Coder' })
+      expect(created.status).toBe(201)
+      const coderId = (created.body as { agent: { id: string } }).agent.id
+
+      // 撞已有的
+      const dup = await postJson(base, '/api/agents', { templateKey: 'coding', name: 'Coder' })
+      expect(dup.status).toBe(409)
+      // 大小写与首尾空白算同一个名字
+      const dupCase = await postJson(base, '/api/agents', { templateKey: 'coding', name: ' coder ' })
+      expect(dupCase.status).toBe(409)
+      // 撞内置的（Ryen 是内置助理）
+      const dupBuiltin = await postJson(base, '/api/agents', { templateKey: 'coding', name: 'Ryen' })
+      expect(dupBuiltin.status).toBe(409)
+
+      // 改名撞别人也拦
+      const other = await postJson(base, '/api/agents', { templateKey: 'writing', name: 'Writer' })
+      const otherId = (other.body as { agent: { id: string } }).agent.id
+      const rename = await fetch(`${base}/api/agents/${otherId}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'Coder' }),
+      })
+      expect(rename.status).toBe(409)
+
+      // 改回自己的名字不算撞（编辑时排除自己）
+      const selfRename = await fetch(`${base}/api/agents/${coderId}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'Coder' }),
+      })
+      expect(selfRename.status).toBe(200)
+
+      // 失败的都没落库：名单里只有一个 Coder
+      const list = await getJson(base, '/api/agents')
+      const names = (list.body.agents as { name: string }[]).map((a) => {
+        return a.name.trim().toLowerCase()
+      })
+      expect(
+        names.filter((n) => {
+          return n === 'coder'
+        }),
+      ).toHaveLength(1)
     } finally {
       await server.close()
     }
@@ -401,17 +455,17 @@ describe('RyAgentServer', () => {
   })
 
   it('memory endpoints: agent memories + shared profile + soft delete + stats', async () => {
-    const { MemoryService, HashEmbeddings } = await import('@ryagent/memory')
+    const { MemoryService, HashEmbeddings } = await import('@ryharness/memory')
     const { mkdtempSync } = await import('node:fs')
-    const dataDir = mkdtempSync(join(tmpdir(), 'ryagent-server-mem-'))
+    const dataDir = mkdtempSync(join(tmpdir(), 'ryharness-server-mem-'))
     tmpDirs.push(dataDir)
     const memory = new MemoryService({
-      dbPath: join(dataDir, 'ryagent.db'),
+      dbPath: join(dataDir, 'ryharness.db'),
       embeddings: new HashEmbeddings(),
     })
     memory.store.insert({ agentId: 'ryen', kind: 'fact', content: 'Ryen 的私有约定' })
     memory.store.insert({ agentId: '*shared*', kind: 'profile', content: '用户是产品经理' })
-    const server = await RyAgentServer.create({ port: 0, dataDir, memory })
+    const server = await RyHarnessServer.create({ port: 0, dataDir, memory })
     try {
       const res = await getJson(server.url, '/api/agents/ryen/memories')
       const body = res.body as { agent: { content: string }[]; shared: { content: string }[] }
@@ -444,7 +498,7 @@ describe('RyAgentServer', () => {
     try {
       // 不经过 LLM，直接在工作区产物目录造一个文件验证下载白名单
       const { mkdirSync, writeFileSync } = await import('node:fs')
-      const artifacts = join(server.dataDir, 'workspace', '.ryagent-artifacts')
+      const artifacts = join(server.dataDir, 'workspace', '.ryharness-artifacts')
       mkdirSync(artifacts, { recursive: true })
       writeFileSync(join(artifacts, 'hello.txt'), 'hello file')
 
@@ -455,7 +509,7 @@ describe('RyAgentServer', () => {
 
       const missing = await fetch(`${base}/api/files/nope.txt`)
       expect(missing.status).toBe(404)
-      const traversal = await fetch(`${base}/api/files/..%2Fryagent.db`)
+      const traversal = await fetch(`${base}/api/files/..%2Fryharness.db`)
       expect(traversal.status).toBe(400)
     } finally {
       await server.close()
@@ -524,10 +578,10 @@ describe('RyAgentServer', () => {
         })()
       }
     }
-    const dataDir = mkdtempSync(join(tmpdir(), 'ryagent-server-queue-'))
+    const dataDir = mkdtempSync(join(tmpdir(), 'ryharness-server-queue-'))
     tmpDirs.push(dataDir)
     const adapter = new GatedAdapter(['', ''])
-    const server = await RyAgentServer.create({
+    const server = await RyHarnessServer.create({
       port: 0,
       dataDir,
       mountLlm: (ctx) => {
@@ -793,9 +847,9 @@ describe('RyAgentServer', () => {
   })
 
   it('WS 心跳：连续两轮未 pong 的半死连接被 terminate', async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), 'ryagent-server-heartbeat-'))
+    const dataDir = mkdtempSync(join(tmpdir(), 'ryharness-server-heartbeat-'))
     tmpDirs.push(dataDir)
-    const server = await RyAgentServer.create({
+    const server = await RyHarnessServer.create({
       port: 0,
       dataDir,
       wsHeartbeatMs: 60,
@@ -858,9 +912,9 @@ describe('RyAgentServer', () => {
         })()
       }
     }
-    const dataDir = mkdtempSync(join(tmpdir(), 'ryagent-server-drain-'))
+    const dataDir = mkdtempSync(join(tmpdir(), 'ryharness-server-drain-'))
     tmpDirs.push(dataDir)
-    const server = await RyAgentServer.create({
+    const server = await RyHarnessServer.create({
       port: 0,
       dataDir,
       mountLlm: (ctx) => {
@@ -914,10 +968,8 @@ describe('RyAgentServer', () => {
   }, 20_000)
 
   it('优雅停机超时兜底：在途 turn 卡死时 close() 也在超时后完成', async () => {
-    let release: () => void = () => {}
-    const gate = new Promise<void>((resolve) => {
-      release = resolve
-    })
+    // 永不下文的门：这一轮永远不会自己结束，正是本用例要验的那件事。
+    const gate = new Promise<void>(() => {})
     const calls: string[] = []
     class StuckAdapter extends MockAdapter {
       protected override scriptedText(options: GenerateOptions): string {
@@ -934,9 +986,9 @@ describe('RyAgentServer', () => {
         })()
       }
     }
-    const dataDir = mkdtempSync(join(tmpdir(), 'ryagent-server-timeout-'))
+    const dataDir = mkdtempSync(join(tmpdir(), 'ryharness-server-timeout-'))
     tmpDirs.push(dataDir)
-    const server = await RyAgentServer.create({
+    const server = await RyHarnessServer.create({
       port: 0,
       dataDir,
       shutdownTimeoutMs: 200,
@@ -961,6 +1013,10 @@ describe('RyAgentServer', () => {
       return calls.length > 0
     })
     await server.close() // turn 永不放行也应 ~200ms 后完成停机
-    release() // 放行悬挂的 turn；写已关闭的库由 runTurn 的 catch 兜住
+    // 刻意**不** release：这一轮已经被停机放弃，库也关了，此刻放行只会让它去写一个
+    // 已经关掉的 SQLite。那条报错会落在本用例结束之后——表现为别的用例头上冒出一条
+    // unhandled error，整个 worker 提前退出，于是汇总里少报几个文件。此前这里写的是
+    // 「放行 + 由 runTurn 的 catch 兜住」，兜住的是异常，不是它逃出本用例的时机。
+    // gate 保持未决正是「卡死」的含义：这一轮就是不会结束。
   }, 20_000)
 })

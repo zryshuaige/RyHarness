@@ -1,6 +1,6 @@
 /**
  * 从 lucide-static 拷贝 UI 需要的图标到 src/assets/lucide/（一次性，资产入库）。
- * 用法：pnpm --filter @ryagent/desktop gen:icons
+ * 用法：pnpm --filter @ryharness/desktop gen:icons
  */
 import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -39,6 +39,16 @@ const ICONS = {
   'clipboard-list': 'clipboard-list',
   mail: 'mail',
   'calendar-days': 'calendar-days',
+  // 界面 chrome 此前用字符冒充图标（⋯ / ↑ / ↗ / ★），这四个是它们的图形版。
+  // key 与 lucide 正式名同名，少一层映射；补进来是为了让本表仍是资产可复现的唯一出处。
+  ellipsis: 'ellipsis',
+  'arrow-up': 'arrow-up',
+  'arrow-up-right': 'arrow-up-right',
+  crown: 'crown',
+  // 「我的」是用户自己的页面，不是 Ryen——品牌猫只该出现在 logo 与 Ryen 的头像位。
+  user: 'user',
+  // RyVibe：一眼就懂是「生成点什么」的图形。名字与 lucide 正式名同名。
+  sparkles: 'sparkles',
 }
 
 mkdirSync(outDir, { recursive: true })

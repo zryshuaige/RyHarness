@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { ApiClient, MemoryHealthReport, MemoryRow, MemoryStats, TelemetrySnapshot } from '../api.ts'
+import { errorDetail, humanError } from '../lib/error-text.ts'
+import { humanDuration } from '../lib/humanize.ts'
 import { toast } from '../lib/toast.ts'
+import { AsyncState } from './AsyncState.tsx'
 import { ConfirmDialog } from './ConfirmDialog.tsx'
 import { Icon } from './Icon.tsx'
 import { Modal } from './Modal.tsx'
 import { PanelSkeleton } from './Skeleton.tsx'
 
-const KIND_LABELS: Record<MemoryRow['kind'], string> = {
+/** 记忆类别的中文口径（记忆面板与「我的」页共享同一份，不再各写一套）。 */
+export const KIND_LABELS: Record<MemoryRow['kind'], string> = {
   profile: '画像',
   fact: '事实',
   preference: '偏好',
@@ -37,6 +41,8 @@ export function MemoryPanel({
   onClose: () => void
 }) {
   const [memories, setMemories] = useState<{ agent: MemoryRow[]; shared: MemoryRow[] } | undefined>(undefined)
+  /** 读取失败的一句话原因；原文只进 AsyncState 的「详情」。 */
+  const [loadError, setLoadError] = useState<string | undefined>(undefined)
   const [archived, setArchived] = useState<MemoryRow[] | undefined>(undefined)
   const [archivedOpen, setArchivedOpen] = useState(false)
   const [restoringId, setRestoringId] = useState<string | undefined>(undefined)
@@ -45,12 +51,19 @@ export function MemoryPanel({
   const [reembedding, setReembedding] = useState(false)
 
   const reload = useCallback(() => {
-    api
-      .listAgentMemories(agentId)
-      .then(setMemories)
-      .catch(() => {
-        setMemories({ agent: [], shared: [] })
-      })
+    setLoadError(undefined)
+    api.listAgentMemories(agentId).then(
+      (next) => {
+        setMemories(next)
+        setLoadError(undefined)
+      },
+      (error: unknown) => {
+        // 失败不是「没有记忆」：把列表置回未知态，让错误条与重试入口接手。
+        // 这里存的是**原文**——它不进第一眼，只进 AsyncState 的「详情」。
+        setMemories(undefined)
+        setLoadError(errorDetail(error) ?? '未知原因')
+      },
+    )
   }, [api, agentId])
   const reloadArchived = useCallback(() => {
     api
@@ -71,31 +84,40 @@ export function MemoryPanel({
     reloadArchived()
   }, [reload, reloadArchived])
 
-  const remove = async (id: string): Promise<void> => {
-    // 删除失败此前是 `.catch(() => {})`：条目还挂在列表里，用户却以为删掉了。
-    setDeletingId(id)
-    try {
-      await api.deleteMemory(id)
-      toast.success('已删除这条记忆')
-      reload()
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error))
-    } finally {
-      setDeletingId(undefined)
-    }
-  }
-
-  const restore = async (id: string): Promise<void> => {
+  const restore = async (id: string, announce = true): Promise<void> => {
     setRestoringId(id)
     try {
       await api.restoreMemory(id)
+      if (announce) toast.success('已恢复这条记忆')
+      else toast.success('已撤销，记忆回到列表')
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error))
+      toast.error(humanError(error, '这条记忆没能恢复，再试一次'))
     } finally {
       setRestoringId(undefined)
     }
     reload()
     reloadArchived()
+  }
+
+  const remove = async (id: string): Promise<void> => {
+    // 删除是软删（进归档），所以给「撤销」；接口失败仍要出声，不能假装已经移走。
+    setDeletingId(id)
+    try {
+      await api.deleteMemory(id)
+      toast.success('已移入归档', {
+        action: {
+          label: '撤销',
+          run: () => {
+            void restore(id, false)
+          },
+        },
+      })
+      reload()
+    } catch (error) {
+      toast.error(humanError(error, '这条记忆没能移走，再试一次'))
+    } finally {
+      setDeletingId(undefined)
+    }
   }
 
   const reembed = async (): Promise<void> => {
@@ -104,7 +126,7 @@ export function MemoryPanel({
       await api.reembedMemories()
       toast.success('向量索引已重建')
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error))
+      toast.error(humanError(error, '向量索引没能重建，先确认已经配好向量模型'))
     } finally {
       setReembedding(false)
       setConfirmingReembed(false)
@@ -126,28 +148,44 @@ export function MemoryPanel({
       </span>
       <button
         type="button"
-        className="memory-delete"
-        title="删除（软删）"
+        className="btn btn-mini memory-delete"
+        style={{ width: 'auto', height: 'auto', padding: '2px 8px', whiteSpace: 'nowrap' }}
+        title="移入归档（可以撤销）"
+        aria-label={`移入归档：${memory.content.slice(0, 20)}`}
         disabled={deletingId === memory.id}
         onClick={() => {
           void remove(memory.id)
         }}
       >
-        <Icon name="x" size={11} />
+        {deletingId === memory.id ? '归档中…' : '移入归档'}
       </button>
     </li>
   )
 
   return (
     <Modal title={`${agentName} 的记忆`} onClose={onClose}>
-      {memories === undefined ? (
-        <PanelSkeleton rows={4} />
+      {loadError !== undefined ? (
+        <AsyncState
+          loading={false}
+          error="记忆没读出来，可能是本机服务暂时不可用。"
+          detail={loadError}
+          onRetry={reload}
+        >
+          {null}
+        </AsyncState>
+      ) : memories === undefined ? (
+        <AsyncState loading skeleton={<PanelSkeleton rows={4} />}>
+          {null}
+        </AsyncState>
       ) : (
         <>
           <MemoryHealth api={api} agentId={agentId} archivedCount={archived === undefined ? null : archived.length} />
           {memories.shared.length > 0 && (
             <>
-              <p className="section-title">共享画像（Ryen 了解你）</p>
+              {/* 用组件自己拿到的 agentName，不写死 Ryen：这份面板在右栏里对任意
+                  agent 都会打开，写死品牌名等于让用户在小明的记忆面板里看到
+                  「Ryen 了解你」。隔壁的私有记忆区已经是这个写法。 */}
+              <p className="section-title">共享画像（{agentName} 了解你）</p>
               <ul className="memory-list">
                 {memories.shared.map((m) => {
                   return renderRow(m, true)
@@ -159,7 +197,7 @@ export function MemoryPanel({
             {agentName} 的私有记忆（{memories.agent.length}）
           </p>
           {memories.agent.length === 0 && memories.shared.length === 0 ? (
-            <p className="panel-empty">还没有记忆——多聊几轮，我会默默记住重要的事情。</p>
+            <p className="panel-empty">还没有记忆。</p>
           ) : (
             <ul className="memory-list">
               {memories.agent.map((m) => {
@@ -180,7 +218,7 @@ export function MemoryPanel({
                 }}
               >
                 <span className="memory-chevron">
-                  <Icon name="chevron-right" size={12} />
+                  <Icon name="chevron-right" size={16} />
                 </span>
                 已归档（{archived.length}）
               </button>
@@ -210,7 +248,7 @@ export function MemoryPanel({
             </div>
           )}
           <div className="memory-footer">
-            <p className="memory-footer-hint">更换 embedding 模型后，重建一次让旧记忆重新可被检索。</p>
+            <p className="memory-footer-hint">换了向量模型后重建一次，旧记忆才能被重新找到。</p>
             <button
               type="button"
               className="btn memory-reembed"
@@ -426,7 +464,9 @@ export function MemoryHealth({
         </div>
         <div className="health-stat" title={recall === undefined ? '本次运行还没有发生过召回' : undefined}>
           <span className="health-label">最近召回</span>
-          <span className="health-value">{recall === undefined ? '暂无' : `${recall.items} 条 · ${recall.ms}ms`}</span>
+          <span className="health-value">
+            {recall === undefined ? '暂无' : `${recall.items} 条 · ${humanDuration(recall.ms)}`}
+          </span>
         </div>
         <div
           className="health-stat"

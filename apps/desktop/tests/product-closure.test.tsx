@@ -25,11 +25,11 @@ import { AboutContent, MePage } from '../renderer/src/components/MePage.tsx'
 import { RightPanel } from '../renderer/src/components/RightPanel.tsx'
 import { WelcomeHome } from '../renderer/src/components/WelcomeHome.tsx'
 import { WorkspaceSection } from '../renderer/src/components/WorkspaceSection.tsx'
-import { isGuardRelay, relayChainLabel, relayLabel } from '../renderer/src/lib/relay-labels.ts'
+import { isGuardRelay, relayChainLabel, relayLabel, relayTimelineSummary } from '../renderer/src/lib/relay-labels.ts'
 import { getToasts } from '../renderer/src/lib/toast.ts'
-import { ALL_TOOLS, toolLabel } from '../renderer/src/lib/tool-labels.ts'
+import { ALL_TOOLS, routeLabel, toolLabel } from '../renderer/src/lib/tool-labels.ts'
 import { LEAVE_MS } from '../renderer/src/lib/useLeaving.ts'
-import { ChatStore } from '../renderer/src/store.ts'
+import { bucketOf, ChatStore, type ConversationBucket } from '../renderer/src/store.ts'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -148,8 +148,10 @@ describe('调度原因的中文口径', () => {
     expect(relayLabel('loop-guard')).toBe('互相推诿已拦下')
     expect(relayLabel('max-turns')).toBe('达到轮次上限')
     expect(relayLabel('relay @CodeBot')).toBe('点名转交给了CodeBot')
-    // 未知 reason 原样透出，不吞信息也不编故事。
-    expect(relayLabel('brand-new-reason')).toBe('brand-new-reason')
+    // 未知 reason：机器枚举（纯 ASCII）一律换人话，不上屏内部标识；
+    // 中文未知原因才原样保留（信息不吞、也不编故事）
+    expect(relayLabel('brand-new-reason')).toBe('自动安排')
+    expect(relayLabel('服务端自定义原因')).toBe('服务端自定义原因')
   })
 
   it('接力链用同源的紧凑标签', () => {
@@ -158,6 +160,21 @@ describe('调度原因的中文口径', () => {
     expect(isGuardRelay('loop-guard')).toBe(true)
     expect(isGuardRelay('max-turns')).toBe(true)
     expect(isGuardRelay('user-mention')).toBe(false)
+  })
+
+  it('折叠摘要只说「派了几次、最后谁交付」，不带机器枚举', () => {
+    const relays = [
+      { toAgent: 'ryen', reason: 'default-dispatcher', turnIndex: 0 },
+      { fromAgent: 'ryen', toAgent: 'coder', reason: 'loop-guard', turnIndex: 1 },
+    ]
+    expect(
+      relayTimelineSummary(relays, (id) => {
+        return id === 'ryen' ? 'Ryen' : 'CodeBot'
+      }),
+    ).toBe('2 次派工 · 最后由 CodeBot 交付')
+    // 摘要行是用户唯一默认能看到的东西，reason 漏进来就等于内部机制又上屏
+    expect(relayTimelineSummary(relays, () => 'x')).not.toContain('default-dispatcher')
+    expect(relayTimelineSummary([], () => 'x')).toBe('本轮还没有派工')
   })
 })
 
@@ -176,7 +193,7 @@ describe('群聊右栏：看得见的进化', () => {
     expect(html).toContain('查看 Ryen 的记忆')
   })
 
-  it('调度轨迹渲染中文标签而不是 loop-guard', () => {
+  it('调度轨迹默认折叠：只留一行摘要，完整轨迹不占地方', () => {
     const html = renderToStaticMarkup(
       <RelayTimeline
         nameOf={(id) => {
@@ -188,11 +205,46 @@ describe('群聊右栏：看得见的进化', () => {
         ]}
       />,
     )
-    expect(html).toContain('总管默认接手')
-    expect(html).toContain('互相推诿已拦下')
-    expect(html).toContain('is-guard')
+    expect(html).toContain('调度轨迹')
+    expect(html).toContain('2 次派工 · 最后由 CodeBot 交付')
+    expect(html).toContain('aria-expanded="false"')
+    // 折叠态下整条轨迹都不渲染：内部机制不默认占地方
+    expect(html).not.toContain('relay-list')
     expect(html).not.toContain('loop-guard')
-    expect(html).not.toContain('default-dispatcher')
+  })
+
+  it('点摘要行才展开轨迹，再点收起（功能没被删，只是默认不展开）', () => {
+    act(() => {
+      root = createRoot(container)
+      root.render(
+        <RelayTimeline
+          nameOf={(id) => {
+            return id === 'ryen' ? 'Ryen' : 'CodeBot'
+          }}
+          relays={[
+            { toAgent: 'ryen', reason: 'default-dispatcher', turnIndex: 0 },
+            { fromAgent: 'ryen', toAgent: 'coder', reason: 'loop-guard', turnIndex: 1 },
+          ]}
+        />,
+      )
+    })
+    const toggle = container.querySelector<HTMLButtonElement>('.relay-toggle')
+    expect(toggle?.getAttribute('aria-expanded')).toBe('false')
+    expect(container.querySelector('.relay-list')).toBeNull()
+
+    act(() => {
+      toggle?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(toggle?.getAttribute('aria-expanded')).toBe('true')
+    const list = container.querySelector('.relay-list')
+    expect(list?.textContent).toContain('总管默认接手')
+    expect(list?.textContent).toContain('互相推诿已拦下')
+    expect(list?.querySelectorAll('li')[1]?.className).toContain('is-guard')
+
+    act(() => {
+      toggle?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(container.querySelector('.relay-list')).toBeNull()
   })
 
   it('空轨迹给出说明而不是空白', () => {
@@ -241,13 +293,22 @@ describe('群聊右栏：看得见的进化', () => {
     })
     const panel = container.textContent ?? ''
     expect(panel).toContain('谁在进化')
-    expect(panel).toContain('互相推诿已拦下')
+    // 默认折叠：右栏只给一行摘要，轨迹细节要用户点开才有
+    expect(panel).toContain('1 次派工 · 最后由 CodeBot 交付')
+    expect(container.querySelector('.relay-list')).toBeNull()
+
+    const toggle = container.querySelector<HTMLButtonElement>('.relay-toggle')
+    await act(async () => {
+      toggle?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(container.querySelector('.relay-list')?.textContent).toContain('互相推诿已拦下')
     expect(panel).not.toContain('loop-guard')
   })
 })
 
 describe('ChatView：点「停止」后不复死在生成中', () => {
   let store: ChatStore
+  let bucket: ConversationBucket
   let push: (event: WsEvent) => void
   let cancelled: number
 
@@ -282,7 +343,7 @@ describe('ChatView：点「停止」后不复死在生成中', () => {
   async function render(): Promise<void> {
     await act(async () => {
       root = createRoot(container)
-      root.render(<ChatView api={fakeApi()} conversation={conversation} agents={[agent]} store={store} />)
+      root.render(<ChatView api={fakeApi()} conversation={conversation} agents={[agent]} bucket={bucket} />)
       await Promise.resolve()
     })
   }
@@ -296,6 +357,7 @@ describe('ChatView：点「停止」后不复死在生成中', () => {
 
   beforeEach(() => {
     store = new ChatStore()
+    bucket = bucketOf(store)
     cancelled = 0
   })
 
@@ -412,14 +474,14 @@ describe('工作区：路径要看得见、点得开', () => {
         <WorkspaceSection
           api={{
             workspace: () => {
-              return Promise.resolve({ path: 'C:/Users/zry/AppData/ryagent/workspace' })
+              return Promise.resolve({ path: 'C:/Users/zry/AppData/ryharness/workspace' })
             },
           }}
         />,
       )
       await Promise.resolve()
     })
-    expect(container.querySelector('.workspace-path')?.textContent).toBe('C:/Users/zry/AppData/ryagent/workspace')
+    expect(container.querySelector('.workspace-path')?.textContent).toBe('C:/Users/zry/AppData/ryharness/workspace')
     const labels = [...container.querySelectorAll('.workspace-actions button')].map((node) => {
       return node.textContent
     })
@@ -481,7 +543,7 @@ describe('「我的」页：用户与 agent 分开说', () => {
     expect(card.textContent).not.toContain('Ryen')
     const butler = container.querySelector('.me-butler')!
     expect(butler.textContent).toContain('Ryen')
-    expect(butler.textContent).toContain('内置 Agent')
+    expect(butler.textContent).toContain('内置')
   })
 
   it('工作区区块在页面上', async () => {
@@ -563,9 +625,25 @@ describe('弹窗提交失败不再静默', () => {
 
 describe('工具中文名只有一份', () => {
   it('新建表单与右栏徽章读同一张表', () => {
-    expect(ALL_TOOLS).toEqual(['fs_read', 'fs_write', 'shell_exec', 'file_produce'])
+    expect(ALL_TOOLS).toEqual(['fs_read', 'fs_write', 'shell_exec', 'file_produce', 'todo'])
     expect(toolLabel('fs_read')).toBe('读文件')
+    expect(toolLabel('todo')).toBe('待办清单')
     // 未知工具原样透出，不显示空白。
     expect(toolLabel('mystery_tool')).toBe('mystery_tool')
+  })
+
+  it('插件接口说人话：动词 + 路径，参数与 api 根不上屏', () => {
+    expect(routeLabel('GET /api/todos')).toBe('读取待办清单')
+    expect(routeLabel('PATCH /api/todos/:id')).toBe('修改待办清单')
+    expect(routeLabel('POST /api/voice/speak')).toBe('发起语音朗读')
+    expect(routeLabel('GET /api/voice/catalog')).toBe('读取语音目录')
+    expect(routeLabel('POST /api/voice/engines/piper/install')).toBe('发起语音引擎Piper安装')
+  })
+
+  it('认不全的路由不猜：宁可说"一个接口"，也不把路径拆开念', () => {
+    expect(routeLabel('PROPFIND /api/x/:y')).toBe('这个插件提供的接口')
+    expect(routeLabel('GET /api/unheard-of/thing')).toBe('这个插件提供的接口')
+    expect(routeLabel('GET /api/todos')).not.toContain('/api')
+    expect(routeLabel('PATCH /api/todos/:id')).not.toContain(':id')
   })
 })

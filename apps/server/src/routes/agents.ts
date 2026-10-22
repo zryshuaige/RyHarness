@@ -1,11 +1,11 @@
 /**
  * Agent 定义路由：CRUD + 内置模板清单。
- * @module @ryagent/server/routes/agents
+ * @module @ryharness/server/routes/agents
  */
 
-import type { AgentDefinition } from '@ryagent/agent'
-import type { AgentPersona, SessionStore } from '@ryagent/session'
-import { VOICE_PRESETS } from '@ryagent/session'
+import type { AgentDefinition } from '@ryharness/agent'
+import type { AgentPersona, SessionStore } from '@ryharness/session'
+import { VOICE_PRESETS } from '@ryharness/session'
 import type { ProvidersConfigFile } from '../config.ts'
 import { resolveSidecarLlm } from '../config.ts'
 import { HttpRequestError, json, type Router, strField } from '../router.ts'
@@ -18,6 +18,28 @@ export interface AgentRoutes {
   providers: ProvidersConfigFile
 }
 
+/**
+ * 名字不能重：通讯录、群成员选择、气泡署名全都按名字认人，两个都叫"CodeBot"
+ * 的 Agent 根本没法区分。内置 Agent 也在名单里，所以叫"Ryen"同样被挡。
+ *
+ * 比较时忽略首尾空白与大小写——"CodeBot" 与 "codebot " 在界面上看着是两个人，
+ * 实际上分不清。
+ *
+ * @param store - 会话存储（读 Agent 列表）
+ * @param name - 要检查的名字
+ * @param selfId - 自己的 id（改名时排除自己）
+ */
+function assertNameFree(store: SessionStore, name: string, selfId: string): void {
+  const wanted = name.trim().toLowerCase()
+  if (wanted.length === 0) return
+  const clash = store.listAgents().find((agent) => {
+    return agent.id !== selfId && agent.name.trim().toLowerCase() === wanted
+  })
+  if (clash !== undefined) {
+    throw new HttpRequestError(409, `已经有叫「${name.trim()}」的 Agent 了，换个名字`)
+  }
+}
+
 /** POST/PATCH 共用的 agent 字段白名单校验：类型不符抛 400，未知键丢弃。 */
 function agentFieldOverrides(
   body: unknown,
@@ -25,7 +47,7 @@ function agentFieldOverrides(
   const overrides: Partial<Omit<AgentDefinition, 'id' | 'isBuiltin'>> & { persona?: Partial<AgentPersona> } = {}
   if (typeof body !== 'object' || body === null) return overrides
   const record = body as Record<string, unknown>
-  for (const key of ['name', 'avatar', 'systemPrompt', 'provider', 'model'] as const) {
+  for (const key of ['name', 'avatar', 'systemPrompt', 'provider', 'model', 'reasoningEffort'] as const) {
     const value = record[key]
     if (value === undefined) continue
     if (typeof value !== 'string') throw new HttpRequestError(400, `field "${key}" must be a string`)
@@ -119,6 +141,14 @@ export function registerAgentRoutes(router: Router, deps: AgentRoutes): void {
         tools: overrides.tools ?? [],
       }
     }
+    // **重名要拦住**：通讯录、群成员选择、气泡上全都按名字认人，两个都叫
+    // "CodeBot"的 Agent 根本没法区分。内置 Agent 也在名单里，所以叫"Ryen"
+    // 同样会被挡下。
+    // 没给名字又没给模板时用的是占位名「未命名 Agent」——那是服务端的默认值，
+    // 不是用户挑的名字，不拿来当重名的由头（界面那边总是会传名字）。
+    if (templateKey !== undefined || overrides.name !== undefined) {
+      assertNameFree(store, definition.name, definition.id)
+    }
     const stored = store.upsertAgent({
       ...definition,
       ...(persona === undefined ? {} : { persona }),
@@ -126,7 +156,6 @@ export function registerAgentRoutes(router: Router, deps: AgentRoutes): void {
     })
     json(res, 201, { agent: stored })
   })
-
   router.patch('/api/agents/:id', async (req, res) => {
     const existing = store.getAgent(req.params.id as string)
     if (existing === undefined) {
@@ -142,6 +171,10 @@ export function registerAgentRoutes(router: Router, deps: AgentRoutes): void {
       id: existing.id,
       isBuiltin: existing.isBuiltin,
     }
+    // 改名也要查重：编辑一个 Agent 时把它改成别人的名字，同样会让列表认不出人。
+    if (overrides.name !== undefined) {
+      assertNameFree(store, merged.name, existing.id)
+    }
     json(res, 200, {
       agent: store.upsertAgent({
         ...merged,
@@ -151,7 +184,9 @@ export function registerAgentRoutes(router: Router, deps: AgentRoutes): void {
   })
 
   /**
-   * 点赞/点踩：亲密度按同一套规则增长（对话轮数由协调器算，点赞走这里）。
+   * 亲密度原始入口：按 nextAffinity 的同一套规则加减速（对话轮数由协调器直接调
+   * store，不走 HTTP）。界面上的 👍/👎 不从这里走——/api/feedback 接受反馈后内联
+   * bump（反馈被接受才涨，且按 messageId+signal 去重）；这条留给手动调参与外部脚本。
    * 回包是更新后的 agent——界面据此刷新卡片上的亲密度，不用再拉一次列表。
    */
   router.post('/api/agents/:id/affinity', async (req, res) => {
@@ -191,8 +226,10 @@ export function registerAgentRoutes(router: Router, deps: AgentRoutes): void {
   })
 
   /**
-   * 音色目录：目前只有 id 与显示名（还没有任何 TTS 调用路径，界面如实说明）。
-   * 编辑器用它渲染下拉，服务端校验 persona.voiceId 也认这份清单。
+   * 旧版音色清单：`none` + @ryharness/voice 的实测目录（由 session 派生）。
+   *
+   * 新界面走 GET /api/voice/catalog（带引擎可用性与试听句）；这条留给旧客户端与
+   * 外部脚本，返回的 id 与目录同源，不会出现两套命名。
    */
   router.get('/api/agent-voices', async (_req, res) => {
     json(res, 200, { voices: VOICE_PRESETS })

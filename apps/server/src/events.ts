@@ -4,11 +4,11 @@
  * 服务器把 AgentLoop / GroupDispatcher / SessionCoordinator 的事件流
  * 统一映射为以下 JSON 事件，推送给订阅了对应会话的 WS 客户端。
  * 所有事件都带 conversationId；senderId 为 'user' 或 agent id。
- * @module @ryagent/server/events
+ * @module @ryharness/server/events
  */
 
-import type { ProduceCard } from '@ryagent/agent'
-import type { StoredUsage } from '@ryagent/session'
+import type { ProduceCard } from '@ryharness/agent'
+import type { StoredUsage } from '@ryharness/session'
 
 /** WS 事件（/ws?conversationId= 订阅后推送）。 */
 export type WsEvent =
@@ -19,6 +19,15 @@ export type WsEvent =
       senderId: string
       senderName: string
       turnIndex: number
+      /**
+       * 这一轮是 agent **主动开口**说的（每日回顾那条），不是用户问出来的。
+       *
+       * 渲染层据此给气泡加「主动找你」的标识：它与用户消息长得一样，就等于
+       * 「我什么时候问过这句」这件事在界面上消失了。历史里的同一条消息靠
+       * content_blocks 里的标记块认出（见 apps/server/src/proactive.ts），两处
+       * 认的是同一件事——实时那条也得带这个标记，否则刷新一次标识就没了。
+       */
+      proactive?: boolean
     }
   | { type: 'text-delta'; conversationId: string; senderId: string; text: string }
   | {
@@ -64,12 +73,18 @@ export type WsEvent =
       usage?: StoredUsage
     }
   | { type: 'error'; conversationId: string; message: string; code: string }
+  /**
+   * 这一轮进队列了（会话内已有在途轮次）。
+   *
+   * **刻意不带 turnIndex**：入队那一刻这一轮还没有自己的序号（同一会话串行，它的
+   * 序号要等真正执行时才取），此时另读一次 nextTurnIndex 给出的值属于「排队者」而
+   * 不属于这一轮。渲染层把它只当"排队中"这一个状态用，与序号无关。
+   */
   | {
       type: 'queued'
       conversationId: string
       /** 排队的用户消息。 */
       senderId: 'user'
-      turnIndex: number
     }
 
 /**

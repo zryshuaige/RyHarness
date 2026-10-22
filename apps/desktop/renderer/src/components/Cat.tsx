@@ -1,51 +1,81 @@
 /**
- * RyAgent 品牌主角：极简几何橘猫（琥珀渐变底板 + 圆头三角耳 + 极简五官）。
+ * RyHarness 品牌主角：橘猫位图徽标（琥珀圆角方形底板 + 大眼 + 两只前爪搭在底板边缘）。
  *
- * 矢量母版在 apps/desktop/assets/brand/cat-face*.svg —— 与 scripts/gen-icon.mjs
- * 导出应用图标、以及 renderer/index.html 启动屏引用的是同一份几何，全应用只有
- * 这一只猫（三态 idle / thinking / happy 只改眼神、嘴与星光，不改轮廓）。
+ * 图像来自 assets/brand/mark.png 这一份母版，与应用图标、任务栏、托盘、favicon、启动屏
+ * 同源：渲染层吃的那张图是 gen:icon 导出的 256 档（renderer/public/cat.png），全应用
+ * 只有这一只猫。
  *
- * `shape="circle"` 供头像位使用：满幅圆底板，与 DiceBear 风格头像是同一个画布。
- * 脸底色随主题翻（assets/brand/cat.css），否则暗色下浅墨压在奶油底上没有五官。
+ * 为什么是 <img> 而不是内联 SVG / dangerouslySetInnerHTML：
+ *   - 母版是**位图**。此前那套矢量母版才有条件在渲染时拼 SVG（每只猫一个渐变 id、三态
+ *     换眼形、小尺寸档按 tiers.json 改坐标）；换成位图之后那些几何全都不存在了，留着的
+ *     只会是一整套改写 SVG 字符串的代码。
+ *   - 位图走 <img> 由浏览器解码，缩放到各档都是浏览器自己的高质量缩放，不需要渲染层
+ *     再实现一遍多档取样。
+ *   - 走 public/ 而不是打包进 JS：图片不进 bundle，走 vite 的 /app 静态资源路径，
+ *     浏览器能缓存，渲染层也不用背一段 base64。
+ *
+ * 三态（idle / thinking / happy）随矢量母版一起作废：位图没有可换的眼形与嘴形。
+ * 「正在思考」改由 components/TypingDots.tsx 的打字动画表达——那才是真正在动的状态。
  */
-import { useId } from 'react'
 import '../assets/brand/cat.css'
-import catIdle from '../../../assets/brand/cat-face.svg?raw'
-import catHappy from '../../../assets/brand/cat-face-happy.svg?raw'
-import catThinking from '../../../assets/brand/cat-face-thinking.svg?raw'
+// 逐档候选直接进 vite 的资源管线：它们是托盘/任务栏在用的那几张位图，每一张都独立从
+// 953 母版直缩（见 docs/brand/icon.md）。renderer/public/ 里刻意不放它们——那份目录是
+// gen-icon 声明过的集合，brand-tiers.test.ts 逐字校验，多几张会让启动屏与托盘的接线
+// 契约失去意义；vite 把 import 进来的图写成 dist/assets/ 下带 hash 的产物，由
+// renderer-assets.ts 一并伺服（vite 的 base='/'，页面挂在 /app 上仍能解析）。
+import icon16 from '../../../assets/icon-16.png'
+import icon24 from '../../../assets/icon-24.png'
+import icon32 from '../../../assets/icon-32.png'
+import icon48 from '../../../assets/icon-48.png'
+import icon64 from '../../../assets/icon-64.png'
 
-/** 64×64 设计网格下的底板：应用图标用 squircle，头像圆形裁切用满幅圆。 */
-const PLATES = {
-  squircle: 'M32 2 C46.375 2 62 10.75 62 32 C62 53.25 46.375 62 32 62 C17.625 62 2 53.25 2 32 C2 10.75 17.625 2 32 2 Z',
-  circle: 'M32 0 A32 32 0 1 1 32 64 A32 32 0 1 1 32 0 Z',
-} as const
+/** 资源挂载前缀，与 electron/renderer-assets.ts 的 RENDERER_MOUNT 一致。 */
+const MOUNT = '/app'
+/** gen:icon 导出的 256 档整幅（renderer/public/cat.png 是它的逐字节副本）。 */
+const MARK = `${MOUNT}/cat.png`
 
-const FACES: Record<'idle' | 'thinking' | 'happy', string> = {
-  idle: catIdle.trim(),
-  thinking: catThinking.trim(),
-  happy: catHappy.trim(),
-}
+/**
+ * srcset 候选：从母版逐档直缩，按宽度描述符交给浏览器挑「最小的够用档」。
+ *
+ * 此前 24px 头像吃的是 256→24 这条二次降采样——母版的缩放核在小尺寸上把五官糊掉之后，
+ * 后面的降采样拿不回细节。逐档直缩的版本才是托盘与任务栏在用的那几张。
+ * src 仍留 256 档：它是不认 srcset 时的兜底，也是启动屏 / 托盘档位同源的那一份；
+ * sizes 报的是布局宽度（每处 <Cat> 都把 size 写进了 width/height），
+ * 于是 1x 屏上的 16px 头像拿到 icon-16 而不是被缩到 16 的 256 档。
+ */
+const TIERS: readonly { url: string; width: number }[] = [
+  { url: icon16, width: 16 },
+  { url: icon24, width: 24 },
+  { url: icon32, width: 32 },
+  { url: icon48, width: 48 },
+  { url: icon64, width: 64 },
+  { url: MARK, width: 256 },
+]
+const SRCSET = TIERS.map((tier) => {
+  return `${tier.url} ${tier.width}w`
+}).join(', ')
 
 export function Cat({
-  mood,
   size = 40,
   shape = 'squircle',
 }: {
-  mood: 'idle' | 'thinking' | 'happy'
   size?: number
-  /** 底板形状：应用图标用 squircle，头像圆形裁切用 circle。 */
-  shape?: keyof typeof PLATES
+  /** 底板形状：应用图标位用圆角方形（母版自带），头像位用 circle 裁成满幅圆。 */
+  shape?: 'squircle' | 'circle'
 }) {
-  // 多只猫同屏时渐变 id 不能重名（否则后渲染的会引用到别人的 defs）。
-  const uid = `plate${useId().replace(/[^\dA-Za-z]/g, '')}`
-  const svg =
-    `<svg class="cat" width="${size}" height="${size}" viewBox="0 0 64 64" fill="none">` +
-    `<defs><linearGradient id="${uid}" x1="0%" y1="0%" x2="100%" y2="100%">` +
-    `<stop offset="0%" stop-color="#FBBF24"/><stop offset="100%" stop-color="#D97706"/>` +
-    `</linearGradient></defs>` +
-    `<path fill="url(#${uid})" d="${PLATES[shape]}"/>` +
-    FACES[mood] +
-    `</svg>`
-  // biome-ignore lint/security/noDangerouslySetInnerHtml: 仓库内置的静态母版 SVG，无外部输入
-  return <span data-mood={mood} dangerouslySetInnerHTML={{ __html: svg }} aria-label={`Ryen ${mood}`} role="img" />
+  return (
+    <img
+      className={shape === 'circle' ? 'cat cat-circle' : 'cat'}
+      src={MARK}
+      srcSet={SRCSET}
+      sizes={`${size}px`}
+      width={size}
+      height={size}
+      alt=""
+      // 纯装饰：头像位外面已经有一层带 aria-label 的 role="img" 外壳（AvatarShell），
+      // 这里再挂 role="img" 会让读屏念两遍；徽标单独出现时也没有可念的信息。
+      aria-hidden="true"
+      decoding="async"
+    />
+  )
 }

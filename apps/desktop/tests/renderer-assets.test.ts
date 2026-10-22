@@ -7,7 +7,7 @@
  * 端口每次都变等于每次冷启动把 Chromium 的 HTTP 与 V8 缓存清零；而把
  * index.html 也当不可变资源缓存住，则会让用户永远停在旧版本上。
  */
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { type AddressInfo, createServer as createNetServer, type Server } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -15,10 +15,13 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { RENDERER_MOUNT, RendererAssets, type RendererAssetsOptions } from '../electron/renderer-assets.ts'
 
 /** 造一份 vite 形状的 dist：入口 + assets/ 下带 hash 的分片 + public 原样拷贝的文件。 */
+const fixtureDirs: string[] = []
+
 function fixture(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'ryagent-assets-'))
+  const dir = mkdtempSync(join(tmpdir(), 'ryharness-assets-'))
+  fixtureDirs.push(dir)
   mkdirSync(join(dir, 'assets'))
-  writeFileSync(join(dir, 'index.html'), '<!doctype html><title>RyAgent</title>')
+  writeFileSync(join(dir, 'index.html'), '<!doctype html><title>RyHarness</title>')
   writeFileSync(join(dir, 'favicon.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>\n')
   writeFileSync(join(dir, 'assets/index-B6_i5xWc.js'), 'export const a = 1\n')
   writeFileSync(join(dir, 'assets/index-Bbc7Hzqy.css'), '.a{color:red}\n')
@@ -43,6 +46,9 @@ afterEach(async () => {
       })
     }),
   )
+  while (fixtureDirs.length > 0) {
+    rmSync(fixtureDirs.pop() as string, { recursive: true, force: true, maxRetries: 5 })
+  }
 })
 
 async function startAssets(dir: string, options?: RendererAssetsOptions): Promise<RendererAssets> {
@@ -114,13 +120,13 @@ describe('渲染层资源服务的缓存策略', () => {
     expect(first.status).toBe(200)
     expect(first.headers.get('cache-control')).toBe('no-cache')
     expect(first.headers.get('etag')).toBeNull()
-    expect(await first.text()).toContain('RyAgent')
+    expect(await first.text()).toContain('RyHarness')
 
     // 就算客户端拿着校验器来要 304，入口 HTML 也不给——它才是版本的新旧开关。
     const second = await fetch(`${assets.url}${RENDERER_MOUNT}`, { headers: { 'if-none-match': '*' } })
     expect(second.status).toBe(200)
     expect(second.headers.get('cache-control')).toBe('no-cache')
-    expect(await second.text()).toContain('RyAgent')
+    expect(await second.text()).toContain('RyHarness')
   })
 
   it('带 hash 的产物 immutable + 强 ETag；If-None-Match 命中就回 304 不传 body', async () => {

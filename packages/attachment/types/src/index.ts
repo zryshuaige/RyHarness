@@ -2,13 +2,13 @@
  * Minimal type-only attachment vocabulary stub.
  *
  * Upstream `@deepseek-ai/dsh-llm` imports attachment types (`import type` only)
- * for image/file content blocks. RyAgent's M1 kernel is text-only, so this
- * package provides just the structural types needed to compile `@ryagent/llm`;
+ * for image/file content blocks. RyHarness's M1 kernel is text-only, so this
+ * package provides just the structural types needed to compile `@ryharness/llm`;
  * a real attachment service can replace it later without touching the LLM seam.
- * @module @ryagent/attachment
+ * @module @ryharness/attachment
  */
 
-import { Service } from '@ryagent/cordis'
+import { Service } from '@ryharness/cordis'
 
 /** Opaque attachment identifier; never a filesystem path or bearer URL. */
 export type AttachmentId = string & { readonly __brand: 'AttachmentId' }
@@ -81,7 +81,7 @@ export interface StoredImageAttachment {
 
 /**
  * Structural seam over durable attachment storage. The real upstream service
- * declares more methods; `@ryagent/llm` only ever touches `imageHostPath`.
+ * declares more methods; `@ryharness/llm` only ever touches `imageHostPath`.
  */
 export abstract class AttachmentStore extends Service {
   /** Resolve the current host read path for one stored image, when available. */

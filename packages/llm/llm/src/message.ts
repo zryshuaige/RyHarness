@@ -1,8 +1,8 @@
 /** Message value types, identity, and immutable construction helpers. */
 
-import { brandString } from '@ryagent/brand'
-import { randomUUID } from '@ryagent/util-crypto'
-import { deepFreeze } from '@ryagent/util-values'
+import { brandString } from '@ryharness/brand'
+import { randomUUID } from '@ryharness/util-crypto'
+import { deepFreeze } from '@ryharness/util-values'
 import type { MessageId, ToolCallId } from './brand.ts'
 import type { ContentBlock } from './types.ts'
 

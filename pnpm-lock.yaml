@@ -35,25 +35,19 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@ryharness/server':
+        specifier: workspace:*
+        version: link:../server
+    devDependencies:
       '@dicebear/collection':
         specifier: ^9.4.2
         version: 9.4.2(@dicebear/core@9.4.3)
       '@dicebear/core':
         specifier: ^9.4.3
         version: 9.4.3
-      '@ryagent/server':
+      '@ryharness/session':
         specifier: workspace:*
-        version: link:../server
-      marked:
-        specifier: ^18.1.0
-        version: 18.1.0
-      react:
-        specifier: ^19.1.0
-        version: 19.3.0
-      react-dom:
-        specifier: ^19.1.0
-        version: 19.3.0(react@19.3.0)
-    devDependencies:
+        version: link:../../packages/session
       '@types/react':
         specifier: ^19.1.0
         version: 19.3.0
@@ -75,9 +69,18 @@ importers:
       lucide-static:
         specifier: ^1.55.0
         version: 1.55.0
+      marked:
+        specifier: ^18.1.0
+        version: 18.1.0
       png-to-ico:
         specifier: ^3.0.2
         version: 3.0.2
+      react:
+        specifier: ^19.1.0
+        version: 19.3.0
+      react-dom:
+        specifier: ^19.1.0
+        version: 19.3.0(react@19.3.0)
       sharp:
         specifier: ^0.35.5
         version: 0.35.5(@types/node@25.9.9)
@@ -87,33 +90,33 @@ importers:
 
   apps/server:
     dependencies:
-      '@ryagent/agent':
+      '@ryharness/agent':
         specifier: workspace:*
         version: link:../../packages/agent
-      '@ryagent/cordis':
+      '@ryharness/cordis':
         specifier: workspace:*
         version: link:../../vendor/cordis
-      '@ryagent/evolve':
+      '@ryharness/evolve':
         specifier: workspace:*
         version: link:../../packages/evolve
-      '@ryagent/group':
-        specifier: workspace:*
-        version: link:../../packages/group
-      '@ryagent/llm':
+      '@ryharness/llm':
         specifier: workspace:*
         version: link:../../packages/llm/llm
-      '@ryagent/llm-openai':
+      '@ryharness/llm-openai':
         specifier: workspace:*
         version: link:../../packages/llm/openai
-      '@ryagent/memory':
+      '@ryharness/memory':
         specifier: workspace:*
         version: link:../../packages/memory
-      '@ryagent/session':
+      '@ryharness/session':
         specifier: workspace:*
         version: link:../../packages/session
-      '@ryagent/tools':
+      '@ryharness/tools':
         specifier: workspace:*
         version: link:../../packages/tools
+      '@ryharness/voice':
+        specifier: workspace:*
+        version: link:../../packages/voice
       ws:
         specifier: ^8.18.0
         version: 8.22.0
@@ -124,106 +127,131 @@ importers:
 
   packages/agent:
     dependencies:
-      '@ryagent/llm':
+      '@ryharness/llm':
         specifier: workspace:*
         version: link:../llm/llm
+    devDependencies:
+      '@ryharness/brand':
+        specifier: workspace:*
+        version: link:../util/brand
 
   packages/attachment/types:
     dependencies:
-      '@ryagent/cordis':
+      '@ryharness/cordis':
         specifier: workspace:*
         version: link:../../../vendor/cordis
 
   packages/evolve:
     dependencies:
-      '@ryagent/llm':
+      '@ryharness/llm':
         specifier: workspace:*
         version: link:../llm/llm
-      '@ryagent/util-llm-json':
+      '@ryharness/util-llm-json':
         specifier: workspace:*
         version: link:../util/llm-json
 
   packages/group:
     dependencies:
-      '@ryagent/agent':
+      '@ryharness/agent':
         specifier: workspace:*
         version: link:../agent
-      '@ryagent/llm':
+      '@ryharness/llm':
         specifier: workspace:*
         version: link:../llm/llm
+    devDependencies:
+      '@ryharness/brand':
+        specifier: workspace:*
+        version: link:../util/brand
 
   packages/llm/llm:
     dependencies:
-      '@ryagent/attachment':
+      '@ryharness/attachment':
         specifier: workspace:*
         version: link:../../attachment/types
-      '@ryagent/brand':
+      '@ryharness/brand':
         specifier: workspace:*
         version: link:../../util/brand
-      '@ryagent/cordis':
+      '@ryharness/cordis':
         specifier: workspace:*
         version: link:../../../vendor/cordis
-      '@ryagent/timeout':
+      '@ryharness/timeout':
         specifier: workspace:*
         version: link:../../util/timeout
-      '@ryagent/typert-protocol':
+      '@ryharness/typert-protocol':
         specifier: workspace:*
         version: link:../../typert/protocol
-      '@ryagent/util-crypto':
+      '@ryharness/util-crypto':
         specifier: workspace:*
         version: link:../../util/crypto
-      '@ryagent/util-values':
+      '@ryharness/util-values':
         specifier: workspace:*
         version: link:../../util/values
 
   packages/llm/openai:
     dependencies:
-      '@ryagent/cordis':
+      '@ryharness/cordis':
         specifier: workspace:*
         version: link:../../../vendor/cordis
-      '@ryagent/llm':
+      '@ryharness/llm':
         specifier: workspace:*
         version: link:../llm
-      '@ryagent/timeout':
+      '@ryharness/timeout':
         specifier: workspace:*
         version: link:../../util/timeout
       eventsource-parser:
         specifier: ^3.1.0
         version: 3.1.1
+    devDependencies:
+      '@ryharness/brand':
+        specifier: workspace:*
+        version: link:../../util/brand
 
   packages/memory:
     dependencies:
-      '@ryagent/llm':
+      '@ryharness/llm':
         specifier: workspace:*
         version: link:../llm/llm
-      '@ryagent/util-llm-json':
+      '@ryharness/util-llm-json':
         specifier: workspace:*
         version: link:../util/llm-json
 
   packages/session:
     dependencies:
-      '@ryagent/agent':
+      '@ryharness/agent':
         specifier: workspace:*
         version: link:../agent
-      '@ryagent/brand':
+      '@ryharness/brand':
         specifier: workspace:*
         version: link:../util/brand
-      '@ryagent/group':
+      '@ryharness/group':
         specifier: workspace:*
         version: link:../group
-      '@ryagent/llm':
+      '@ryharness/llm':
         specifier: workspace:*
         version: link:../llm/llm
+      '@ryharness/voice':
+        specifier: workspace:*
+        version: link:../voice
+    devDependencies:
+      '@ryharness/evolve':
+        specifier: workspace:*
+        version: link:../evolve
+      '@ryharness/memory':
+        specifier: workspace:*
+        version: link:../memory
 
   packages/tools:
     dependencies:
-      '@ryagent/agent':
+      '@ryharness/agent':
         specifier: workspace:*
         version: link:../agent
+      '@ryharness/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
 
   packages/typert/protocol:
     dependencies:
-      '@ryagent/cordis':
+      '@ryharness/cordis':
         specifier: workspace:*
         version: link:../../../vendor/cordis
 
@@ -233,7 +261,7 @@ importers:
 
   packages/util/llm-json:
     dependencies:
-      '@ryagent/llm':
+      '@ryharness/llm':
         specifier: workspace:*
         version: link:../../llm/llm
 
@@ -241,9 +269,15 @@ importers:
 
   packages/util/values: {}
 
+  packages/voice:
+    dependencies:
+      '@ryharness/llm':
+        specifier: workspace:*
+        version: link:../llm/llm
+
   vendor/cordis:
     dependencies:
-      '@ryagent/cosmokit':
+      '@ryharness/cosmokit':
         specifier: workspace:*
         version: link:../cosmokit
       '@standard-schema/spec':
@@ -262,7 +296,7 @@ importers:
 
   vendor/schemastery:
     dependencies:
-      '@ryagent/cosmokit':
+      '@ryharness/cosmokit':
         specifier: workspace:*
         version: link:../cosmokit
       '@standard-schema/spec':
@@ -2443,28 +2477,24 @@ packages:
     engines: {node: '>= 12.0.0'}
     cpu: [arm64]
     os: [linux]
-    libc: [glibc]
 
   lightningcss-linux-arm64-musl@1.33.0:
     resolution: {integrity: sha512-yiO5ROMuYQgXbC60yjZU5CYSFZGKXL0HFATXt9mHJn1+zW55oCtMI9NfcVhYLMFDL7gV7oBPon/EmMMGg2OvtQ==}
     engines: {node: '>= 12.0.0'}
     cpu: [arm64]
     os: [linux]
-    libc: [musl]
 
   lightningcss-linux-x64-gnu@1.33.0:
     resolution: {integrity: sha512-ar+Ju7LmcN0Jo4FpL4hpFybwNG9/3A/Br5KW2n2jyODg3MEZXaDYADdemoNS+BDNfMgKvylJLj4S5tyRActuAg==}
     engines: {node: '>= 12.0.0'}
     cpu: [x64]
     os: [linux]
-    libc: [glibc]
 
   lightningcss-linux-x64-musl@1.33.0:
     resolution: {integrity: sha512-RYiYbkokw0trfKqqzfF55lginwEPrD3OJDfTuJzFs1MK6iFnDenaz1fqLLtX4ITG3OktJQXOeTaw1awrBAlZPw==}
     engines: {node: '>= 12.0.0'}
     cpu: [x64]
     os: [linux]
-    libc: [musl]
 
   lightningcss-win32-arm64-msvc@1.33.0:
     resolution: {integrity: sha512-1K+MPfLSFVpphzpdbfkhlWk6wBrTObBzS2T6db10PNOZgR9GoVsAWzwNyuhUYYbTp23j+4RrncfujZ4uAzXvwA==}

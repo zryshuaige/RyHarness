@@ -1,6 +1,6 @@
 # 安全策略
 
-RyAgent 是**单机**桌面应用：后端只监听回环地址，数据落在本机 `%APPDATA%/ryagent-data`，
+RyHarness 是**单机**桌面应用：后端只监听回环地址，数据落在本机 `%APPDATA%/ryharness-data`，
 但它同时持有用户的 LLM API key 与文件系统工具权限，因此安全问题值得认真对待。
 
 ## 支持范围
@@ -59,9 +59,9 @@ RyAgent 是**单机**桌面应用：后端只监听回环地址，数据落在�
    没有 Electron 的环境（独立开发进程、CI、测试）**明确降级**为明文 + 0600 并在
    日志里说明，不会静默假装已加密。
 
-> 已知的取舍：独立启动后端（`pnpm --filter @ryagent/server dev`）默认不鉴权——
+> 已知的取舍：独立启动后端（`pnpm --filter @ryharness/server dev`）默认不鉴权——
 > 它是开发入口，不随安装包分发。发布版**一定**走上面的 token 通道。给独立进程开鉴权：
-> `RYAGENT_API_TOKEN=<任意串> pnpm --filter @ryagent/server dev`。
+> `RYHARNESS_API_TOKEN=<任意串> pnpm --filter @ryharness/server dev`。
 
 ## 已知漏洞与缓解措施
 

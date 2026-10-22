@@ -8,7 +8,7 @@ export default defineConfig({
   dts: true,
   sourcemap: false,
   minify: false,
-  external: [/^@ryagent\//],
+  external: [/^@ryharness\//],
   outExtensions: () => ({ js: '.js', dts: '.d.ts' }),
   plugins: [standardDecorators()],
 })

@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>毛色对照表</title>
+    <style>
+      /* 这一页是给文档用的「6 动物 × 8 毛色」对照图：与产品里用同一批资产、
+         同一套 filter 链（下面写死的那 8 条与 renderer/src/lib/animal-3d.ts 一致），
+         所以改了毛色要重跑 scripts/shot-hues.mjs 重新出图。 */
+      body {
+        margin: 0;
+        padding: 16px;
+        background: #f7f2ea;
+        font: 12px/1.4 'Microsoft YaHei', sans-serif;
+        color: #3a2d1c;
+      }
+      h1 { font-size: 15px; margin: 0 0 10px; }
+      .row { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+      .rowname { width: 42px; color: #7a6a55; }
+      .cell { width: 66px; text-align: center; }
+      .face {
+        width: 54px; height: 54px; border-radius: 50%; overflow: hidden;
+        background: #efe7db; position: relative;
+      }
+      .face img { width: 100%; height: 100%; object-fit: contain; }
+      .light {
+        position: absolute; inset: 0; border-radius: 50%;
+        background: radial-gradient(44% 38% at 32% 26%, rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0) 68%);
+        mix-blend-mode: soft-light;
+      }
+      .rim {
+        position: absolute; inset: 0; border-radius: 50%;
+        box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.34), inset 0 -4px 10px rgba(40, 26, 12, 0.22);
+      }
+      .cell small { display: block; font-size: 10px; color: #8a7a63; }
+      .hues { display: flex; gap: 6px; margin-left: 48px; margin-bottom: 8px; }
+      .hues span { width: 66px; text-align: center; color: #7a6a55; }
+    </style>
+  </head>
+  <body>
+    <h1>6 动物 × 8 毛色 = 48 种组合（毛色是 CSS filter 链，零额外资产）</h1>
+    <div class="hues" id="hues"></div>
+    <div id="grid"></div>
+    <script>
+      // 与 renderer/src/lib/animal-3d.ts 的 ANIMALS / ANIMAL_HUES 保持一致：
+      // 每只动物有自己的原色相（baseHue）与染色前的准备链（dyeBase），
+      // 染色链 = dyeBase + hue-rotate(目标 − 原色相) + saturate + brightness。
+      const ANIMALS = [
+        { kind: 'dog', label: '狗', baseHue: 38, dyeBase: '' },
+        { kind: 'fox', label: '狐', baseHue: 25, dyeBase: '' },
+        { kind: 'rabbit', label: '兔', baseHue: 342, dyeBase: '' },
+        { kind: 'bear', label: '熊', baseHue: 22, dyeBase: '' },
+        { kind: 'panda', label: '熊猫', baseHue: 38, dyeBase: 'sepia(1)' },
+        { kind: 'mouse', label: '鼠', baseHue: 282, dyeBase: '' },
+      ]
+      const HUES = [
+        { hue: 30, label: '暖橘', sat: 1.3, bright: 1 },
+        { hue: 14, label: '砖红', sat: 1.35, bright: 0.95 },
+        { hue: 42, label: '奶黄', sat: 1.25, bright: 1.08 },
+        { hue: 78, label: '橄榄', sat: 1.2, bright: 0.96 },
+        { hue: 158, label: '松绿', sat: 1.15, bright: 0.93 },
+        { hue: 200, label: '天青', sat: 1.15, bright: 0.98 },
+        { hue: 222, label: '靛蓝', sat: 1.2, bright: 0.92 },
+        { hue: 264, label: '雾紫', sat: 1.1, bright: 1 },
+      ]
+      const filterFor = (animal, hue) => {
+        const shift = ((hue.hue - animal.baseHue) % 360 + 360) % 360
+        return `${animal.dyeBase} hue-rotate(${shift}deg) saturate(${hue.sat}) brightness(${hue.bright})`.trim()
+      }
+      const base = '../assets/animals'
+      document.getElementById('hues').innerHTML = HUES.map((h) => `<span>${h.label}</span>`).join('')
+      document.getElementById('grid').innerHTML = ANIMALS.map((animal) => {
+        const cells = HUES.map((h) => {
+          return `<div class="cell"><div class="face">
+            <img src="${base}/${animal.kind}-front.webp" style="filter:${filterFor(animal, h)}" />
+            <span class="light"></span><span class="rim"></span></div><small></small></div>`
+        }).join('')
+        return `<div class="row"><span class="rowname">${animal.label}</span>${cells}</div>`
+      }).join('')
+    </script>
+  </body>
+</html>

@@ -1,4 +1,4 @@
-# @ryagent/util-llm-json
+# @ryharness/util-llm-json
 
 OpenAI 兼容 chat/completions 的 JSON 结构化输出客户端。记忆管线与进化管线各自
 的 prompt 与结果校验不同，但「发一次请求、解出 JSON、失败时给出可路由的稳定

@@ -1,5 +1,5 @@
 {
-  "name": "@ryagent/util-llm-json",
+  "name": "@ryharness/util-llm-json",
   "version": "0.1.0",
   "type": "module",
   "license": "MIT",
@@ -17,6 +17,6 @@
     "build": "tsdown"
   },
   "dependencies": {
-    "@ryagent/llm": "workspace:*"
+    "@ryharness/llm": "workspace:*"
   }
 }

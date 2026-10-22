@@ -4,10 +4,10 @@
  * 调用方通过 {@link AgentRunOptions.signal}（或 ToolContext.signal）取消一轮
  * 运行时，循环不再发起新的模型调用、不再执行后续工具，并以本错误结束，
  * 让上层（server 的取消接口 / 群聊调度器）能把"被取消"与"模型报错"区分开。
- * @module @ryagent/agent/aborted
+ * @module @ryharness/agent/aborted
  */
 
-import { HarnessError } from '@ryagent/llm'
+import { HarnessError } from '@ryharness/llm'
 
 /** 取消的稳定错误码（与 LLM 侧 aborted finish 的 code 对齐）。 */
 export const ABORTED_CODE = 'ABORTED'

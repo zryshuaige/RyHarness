@@ -1,6 +1,6 @@
 /**
  * 实测 SiliconFlow embedding：维度、耗时、可用性。
- * 读取 RyAgent/.env 的 SILICONFLOW_API_KEY；无 key 时提示跳过。
+ * 读取 RyHarness/.env 的 SILICONFLOW_API_KEY；无 key 时提示跳过。
  *
  *   pnpm tsx scripts/check-embedding.ts
  */

@@ -1,5 +1,5 @@
 {
-  "name": "@ryagent/typert-protocol",
+  "name": "@ryharness/typert-protocol",
   "version": "0.1.0",
   "type": "module",
   "license": "MIT",
@@ -17,6 +17,6 @@
     "build": "tsdown"
   },
   "peerDependencies": {
-    "@ryagent/cordis": "workspace:*"
+    "@ryharness/cordis": "workspace:*"
   }
 }

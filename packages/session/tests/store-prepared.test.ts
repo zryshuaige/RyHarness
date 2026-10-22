@@ -1,4 +1,4 @@
-import { SessionStore } from '@ryagent/session'
+import { SessionStore } from '@ryharness/session'
 import { describe, expect, it } from 'vitest'
 
 /**

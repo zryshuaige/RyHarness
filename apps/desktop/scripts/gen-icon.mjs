@@ -1,28 +1,38 @@
 /**
- * 生成 RyAgent 全部图形资产（可重复运行）：
- *   pnpm --filter @ryagent/desktop gen:icon
+ * 从**位图母版**导出 RyHarness 的全部图形资产（可重复运行、完全离线，只读本仓库内的文件）：
+ *   pnpm --filter @ryharness/desktop gen:icon
  *
- * 唯一主角是 assets/brand/ 下的几何橘猫（纯矢量，本项目原创）：琥珀渐变
- * squircle 底板 + 圆头宽三角耳猫。历史版本曾用微软 Fluent Emoji 猫脸当
- * 软件图标（第三方贴纸感、与品牌橘不一致），现已全部改为本仓库母版。
+ * 母版是 assets/brand/mark.png：一只橘猫（大眼、微笑、两只前爪搭在底板边缘），坐在琥珀
+ * 色圆角方形底板上，暖色调，与界面调性同源。项目自有资产，来源与授权见
+ * apps/desktop/docs/brand/icon.md。
  *
- * 尺寸分级（16/24/32/48/64/128/256）是导出的核心：每一档都是拿母版**独立**
- * 栅格化并按该尺寸做过光学补偿，不是拿 256 档降采样。同一份母版缩到 16px 时
- * 五官会一起糊掉（眼直径只剩 1.35px、嘴的描边不到半个像素），所以小尺寸档要
- * 加粗五官、必要时直接删掉细节（见 TIERS）。补偿只动半径/描边/取舍，坐标一律
- * 来自 assets/brand/cat-face.svg 这一个真源。
+ * 这里不再有矢量母版。此前是「几何 SVG 母版 → 逐档栅格化 + 小尺寸档光学补偿（加粗五官、
+ * 删细节）」，那一整套补偿逻辑（tiers.json 的 tuning 表、渲染层 <Cat> 的 applyTier）
+ * 随矢量母版一起作废：位图母版的五官本来就是实心的，没有可加粗也没有可删的图元。
  *
- * 产物：
- * - icon.svg            彩色母版（底板 + 猫）
- * - icon-{16..256}.png  分级位图（逐档光学补偿）；icon-512/1024.png 走母版原样
- * - icon.ico            Windows 图标（16/24/32/48/256）
- * - icon-mono.svg/.png  单色版（深色底场景：深色标签页的 favicon）
- * - favicon.svg/.png    浏览器标签页
- * - tiers.json          分级契约（托盘/窗口各取哪一档 + 每档的补偿参数）
- * - renderer/public/    favicon 与单色版的可服务副本（vite 原样拷进 dist 根目录）
+ * 每档都是**独立从母版栅格化**，不是从 1024 或从 256 降采样。降采样只会把上一档的
+ * 结果再缩小一遍：母版的缩放核一旦在小尺寸上把五官糊掉，后面的降采样拿不回细节。
+ *
+ * ## 为什么九档全都取整幅、都扣圆角（实测依据，逐条在 docs/brand/icon.md 里）
+ *
+ * 曾经 24/32/48 三档裁到脸、满出血直角方块，其余档整幅加圆角。结果同一枚托盘图标在
+ * 非 HiDPI 下是圆角、HiDPI 下是直角，同一枚 favicon 在 32 与 128 尺寸下形状不同。
+ * 两条路二选一，实测都指向「取消裁脸」：
+ *
+ * 1. **给裁脸档也扣同一个圆角 → 必然削耳。** 半径 0.245·S 的圆角只保住裁窗顶边中间
+ *    51% 宽的像素。母版上两只耳尖实测在 x≈234 与 x≈708（横向跨度 474px），要让它们
+ *    都落进安全带需要 474 ≤ 0.51·S，即 S ≥ 929——母版边长只有 953，而窗还得再让出
+ *    耳尖的纵向余量，实际只剩「整幅」这一档成立。换句话说「裁脸 + 圆角」不是风格选择，
+ *    是几何上做不到。
+ * 2. **不扣圆角 → 整幅档会丢掉底板的圆角轮廓。** 母版本身就是抠好的圆角底板，Windows
+ *    任务栏/托盘与标签页 favicon 都是圆角更可识别，退成硬方块是把品牌资产做差。
+ *
+ * 所以：九档（含 favicon）一律整幅 + 同一个圆角遮罩，托盘的 16 档与 HiDPI 24 档从此
+ * 是同一枚图的两次缩放，不再是两种零件。16px 的可读性另有一组实测数字支撑这个选择
+ * （见 docs/brand/icon.md「16px 到底糊不糊」）。
  */
 
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import pngToIco from 'png-to-ico'
@@ -33,219 +43,136 @@ const assets = join(here, '../assets')
 const brand = join(assets, 'brand')
 const publicDir = join(here, '../renderer/public')
 
-// 64×64 设计网格：底板 2..62，猫头 r17 居中 (32,36)，耳尖 y≈10.4。
-const SQUIRCLE =
-  'M32 2 C46.375 2 62 10.75 62 32 C62 53.25 46.375 62 32 62 C17.625 62 2 53.25 2 32 C2 10.75 17.625 2 32 2 Z'
-// 墨色要在这里写死成静态属性（渲染层才会翻主题），奶油脸底则由母版自带。
-const INK = '#4a2e1a'
+/** 母版文件名（assets/brand/ 下）。改母版只改这一处引用。 */
+export const MASTER = 'mark.png'
+/** 母版边长。母版是从原始素材裁到琥珀底板本体之后的无损重编码（见 docs/brand/icon.md）。 */
+export const MASTER_SIZE = 953
+/** 底板圆角半径（占边长比）。与母版自带的圆角一致，让派生档的角与母版对得上。 */
+export const PLATE_RADIUS = 0.245
+
 /**
- * 每档的光学补偿：`eye` 是眼睛半径、`mouth` 是嘴的描边宽（0 = 该尺寸下直接删掉，
- * 一条 0.5px 的线只是噪点）、`nose` 是鼻子放大倍数。
+ * 逐档策略表：只有尺寸，没有裁窗。九档取同一枚母版、同一套圆角，导出结果之间不可能
+ * 出现「形状随尺寸变」的分叉（brand-tiers.test.ts 逐档比对母版缩放结果把它钉住）。
+ */
+export const TIERS = [16, 24, 32, 48, 64, 128, 256, 512, 1024]
+
+/**
+ * 主进程按这张表取档位（electron/main.ts 的 ICON_TIER 是它的镜像）。
+ * 托盘只有 16/24 两个物理尺寸，直接喂对应档位，不另做托盘专用资产：
+ * 两档现在来自同一个裁窗，只差缩放，不会在同一个托盘里混出两种轮廓。
+ */
+export const WIRING = {
+  tray: 'icon-16.png',
+  trayHiDpi: 'icon-24.png',
+  window: 'icon-256.png',
+}
+
+/**
+ * 非 icon-NNN.png 的几份派生图：既是 assets/ 下的产物，也拷一份进 renderer/public/
+ * （vite 把 public/ 原样拷进 dist 根目录，主进程以 /app 伺服，渲染层按 /app/<名> 取）。
  *
- * 阈值按栅格化后的实际像素宽度定的：嘴宽 × size/64 ≥ 1px 才留得下（16px 档只有
- * 0.48px，删）；眼睛直径 × size/64 ≥ 1.5px 才看得见（16px 档母版值只有 1.35px，
- * 补到 1.7px）。≥48px 档母版值本身就够用，补偿退回 1:1。
+ * 用哪一档：标签页要小而清楚（32 档），2x 标签页与大图要用 128 档；应用内 <Cat> 与启动屏
+ * 共用 256 档——104px 的欢迎页在 2x 屏上正好 1:1。
  */
-const TIERS = [
-  { size: 16, eye: 3.4, mouth: 0, nose: 1 },
-  { size: 24, eye: 3.1, mouth: 2.7, nose: 1.15 },
-  { size: 32, eye: 2.9, mouth: 2.4, nose: 1 },
-  { size: 48, eye: 2.8, mouth: 2.1, nose: 1 },
-  { size: 64, eye: 2.7, mouth: 1.9, nose: 1 },
-  { size: 128, eye: 2.7, mouth: 1.9, nose: 1 },
-  { size: 256, eye: 2.7, mouth: 1.9, nose: 1 },
-]
-
-/** 母版原样导出的两档超大图（安装包封面、文档插图用）：这两档不补偿。 */
-const PLAIN_SIZES = [512, 1024]
-
-/** favicon 与应用图标同图，只多给一条 shape-rendering（小尺寸边缘更稳）。 */
-const crisp = (svg) => {
-  return svg.replace('<svg ', '<svg shape-rendering="geometricPrecision" ')
+export const DERIVED = {
+  brand: { file: 'cat.png', size: 256 },
+  favicon: { file: 'favicon-32.png', size: 32 },
+  faviconLarge: { file: 'favicon-128.png', size: 128 },
 }
 
-/** 母版里的 class 只服务于应用内主题样式（ink / inkf / face 都是给渲染层 CSS 用的
- * 钩子，静态产物里没有对应的样式表）。逐个改写成静态属性：ink 变成写死的描边色，
- * 其余直接剥掉——漏一个就会把无意义的 class 泄漏进 icon.svg。 */
-const stripClasses = (svg) => {
-  return svg
-    .replaceAll('class="ink" ', `stroke="${INK}" `)
-    .replaceAll('class="inkf" ', '')
-    .replaceAll('class="face" ', '')
-}
+/** renderer/public/ 下的文件名（index.html 与 <Cat> 按这套名字引用）。 */
+export const PUBLIC = Object.fromEntries(
+  Object.entries(DERIVED).map(([key, spec]) => {
+    return [key, spec.file]
+  }),
+)
 
-const SHELL =
-  '<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 64 64" role="img" aria-label="RyAgent">'
-const GRADIENT =
-  '<defs><linearGradient id="ryagent-plate" x1="0%" y1="0%" x2="100%" y2="100%">' +
-  '<stop offset="0%" stop-color="#FBBF24"/><stop offset="100%" stop-color="#D97706"/>' +
-  '</linearGradient></defs>'
-
-const EYE = /(<circle class="inkf" cx="[\d.]+" cy="[\d.]+" r=")[\d.]+(")/g
-const MOUTH = /\n?[ \t]*<path class="ink" [^>]*\/>\n?/
-const MOUTH_STROKE = /style="stroke-width:[\d.]+"/
-const NOSE = /<path class="inkf" d="M[\d.]+ [\d.]+ L[\d.]+ [\d.]+ L[\d.]+ [\d.]+ Z"/
-
-/**
- * 按一档的补偿参数改写母版：只改半径、描边与取舍，不动任何坐标。模式没命中就抛错
- * ——正则悄悄失配等于这一档悄悄退回没补偿，图标看着「差不多」就没人会发现。
- */
-function applyTier(master, tier) {
-  const eyes = master.match(EYE)
-  if (eyes === null || eyes.length !== 2) {
-    throw new Error(`[icon] 母版里应有两颗眼，实际 ${String(eyes?.length ?? 0)}`)
-  }
-  // 用回调而不是 $1 拼接：替换文本形如 `$13.4` 会被当成第 13 个捕获组。
-  let svg = master.replace(EYE, (_match, head, tail) => {
-    return `${head}${tier.eye}${tail}`
-  })
-  if (tier.mouth === 0) {
-    if (!MOUTH.test(svg)) throw new Error('[icon] 母版里没找到嘴，简化规则已失效')
-    svg = svg.replace(MOUTH, '\n')
-  } else {
-    // 判据是「模式有没有命中」而不是「字符串有没有变」：≥64px 档的补偿值与母版
-    // 同值，字符串本就不变，拿变化当命中会把大尺寸档全部误判成规则失效。
-    if (!MOUTH_STROKE.test(svg)) throw new Error('[icon] 母版里没找到嘴的描边，加粗规则已失效')
-    svg = svg.replace(MOUTH_STROKE, `style="stroke-width:${tier.mouth}"`)
-  }
-  if (tier.nose !== 1) {
-    if (!NOSE.test(svg)) throw new Error('[icon] 母版里没找到鼻子，放大规则已失效')
-    svg = svg.replace(NOSE, (node) => {
-      return node.replace(' d=', ` transform="translate(32 41) scale(${tier.nose}) translate(-32 -41)" d=`)
-    })
-  }
-  return svg
+/** 圆角方形的 alpha 遮罩。母版之外的角是抠出来的，这一步保证派生档的角不会多出一圈白边。 */
+function plateMask(size) {
+  const radius = Math.round(size * PLATE_RADIUS)
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}"><rect width="${size}" height="${size}" rx="${radius}" ry="${radius}" fill="#fff"/></svg>`
+  return Buffer.from(svg)
 }
 
 /**
- * 单色版直接从母版派生：把主题钩子换成写死的墨色描边，再补上渲染层那条
- * stroke-linecap；配色（奶油脸底 + 墨色五官）就是母版自带的两种颜色。
- * 早期版本在脚本里手抄了一份头与五官，母版一改就跟着跑偏——这里不许再抄。
+ * 母版必须是本脚本准备好的那一版：边长对上、带 alpha。母版被换成别的图（尺寸不同、
+ * 或没抠角）时逐档导出仍然会「成功」，只是任务栏上多一圈白角——这里让它当场失败。
  */
-const monoFrom = (faceSvg) => {
-  return faceSvg
-    .replaceAll('class="ink" ', `stroke="${INK}" stroke-linecap="round" `)
-    .replaceAll('class="inkf" ', '')
-    .replaceAll('class="face" ', '')
-    .replace('style="stroke-width:', 'stroke-width="')
+async function readMaster() {
+  const meta = await sharp(join(brand, MASTER)).metadata()
+  if (meta.width !== MASTER_SIZE || meta.height !== MASTER_SIZE) {
+    throw new Error(`${MASTER} 应为 ${MASTER_SIZE}×${MASTER_SIZE}，实际 ${meta.width}×${meta.height}`)
+  }
+  if (meta.hasAlpha !== true) throw new Error(`${MASTER} 必须带 alpha 通道（四角已抠圆）`)
 }
 
-/** 彩色母版：琥珀 squircle + 按档补偿过的几何橘猫脸。 */
-const colorSvg = (faceSvg) => {
-  return `${SHELL}${GRADIENT}<path fill="url(#ryagent-plate)" d="${SQUIRCLE}"/>${stripClasses(faceSvg)}</svg>`
+/** 一档位图：母版独立缩放到该尺寸，再扣同一个圆角遮罩。九档走的是同一条路径。 */
+async function render(size) {
+  return await sharp(join(brand, MASTER))
+    .resize(size, size, { fit: 'fill', kernel: 'lanczos3' })
+    .composite([{ input: plateMask(size), blend: 'dest-in' }])
+    .png({ compressionLevel: 9, effort: 10 })
+    .toBuffer()
 }
 
-/** 单色版：只有猫（连底板都不要），深色底上直接可用。 */
-const monoSvg = (faceSvg) => {
-  return `${SHELL}${monoFrom(faceSvg)}</svg>`
+/** 分级契约：档位表、圆角与接线文件名，测试按这一份核对每个产物。 */
+function manifest() {
+  return {
+    master: MASTER,
+    masterSize: MASTER_SIZE,
+    plateRadius: PLATE_RADIUS,
+    ...WIRING,
+    ...PUBLIC,
+    icons: Object.fromEntries(
+      TIERS.map((size) => {
+        return [
+          String(size),
+          {
+            file: `icon-${size}.png`,
+            // 每档都从整幅母版缩放 + 扣圆角，没有裁窗，因此 mask 对九档一视同仁。
+            masked: true,
+          },
+        ]
+      }),
+    ),
+  }
 }
-
-const render = async (svg, size) => {
-  return sharp(Buffer.from(svg)).resize(size, size).png().toBuffer()
-}
-
-/** 取某一档的补偿参数（512/1024 走母版原样，不在表里）。 */
-function tierOf(size) {
-  const tier = TIERS.find((candidate) => {
-    return candidate.size === size
-  })
-  if (tier === undefined) throw new Error(`[icon] ${size} 不在分级表里`)
-  return tier
-}
-
-const faceIdle = readFileSync(join(brand, 'cat-face.svg'), 'utf8').trim()
 
 async function main() {
-  const iconSvg = colorSvg(faceIdle)
-  const mono = monoSvg(faceIdle)
-  const faviconSvg = crisp(iconSvg)
-  // 母版随时会加新的主题钩子，class 一旦漏进静态产物就没人会注意到，直到图标显示错。
-  for (const [name, svg] of [
-    ['icon.svg', iconSvg],
-    ['favicon.svg', faviconSvg],
-    ['icon-mono.svg', mono],
-  ]) {
-    if (svg.includes('class="')) throw new Error(`[icon] ${name} 残留 class 钩子，静态产物不应带 class`)
-    writeFileSync(join(brand, name), `${svg}\n`)
-  }
-  console.log('[icon] brand/icon.svg, brand/favicon.svg, brand/icon-mono.svg')
+  await readMaster()
+  console.log(`[icon] 母版 ${MASTER} ${MASTER_SIZE}×${MASTER_SIZE}`)
 
-  // 分级导出：逐档独立栅格化，不共用 256 档那张位图。
-  const pngs = []
-  for (const tier of TIERS) {
-    const tuned = applyTier(faceIdle, tier)
-    const buffer = await render(colorSvg(tuned), tier.size)
-    writeFileSync(join(assets, `icon-${tier.size}.png`), buffer)
-    writeFileSync(join(assets, `icon-mono-${tier.size}.png`), await render(monoSvg(tuned), tier.size))
-    pngs.push({ size: tier.size, buffer })
+  for (const size of TIERS) {
+    writeFileSync(join(assets, `icon-${size}.png`), await render(size))
   }
-  // 超大档走母版原样，不做任何补偿。
-  for (const size of PLAIN_SIZES) {
-    writeFileSync(join(assets, `icon-${size}.png`), await render(iconSvg, size))
-    writeFileSync(join(assets, `icon-mono-${size}.png`), await render(mono, size))
+  console.log(`[icon] icon-{${TIERS.join(',')}}.png`)
+
+  // Windows 图标：任务栏、标题栏、Alt-Tab、资源管理器用的都是这一个文件。
+  const icoSizes = [16, 24, 32, 48, 64, 256]
+  const frames = []
+  for (const size of icoSizes) {
+    frames.push(await render(size))
   }
-  console.log(`[icon] icon-{${[...TIERS.map((tier) => tier.size), ...PLAIN_SIZES].join(',')}}.png, icon-mono-*.png`)
+  writeFileSync(join(assets, 'icon.ico'), await pngToIco(frames))
+  console.log(`[icon] icon.ico (${icoSizes.join('/')})`)
 
-  writeFileSync(
-    join(assets, 'icon.ico'),
-    await pngToIco(
-      pngs
-        .filter((png) => {
-          return [16, 24, 32, 48, 256].includes(png.size)
-        })
-        .map((png) => {
-          return png.buffer
-        }),
-    ),
-  )
-  console.log('[icon] icon.ico')
-
-  writeFileSync(join(assets, 'favicon-32.png'), await render(crisp(colorSvg(applyTier(faceIdle, tierOf(32)))), 32))
-  for (const size of [128, 512]) {
-    writeFileSync(join(assets, `favicon-${size}.png`), await render(faviconSvg, size))
-  }
-  console.log('[icon] favicon-*.png')
-
-  // 分级契约：主进程按这张表取托盘/窗口档位，测试按这张表核对每个产物与补偿参数。
-  // 全是对象、没有数组：仓库的 biome 会把短数组压成一行，JSON.stringify 展开的
-  // 数组与之对不上，产物就会每次生成都把 biome check 弄红。
-  writeFileSync(
-    join(brand, 'tiers.json'),
-    `${JSON.stringify(
-      {
-        tray: 'icon-16.png',
-        trayHiDpi: 'icon-24.png',
-        window: 'icon-256.png',
-        favicon: 'favicon.svg',
-        faviconPng: 'favicon-32.png',
-        mono: 'icon-mono.svg',
-        tuning: Object.fromEntries(
-          TIERS.map((tier) => {
-            return [String(tier.size), { eye: tier.eye, mouth: tier.mouth, nose: tier.nose }]
-          }),
-        ),
-      },
-      null,
-      2,
-    )}\n`,
-  )
+  writeFileSync(join(brand, 'tiers.json'), `${JSON.stringify(manifest(), null, 2)}\n`)
   console.log('[icon] brand/tiers.json')
 
-  // 网页端标签页要从主进程的 HTTP server 取到：vite 把 public/ 原样拷进 dist 根目录。
+  // 渲染层要能从主进程的 HTTP server 取到这些图（vite 把 public/ 原样拷进 dist 根目录）。
   mkdirSync(publicDir, { recursive: true })
-  for (const [name, from] of [
-    ['favicon.svg', join(brand, 'favicon.svg')],
-    ['favicon-32.png', join(assets, 'favicon-32.png')],
-    ['icon-mono.svg', join(brand, 'icon-mono.svg')],
-  ]) {
-    writeFileSync(join(publicDir, name), readFileSync(from))
+  for (const spec of Object.values(DERIVED)) {
+    writeFileSync(join(assets, spec.file), await render(spec.size))
+    copyFileSync(join(assets, spec.file), join(publicDir, spec.file))
   }
-  console.log('[icon] renderer/public/{favicon.svg,favicon-32.png,icon-mono.svg}')
-
-  // 旧的第三方 Emoji 合成母版与手绘领结猫母版已废弃，清掉避免继续被误用。
-  for (const stale of ['icon-master-fluent.png', 'icon-master.svg']) {
-    rmSync(join(assets, stale), { force: true })
-  }
+  console.log(
+    `[icon] renderer/public/{${Object.values(DERIVED)
+      .map((spec) => spec.file)
+      .join(',')}}`,
+  )
 }
 
-await main()
+// 被测试以模块方式导入时不要顺手把产物重写一遍。
+if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.argv[1]) {
+  await main()
+}

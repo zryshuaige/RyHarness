@@ -1,6 +1,6 @@
 /**
  * 设置路由：应用内 API key 的增删 + 工作区路径。
- * @module @ryagent/server/routes/settings
+ * @module @ryharness/server/routes/settings
  */
 
 import type { ProvidersConfigFile } from '../config.ts'

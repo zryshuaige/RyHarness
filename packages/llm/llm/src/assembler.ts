@@ -3,11 +3,11 @@
  * algorithm used by the agent loop to build an assistant message from a chunk
  * stream while logging the raw chunks for replay fidelity.
  *
- * @module @ryagent/llm/assembler
+ * @module @ryharness/llm/assembler
  */
 
-import { brandString } from '@ryagent/brand'
-import { assertNever } from '@ryagent/util-values'
+import { brandString } from '@ryharness/brand'
+import { assertNever } from '@ryharness/util-values'
 import type { ToolCallId } from './brand.ts'
 import type { AssistantMessage, ModelMessageSource } from './message.ts'
 import { createAssistantMessage } from './message.ts'

@@ -15,7 +15,7 @@ vi.mock('electron', () => {
   return {
     app: {
       getPath: () => {
-        return 'C:/tmp/ryagent'
+        return 'C:/tmp/ryharness'
       },
       getAppPath: () => {
         return 'C:/app'
@@ -99,25 +99,34 @@ describe('后端端口策略', () => {
     expect(probed).toBe(false)
   })
 
-  it('RYAGENT_PORT 覆盖默认值；非法值退回默认固定端口', () => {
-    expect(backendPortFromEnv({ RYAGENT_PORT: '45999' })).toBe(45999)
-    expect(backendPortFromEnv({ RYAGENT_PORT: '0' })).toBe(0)
-    expect(backendPortFromEnv({ RYAGENT_PORT: '' })).toBe(DEFAULT_BACKEND_PORT)
-    expect(backendPortFromEnv({ RYAGENT_PORT: 'abc' })).toBe(DEFAULT_BACKEND_PORT)
-    expect(backendPortFromEnv({ RYAGENT_PORT: '-1' })).toBe(DEFAULT_BACKEND_PORT)
-    expect(backendPortFromEnv({ RYAGENT_PORT: '70000' })).toBe(DEFAULT_BACKEND_PORT)
+  it('RYHARNESS_PORT 覆盖默认值；非法值退回默认固定端口', () => {
+    expect(backendPortFromEnv({ RYHARNESS_PORT: '45999' })).toBe(45999)
+    expect(backendPortFromEnv({ RYHARNESS_PORT: '0' })).toBe(0)
+    expect(backendPortFromEnv({ RYHARNESS_PORT: '' })).toBe(DEFAULT_BACKEND_PORT)
+    expect(backendPortFromEnv({ RYHARNESS_PORT: 'abc' })).toBe(DEFAULT_BACKEND_PORT)
+    expect(backendPortFromEnv({ RYHARNESS_PORT: '-1' })).toBe(DEFAULT_BACKEND_PORT)
+    expect(backendPortFromEnv({ RYHARNESS_PORT: '70000' })).toBe(DEFAULT_BACKEND_PORT)
   })
 
   it('渲染层资源服务占后端 +1：两个固定端口互不抢，各自被占用时各回退随机', async () => {
     expect(DEFAULT_ASSETS_PORT).toBe(DEFAULT_BACKEND_PORT + 1)
+    // 必须注入 probe：不注入就会真的去连 32100/32101，而开发者自己开着这个 App 时
+    // 那两个端口正被占着，用例必红——一个跑在别人机器上的测试不能取决于端口是否空闲。
+    const probed: number[] = []
+    const probe = (port: number) => {
+      probed.push(port)
+      return Promise.resolve(true)
+    }
     const [backend, assets] = await Promise.all([
-      resolveBackendPort({ port: DEFAULT_BACKEND_PORT, host: '127.0.0.1' }),
-      resolveBackendPort({ port: DEFAULT_ASSETS_PORT, host: '127.0.0.1' }),
+      resolveBackendPort({ port: DEFAULT_BACKEND_PORT, host: '127.0.0.1', probe }),
+      resolveBackendPort({ port: DEFAULT_ASSETS_PORT, host: '127.0.0.1', probe }),
     ])
     expect(backend.port).toBe(DEFAULT_BACKEND_PORT)
     expect(assets.port).toBe(DEFAULT_ASSETS_PORT)
     expect(backend.fallback).toBe(false)
     expect(assets.fallback).toBe(false)
+    // 钉住的是「两个调用各自探测一次自己的端口」这条结构不变量，不是具体端口字面量。
+    expect(probed).toEqual([DEFAULT_BACKEND_PORT, DEFAULT_ASSETS_PORT])
   })
 })
 
@@ -198,7 +207,7 @@ describe('启动计时', () => {
   })
 
   it('写入 userData 下的 boot-trace.log（覆盖上次，一次启动一行 JSON）', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ryagent-boot-'))
+    const dir = mkdtempSync(join(tmpdir(), 'ryharness-boot-'))
     const clock = fakeClock()
     const trace = new BootTrace(clock.now, clock.now())
     clock.advance(80)

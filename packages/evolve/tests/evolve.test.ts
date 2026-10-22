@@ -1,13 +1,13 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { EvolveLlm, PlaybookSection, TurnTrajectory } from '@ryagent/evolve'
-import { AUTO_DEPRECATE_HARMFUL, EvolveService, NEGATIVE_FEEDBACK_RE, seedIfEmpty } from '@ryagent/evolve'
+import type { EvolveLlm, PlaybookSection, TurnTrajectory } from '@ryharness/evolve'
+import { AUTO_DEPRECATE_HARMFUL, EvolveService, NEGATIVE_FEEDBACK_RE, seedIfEmpty } from '@ryharness/evolve'
 import { afterEach, describe, expect, it } from 'vitest'
 
 const dirs: string[] = []
 function service(llm?: EvolveLlm): EvolveService {
-  const dir = mkdtempSync(join(tmpdir(), 'ryagent-evolve-'))
+  const dir = mkdtempSync(join(tmpdir(), 'ryharness-evolve-'))
   dirs.push(dir)
   return new EvolveService({ dbPath: join(dir, 'e.db'), llm, logger: () => {} })
 }
@@ -38,7 +38,7 @@ const turn = (
 
 /** 脚本化 Curator/Reflector。 */
 function mockLlm(
-  overrides: { deltas?: import('@ryagent/evolve').PlaybookDelta[]; reflectLesson?: string } = {},
+  overrides: { deltas?: import('@ryharness/evolve').PlaybookDelta[]; reflectLesson?: string } = {},
 ): EvolveLlm {
   return {
     async proposeDeltas() {

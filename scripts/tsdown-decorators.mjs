@@ -14,7 +14,7 @@ const decoratorSyntax = /^\s*@[A-Za-z_$][\w$]*/m
 
 export function standardDecorators() {
   return {
-    name: 'ryagent-standard-decorators',
+    name: 'ryharness-standard-decorators',
     transform(code, id) {
       const file = String(id).split('?', 1)[0]
       if (!/\.[cm]?tsx?$/.test(file) || !decoratorSyntax.test(code)) return null

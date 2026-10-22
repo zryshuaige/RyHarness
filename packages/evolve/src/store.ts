@@ -1,6 +1,6 @@
 /**
  * 进化存储层：playbook 条目、反思、反馈事件。
- * @module @ryagent/evolve/store
+ * @module @ryharness/evolve/store
  */
 
 import { randomUUID } from 'node:crypto'
@@ -347,19 +347,20 @@ export class EvolveStore {
 
   // ---- feedback ----
 
-  /** 记一条反馈，返回事件 id（溯源要用）。 */
+  /** 记一条反馈，返回事件 id（溯源要用）。messageId 供 /api/feedback 按 (message_id, signal) 去重。 */
   recordFeedback(input: {
     agentId: string
     conversationId: string
     turnIndex: number
     signal: 'thumb_up' | 'thumb_down'
+    messageId?: string
   }): string {
     const id = randomUUID()
     this.db
       .prepare(
-        'INSERT INTO feedback_events (id, agent_id, conversation_id, turn_index, signal, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+        'INSERT INTO feedback_events (id, agent_id, conversation_id, turn_index, signal, message_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
       )
-      .run(id, input.agentId, input.conversationId, input.turnIndex, input.signal, Date.now())
+      .run(id, input.agentId, input.conversationId, input.turnIndex, input.signal, input.messageId ?? null, Date.now())
     return id
   }
 

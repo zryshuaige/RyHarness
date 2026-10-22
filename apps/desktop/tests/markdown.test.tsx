@@ -1,8 +1,15 @@
 // @vitest-environment jsdom
-
+/**
+ * Markdown 渲染与流式词法缓存。
+ *
+ * 分槽那条是群聊专属的回归网：调度器并发跑多条 lane，两条消息交替 flush 时，
+ * 「已稳定前缀」放在模块级单槽里会每帧互踩、增量退化成整篇 lex（群聊里 16× 的
+ * 优化等于零）。这里钉的是命中计数这条硬指标，与机器快慢无关。
+ */
+import { lexer } from 'marked'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { Markdown, safeHref } from '../renderer/src/components/Markdown.tsx'
+import { Markdown, prefixCacheStats, safeHref, streamingTokens } from '../renderer/src/components/Markdown.tsx'
 import { MessageBubble } from '../renderer/src/components/MessageBubble.tsx'
 import type { UiMessage } from '../renderer/src/store.ts'
 
@@ -120,6 +127,73 @@ describe('Markdown 渲染', () => {
     expect(safeHref('data:text/html,<script>alert(1)</script>')).toBeUndefined()
     expect(safeHref('vbscript:x')).toBeUndefined()
     expect(safeHref(undefined)).toBeUndefined()
+  })
+})
+
+describe('流式前缀缓存按消息分槽', () => {
+  /** 一段有多个空行块边界的正文：只有跨过空行才有「已稳定前缀」可缓存。 */
+  const paragraph = '这是一段用来撑出稳定前缀的正文，长度足够长到词法分析真的花时间。'
+  const doc = (paragraphs: number): string => {
+    return Array.from({ length: paragraphs }, () => paragraph).join('\n\n')
+  }
+  /** 逐段追加的帧：切点落在段落边界上，前缀每帧都在增长（模型吐 token 的真实形状）。 */
+  const framesOf = (paragraphs: number): string[] => {
+    const frames: string[] = []
+    for (let index = 0; index < paragraphs; index++) frames.push(doc(index + 1))
+    return frames
+  }
+
+  it('两条消息交替 flush：结果与整篇 lex 逐帧一致', () => {
+    const frames = framesOf(60)
+    for (let index = 0; index < frames.length; index++) {
+      const text = frames[index] as string
+      const cached = streamingTokens(text, `msg-${index % 2}`)
+      expect(cached.map((token) => token.type)).toEqual(lexer(text).map((token) => token.type))
+    }
+  })
+
+  it('两条消息交替 flush：前缀缓存仍然命中（单槽实现下这里全是 miss）', () => {
+    const frames = framesOf(60)
+    const before = prefixCacheStats()
+    for (let index = 0; index < frames.length; index++) {
+      streamingTokens(frames[index] as string, `slot-${index % 2}`)
+    }
+    const after = prefixCacheStats()
+    const hits = after.hits - before.hits
+    const misses = after.misses - before.misses
+    // 每条 lane 只在「前缀还没成立」的那一帧整段重 lex；退回单槽就是每帧一次 miss。
+    expect(misses).toBeLessThanOrEqual(4)
+    expect(hits).toBeGreaterThan(frames.length * 0.9)
+  })
+
+  it('槽位有上界：长会话滚过很多条消息也不会把内存带跑', () => {
+    for (let index = 0; index < 200; index++) streamingTokens(doc(4), `msg-${index}`)
+    expect(prefixCacheStats().slots).toBeLessThanOrEqual(8)
+  })
+
+  it('气泡把消息 key 当分槽键传下去（不传，两条消息就共用一个槽）', () => {
+    const text = doc(6)
+    const bubble = (key: string): string => {
+      return renderToStaticMarkup(
+        <MessageBubble
+          message={{
+            key,
+            senderType: 'agent',
+            senderId: 'ryen',
+            senderName: 'Ryen',
+            turnIndex: 7,
+            done: false,
+            parts: [{ kind: 'text', text }],
+          }}
+          fileUrl={fileUrl}
+        />,
+      )
+    }
+    const before = prefixCacheStats()
+    // 同一段正文、两个不同的消息 key：分槽生效时各占一槽，两次都是该槽的首次整段 lex。
+    bubble('stream:ryen:71')
+    bubble('stream:ryen:72')
+    expect(prefixCacheStats().misses - before.misses).toBe(2)
   })
 })
 

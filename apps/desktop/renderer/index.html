@@ -3,49 +3,70 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <!-- CSP：script/style 的 unsafe-inline 是必须的——scripts/inline-dist.mjs 把打包后的 JS/CSS
-         内联进单个 index.html（file:// 单文件产物），无法改用外部文件或 nonce；网络面已收紧：
-         connect-src 只放行本机回环 http/ws（内嵌 server 随机端口），img-src 仅 self+data:。 -->
+    <!-- CSP：script-src 只放行 'self'——页面里不再内联任何脚本。
+         此前这里写着「unsafe-inline 是必须的」，理由是 scripts/inline-dist.mjs 把打包后的
+         JS/CSS 内联进单个 index.html（file:// 单文件产物）；那个脚本早就不存在了，
+         现在的产物是回环 HTTP 伺服 + 保留分片（见 electron/renderer-assets.ts 的文件头
+         注释），产物天生就是外部文件，没有理由再留着 unsafe-inline。
+         主题引导那段脚本已挪到 public/theme-boot.js（<script src>，经典脚本、不带 defer，
+         放在 <head> 里同步执行，赶在 React 挂载与 splash 淡出之前把 data-theme 定下来，
+         否则会先闪一次浅色）。
+
+         style-src 的 'unsafe-inline' 必须保留：React 组件全程用内联 style 属性
+         （style={...}），去掉它等于把整个界面样式打死——这不是可以顺手收紧的口子。
+         启动 splash 的样式也还是内联的（它同样不在这条 directive 的射程之外）。
+
+         网络面已收紧：connect-src 只放行本机回环 http/ws（内嵌 server 随机端口）。
+         img-src / frame-src / object-src 必须显式放行**回环 API 源**与 blob:：
+         页面由资源服务伺服（32101），而产物字节在 API 服务（32100）上——端口不同即不同源，
+         只写 'self' 会把产物图片、HTML 预览（blob: iframe）与 PDF 内嵌（object）全部拦掉，
+         用户看到的是一块空白且没有任何报错。回环只监听 127.0.0.1，且与 connect-src
+         放行的是同一组地址，因此不放行任何 https: 或通配 *。
+
+         frame-ancestors 不写在这里：meta 形式的 CSP 不支持这条 directive（浏览器会
+         直接忽略），防嵌套只能靠响应头——资源服务对所有响应统一发 X-Frame-Options: DENY
+         与 Content-Security-Policy: frame-ancestors 'none'（见 electron/renderer-assets.ts）。 -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src http://127.0.0.1:* ws://127.0.0.1:*; img-src 'self' data:"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src http://127.0.0.1:* ws://127.0.0.1:*; img-src 'self' data: blob: http://127.0.0.1:*; frame-src 'self' blob:; object-src 'self' http://127.0.0.1:*"
     />
-    <title>RyAgent</title>
-    <!-- 网页端标签页图标：与 assets/brand 母版同源，gen:icon 导出到 public/（vite 原样拷进
-         dist 根目录）。彩色档自带琥珀底板，深浅底都压得住；mono 档是单色猫，只给深色标签栏，
-         浅色标签栏上会看不见，因此挂在那条 media 上。路径前缀与 electron/renderer-assets.ts 的
-         RENDERER_MOUNT 一致（tests/brand-tiers.test.ts 钉住这条契约）。 -->
+    <title>RyHarness</title>
+    <!-- 网页端标签页图标：与 assets/brand/mark.png 母版同源，gen:icon 导出到 public/
+         （vite 原样拷进 dist 根目录，主进程以 RENDERER_MOUNT 伺服）。两档都是位图：32 档
+         是脸部特写（标签页只有这么大，眼睛就是全部识别度），128 档给 2x 屏。母版是位图、
+         产不出真矢量，因此这里没有 .svg favicon——留一个「内嵌位图的假矢量」不如直接给
+         浏览器 PNG。路径前缀与 electron/renderer-assets.ts 的 RENDERER_MOUNT 一致
+         （tests/brand-tiers.test.ts 钉住这条契约）。 -->
     <link rel="icon" type="image/png" sizes="32x32" href="/app/favicon-32.png" />
-    <link rel="icon" type="image/svg+xml" href="/app/favicon.svg" />
-    <link rel="icon" type="image/svg+xml" href="/app/icon-mono.svg" media="(prefers-color-scheme: dark)" />
+    <link rel="icon" type="image/png" sizes="128x128" href="/app/favicon-128.png" />
+    <!-- 启动 splash 的样式：留在内联 <style> 里。
+         它不能跟「主题引导脚本」一起搬出去的理由是：搬了也换不来什么——
+         style-src 的 'unsafe-inline' 因为 React 全程用内联 style 属性而必须保留，
+         搬走这段 CSS 收不掉任何一条 directive；而它每次都要在第一帧之前生效，
+         内联比多一个 HTTP 往返更稳（回环虽快，也没快到值得多一次往返）。
+         真要收 style-src，得先让 React 不再吐内联 style，那是另一件事。 -->
     <style>
       /* 启动 splash：logo 渐入，React 挂载后 500ms 内淡出移除（不拖慢感知启动）。
          底色跟主题走：系统是暗色却先铺一片 #FAF7F2，那一下奶油色闪屏本身就是一次
          白到黑的刺眼跳变，比多花 100ms 难受得多。取色用局部 token —— styles.css
-         这会儿还没加载，抄一份全套主题变量只会多出第二真源。 */
+         这会儿还没加载，抄一份全套主题变量只会多出第二真源。
+         徽标本身是位图，深浅两套底色都不用为它改任何东西：琥珀底板自带一圈实色描边，
+         浅色底上是暖色块、暗色底上是发光的琥珀贴纸，两边都立得住。 */
       :root {
         --splash-bg: #FAF7F2;
         --splash-ink: #B45309;
-        /* 猫脸底色 / 五官墨色：与应用内 assets/brand/cat.css + styles.css 的 --cat-ink
-           同一套口径（暗色下脸底翻深、墨色翻浅，浅墨压在奶油底上只有 1.23:1）。 */
-        --splash-cat-face: #FFFDF8;
-        --splash-cat-ink: #4A2E1A;
       }
-      /* 紧随其后的内联脚本在 body 之前就定了 data-theme；系统暗色这条媒体查询兜的
+      /* 紧随其后的引导脚本在 body 之前就定了 data-theme；系统暗色这条媒体查询兜的
          是「脚本还没跑 / 跑失败」的窗口期。 */
       @media (prefers-color-scheme: dark) {
         :root:not([data-theme='light']) {
           --splash-bg: #14110E;
           --splash-ink: #FCD34D;
-          --splash-cat-face: #241B12;
-          --splash-cat-ink: #F0E4D2;
         }
       }
       :root[data-theme='dark'] {
         --splash-bg: #14110E;
         --splash-ink: #FCD34D;
-        --splash-cat-face: #241B12;
-        --splash-cat-ink: #F0E4D2;
       }
       #splash {
         position: fixed; inset: 0; z-index: 99;
@@ -54,53 +75,28 @@
         transition: opacity 320ms ease;
       }
       #splash.hide { opacity: 0; pointer-events: none; }
+      /* 徽标与下面 <Cat> 用的是同一张 gen:icon 导出的 256 档（/app/cat.png）：启动屏、
+         应用图标、任务栏、托盘、favicon 全都是这一只猫，全应用没有第二份造型。2x 屏上
+         96px 正好 1:1，不会发虚。 */
       #splash .splash-mark { width: 96px; height: 96px; animation: splash-in 420ms ease-out; }
-      /* 母版里的颜色钩子在这里生效：这只猫与应用内那只逐元素同源，只换颜色。
-         描边宽度与 fill:none 由母版自带的 style/fill 给出，这里只补应用内那条
-         stroke-linecap: round（母版的嘴没有它，gen-icon 导出时手工补上）。 */
-      #splash .face { fill: var(--splash-cat-face); }
-      #splash .inkf { fill: var(--splash-cat-ink); }
-      #splash .ink { stroke: var(--splash-cat-ink); stroke-linecap: round; }
       #splash p { margin: 0; color: var(--splash-ink); font: 600 15px/1.4 "PingFang SC", "Microsoft YaHei", sans-serif; letter-spacing: 2px; }
       @keyframes splash-in { from { opacity: 0; transform: scale(.86); } to { opacity: 1; transform: scale(1); } }
     </style>
-    <script>
-      /* 主题在第一帧之前落定：React 挂载前的那一瞬不再闪一次浅色。
-         存储键与取值口径必须与 renderer/src/App.tsx 的 loadTheme 一致。 */
-      (function () {
-        var t = null
-        try {
-          t = localStorage.getItem('ryagent-theme')
-        } catch (e) {
-          t = null
-        }
-        var dark = window.matchMedia('(prefers-color-scheme: dark)').matches
-        document.documentElement.dataset.theme =
-          t === 'dark' || t === 'light' ? t : dark ? 'dark' : 'light'
-      })()
-    </script>
+    <!-- 主题在第一帧之前落定：React 挂载前的那一瞬不再闪一次浅色。
+         必须是经典脚本且不带 defer/async：module 与 defer 都要等文档解析完才执行，
+         那时第一帧可能已经画出来了，浅色闪屏就又回来了。放在 <head> 里同步执行，
+         赶在 React 挂载与 splash 淡出之前把 data-theme 定下来。
+         存储键与取值口径必须与 renderer/src/App.tsx 的 loadTheme 一致。 -->
+    <script src="/app/theme-boot.js"></script>
   </head>
   <body>
     <div id="splash" aria-hidden="true">
-      <!-- 启动屏这只猫就是 apps/desktop/assets/brand/cat-face.svg 的母版本身（下面
-           <g id="ryen-cat-idle"> 一段与母版逐字符相同，tests/brand.test.tsx 比对，
-           改母版必须同步这段）。它与应用内 <Cat>、应用图标、任务栏、托盘是同一只猫：
-           此处此前内联过一版手写猫——1024 网格另起炉灶、带着领结、墨色也不同，
-           等于全应用第二只猫。底板与颜色由上面局部 token 给，形状一律不动。 -->
-      <svg class="splash-mark" viewBox="0 0 64 64" fill="none"><defs><linearGradient id="sp-plate" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#FBBF24"/><stop offset="100%" stop-color="#D97706"/></linearGradient></defs><path fill="url(#sp-plate)" d="M32 2 C46.375 2 62 10.75 62 32 C62 53.25 46.375 62 32 62 C17.625 62 2 53.25 2 32 C2 10.75 17.625 2 32 2 Z"/>
-        <g id="ryen-cat-idle">
-          <g transform="translate(32 34) scale(1.05) translate(-32 -34)">
-            <circle cx="32" cy="36" r="17" class="face" fill="#FFFDF8"/>
-            <path d="M21.5 22.6 L19.6 10.4 L29.1 19.3 Z" class="face" fill="#FFFDF8"/>
-            <path d="M42.5 22.6 L44.4 10.4 L34.9 19.3 Z" class="face" fill="#FFFDF8"/>
-            <circle class="inkf" cx="26.4" cy="34.8" r="2.7" fill="#4a2e1a"/>
-            <circle class="inkf" cx="37.6" cy="34.8" r="2.7" fill="#4a2e1a"/>
-            <path class="inkf" d="M29.8 39.4 L32 42.6 L34.2 39.4 Z" fill="#4a2e1a"/>
-            <path class="ink" d="M27.5 44.2 q2.25 3.9 4.5 0 q2.25 3.9 4.5 0" fill="none" style="stroke-width:1.9"/>
-          </g>
-        </g>
-      </svg>
-      <p>RyAgent</p>
+      <!-- 这只橘猫与应用图标、任务栏、托盘、favicon、应用内 <Cat> 是同一张图：
+           gen:icon 从 assets/brand/mark.png 导出的 256 档，由 vite 原样拷进 dist 根目录，
+           主进程以 /app 伺服（tests/brand.test.tsx 比对这条同源关系）。此前这里内联过一整段
+           手绘猫 SVG——1024 网格另起炉灶、几何与应用内那只不同，等于全应用第二只猫。 -->
+      <img class="splash-mark" src="/app/cat.png" alt="" width="96" height="96" />
+      <p>RyHarness</p>
     </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>

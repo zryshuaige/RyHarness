@@ -6,13 +6,13 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { EvolveLlm, EvolveServiceOptions } from '@ryagent/evolve'
-import { EvolveService } from '@ryagent/evolve'
+import type { EvolveLlm, EvolveServiceOptions } from '@ryharness/evolve'
+import { EvolveService } from '@ryharness/evolve'
 import { afterEach, describe, expect, it } from 'vitest'
 
 const dirs: string[] = []
 function service(llm?: EvolveLlm, limits?: EvolveServiceOptions['limits']): EvolveService {
-  const dir = mkdtempSync(join(tmpdir(), 'ryagent-pipeline-'))
+  const dir = mkdtempSync(join(tmpdir(), 'ryharness-pipeline-'))
   dirs.push(dir)
   return new EvolveService({
     dbPath: join(dir, 'e.db'),
@@ -137,7 +137,7 @@ describe('管线超时与失败隔离', () => {
 describe('进化耗时埋点', () => {
   it('turn / feedback 都记录耗时与处理条目数（供服务端聚合）', async () => {
     const rounds: { kind: string; processed: number; durationMs: number }[] = []
-    const dir = mkdtempSync(join(tmpdir(), 'ryagent-metrics-'))
+    const dir = mkdtempSync(join(tmpdir(), 'ryharness-metrics-'))
     dirs.push(dir)
     const llm: EvolveLlm = {
       async proposeDeltas() {

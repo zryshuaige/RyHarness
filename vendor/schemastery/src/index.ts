@@ -1,5 +1,5 @@
-import { Binary, clone, deepEqual, filterKeys, isNullable, isPlainObject, pick, valueMap, type Dict } from '@ryagent/cosmokit'
-import { createVolatile, isVolatile, type Volatile } from '@ryagent/cosmokit'
+import { Binary, clone, deepEqual, filterKeys, isNullable, isPlainObject, pick, valueMap, type Dict } from '@ryharness/cosmokit'
+import { createVolatile, isVolatile, type Volatile } from '@ryharness/cosmokit'
 import type { StandardSchemaV1 } from '@standard-schema/spec'
 
 const kSchema = Symbol.for('schemastery')

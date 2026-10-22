@@ -1,13 +1,13 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { CandidateFact, EmbeddingProvider, MemoryLlm, MemoryOperation } from '@ryagent/memory'
-import { HashEmbeddings, MemoryService, NullEmbeddings, SHARED_SPACE } from '@ryagent/memory'
+import type { CandidateFact, EmbeddingProvider, MemoryLlm, MemoryOperation } from '@ryharness/memory'
+import { HashEmbeddings, MemoryService, NullEmbeddings, SHARED_SPACE } from '@ryharness/memory'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const dirs: string[] = []
 function dbPath(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'ryagent-memory-svc-'))
+  const dir = mkdtempSync(join(tmpdir(), 'ryharness-memory-svc-'))
   dirs.push(dir)
   return join(dir, 'm.db')
 }
@@ -245,7 +245,7 @@ describe('抽取管线：四操作', () => {
 
 describe('检索管线：混合召回', () => {
   it('RRF 融合：语义命中的排前，纯 FTS 时 BM25 命中的排前（降级路径）', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ryagent-memory-rrf-'))
+    const dir = mkdtempSync(join(tmpdir(), 'ryharness-memory-rrf-'))
     dirs.push(dir)
     const path = join(dir, 'm.db')
     // 构造：query=[1,0,0,0]

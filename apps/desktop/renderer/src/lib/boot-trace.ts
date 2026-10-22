@@ -1,7 +1,7 @@
 /**
  * 渲染层启动计时：模块执行 → DOM 就绪 → 首帧 → 首屏可用。
  *
- * 阶段挂在 `window.__RYAGENT_BOOT__` 上，主进程在 did-finish-load 之后用
+ * 阶段挂在 `window.__RYHARNESS_BOOT__` 上，主进程在 did-finish-load 之后用
  * executeJavaScript 读走、并入自己的时间轴（见 electron/main.ts 的 collectRendererBootPhases）。
  * 整条链路不经 preload、不依赖遥测服务，因此单测、离线开发、CI 里都只是往一个普通
  * 对象里写几行数字。
@@ -16,7 +16,7 @@ export interface RendererBootPhase {
 }
 
 /** 主进程读取的全局键。 */
-const BOOT_GLOBAL = '__RYAGENT_BOOT__'
+const BOOT_GLOBAL = '__RYHARNESS_BOOT__'
 
 const phases: RendererBootPhase[] = []
 const seen = new Set<string>()

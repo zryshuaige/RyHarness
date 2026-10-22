@@ -1,5 +1,5 @@
 /**
- * RyAgent 自我进化（ACE 式 playbook + Reflexion 反思 + 反馈闭环 + 巩固调度）。
+ * RyHarness 自我进化（ACE 式 playbook + Reflexion 反思 + 反馈闭环 + 巩固调度）。
  *
  * 闭环图（详见包 README）：
  * 每轮对话后（异步） → Reflector 归因计数（注入条目 helpful/harmful，
@@ -9,7 +9,7 @@
  * 组装 prompt 前 compile() 注入 [经验手册] + [上次教训]；
  * 👎 即时反思 + 归因 harmful；👍 归因 helpful；runOnce() 巩固（到期清理/
  * 重复记忆合并/dormant 统计）。
- * @module @ryagent/evolve
+ * @module @ryharness/evolve
  */
 
 export type { CuratorEntryView, EvolveLlm, PlaybookDelta, TurnTrajectory } from './llm.ts'
@@ -23,13 +23,23 @@ export { SEED_PLAYBOOKS, seedIfEmpty } from './seeds.ts'
 export type {
   AgentEvolutionHooks,
   CompiledEvolution,
-  ConsolidationResult,
   EntryExplanation,
   EvolutionTurn,
   EvolveLimits,
   EvolveServiceOptions,
-  MemorySweep,
 } from './service.ts'
 export { DEFAULT_EVOLVE_LIMITS, EvolveService } from './service.ts'
 export type { EntryOrigin, EntryOriginInput, PlaybookEntry, ReflectionRow } from './store.ts'
 export { EvolveStore, NEAR_DUPLICATE_THRESHOLD, REFLECTION_RELEVANCE_THRESHOLD } from './store.ts'
+export type {
+  ArchiveStage,
+  ConsolidationResult,
+  MemorySweep,
+  SweepHost,
+  SweepLimits,
+  SweepPhase,
+  SweepRoundRecord,
+  SweepRow,
+  SweepState,
+} from './sweeper.ts'
+export { Sweeper } from './sweeper.ts'

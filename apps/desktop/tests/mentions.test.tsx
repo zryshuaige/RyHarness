@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { filterMentions, mentionQueryAt } from '../renderer/src/store.ts'
+import { filterMentions, mentionQueryAt } from '../renderer/src/lib/mentions.ts'
 
 describe('mentionQueryAt', () => {
   it('光标在 @词 中间时返回查询与起点', () => {

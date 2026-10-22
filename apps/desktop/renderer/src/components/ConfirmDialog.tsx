@@ -9,6 +9,7 @@
  * 关掉的弹窗猜发生了什么。
  */
 import { useState } from 'react'
+import { humanError } from '../lib/error-text.ts'
 import { toast } from '../lib/toast.ts'
 import { Modal } from './Modal.tsx'
 
@@ -42,7 +43,9 @@ export function ConfirmDialog({
             setBusy(true)
             onConfirm()
               .catch((error: unknown) => {
-                toast.error(error instanceof Error ? error.message : String(error))
+                // 弹窗自己不知道这次确认在做什么（关插件 / 删会话 / 删助理），
+                // 所以给一句中性兜底，而不是把英文原话甩到 toast 上。
+                toast.error(humanError(error, '这一步没能完成，再试一次'))
               })
               .finally(() => {
                 setBusy(false)

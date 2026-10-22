@@ -7,19 +7,19 @@
  *   那次调用的用量。
  * - 删除 agent：级联清理记忆与经验手册，并在回执里报告条数。
  * - 巩固判重只在同一个 embedding 模型内比对，跨模型同维向量不会被误删。
- * @module @ryagent/server/tests/turn-lifecycle
+ * @module @ryharness/server/tests/turn-lifecycle
  */
 
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { Context } from '@ryagent/cordis'
-import { EvolveService } from '@ryagent/evolve'
-import type { GenerateOptions, StreamChunk } from '@ryagent/llm'
-import { LlmAdapter } from '@ryagent/llm'
-import { HashEmbeddings, MemoryService } from '@ryagent/memory'
-import type { WsEvent } from '@ryagent/server'
-import { RyAgentServer } from '@ryagent/server'
+import type { Context } from '@ryharness/cordis'
+import { EvolveService } from '@ryharness/evolve'
+import type { GenerateOptions, StreamChunk } from '@ryharness/llm'
+import { LlmAdapter } from '@ryharness/llm'
+import { HashEmbeddings, MemoryService } from '@ryharness/memory'
+import type { WsEvent } from '@ryharness/server'
+import { RyHarnessServer } from '@ryharness/server'
 import { afterEach, describe, expect, it } from 'vitest'
 import WebSocket from 'ws'
 
@@ -115,12 +115,12 @@ async function startServer(
   adapter: LlmAdapter,
   services?: (dataDir: string) => { memory?: MemoryService; evolution?: EvolveService },
 ) {
-  const dataDir = mkdtempSync(join(tmpdir(), 'ryagent-turn-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'ryharness-turn-'))
   tmpDirs.push(dataDir)
-  const server = await RyAgentServer.create({
+  const server = await RyHarnessServer.create({
     port: 0,
     dataDir,
-    // 记忆/进化与服务端共用同一个 ryagent.db：级联删除正是跨这两个子系统做的。
+    // 记忆/进化与服务端共用同一个 ryharness.db：级联删除正是跨这两个子系统做的。
     ...(services === undefined ? {} : services(dataDir)),
     mountLlm: (ctx: Context) => {
       ctx.llm.registerAdapter(['mock'], adapter)
@@ -200,7 +200,7 @@ async function newDirectConversation(base: string): Promise<string> {
   return (created.conversation as { id: string }).id
 }
 
-describe('RyAgentServer 一轮对话契约', () => {
+describe('RyHarnessServer 一轮对话契约', () => {
   it('取消：半截回复已落库、消息正常收尾、再以 ABORTED 结束', async () => {
     const adapter = new GatedAdapter()
     const { server, base } = await startServer(adapter)
@@ -263,11 +263,59 @@ describe('RyAgentServer 一轮对话契约', () => {
     }
   })
 
+  it('turnIndex：message-start 与 message-done 必须是同一个值（渲染层靠它收口气泡）', async () => {
+    /**
+     * 这条契约钉的是一次真实事故：message-start 发 nextTurnIndex-1、message-done
+     * 在自己的时刻重算一遍——空会话里前者算出 -1、后者算出 0，两端对不上，渲染层
+     * 查不到那条流式气泡，于是光标不灭、停止按钮长亮，整轮永远停在"生成中"
+     * （真实供应商 DeepSeek-V3 下实测复现，只有真机真模型才看得见）。
+     *
+     * 两轮都要查：第一轮验空会话的 -1 陷阱，第二轮验"同一个 turn 内序号单调增长"
+     * 这条曾经的漂移源。
+     */
+    const { server, base } = await startServer(new UsageAdapter('答完了', USAGE))
+    try {
+      const conversationId = await newDirectConversation(base)
+      for (const round of [1, 2]) {
+        const collector = collectWs(base, conversationId, (events) => {
+          return events.some((event) => {
+            return event.type === 'message-done'
+          })
+        })
+        await collector.ready
+        await postJson(base, `/api/conversations/${conversationId}/messages`, { text: `第${round}轮` })
+        const events = await collector.done
+        const start = events.find((event) => {
+          return event.type === 'message-start'
+        })
+        const done = events.find((event) => {
+          return event.type === 'message-done'
+        })
+        expect(start, `第${round}轮没有 message-start`).toBeDefined()
+        expect(done, `第${round}轮没有 message-done`).toBeDefined()
+        const startIndex = (start as { turnIndex: number }).turnIndex
+        const doneIndex = (done as { turnIndex: number }).turnIndex
+        expect(startIndex, `第${round}轮 start/done 序号对不上`).toBe(doneIndex)
+        // 序号还必须等于落库那一轮的 turn_index（渲染层靠它把气泡排回时间线）。
+        const rows = (await getJson(base, `/api/conversations/${conversationId}/messages`)).messages as {
+          senderType: string
+          turnIndex: number
+        }[]
+        const agentRow = rows.filter((row) => {
+          return row.senderType === 'agent'
+        })[round - 1]
+        expect(agentRow?.turnIndex, `第${round}轮事件序号与落库序号不一致`).toBe(startIndex)
+      }
+    } finally {
+      await server.close()
+    }
+  }, 20_000)
+
   it('DELETE /api/agents/:id 级联清掉记忆与手册，并在回执里报告条数', async () => {
     let memory: MemoryService | undefined
     let evolution: EvolveService | undefined
     const { server, base } = await startServer(new UsageAdapter('你好', USAGE), (dataDir) => {
-      const dbPath = join(dataDir, 'ryagent.db')
+      const dbPath = join(dataDir, 'ryharness.db')
       memory = new MemoryService({ dbPath, embeddings: new HashEmbeddings(), logger: () => {} })
       evolution = new EvolveService({ dbPath, logger: () => {} })
       return { memory, evolution }
@@ -305,11 +353,11 @@ describe('RyAgentServer 一轮对话契约', () => {
     let memory: MemoryService | undefined
     const { server, base } = await startServer(new UsageAdapter('你好', USAGE), (dataDir) => {
       memory = new MemoryService({
-        dbPath: join(dataDir, 'ryagent.db'),
+        dbPath: join(dataDir, 'ryharness.db'),
         embeddings: new HashEmbeddings(),
         logger: () => {},
       })
-      return { memory, evolution: new EvolveService({ dbPath: join(dataDir, 'ryagent.db'), logger: () => {} }) }
+      return { memory, evolution: new EvolveService({ dbPath: join(dataDir, 'ryharness.db'), logger: () => {} }) }
     })
     const memoryService = memory as MemoryService
     try {

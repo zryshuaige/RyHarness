@@ -3,14 +3,14 @@
  * diagnostics.
  *
  * The `Branded<B>` primitive and stateless constructor live in
- * `@ryagent/brand` so every owner of a cross-boundary id can brand it
+ * `@ryharness/brand` so every owner of a cross-boundary id can brand it
  * without depending on dsh-llm; see that package's README for the
  * nominal-typing policy.
  *
- * @module @ryagent/llm/brand
+ * @module @ryharness/llm/brand
  */
 
-import { type Branded, brandString } from '@ryagent/brand'
+import { type Branded, brandString } from '@ryharness/brand'
 
 /** Stable identity carried by one message across inbox, log, and model-request boundaries. */
 export type MessageId = Branded<'MessageId'>

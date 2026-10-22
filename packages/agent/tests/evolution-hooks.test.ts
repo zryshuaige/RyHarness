@@ -1,6 +1,6 @@
-import type { AgentDefinition, AgentEvolutionHooks, EvolutionTurnData } from '@ryagent/agent'
-import { AgentLoop } from '@ryagent/agent'
-import type { LlmRuntime, StreamChunk } from '@ryagent/llm'
+import type { AgentDefinition, AgentEvolutionHooks, EvolutionTurnData } from '@ryharness/agent'
+import { AgentLoop } from '@ryharness/agent'
+import type { LlmRuntime, StreamChunk } from '@ryharness/llm'
 import { describe, expect, it } from 'vitest'
 
 const DEFINITION: AgentDefinition = {

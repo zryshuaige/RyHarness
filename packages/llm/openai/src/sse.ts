@@ -3,10 +3,10 @@
  * `data:` payload strings out (`[DONE]` is consumed here, never yielded).
  * Built on `eventsource-parser`; every decoded chunk counts as wire activity
  * for the idle watchdog.
- * @module @ryagent/llm-openai/sse
+ * @module @ryharness/llm-openai/sse
  */
 
-import { LlmError } from '@ryagent/llm'
+import { LlmError } from '@ryharness/llm'
 import { createParser } from 'eventsource-parser'
 
 /**

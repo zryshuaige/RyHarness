@@ -7,16 +7,16 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { Context } from '@ryagent/cordis'
-import type { GenerateOptions, StreamChunk } from '@ryagent/llm'
-import { LlmAdapter } from '@ryagent/llm'
-import { RyAgentServer } from '@ryagent/server'
+import type { Context } from '@ryharness/cordis'
+import type { GenerateOptions, StreamChunk } from '@ryharness/llm'
+import { LlmAdapter } from '@ryharness/llm'
+import { RyHarnessServer } from '@ryharness/server'
 import { afterEach, describe, expect, it } from 'vitest'
 
 const tmpDirs: string[] = []
 
 function tempDataDir(prefix: string): string {
-  const dir = mkdtempSync(join(tmpdir(), `ryagent-conv-admin-${prefix}-`))
+  const dir = mkdtempSync(join(tmpdir(), `ryharness-conv-admin-${prefix}-`))
   tmpDirs.push(dir)
   return dir
 }
@@ -53,8 +53,8 @@ class EchoAdapter extends LlmAdapter {
   }
 }
 
-async function startServer(dataDir: string): Promise<RyAgentServer> {
-  return RyAgentServer.create({
+async function startServer(dataDir: string): Promise<RyHarnessServer> {
+  return RyHarnessServer.create({
     port: 0,
     dataDir,
     mountLlm: (ctx: Context) => {

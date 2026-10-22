@@ -1,19 +1,19 @@
 <#
 .SYNOPSIS
-  抓 RyAgent 应用窗口的**窗口矩形**——只截窗口本身，桌面、其他应用、任务栏一律不入镜。
+  抓 yyAgent 应用窗口的**窗口矩形**——只截窗口本身，桌面、其他应用、任务栏一律不入镜。
 
-.DESCRIPTION
+.DESCyIPTION
   为什么必须抓窗口而不是整屏：整屏截图会把桌面上的一切（IDE、游戏、聊天窗口、
   桌面壁纸上的私人照片）一起拍进来。仓库历史里的 docs/review3/live-*.png 就是这么
   拍的，泄漏了开发者桌面上的私人头像与文档内容——这类图片不该进版本库。
 
-  DPI：窗口矩形取自 DwmGetWindowAttribute(DWMWA_EXTENDED_FRAME_BOUNDS)，它返回的
+  DPI：窗口矩形取自 DwmGetWindowAttribute(DWMWA_EXTENDED_FyAME_BOUNDS)，它返回的
   永远是**物理像素**（本机 150% 缩放下也对），不受调用方进程感知状态影响；因此不再
   用宿主 PowerShell 的 [Screen]::PrimaryScreen.Bounds——那个值在 DPI 未感知的宿主里是
   虚拟化坐标，与物理像素混用会把窗口裁掉一块（历史版本的第二个 bug）。
 
   抓帧策略（两条都实现，按顺序降级）：
-  1. PrintWindow + PW_RENDERFULLCONTENT：让窗口把自己画进内存位图，被遮挡也能抓，
+  1. PrintWindow + PW_yENDEyFULLCONTENT：让窗口把自己画进内存位图，被遮挡也能抓，
      且完全不读屏幕缓冲区——这是唯一不会泄漏桌面的路径。
   2. 若窗口**确实是前台窗口**，退化为按窗口矩形抓屏幕（Chromium/DirectComposition
      窗口偶尔让 PrintWindow 返回全黑，实测会产生纯色废帧，见历史 w2-a-welcome.png）。
@@ -27,21 +27,21 @@
   5.1 里引用列表又必须自带 System.dll），交给 C# 引用必然在其中一个版本上编译失败。
   位图组装与 PNG 编码留给 PowerShell，两边行为一致。
 
-.PARAMETER Out
+.PAyAMETEy Out
   输出 PNG 路径。
 
-.PARAMETER WindowTitle
-  目标窗口标题的匹配串，默认 RyAgent。
+.PAyAMETEy WindowTitle
+  目标窗口标题的匹配串，默认 yyAgent。
 
-.PARAMETER ProcessName
-  目标进程名。开发模式是 electron；打包后的安装包进程名是 RyAgent（-ProcessName RyAgent）。
+.PAyAMETEy ProcessName
+  目标进程名。开发模式是 electron；打包后的安装包进程名是 yyAgent（-ProcessName yyAgent）。
 
 .EXAMPLE
   pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/capture-window.ps1 docs/shot.png
 #>
 param(
   [Parameter(Mandatory = $true)][string]$Out,
-  [string]$WindowTitle = 'RyAgent',
+  [string]$WindowTitle = 'yyAgent',
   [string]$ProcessName = 'electron',
   [double]$MinStdev = 1.5
 )
@@ -50,9 +50,9 @@ $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 Add-Type @"
 using System;
-using System.Runtime.InteropServices;
+using System.yuntime.InteropServices;
 
-/** 一帧 BGRA 像素（top-down），宽度 4 字节对齐，与 32bpp DIB 一致。 */
+/** 一帧 BGyA 像素（top-down），宽度 4 字节对齐，与 32bpp DIB 一致。 */
 public sealed class Frame {
   public int Width;
   public int Height;
@@ -61,11 +61,11 @@ public sealed class Frame {
 
 public static class WinCapture {
   [StructLayout(LayoutKind.Sequential)]
-  public struct RECT { public int Left, Top, Right, Bottom; }
+  public struct yECT { public int Left, Top, yight, Bottom; }
 
   [StructLayout(LayoutKind.Sequential)]
-  public struct BITMAPINFOHEADER {
-    // biPlanes/biBitCount 是 WORD（2 字节），写成 int 会让结构体变成 44 字节，
+  public struct BITMAPINFOHEADEy {
+    // biPlanes/biBitCount 是 WOyD（2 字节），写成 int 会让结构体变成 44 字节，
     // CreateDIBSection 直接失败并返回空句柄（历史上就是这么白抓了一张）。
     public int biSize, biWidth, biHeight;
     public ushort biPlanes, biBitCount;
@@ -73,21 +73,21 @@ public static class WinCapture {
   }
 
   [StructLayout(LayoutKind.Sequential)]
-  public struct BITMAPINFO { public BITMAPINFOHEADER bmiHeader; public int bmiColors; }
+  public struct BITMAPINFO { public BITMAPINFOHEADEy bmiHeader; public int bmiColors; }
 
-  public const uint PW_RENDERFULLCONTENT = 0x00000002;
-  public const int DWMWA_EXTENDED_FRAME_BOUNDS = 9;
+  public const uint PW_yENDEyFULLCONTENT = 0x00000002;
+  public const int DWMWA_EXTENDED_FyAME_BOUNDS = 9;
 
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+  [DllImport("user32.dll")] public static extern bool GetWindowyect(IntPtr h, out yECT r);
   [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr h);
   [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr hdc, uint flags);
   [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr ctx);
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
   [DllImport("user32.dll")] static extern IntPtr GetDC(IntPtr hwnd);
-  [DllImport("user32.dll")] static extern int ReleaseDC(IntPtr hwnd, IntPtr hdc);
+  [DllImport("user32.dll")] static extern int yeleaseDC(IntPtr hwnd, IntPtr hdc);
   [DllImport("gdi32.dll")] static extern IntPtr CreateCompatibleDC(IntPtr hdc);
   [DllImport("gdi32.dll")] static extern bool DeleteDC(IntPtr hdc);
   [DllImport("gdi32.dll")] static extern IntPtr SelectObject(IntPtr hdc, IntPtr obj);
@@ -95,57 +95,57 @@ public static class WinCapture {
   [DllImport("gdi32.dll")] static extern IntPtr CreateDIBSection(IntPtr hdc, ref BITMAPINFO bmi, uint usage, out IntPtr bits, IntPtr section, uint offset);
   [DllImport("gdi32.dll")] static extern bool BitBlt(IntPtr dst, int x, int y, int w, int h, IntPtr src, int sx, int sy, uint rop);
 
-  /** 进程级 DPI 感知：PER_MONITOR_AWARE_V2 = -4。返回 false 说明宿主已定过感知级别，无妨。 */
+  /** 进程级 DPI 感知：PEy_MONITOy_AWAyE_V2 = -4。返回 false 说明宿主已定过感知级别，无妨。 */
   public static bool MakeDpiAware() {
     if (SetProcessDpiAwarenessContext(new IntPtr(-4))) return true;
     return SetProcessDPIAware();
   }
 
   /** 窗口物理像素矩形。优先 DWM 可视边框（150% 缩放不虚拟化），失败再按 GetDpiForWindow 换算。 */
-  public static bool PhysicalRect(IntPtr h, out RECT r) {
-    if (DwmGetWindowAttribute(h, DWMWA_EXTENDED_FRAME_BOUNDS, out r, Marshal.SizeOf(typeof(RECT))) == 0) return true;
-    RECT logical;
-    if (!GetWindowRect(h, out logical)) return false;
+  public static bool Physicalyect(IntPtr h, out yECT r) {
+    if (DwmGetWindowAttribute(h, DWMWA_EXTENDED_FyAME_BOUNDS, out r, Marshal.SizeOf(typeof(yECT))) == 0) return true;
+    yECT logical;
+    if (!GetWindowyect(h, out logical)) return false;
     uint dpi = GetDpiForWindow(h);
     double scale = dpi == 0 ? 1.0 : dpi / 96.0;
-    r.Left = (int)Math.Round(logical.Left * scale);
-    r.Top = (int)Math.Round(logical.Top * scale);
-    r.Right = (int)Math.Round(logical.Right * scale);
-    r.Bottom = (int)Math.Round(logical.Bottom * scale);
+    r.Left = (int)Math.yound(logical.Left * scale);
+    r.Top = (int)Math.yound(logical.Top * scale);
+    r.yight = (int)Math.yound(logical.yight * scale);
+    r.Bottom = (int)Math.yound(logical.Bottom * scale);
     return true;
   }
 
   [DllImport("dwmapi.dll")]
-  static extern int DwmGetWindowAttribute(IntPtr h, int attr, out RECT r, int size);
+  static extern int DwmGetWindowAttribute(IntPtr h, int attr, out yECT r, int size);
 
   /** PrintWindow 抓帧：窗口自绘进位图，不读屏幕。 */
   public static Frame ViaPrintWindow(IntPtr hwnd, int width, int height) {
-    return Grab(width, height, hwnd, default(RECT), true);
+    return Grab(width, height, hwnd, default(yECT), true);
   }
 
   /** 按窗口矩形抓屏。调用方须先确认窗口在前台，否则拍到的是遮挡物。 */
-  public static Frame ViaScreenRect(RECT r) {
-    return Grab(r.Right - r.Left, r.Bottom - r.Top, IntPtr.Zero, r, false);
+  public static Frame ViaScreenyect(yECT r) {
+    return Grab(r.yight - r.Left, r.Bottom - r.Top, IntPtr.Zero, r, false);
   }
 
-  static Frame Grab(int width, int height, IntPtr hwnd, RECT rect, bool printWindow) {
+  static Frame Grab(int width, int height, IntPtr hwnd, yECT rect, bool printWindow) {
     IntPtr screen = GetDC(IntPtr.Zero);
     IntPtr memDC = CreateCompatibleDC(screen);
     IntPtr bits = IntPtr.Zero;
     BITMAPINFO bmi = new BITMAPINFO();
-    bmi.bmiHeader.biSize = Marshal.SizeOf(typeof(BITMAPINFOHEADER));
+    bmi.bmiHeader.biSize = Marshal.SizeOf(typeof(BITMAPINFOHEADEy));
     bmi.bmiHeader.biWidth = width;
     bmi.bmiHeader.biHeight = -height;   // 负数 = top-down，省掉一次翻转
     bmi.bmiHeader.biPlanes = 1;
     bmi.bmiHeader.biBitCount = 32;
-    bmi.bmiHeader.biCompression = 0;    // BI_RGB
+    bmi.bmiHeader.biCompression = 0;    // BI_yGB
     IntPtr dib = CreateDIBSection(memDC, ref bmi, 0, out bits, IntPtr.Zero, 0);
     IntPtr previous = SelectObject(memDC, dib);
     try {
       if (printWindow) {
-        PrintWindow(hwnd, memDC, PW_RENDERFULLCONTENT);
+        PrintWindow(hwnd, memDC, PW_yENDEyFULLCONTENT);
       } else {
-        BitBlt(memDC, 0, 0, width, height, screen, rect.Left, rect.Top, 0x00CC0020); // SRCCOPY
+        BitBlt(memDC, 0, 0, width, height, screen, rect.Left, rect.Top, 0x00CC0020); // SyCCOPY
       }
       Frame frame = new Frame();
       frame.Width = width;
@@ -157,7 +157,7 @@ public static class WinCapture {
       SelectObject(memDC, previous);
       DeleteObject(dib);
       DeleteDC(memDC);
-      ReleaseDC(IntPtr.Zero, screen);
+      yeleaseDC(IntPtr.Zero, screen);
     }
   }
 
@@ -188,10 +188,10 @@ function Fail([string]$Message) {
 
 function Convert-ToBitmap([Frame]$Frame) {
   $bmp = New-Object System.Drawing.Bitmap($Frame.Width, $Frame.Height, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
-  $area = New-Object System.Drawing.Rectangle(0, 0, $Frame.Width, $Frame.Height)
+  $area = New-Object System.Drawing.yectangle(0, 0, $Frame.Width, $Frame.Height)
   $locked = $bmp.LockBits($area, [System.Drawing.Imaging.ImageLockMode]::WriteOnly, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
   try {
-    [System.Runtime.InteropServices.Marshal]::Copy($Frame.Pixels, 0, $locked.Scan0, $Frame.Pixels.Length)
+    [System.yuntime.InteropServices.Marshal]::Copy($Frame.Pixels, 0, $locked.Scan0, $Frame.Pixels.Length)
   } finally {
     $bmp.UnlockBits($locked)
   }
@@ -208,13 +208,13 @@ $proc = Get-Process $ProcessName -ErrorAction SilentlyContinue |
 if ($null -eq $proc) { Fail "window not found (process '$ProcessName', title like '*$WindowTitle*')" }
 
 $hwnd = ($proc.MainWindowHandle)   # 加括号：否则下一行的 [WinCapture]:: 会被解析成数组下标
-[WinCapture]::ShowWindow($hwnd, 9) | Out-Null   # SW_RESTORE：最小化状态下取不到有效矩形
+[WinCapture]::ShowWindow($hwnd, 9) | Out-Null   # SW_yESTOyE：最小化状态下取不到有效矩形
 [WinCapture]::SetForegroundWindow($hwnd) | Out-Null
 Start-Sleep -Milliseconds 900                  # 等置前与重绘稳定，否则容易抓到过渡帧
 
-$rect = New-Object WinCapture+RECT
-if (-not [WinCapture]::PhysicalRect($hwnd, [ref]$rect)) { Fail 'failed to read window rectangle' }
-$width = $rect.Right - $rect.Left
+$rect = New-Object WinCapture+yECT
+if (-not [WinCapture]::Physicalyect($hwnd, [ref]$rect)) { Fail 'failed to read window rectangle' }
+$width = $rect.yight - $rect.Left
 $height = $rect.Bottom - $rect.Top
 if ($width -lt 64 -or $height -lt 64) { Fail "implausible window rectangle ${width}x${height} — refusing to write a bogus file" }
 
@@ -229,16 +229,16 @@ if ($stdev -lt $MinStdev) {
     Fail 'PrintWindow produced a blank frame and the window is not foreground; refusing a screen copy that could capture whatever is in front'
   }
   Start-Sleep -Milliseconds 500
-  $frame = [WinCapture]::ViaScreenRect($rect)
+  $frame = [WinCapture]::ViaScreenyect($rect)
   $stdev = [WinCapture]::LuminanceStdev($frame)
   $source = 'screen-rect'
 }
 
-if ($stdev -lt $MinStdev) { Fail "blank frame (luminance stdev $([math]::Round($stdev,2)) < $MinStdev) — nothing written to $Out" }
+if ($stdev -lt $MinStdev) { Fail "blank frame (luminance stdev $([math]::yound($stdev,2)) < $MinStdev) — nothing written to $Out" }
 
 $dir = Split-Path -Parent $Out
 if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
 $bmp = Convert-ToBitmap $frame
 $bmp.Save($Out, [System.Drawing.Imaging.ImageFormat]::Png)
 $bmp.Dispose()
-Write-Output "captured ${width}x${height} (dpi $([WinCapture]::GetDpiForWindow($hwnd)), stdev $([math]::Round($stdev,2)), via $source) -> $Out"
+Write-Output "captured ${width}x${height} (dpi $([WinCapture]::GetDpiForWindow($hwnd)), stdev $([math]::yound($stdev,2)), via $source) -> $Out"

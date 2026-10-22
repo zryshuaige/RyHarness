@@ -6,7 +6,7 @@ import type { AgentDef, ApiClient, Conversation, MessageRow, WsEvent } from '../
 import { ChatView } from '../renderer/src/components/ChatView.tsx'
 import { toast } from '../renderer/src/lib/toast.ts'
 import { LEAVE_MS } from '../renderer/src/lib/useLeaving.ts'
-import { ChatStore } from '../renderer/src/store.ts'
+import { bucketOf, ChatStore, type ConversationBucket } from '../renderer/src/store.ts'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -48,6 +48,7 @@ function historyRow(id: string): MessageRow {
 let container: HTMLDivElement
 let root: ReturnType<typeof createRoot>
 let store: ChatStore
+let bucket: ConversationBucket
 /** 由测试驱动的 WS 事件泵。 */
 let push: (event: WsEvent) => void
 /** 由测试驱动的连接状态。 */
@@ -91,7 +92,7 @@ async function render(): Promise<void> {
   // 历史/调度事件的请求在 Promise 里落地，用 async act 等它们 resolve 后再断言。
   await act(async () => {
     root = createRoot(container)
-    root.render(<ChatView api={fakeApi()} conversation={conversation} agents={[agent]} store={store} />)
+    root.render(<ChatView api={fakeApi()} conversation={conversation} agents={[agent]} bucket={bucket} />)
     await Promise.resolve()
   })
 }
@@ -115,6 +116,7 @@ beforeEach(() => {
   container = document.createElement('div')
   document.body.appendChild(container)
   store = new ChatStore()
+  bucket = bucketOf(store)
   vi.stubGlobal('matchMedia', (query: string) => {
     return {
       matches: false,

@@ -9,17 +9,24 @@ export interface DesktopBridge {
   appName: string
   /** 用系统文件管理器打开目录；resolve 的空串表示成功（Electron shell.openPath 约定）。 */
   openPath?: (targetPath: string) => Promise<string>
+  /**
+   * 告诉主进程当前主题（原生标题栏要跟着换配色）。
+   *
+   * 单向推送，没有回调：主进程此前是每 400ms 问渲染层一次「现在什么主题」——
+   * 一次 executeJavaScript 就是一个跨进程往返，常年占着渲染层的主线程。
+   */
+  setTheme?: (theme: 'light' | 'dark') => void
 }
 
 declare global {
   interface Window {
-    ryagentDesktop?: DesktopBridge
+    ryharnessDesktop?: DesktopBridge
   }
 }
 
 function bridge(): DesktopBridge | undefined {
   if (typeof window === 'undefined') return undefined
-  return window.ryagentDesktop
+  return window.ryharnessDesktop
 }
 
 /** 是否运行在带主进程桥的桌面壳里。 */
@@ -46,4 +53,13 @@ export async function copyText(text: string): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+/**
+ * 把当前主题告诉主进程（原生标题栏的配色跟着换）。
+ *
+ * 没有主进程桥时静默返回：浏览器形态（vite dev、单测）本来就没有原生标题栏。
+ */
+export function reportTheme(theme: 'light' | 'dark'): void {
+  bridge()?.setTheme?.(theme)
 }

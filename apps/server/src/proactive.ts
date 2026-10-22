@@ -13,14 +13,15 @@
  *    应用在同一天发两次。
  * 3. **安静优先**：没内容就不发（{@link composeProactiveMessage} 返回 undefined），
  *    「今天没什么新鲜的」这种凑数句只会让人觉得吵。
- * @module @ryagent/server/proactive
+ * @module @ryharness/server/proactive
  */
 
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { ConsolidationResult, EvolveService } from '@ryagent/evolve'
-import type { MemoryService } from '@ryagent/memory'
-import type { Conversation, SessionStore } from '@ryagent/session'
+import type { ConsolidationResult, EvolveService } from '@ryharness/evolve'
+import type { MemoryService } from '@ryharness/memory'
+import type { Conversation, SessionStore } from '@ryharness/session'
+import type { WsEvent } from './events.ts'
 
 /** 主动消息的发言者：内置总管 Ryen（只跟它单聊，不打扰别的小队成员）。 */
 export const PROACTIVE_AGENT_ID = 'ryen'
@@ -102,27 +103,78 @@ function greetingForHour(hour: number): string {
   return '夜深了'
 }
 
-/** 读取落盘设置：文件缺失或损坏时按默认起（坏设置不该让服务起不来）。 */
-export function loadProactiveSettings(dataDir: string): ProactiveSettings {
+/** 落盘文件里的完整形状：设置 + 判重状态。 */
+interface ProactiveFile {
+  enabled?: unknown
+  hour?: unknown
+  lastSentAt?: unknown
+  lastSentDay?: unknown
+}
+
+/**
+ * 读落盘文件（缺失或损坏时按默认起：坏设置不该让服务起不来）。
+ *
+ * 设置与判重状态放在**同一个文件**里，但读写的粒度不同：改设置不能把判重状态
+ * 抹掉（那会让应用重启后同一天发第二次），发完消息也不能把用户关掉的设置打开。
+ * 所以两边都走「读整份 → 只改自己那几项 → 写回整份」。
+ */
+function readProactiveFile(dataDir: string): ProactiveFile {
   const path = join(dataDir, PROACTIVE_SETTINGS_FILE)
-  if (!existsSync(path)) return { ...DEFAULT_PROACTIVE_SETTINGS }
+  if (!existsSync(path)) return {}
   try {
-    const parsed = JSON.parse(readFileSync(path, 'utf8')) as { enabled?: unknown; hour?: unknown }
-    return {
-      enabled: typeof parsed.enabled === 'boolean' ? parsed.enabled : DEFAULT_PROACTIVE_SETTINGS.enabled,
-      hour: isProactiveHour(parsed.hour) ? parsed.hour : DEFAULT_PROACTIVE_SETTINGS.hour,
-    }
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown
+    if (typeof parsed !== 'object' || parsed === null) return {}
+    return parsed as ProactiveFile
   } catch {
-    return { ...DEFAULT_PROACTIVE_SETTINGS }
+    return {}
   }
 }
 
 /** 落盘设置（原子写：先 .tmp 再 rename）。 */
-export function saveProactiveSettings(dataDir: string, settings: ProactiveSettings): void {
+function writeProactiveFile(dataDir: string, file: ProactiveFile): void {
   const path = join(dataDir, PROACTIVE_SETTINGS_FILE)
   const tmp = `${path}.tmp`
-  writeFileSync(tmp, `${JSON.stringify(settings, null, 2)}\n`, 'utf8')
+  writeFileSync(tmp, `${JSON.stringify(file, null, 2)}\n`, 'utf8')
   renameSync(tmp, path)
+}
+
+/** 读取落盘设置：文件缺失或损坏时按默认起（坏设置不该让服务起不来）。 */
+export function loadProactiveSettings(dataDir: string): ProactiveSettings {
+  const file = readProactiveFile(dataDir)
+  return {
+    enabled: typeof file.enabled === 'boolean' ? file.enabled : DEFAULT_PROACTIVE_SETTINGS.enabled,
+    hour: isProactiveHour(file.hour) ? file.hour : DEFAULT_PROACTIVE_SETTINGS.hour,
+  }
+}
+
+/**
+ * 读取落盘的判重状态（上次发出主动消息的时刻与那天）。
+ *
+ * 判重不落盘的话，**每次重启都会重发当天那份回顾**：用户在早上九点收到一次，
+ * 中午重启一次应用，下午又收到一次——同一件事说两遍，比不说更糟。
+ */
+export function loadProactiveState(dataDir: string): { lastSentAt?: number; lastSentDay?: string } {
+  const file = readProactiveFile(dataDir)
+  return {
+    ...(typeof file.lastSentAt === 'number' && Number.isFinite(file.lastSentAt) ? { lastSentAt: file.lastSentAt } : {}),
+    ...(typeof file.lastSentDay === 'string' && file.lastSentDay.length > 0 ? { lastSentDay: file.lastSentDay } : {}),
+  }
+}
+
+/** 落盘设置（原子写：先 .tmp 再 rename）。判重状态原样带回去。 */
+export function saveProactiveSettings(dataDir: string, settings: ProactiveSettings): void {
+  const file = readProactiveFile(dataDir)
+  writeProactiveFile(dataDir, { ...file, enabled: settings.enabled, hour: settings.hour })
+}
+
+/** 落盘判重状态（设置原样带回去）。 */
+export function saveProactiveState(dataDir: string, state: { lastSentAt?: number; lastSentDay?: string }): void {
+  const file = readProactiveFile(dataDir)
+  writeProactiveFile(dataDir, {
+    ...file,
+    ...(state.lastSentAt === undefined ? {} : { lastSentAt: state.lastSentAt }),
+    ...(state.lastSentDay === undefined ? {} : { lastSentDay: state.lastSentDay }),
+  })
 }
 
 /** 发送时刻是否合法（0-23 的整数）。 */
@@ -178,11 +230,11 @@ function sampleText(content: string): string {
 }
 
 /** 会话在列表里的名字（没改名就用成员 agent 的名字，都没有就用 id）。 */
-function conversationTitle(store: SessionStore, conversation: Conversation): string {
+function conversationTitle(conversation: Conversation, agentNames: ReadonlyMap<string, string>): string {
   if (conversation.title.trim().length > 0) return conversation.title
   const agentId = conversation.memberAgentIds[0]
   if (agentId === undefined) return conversation.id
-  return store.getAgent(agentId)?.name ?? agentId
+  return agentNames.get(agentId) ?? agentId
 }
 
 /**
@@ -224,11 +276,17 @@ export function collectProactiveFacts(sources: ProactiveSources): ProactiveFacts
   }
 
   const unread: ProactiveFacts['unread'] = []
-  for (const conversation of store.listConversations(MAX_UNREAD_CONVERSATIONS * 10)) {
+  // 单查询取齐列表 + 未读数（上游 dsh session-query 的「listing 一次解析」同款：
+  // 逐会话 unreadCount 是 N+1）；agent 名字也一次取齐建索引，不在循环里 getAgent。
+  const agentNames = new Map(
+    store.listAgents().map((agent) => {
+      return [agent.id, agent.name] as const
+    }),
+  )
+  for (const conversation of store.listConversationsWithPreview(MAX_UNREAD_CONVERSATIONS * 10)) {
     if (conversation.id === sources.excludeConversationId) continue
-    const count = store.unreadCount(conversation.id, conversation.lastReadSeq)
-    if (count === 0) continue
-    unread.push({ title: conversationTitle(store, conversation), count })
+    if (conversation.unreadCount === 0) continue
+    unread.push({ title: conversationTitle(conversation, agentNames), count: conversation.unreadCount })
     if (unread.length >= MAX_UNREAD_CONVERSATIONS) break
   }
 
@@ -301,6 +359,13 @@ export interface ProactiveDeps extends Omit<ProactiveSources, 'since' | 'now' | 
   initial?: { enabled?: boolean; hour?: number }
   /** 检查间隔（毫秒）；0 = 不起定时器，只保留启动那一次。 */
   intervalMs?: number
+  /**
+   * 把一条 WS 事件推给订阅了该会话的客户端。
+   *
+   * 没有它，主动消息就只是往库里写了一条：用户正开着那个会话也看不到它，非得
+   * 切走再切回来才发现自己被"主动找"过——功能等于没上线。
+   */
+  publish?: (event: WsEvent) => void
 }
 
 /**
@@ -316,6 +381,7 @@ export class ProactiveDigest {
   private readonly lastConsolidation: () => { result: ConsolidationResult; at: number } | undefined
   private readonly dataDir: string
   private readonly settings: ProactiveSettings
+  private readonly publishEvent: ((event: WsEvent) => void) | undefined
   private intervalMs: number
   private timer: ReturnType<typeof setInterval> | undefined
   private lastSentAt: number | undefined
@@ -328,6 +394,7 @@ export class ProactiveDigest {
     this.evolutionService = deps.evolutionService
     this.lastConsolidation = deps.lastConsolidation
     this.dataDir = deps.dataDir
+    this.publishEvent = deps.publish
     this.intervalMs = Math.max(0, Math.trunc(deps.intervalMs ?? DEFAULT_PROACTIVE_INTERVAL_MS))
     // 落盘设置优先于构造参数：用户在设置里关掉的，重启不能又打开。
     const stored = loadProactiveSettings(deps.dataDir)
@@ -335,6 +402,15 @@ export class ProactiveDigest {
       enabled: deps.initial?.enabled ?? stored.enabled,
       hour: isProactiveHour(deps.initial?.hour) ? deps.initial.hour : stored.hour,
     }
+    /**
+     * 判重状态从落盘读回来：重启不是"新的一天"。
+     *
+     * 只在内存里记的话，用户早上九点收到一次回顾，中午重启一下应用，下午又收到
+     * 一次——同一件事说两遍，比不说更糟。
+     */
+    const state = loadProactiveState(deps.dataDir)
+    this.lastSentAt = state.lastSentAt
+    this.lastSentDay = state.lastSentDay
   }
 
   /** 启动：先补一次（应用刚起来就把昨天的回顾补上），再挂每日定时检查。 */
@@ -359,7 +435,7 @@ export class ProactiveDigest {
       return this.check(now, ignoreHour)
     } catch (error) {
       console.warn(
-        `@ryagent/server: proactive message failed: ${error instanceof Error ? error.message : String(error)}`,
+        `@ryharness/server: proactive message failed: ${error instanceof Error ? error.message : String(error)}`,
       )
       return { sent: false, reason: 'error' }
     }
@@ -432,6 +508,7 @@ export class ProactiveDigest {
     // 比不说更让人困惑。
     if (text === undefined) return { sent: false, reason: 'empty' }
     const conversation = existing ?? this.createRyenConversation()
+    const turnIndex = this.store.nextTurnIndex(conversation.id)
     const message = this.store.appendMessage({
       conversationId: conversation.id,
       senderType: 'agent',
@@ -440,12 +517,40 @@ export class ProactiveDigest {
         { type: PROACTIVE_BLOCK_TYPE, day },
         { type: 'text', text },
       ],
-      turnIndex: this.store.nextTurnIndex(conversation.id),
+      turnIndex,
     })
     this.lastSentAt = now
     this.lastSentDay = day
     this.conversationId = conversation.id
+    // 判重状态落盘：重启不是"新的一天"（否则同一天会被重发一遍）。
+    saveProactiveState(this.dataDir, { lastSentAt: now, lastSentDay: day })
+    this.announce(conversation, text, turnIndex)
     return { sent: true, conversationId: conversation.id, messageId: message.id }
+  }
+
+  /**
+   * 把这条主动消息推给界面。
+   *
+   * 只写库不推的话，用户正开着那个会话也看不到它——要切走再切回来才发现"它主动
+   * 找过我"。推的三条事件与一轮正常发言同构（start → delta → done），因此渲染层
+   * 那套流式气泡 machinery 直接接住，不需要为主动消息另开一条通路。
+   *
+   * start 上带 `proactive` 标记：气泡上方那行「它 主动找你」实时就得在，刷新后
+   * 仍在（历史里那条消息带着标记块），两处认的是同一件事。
+   */
+  private announce(conversation: Conversation, text: string, turnIndex: number): void {
+    const publish = this.publishEvent
+    if (publish === undefined) return
+    publish({
+      type: 'message-start',
+      conversationId: conversation.id,
+      senderId: PROACTIVE_AGENT_ID,
+      senderName: 'Ryen',
+      turnIndex,
+      proactive: true,
+    })
+    publish({ type: 'text-delta', conversationId: conversation.id, senderId: PROACTIVE_AGENT_ID, text })
+    publish({ type: 'message-done', conversationId: conversation.id, senderId: PROACTIVE_AGENT_ID, turnIndex })
   }
 
   /** 与 Ryen 的单聊（只找，不建）。 */

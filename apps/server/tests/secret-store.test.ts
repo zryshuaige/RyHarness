@@ -14,13 +14,13 @@ import {
   type SecretCodec,
   saveApiKey,
   secretStoreCipher,
-} from '@ryagent/server'
+} from '@ryharness/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const tmpDirs: string[] = []
 
 function tempDataDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'ryagent-secrets-'))
+  const dir = mkdtempSync(join(tmpdir(), 'ryharness-secrets-'))
   tmpDirs.push(dir)
   mkdirSync(join(dir, 'config'), { recursive: true })
   return dir

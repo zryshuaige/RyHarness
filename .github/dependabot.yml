@@ -15,10 +15,10 @@ updates:
       # 内核/地基小包（vendor + packages/util 等）一起动，避免十几个各改一个版本的 PR。
       vendor-and-util:
         patterns:
-          - '@ryagent/cordis'
-          - '@ryagent/cosmokit'
-          - '@ryagent/schemastery'
-          - '@ryagent/typert-protocol'
+          - '@ryharness/cordis'
+          - '@ryharness/cosmokit'
+          - '@ryharness/schemastery'
+          - '@ryharness/typert-protocol'
           - 'tsdown'
           - 'typescript'
         update-types:
@@ -30,7 +30,7 @@ updates:
       - dependency-name: electron
         update-types:
           - version-update:semver-major
-      - dependency-name: '@ryagent/*'
+      - dependency-name: '@ryharness/*'
 
   # CI 用到的 action 也吃 dependabot 更新，否则 checkout/setup-node 悄悄落后。
   - package-ecosystem: github-actions

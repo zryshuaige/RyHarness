@@ -53,8 +53,19 @@ export function visibleRange(options: WindowOptions): WindowRange {
   if (count === 0) return { start: 0, end: 0 }
   const estimate = Math.max(1, Math.max(0, Math.trunc(options.estimateHeight)))
   const overscan = Math.max(0, Math.trunc(options.overscan ?? DEFAULT_OVERSCAN))
-  const first = Math.floor(Math.max(0, options.scrollTop) / estimate)
   const visible = Math.ceil(Math.max(0, options.viewportHeight) / estimate)
+  /**
+   * 「钉在末尾」用 scrollTop = Infinity 表示（贴底时那一帧的 scrollTop 可能还停在
+   * 旧值，窗口必须直接算在末尾）。
+   *
+   * 此前这里算的是 `floor(Infinity / estimate)` = Infinity，随后被 start 夹成
+   * count-1 —— 于是**贴底时窗口只剩最后一行**，视口里其余全是空白哨兵：
+   * 会话超过 30 轮后，往上翻过再滚回底部（或点「跳至最新」、或发一条新消息）
+   * 就会看到"消息全没了"。钉在末尾时窗口必须**盖住整个视口**。
+   */
+  const first = Number.isFinite(options.scrollTop)
+    ? Math.floor(Math.max(0, options.scrollTop) / estimate)
+    : Math.max(0, count - visible - overscan)
   // start 夹到 [0, count-1]：scrollTop 超出内容高度时（橡皮筋、测试里的假值）
   // 不能算出「整表都在窗口外」的空区间。
   const start = Math.min(count - 1, Math.max(0, first - overscan))
@@ -136,4 +147,98 @@ export function useVisibleWindow(options: {
   const padTop = range.start * estimateHeight
   const padBottom = Math.max(0, count - range.end) * estimateHeight
   return { ...range, padTop, padBottom }
+}
+
+// ---- 冷热窗口：另一处用得着「只留最近几个」的场合 ----
+
+/** 有上界的最近使用窗口：命中即刷新，逐出按最久未用。 */
+export interface BoundedCache<K, V> {
+  /** 取或建；返回的实例对同一个 key 恒等（切来切去拿到的是同一份会话状态）。 */
+  require(key: K, create: (key: K) => V): V
+  get(key: K): V | undefined
+  /** 触碰已存在的条目（不创建），把它挪到「最近用过」。 */
+  touch(key: K): void
+  has(key: K): boolean
+  values(): IterableIterator<V>
+  readonly size: number
+  clear(): void
+}
+
+/**
+ * 有上界的最近使用窗口（LRU）。
+ *
+ * 与列表窗口化同一个取舍：**留热、丢冷，让占用有上界**。区别只在于窗口的边界不是
+ * 像素而是「最近用过」——会话缓存要的就是这个：一天来回切几十个会话，全留着等于把
+ * 内存峰值交给使用历史而不是交给上界。
+ *
+ * `protected` 是一条「有未发送内容、逐出会丢数据」的保命通道：保命的条目最后才被丢，
+ * 全都在保命时才按最久未用丢（并照常回调 {@link onEvict}，让调用方停掉它的定时器）。
+ * 不这样设计的话，用户在五个会话里各留了半句话、切到第六个时，第一句草稿就静默消失。
+ */
+export function createBoundedCache<K, V>(
+  max: number,
+  options: { onEvict?: (value: V, key: K) => void; protected?: (value: V, key: K) => boolean } = {},
+): BoundedCache<K, V> {
+  // Map 按插入顺序迭代：把 key 删了再写回同一个 key，它就落到队尾 = 「最近用过」。
+  const entries = new Map<K, V>()
+  const limit = Math.max(1, Math.trunc(max))
+
+  const evict = (key: K): void => {
+    const value = entries.get(key)
+    if (value === undefined) return
+    entries.delete(key)
+    options.onEvict?.(value, key)
+  }
+
+  const trim = (): void => {
+    while (entries.size > limit) {
+      const keys = [...entries.keys()]
+      let victim: K | undefined
+      for (const key of keys) {
+        const value = entries.get(key)
+        if (value === undefined) continue
+        if (options.protected?.(value, key) === true) continue
+        victim = key
+        break
+      }
+      // 全在保命名单里：宁可丢最久未用的那个，也不让窗口无限长下去。
+      evict(victim ?? keys[0])
+    }
+  }
+
+  return {
+    require(key, create) {
+      const cached = entries.get(key)
+      if (cached !== undefined) {
+        entries.delete(key)
+        entries.set(key, cached)
+        return cached
+      }
+      const created = create(key)
+      entries.set(key, created)
+      trim()
+      return created
+    },
+    get(key) {
+      return entries.get(key)
+    },
+    touch(key) {
+      const cached = entries.get(key)
+      if (cached === undefined) return
+      entries.delete(key)
+      entries.set(key, cached)
+    },
+    has(key) {
+      return entries.has(key)
+    },
+    values() {
+      return entries.values()
+    },
+    get size() {
+      return entries.size
+    },
+    clear() {
+      for (const key of [...entries.keys()]) evict(key)
+    },
+  }
 }

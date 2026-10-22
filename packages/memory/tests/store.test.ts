@@ -10,12 +10,12 @@ import {
   migrateMemory,
   NullEmbeddings,
   SHARED_SPACE,
-} from '@ryagent/memory'
+} from '@ryharness/memory'
 import { afterEach, describe, expect, it } from 'vitest'
 
 const dirs: string[] = []
 function storePath(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'ryagent-memory-'))
+  const dir = mkdtempSync(join(tmpdir(), 'ryharness-memory-'))
   dirs.push(dir)
   return join(dir, 'm.db')
 }
@@ -47,7 +47,7 @@ describe('MemoryStore', () => {
   it('schema 迁移幂等，memory_meta 记录版本', () => {
     const s = store()
     migrateMemory(s['db' as keyof MemoryStore] as never) // 二次迁移不抛错
-    expect(MEMORY_SCHEMA_VERSION).toBe(4)
+    expect(MEMORY_SCHEMA_VERSION).toBe(5)
     s.close()
   })
 
@@ -141,13 +141,16 @@ describe('MemoryStore', () => {
     s.close()
   })
 
-  it('touchAccess 递增访问计数与时间', () => {
+  it('touchAccess 批量递增访问计数与时间（每行一次，重复 id 不叠加）', () => {
     const s = store()
-    const m = s.insert({ agentId: 'a1', kind: 'fact', content: 'x' })
-    s.touchAccess([m.id, m.id])
-    const after = s.get(m.id)!
-    expect(after.accessCount).toBe(2)
-    expect(after.lastAccessedAt).toBeGreaterThanOrEqual(m.lastAccessedAt)
+    const a = s.insert({ agentId: 'a1', kind: 'fact', content: 'x' })
+    const b = s.insert({ agentId: 'a1', kind: 'fact', content: 'y' })
+    s.touchAccess([a.id, b.id, a.id])
+    // 一条 WHERE id IN 的批量记账按「这行被访问了一次」计，重复 id 不叠加：
+    // 逐 id UPDATE 的旧写法会把同一行记两次，是记账口径而不是业务语义。
+    expect(s.get(a.id)?.accessCount).toBe(1)
+    expect(s.get(b.id)?.accessCount).toBe(1)
+    expect(s.get(a.id)?.lastAccessedAt).toBeGreaterThanOrEqual(a.lastAccessedAt)
     s.close()
   })
 
@@ -516,6 +519,19 @@ describe('MemoryStore', () => {
     expect(stats.byStatus.active).toBe(2)
     expect(stats.byStatus.superseded).toBe(1)
     expect(stats.byKind.profile).toBe(1)
+    s.close()
+  })
+
+  it('记忆行与索引行同事务：索引写失败时主表一起回滚（不留有行无索引的半条记忆）', () => {
+    const s = store()
+    // 制造"第二条写会失败"的现场：索引表没了，插记忆行成功、插索引行失败。
+    raw(s, 'DROP TABLE memories_fts')
+    expect(() => {
+      s.insert({ agentId: 'a1', kind: 'fact', content: '写了一半的记忆' })
+    }).toThrow()
+    // 有行无索引的记忆从此对 BM25 通道永久不可见，而仓库里没有任何"重建 FTS"
+    // 的任务能救它——所以主表必须一起回滚。
+    expect(s.stats().total).toBe(0)
     s.close()
   })
 

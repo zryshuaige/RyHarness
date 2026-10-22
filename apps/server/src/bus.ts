@@ -4,7 +4,7 @@
  *
  * 发布时给每条事件打上该会话内单调递增的 seq（无论是否有订阅者都递增，
  * 断线重连的客户端据此发现缺口）；seq 计数随进程生命周期保留。
- * @module @ryagent/server/bus
+ * @module @ryharness/server/bus
  */
 
 import type { StampedWsEvent, WsEvent } from './events.ts'

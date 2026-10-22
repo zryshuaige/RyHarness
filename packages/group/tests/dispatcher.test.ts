@@ -1,9 +1,9 @@
-import type { AgentDefinition, Tool, ToolResult } from '@ryagent/agent'
-import { createSessionQuota } from '@ryagent/agent'
-import { brandString } from '@ryagent/brand'
-import type { GroupEvent } from '@ryagent/group'
-import { buildGroupContext, GroupDispatcher, parseMentions } from '@ryagent/group'
-import type { GenerateOptions, LlmRuntime, StreamChunk, ToolCallId } from '@ryagent/llm'
+import type { AgentDefinition, Tool, ToolResult } from '@ryharness/agent'
+import { createSessionQuota } from '@ryharness/agent'
+import { brandString } from '@ryharness/brand'
+import type { GroupEvent } from '@ryharness/group'
+import { buildGroupContext, GroupDispatcher, parseMentions } from '@ryharness/group'
+import type { GenerateOptions, LlmRuntime, StreamChunk, ToolCallId } from '@ryharness/llm'
 import { describe, expect, it } from 'vitest'
 
 function agent(id: string, name: string, systemPrompt = `你是${name}。`): AgentDefinition {
@@ -59,6 +59,246 @@ function run(replies: string[], text: string, maxTurns?: number) {
   return { promise, calls }
 }
 
+/**
+ * 交接走 handoff 工具（确定性派工）。
+ *
+ * 真机（DeepSeek-V3）实测：模型会照抄提示里的成员名，却把 @ 号漏掉——回复是
+ * 「让阿码查最近没去过的店」，一个 @ 都没有，接力链静默失效，界面上只看到调度员
+ * 答了话。同一个模型的 tool calling 却完全可靠（冒烟脚本里 echo 工具参数一次成型），
+ * 所以路由信号搬进工具参数。
+ */
+/**
+ * 第一次调用 handoff 工具，之后按 system prompt 首行回文本。
+ *
+ * `handoffs` 按人给派工目标与任务；不给的那位只回文本。原签名只有 replies，
+ * 派工目标写死成「调度员 → CodeBot、查最近没去过的店」这一个场景，
+ * 「成员把活交回派工方」那种反向交接就写不出来——那需要一个自己的 mock，
+ * 而全仓 `as unknown as` 是冻结基线，只减不增，所以这里把口子开在已有的这一个上。
+ *
+ * 放在模块作用域而不是 describe 里：收口那条用例也要用它。
+ */
+function handoffThenReplyLlm(
+  replies: Record<string, string>,
+  handoffs: Record<string, { to: string; task: string }> = {
+    Ryen: { to: 'CodeBot', task: '查最近没去过的店' },
+  },
+): LlmRuntime {
+  let calls = 0
+  return {
+    stream(options: GenerateOptions) {
+      calls++
+      const head = (options.system ?? '').split('\n')[0] ?? ''
+      const name = Object.keys(replies).find((key) => {
+        return head.includes(key)
+      })
+      const text = name === undefined ? '' : (replies[name] as string)
+      const handoff = name === undefined ? undefined : handoffs[name]
+      // 工具结果回来后的那一轮只回文本，否则同一条交接会被反复当成「第一次」。
+      const answering = options.messages.some((message) => {
+        return message.role === 'tool'
+      })
+      const alreadyCalledTool = handoff === undefined || answering
+      const chunks: StreamChunk[] = alreadyCalledTool
+        ? [
+            { type: 'text-delta', index: 0, text },
+            { type: 'block-end', index: 0, block: { type: 'text', text } },
+            { type: 'finish', reason: { kind: 'stop' } },
+          ]
+        : [
+            { type: 'text-delta', index: 0, text },
+            {
+              type: 'block-end',
+              index: 0,
+              block: {
+                type: 'tool-call',
+                id: brandString<ToolCallId>(`handoff-${calls}`),
+                name: 'handoff',
+                arguments: JSON.stringify({ to: handoff.to, task: handoff.task }),
+              },
+            },
+            { type: 'finish', reason: { kind: 'tool-calls' } },
+          ]
+      return (async function* (): AsyncGenerator<StreamChunk> {
+        yield* chunks
+      })()
+    },
+  } as unknown as LlmRuntime
+}
+
+describe('GroupDispatcher 交接工具', () => {
+  it('调用 handoff 工具就真的派工，接手成员随后发言', async () => {
+    const dispatcher = new GroupDispatcher({
+      llm: handoffThenReplyLlm({ Ryen: '交给 CodeBot 了', CodeBot: '查完了：巷口那家意面' }),
+      members: MEMBERS,
+      dispatcherId: 'ryen',
+      tools: [],
+    })
+    const events = await collect(
+      dispatcher.runTurn({ text: '下周去哪吃？', history: [], workspaceRoot: process.cwd(), turnIndex: 0 }),
+    )
+    const relays = events.filter((event) => {
+      return event.type === 'dispatch' && event.toAgent === 'codebot'
+    })
+    expect(relays).toHaveLength(1)
+    // 工具调用本身也要透给界面（用户看得见"交出去了"这件事）。
+    expect(
+      events.filter((event) => {
+        return event.type === 'tool-call-start' && event.name === 'handoff'
+      }),
+    ).toHaveLength(1)
+    // 被交接的成员确实发言了（接力链真的跑起来）。
+    expect(
+      events.filter((event) => {
+        return event.type === 'agent-message' && event.agentId === 'codebot'
+      }),
+    ).toHaveLength(1)
+  })
+
+  it('被 handoff 派工的成员，prompt 里带着任务本身（真机抓到：只转发上一句正文，接手人不知道要做什么）', async () => {
+    const codebotPrompts: string[] = []
+    let calls = 0
+    const llm = {
+      stream(options: GenerateOptions) {
+        calls++
+        const head = (options.system ?? '').split('\n')[0] ?? ''
+        const isDispatcher = head.includes('Ryen')
+        const alreadyCalledTool =
+          !isDispatcher ||
+          options.messages.some((message) => {
+            return message.role === 'tool'
+          })
+        if (!isDispatcher) {
+          const last = options.messages[options.messages.length - 1]
+          const text = (last?.content ?? [])
+            .filter((block) => {
+              return block.type === 'text'
+            })
+            .map((block) => {
+              return block.type === 'text' ? block.text : ''
+            })
+            .join('\n')
+          codebotPrompts.push(text)
+        }
+        const chunks: StreamChunk[] = alreadyCalledTool
+          ? [
+              { type: 'text-delta', index: 0, text: '查完了' },
+              { type: 'block-end', index: 0, block: { type: 'text', text: '查完了' } },
+              { type: 'finish', reason: { kind: 'stop' } },
+            ]
+          : [
+              { type: 'text-delta', index: 0, text: '交给我' },
+              {
+                type: 'block-end',
+                index: 0,
+                block: {
+                  type: 'tool-call',
+                  id: brandString<ToolCallId>(`handoff-${calls}`),
+                  name: 'handoff',
+                  arguments: JSON.stringify({ to: 'CodeBot', task: '查最近没去过的店' }),
+                },
+              },
+              { type: 'finish', reason: { kind: 'tool-calls' } },
+            ]
+        return (async function* (): AsyncGenerator<StreamChunk> {
+          yield* chunks
+        })()
+      },
+    } as unknown as LlmRuntime
+    const dispatcher = new GroupDispatcher({ llm, members: MEMBERS, dispatcherId: 'ryen', tools: [] })
+    await collect(dispatcher.runTurn({ text: '下周去哪吃？', history: [], workspaceRoot: process.cwd(), turnIndex: 0 }))
+    expect(codebotPrompts).toHaveLength(1)
+    expect(codebotPrompts[0]).toContain('查最近没去过的店')
+    expect(codebotPrompts[0]).toContain('Ryen')
+  })
+
+  it('交接给名单外的人会被工具拒绝（不派工，模型会看到中文原因）', async () => {
+    const dispatcher = new GroupDispatcher({
+      llm: {
+        stream() {
+          const chunks: StreamChunk[] = [
+            { type: 'text-delta', index: 0, text: '我不知道该找谁' },
+            {
+              type: 'block-end',
+              index: 0,
+              block: {
+                type: 'tool-call',
+                id: brandString<ToolCallId>('handoff-x'),
+                name: 'handoff',
+                arguments: JSON.stringify({ to: 'CodeBot2', task: '干活' }),
+              },
+            },
+            { type: 'finish', reason: { kind: 'tool-calls' } },
+          ]
+          return (async function* (): AsyncGenerator<StreamChunk> {
+            yield* chunks
+          })()
+        },
+      } as unknown as LlmRuntime,
+      members: MEMBERS,
+      dispatcherId: 'ryen',
+      tools: [],
+      maxTurns: 1,
+    })
+    const events = await collect(
+      dispatcher.runTurn({ text: '开工', history: [], workspaceRoot: process.cwd(), turnIndex: 0 }),
+    )
+    expect(
+      events.filter((event) => {
+        return event.type === 'dispatch' && event.reason.startsWith('交接')
+      }),
+    ).toEqual([])
+    const failed = events.find((event) => {
+      return event.type === 'tool-result' && event.name === 'handoff'
+    })
+    expect(failed).toMatchObject({ isError: true })
+  })
+})
+
+describe('调度员交接只认 [交办] 行', () => {
+  /**
+   * 真机（DeepSeek-V3）实测踩过的坑：调度员正文里 @ 了一个人、[交办] 行里 @ 了另一个人，
+   * 两个都派工就会让群里凭空多出一段没人要的发言；反过来，如果连 [交办] 行都没有，
+   * 整段退回扫描，模型自由发挥写下的 @ 依然算数——不能让接力因为格式不守而丢。
+   */
+  it('正文里的 @ 不派工，只有 [交办] 行的 @ 派工', async () => {
+    const reply = ['交给我，先去办。', '顺带一提，@Reviewer 上次说得对。', '[交办] @CodeBot 查最近没去过的店'].join(
+      '\n',
+    )
+    const { promise } = run([reply, '查完了：巷口那家意面。'], '下周去哪吃？')
+    const events = await promise
+    // 第一条 default-dispatcher（先派给调度员本人）是设计内行为，只看接力。
+    const relays = events.filter((event) => {
+      return event.type === 'dispatch' && event.reason.startsWith('relay')
+    })
+    expect(
+      relays.map((event) => {
+        return event.type === 'dispatch' ? event.toAgent : ''
+      }),
+    ).toEqual(['codebot'])
+  })
+
+  it('没有 [交办] 行时整段扫描（模型不守格式也不丢接力）', async () => {
+    const { promise } = run(['好的，@CodeBot 你去查店。', '查完了：川菜那家。'], '下周去哪吃？')
+    const events = await promise
+    expect(
+      events.filter((event) => {
+        return event.type === 'dispatch' && event.reason.startsWith('relay')
+      }).length,
+    ).toBe(1)
+  })
+
+  it('调度员漏写 @ 号的散文不派工（真机上正是这一种）', async () => {
+    const { promise, calls } = run(['让 CodeBot 去查店，让 Reviewer 复核。', '不该轮到我'], '下周去哪吃？')
+    const events = await promise
+    expect(
+      events.filter((event) => {
+        return event.type === 'dispatch' && event.reason.startsWith('relay')
+      }),
+    ).toEqual([])
+    expect(calls()).toBe(1)
+  })
+})
+
 describe('parseMentions', () => {
   it('matches members by name, single and multiple, in order of appearance', () => {
     expect(
@@ -97,10 +337,25 @@ describe('buildGroupContext', () => {
       { speaker: 'Ryen', text: 'b'.repeat(100) },
       { speaker: 'CodeBot', text: 'c'.repeat(100) },
     ]
-    const context = buildGroupContext(history, 250)
+    // 预算按 token：每行 100 字符 ASCII ≈ 26 token，加 "用户: " 前缀与换行。
+    const context = buildGroupContext(history, 60)
     expect(context).not.toContain('a'.repeat(20))
     expect(context).toContain(`Ryen: ${'b'.repeat(100)}`)
     expect(context).toContain(`CodeBot: ${'c'.repeat(100)}`)
+  })
+
+  it('同一份预算对 ASCII 与中文一视同仁（字符口径才是那个偷偷收窄的口子）', () => {
+    const ascii = [
+      { speaker: 'CodeBot', text: 'a'.repeat(800) },
+      { speaker: 'CodeBot', text: 'b'.repeat(800) },
+    ]
+    const chinese = [
+      { speaker: 'CodeBot', text: '中'.repeat(800) },
+      { speaker: 'CodeBot', text: '文'.repeat(800) },
+    ]
+    // 预算 900 token：ASCII 两行约 410 token 全留；中文两行约 1600 token 只留一行。
+    expect(buildGroupContext(ascii, 900).split('\n')).toHaveLength(2)
+    expect(buildGroupContext(chinese, 900).split('\n')).toHaveLength(1)
   })
 })
 
@@ -309,5 +564,148 @@ describe('GroupDispatcher 配额', () => {
         }),
     ).toEqual([false, false])
     expect(executions()).toBe(2)
+  })
+})
+
+/**
+ * 接力链的收口：干完活的人不该把话头又递回派工方。
+ *
+ * 真机复现：用户要一份 PDF，Ryen 派给 CodeBot，CodeBot 交付后在正文里 @ 了 Ryen
+ * 致谢。队列是无去重的 FIFO，于是 Ryen 被重新 push 回去、再跑一轮生成，说出
+ * 「好的，已经安排给 CodeBot 了」——而活早干完了。A-B-A 护栏拦得住直接回头，
+ * 拦不住「干完 → 回到派工方复述」这一种，用户看到的体验就是「它在重复派工」。
+ */
+describe('接力链收口', () => {
+  it('干完活的成员用 handoff 工具交回派工方时，派工方同样不再复述一遍派工', async () => {
+    // 上一条用例盯的是**正文里 @ 派工方**那条路。这条盯工具那条路——而工具恰恰是
+    // 系统提示里明确推荐的结构化交接方式（成员正文常照抄名字却漏掉 @ 号，
+    // 同一个模型 tool calling 却可靠），所以真机上它才是常态。
+    //
+    // 症状与上一条一致：CodeBot 把 PDF 交回 Ryen，界面上留下「交接 → 循环保护」
+    // 两条互相矛盾的轨迹——活早干完了。
+    //
+    // 脚本按 system prompt 认人而不是按调用序号：工具调用会让 AgentLoop 再问一次，
+    // 那一次必须回纯文本，否则同一条回复会被重复当成「第一次」。
+    const dispatcher = new GroupDispatcher({
+      llm: handoffThenReplyLlm(
+        { Ryen: '交给 CodeBot 了', CodeBot: 'PDF 已生成，文件在工作区。' },
+        {
+          Ryen: { to: 'codebot', task: '做一份 PDF' },
+          CodeBot: { to: 'ryen', task: 'PDF 做好了，请查收' },
+        },
+      ),
+      members: MEMBERS,
+      dispatcherId: 'ryen',
+      tools: [],
+    })
+    const events = await collect(
+      dispatcher.runTurn({ text: '做一份 PDF', history: [], workspaceRoot: process.cwd(), turnIndex: 0 }),
+    )
+    const spokenBy = events
+      .filter((event) => {
+        return event.type === 'agent-message'
+      })
+      .map((event) => {
+        return event.agentId
+      })
+    // Ryen 只应在开场派工时说一次；CodeBot 交回之后就该收尾。
+    expect(spokenBy).toEqual(['ryen', 'codebot'])
+    // 真正的病灶不在「Ryen 又说了一遍」——A-B-A 护栏已经拦住了它。病灶是**先排了
+    // 一条假产**（CodeBot → Ryen 的交接），紧接着又来一条 loop-guard：界面上两条
+    // 自相矛盾的轨迹并排，比真的打转更费解。正文 @ 那条路已经修过这个问题
+    // （见下一个用例），工具这条路漏了。
+    const dispatches = events.filter((event) => {
+      return event.type === 'dispatch' && event.fromAgent === 'codebot' && event.toAgent === 'ryen'
+    }) as Extract<GroupEvent, { type: 'dispatch' }>[]
+    // 不能出现「交接 / relay」性质的排产——它会让界面显示成「还在派活」。
+    expect(
+      dispatches.filter((event) => {
+        return event.reason !== 'loop-guard'
+      }),
+    ).toEqual([])
+    // 收口仍要留一条终止事件，轨迹才有头有尾（与正文 @ 那条路同口径）。
+    expect(dispatches).toHaveLength(1)
+    expect(dispatches[0]?.reason).toBe('loop-guard')
+  })
+
+  it('干完活的成员 @ 派工方致谢时，派工方不再复述一遍派工', async () => {
+    const dispatcher = new GroupDispatcher({
+      llm: mockLlm(['正在派工 @CodeBot', 'PDF 做好了。@Ryen 请查收']).llm,
+      members: MEMBERS,
+      dispatcherId: 'ryen',
+      tools: [],
+    })
+    const events = await collect(
+      dispatcher.runTurn({ text: '做一份 PDF', history: [], workspaceRoot: process.cwd(), turnIndex: 0 }),
+    )
+    const spokenBy = events
+      .filter((event) => {
+        return event.type === 'agent-message'
+      })
+      .map((event) => {
+        return event.type === 'agent-message' ? event.agentId : ''
+      })
+    // Ryen 开头派工一次；CodeBot 交付一次。Ryen 不该在 CodeBot 之后再发言。
+    expect(
+      spokenBy.filter((id) => {
+        return id === 'ryen'
+      }),
+    ).toHaveLength(1)
+    expect(spokenBy.at(-1)).toBe('codebot')
+  })
+
+  it('成员 @ 派工方致谢时，链条以收口结束，不再先吐一条假接力', async () => {
+    const dispatcher = new GroupDispatcher({
+      llm: mockLlm(['正在派工 @CodeBot', '做好了。@Ryen 请查收']).llm,
+      members: MEMBERS,
+      dispatcherId: 'ryen',
+      tools: [],
+    })
+    const events = await collect(
+      dispatcher.runTurn({ text: '做一份 PDF', history: [], workspaceRoot: process.cwd(), turnIndex: 0 }),
+    )
+    const dispatches = events.filter((event) => {
+      return event.type === 'dispatch'
+    })
+    // 关键差别不是「有没有终止事件」（终止早有护栏），而是**不能先排一次产**：
+    // 排了产就会在界面上留下一条 relay 接力，紧接着又来一条循环保护，
+    // 两条自相矛盾的轨迹看起来比真的打转还糟。
+    expect(
+      dispatches.filter((event) => {
+        return (
+          event.type === 'dispatch' &&
+          event.fromAgent === 'codebot' &&
+          event.toAgent === 'ryen' &&
+          event.reason.startsWith('relay')
+        )
+      }),
+    ).toEqual([])
+    // 收口仍要留一条终止事件，轨迹才有头有尾。
+    expect(
+      events.filter((event) => {
+        return event.type === 'dispatch' && event.reason === 'loop-guard'
+      }),
+    ).toHaveLength(1)
+  })
+
+  it('真要回程汇总时仍然允许：@ 派工方且带明确的交付说明', async () => {
+    // 收口不是「禁止回程」，而是禁止「空转复述」。带 handoff 工具的显式交接
+    // （下面这条走另一个用例）不受影响；文本 @ 派工方仍然放行一次，
+    // 够用且不至于掐断合法的「汇总」场景。
+    const dispatcher = new GroupDispatcher({
+      llm: mockLlm(['正在派工 @CodeBot', '数据齐了。@Ryen 请汇总成周报']).llm,
+      members: MEMBERS,
+      dispatcherId: 'ryen',
+      tools: [],
+    })
+    const events = await collect(
+      dispatcher.runTurn({ text: '做周报', history: [], workspaceRoot: process.cwd(), turnIndex: 0 }),
+    )
+    // 至少链条要在 CodeBot 之后正常结束，而不是把 Ryen 反复拉回来。
+    expect(
+      events.filter((event) => {
+        return event.type === 'agent-message'
+      }).length,
+    ).toBeLessThanOrEqual(3)
   })
 })

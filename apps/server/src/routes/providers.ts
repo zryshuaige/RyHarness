@@ -3,22 +3,26 @@
  *
  * 热注册（refreshProviders）由组合根持有：适配器句柄在服务端实例上，这里只管
  * 路由与落盘。
- * @module @ryagent/server/routes/providers
+ * @module @ryharness/server/routes/providers
  */
 
-import type { SessionStore } from '@ryagent/session'
-import type { ProviderConfig, ProviderProtocol, ProvidersConfigFile } from '../config.ts'
+import type { SessionStore } from '@ryharness/session'
+import type { ProviderConfig, ProviderModelInput, ProviderProtocol, ProvidersConfigFile } from '../config.ts'
 import {
+  applyDeclaredModels,
   deleteApiKey,
   loadApiKeys,
+  MAX_CONTEXT_WINDOW_TOKENS,
+  MIN_CONTEXT_WINDOW_TOKENS,
   mergeApiKeys,
   PROVIDER_PRESETS,
+  parseContextWindowTokens,
   providerKeyConfigured,
   providerPreset,
   saveApiKey,
   writeProvidersConfig,
 } from '../config.ts'
-import { HttpRequestError, json, type Router, strField } from '../router.ts'
+import { HttpRequestError, json, type Router } from '../router.ts'
 
 /** 供应商路由的依赖。 */
 export interface ProviderRoutes {
@@ -37,7 +41,7 @@ interface NewProviderInput {
   displayName: string
   protocol: ProviderProtocol
   baseUrl: string
-  models: string[]
+  models: ProviderModelInput[]
   /** 免 key 协议（Ollama）允许不填；其余也允许留空——用户可以稍后在设置里补。 */
   apiKey?: string
   /** 从哪个预设建起（图标/文档链接回溯）。 */
@@ -66,18 +70,50 @@ function sameBaseUrl(a: string, b: string): boolean {
   return a.replace(/\/+$/, '').toLowerCase() === b.replace(/\/+$/, '').toLowerCase()
 }
 
-/** 模型 id 数组的白名单校验：非空、去重、逐项 trim。 */
-function parseModelIds(value: unknown): string[] {
+/**
+ * 模型列表的白名单校验：非空、去重、逐项 trim。
+ *
+ * 每项可以是裸 id（`"gpt-4o"`），也可以是带补录上下文长度的对象（`{ id, contextWindow }`）：
+ * OpenAI 兼容端点根本不报这个数字，而用户在设置页照厂商文档填了——那份值要一路进到内核的
+ * 请求预算里去（见 {@link ProviderModelInput}），所以这里必须给它一条通路。裸 id 与对象
+ * 可以混在一份数组里，多余的键一律丢弃。
+ */
+function parseModels(value: unknown): ProviderModelInput[] {
   if (!Array.isArray(value) || value.length === 0) {
     throw new HttpRequestError(400, 'models must be a non-empty array of model ids')
   }
-  const models: string[] = []
-  for (const model of value) {
-    if (typeof model !== 'string' || model.trim().length === 0) {
+  const models: ProviderModelInput[] = []
+  for (const entry of value) {
+    let id: unknown
+    let declaredWindow: unknown
+    if (typeof entry === 'string') {
+      id = entry
+    } else if (typeof entry === 'object' && entry !== null) {
+      const record = entry as Record<string, unknown>
+      id = record.id
+      declaredWindow = record.contextWindow
+    }
+    if (typeof id !== 'string' || id.trim().length === 0) {
       throw new HttpRequestError(400, 'models must be a non-empty array of model ids')
     }
-    const id = model.trim()
-    if (!models.includes(id)) models.push(id)
+    // 给了却不能用（0、小数、超出上下限）一律 400：宁可让用户当场看见自己敲错，也不能把一个
+    // 内核会照着算预算的假数字写进 providers.json。
+    if (declaredWindow !== undefined && parseContextWindowTokens(declaredWindow) === undefined) {
+      throw new HttpRequestError(
+        400,
+        `contextWindow must be an integer between ${MIN_CONTEXT_WINDOW_TOKENS} and ${MAX_CONTEXT_WINDOW_TOKENS}`,
+      )
+    }
+    const trimmed = id.trim()
+    const contextWindow = parseContextWindowTokens(declaredWindow)
+    // 去重保留第一次出现的那份：同一个 id 声明两次是有歧义的，界面的模型列表不会这样发。
+    if (
+      models.some((model) => {
+        return model.id === trimmed
+      })
+    )
+      continue
+    models.push({ id: trimmed, ...(contextWindow === undefined ? {} : { contextWindow }) })
   }
   return models
 }
@@ -92,7 +128,7 @@ function parseNewProviderInput(body: unknown): NewProviderInput {
     throw new HttpRequestError(400, `protocol must be one of ${PROVIDER_PROTOCOLS.join('|')}`)
   }
   const baseUrl = typeof record.baseUrl === 'string' ? record.baseUrl.trim() : ''
-  const models = parseModelIds(record.models)
+  const models = parseModels(record.models)
   const apiKey = typeof record.apiKey === 'string' ? record.apiKey.trim() : ''
   const presetId =
     typeof record.presetId === 'string' && record.presetId.trim().length > 0 ? record.presetId.trim() : undefined
@@ -111,7 +147,8 @@ export interface ProviderPatchInput {
   displayName?: string
   protocol?: ProviderProtocol
   baseUrl?: string
-  models?: string[]
+  /** 声明即覆盖：带 contextWindow 的按它写，没带的清掉旧值（见 applyDeclaredModels）。 */
+  models?: ProviderModelInput[]
 }
 
 /**
@@ -141,8 +178,37 @@ function parseProviderPatch(body: unknown): ProviderPatchInput {
     if (typeof record.baseUrl !== 'string') throw new HttpRequestError(400, 'baseUrl must be a string')
     patch.baseUrl = normalizeBaseUrl(record.baseUrl.trim())
   }
-  if (record.models !== undefined) patch.models = parseModelIds(record.models)
+  if (record.models !== undefined) patch.models = parseModels(record.models)
   return patch
+}
+
+/** POST /api/providers/discover 的入参（校验后）：一份还没保存的供应商草稿。 */
+interface DiscoverInput {
+  baseUrl: string
+  protocol: ProviderProtocol
+  /** 一次性凭据：不落盘、不回显。 */
+  apiKey?: string
+}
+
+/**
+ * 草稿的白名单校验，与新增/编辑共用同一套协议表与 baseUrl 归一。
+ *
+ * 不校验"这家供应商是不是已经有了"：发现只是替用户问一句话，问错了用户自己会
+ * 看到返回的地址与诊断，不必在这里拦住。
+ */
+function parseDiscoverInput(body: unknown): DiscoverInput {
+  const record = (typeof body === 'object' && body !== null ? body : {}) as Record<string, unknown>
+  const protocol = record.protocol === undefined ? 'openai' : String(record.protocol).trim().toLowerCase()
+  if (!PROVIDER_PROTOCOLS.includes(protocol as ProviderProtocol)) {
+    throw new HttpRequestError(400, `protocol must be one of ${PROVIDER_PROTOCOLS.join('|')}`)
+  }
+  const baseUrl = typeof record.baseUrl === 'string' ? record.baseUrl.trim() : ''
+  const apiKey = typeof record.apiKey === 'string' ? record.apiKey.trim() : ''
+  return {
+    baseUrl: normalizeBaseUrl(baseUrl),
+    protocol: protocol as ProviderProtocol,
+    ...(apiKey.length === 0 ? {} : { apiKey }),
+  }
 }
 
 /** 引用某个供应商的 agent（ProviderInfo.usedBy / 删除供应商的 409 载荷）。 */
@@ -179,6 +245,11 @@ export function providerInfo(
     baseUrl: provider.baseURL,
     custom: provider.custom === true,
     apiKeyConfigured: providerKeyConfigured(provider),
+    // 思考档位随路由一起告诉前端：UI 据此决定给不给选择器。
+    // 目录在 OpenAiAdapter 里（各家接受值的交集），路由没声明就不给。
+    ...(provider.reasoningControl === undefined || provider.reasoningControl === 'none'
+      ? {}
+      : { reasoningEfforts: ['low', 'medium', 'high'] }),
     models: provider.models.map((model) => ({
       id: model.id,
       ...(model.name === undefined ? {} : { name: model.name }),
@@ -298,6 +369,23 @@ interface VerifyOutcome {
 }
 
 /**
+ * 端点自己报告的一个模型。
+ *
+ * **只有端点真报出来的字段**：OpenAI 兼容的 `/v1/models` 基本只回 id（连名字都
+ * 常常没有），contextWindow / 价格更是没有——那就空着，界面显示「上下文未知」，
+而不是按模型名猜一个数字（猜错了用户会按错的长度截断历史）。
+ */
+export interface DiscoveredModel {
+  /** 发到线上的 model 值。 */
+  id: string
+  /** 端点另外给了显示名才有。 */
+  name?: string
+}
+
+/** 发现结果的条数上限：只为防住畸形响应把渲染层一次灌爆，不是产品上的限制。 */
+const DISCOVERY_LIMIT = 300
+
+/**
  * 探测 URL：OpenAI 兼容走模型列表端点，Ollama 走本机原生 tags 端点。
  *
  * Ollama 的 OpenAI 兼容面（<base>/v1/models）要求它已经挂上 OpenAI 兼容层，
@@ -317,26 +405,105 @@ function networkErrorCode(error: unknown): string | undefined {
   return typeof cause?.code === 'string' ? cause.code : undefined
 }
 
+/** 模型列表端点的条目数组：认 OpenAI 兼容的 `data`，也认 Ollama 原生的 `models`。 */
+function modelCatalogEntries(payload: unknown, protocol: ProviderProtocol): unknown[] {
+  if (Array.isArray(payload)) return payload
+  if (typeof payload !== 'object' || payload === null) return []
+  const record = payload as Record<string, unknown>
+  // Ollama 原生面只有 models；OpenAI 兼容面是 data，但也有网关只回 models。
+  const list = protocol === 'ollama' ? record.models : (record.data ?? record.models)
+  return Array.isArray(list) ? list : []
+}
+
+/** 单个条目 → 模型。id 缺失的条目直接丢掉：没有 id 的模型建不出路由。 */
+function toDiscoveredModel(entry: unknown): DiscoveredModel | undefined {
+  if (typeof entry === 'string') {
+    const id = entry.trim()
+    return id.length === 0 ? undefined : { id }
+  }
+  if (typeof entry !== 'object' || entry === null) return undefined
+  const record = entry as Record<string, unknown>
+  const id = [record.id, record.name, record.model].find((value) => {
+    return typeof value === 'string' && value.trim().length > 0
+  })
+  if (typeof id !== 'string') return undefined
+  const trimmed = id.trim()
+  // 名字只在端点另外给了、且与 id 不同时才带：Ollama 的 name 就是 id，回一份
+  // 等于 id 的 name 只会在界面上多显示一遍同样的字。
+  const name = record.name
+  return typeof name === 'string' && name.trim().length > 0 && name.trim() !== trimmed
+    ? { id: trimmed, name: name.trim() }
+    : { id: trimmed }
+}
+
+/**
+ * 从模型列表端点的响应体里认出模型条目（按端点顺序，去重）。
+ *
+ * 认两种形状：OpenAI 兼容的 `{ data: [{ id }] }`（云端与网关的绝大多数）与 Ollama
+ * 原生的 `{ models: [{ name }] }`。其余字段一概不补——宁可让界面显示「上下文未知」，
+ * 也不能拿一个猜的 contextWindow / 价格去承诺用户做不到的事。
+ */
+export function parseDiscoveredModels(payload: unknown, protocol: ProviderProtocol): DiscoveredModel[] {
+  const seen = new Set<string>()
+  const models: DiscoveredModel[] = []
+  for (const entry of modelCatalogEntries(payload, protocol)) {
+    const model = toDiscoveredModel(entry)
+    if (model === undefined || seen.has(model.id)) continue
+    seen.add(model.id)
+    models.push(model)
+    if (models.length >= DISCOVERY_LIMIT) break
+  }
+  return models
+}
+
+/**
+ * 读出探测响应里的模型目录。
+ *
+ * 拿不到就当空：探测已经过了（连接与凭据都是通的），因为正文不是 JSON 而把整次
+ * 探测判成失败，是拿一个可有可无的附加信息去推翻已经成立的结论。
+ */
+async function readDiscoveredModels(response: Response, protocol: ProviderProtocol): Promise<DiscoveredModel[]> {
+  try {
+    return parseDiscoveredModels(await response.json(), protocol)
+  } catch {
+    return []
+  }
+}
+
+/** 一次探测的完整结果：连通性结论 + 端点自己报告的模型目录。 */
+interface ProviderProbe {
+  outcome: VerifyOutcome
+  /** 探测成功时来自模型列表端点；失败或端点没报就是空数组。 */
+  discovered: DiscoveredModel[]
+}
+
 /**
  * 拿当前凭据对 baseUrl 打一次最小探测：OpenAI 兼容看模型列表端点，Ollama 看
  * 本机原生 tags 端点。**永远回 200 + 中文结论**（凭据无效 / 服务没启动 /
  * 域名解析失败 / 限流 / 网络不可达 / 超时），不把网络故障冒泡成 500——设置页要的
  * 是一句能照着做的人话。
  *
+ * 顺带把那次模型列表的响应体解析成模型目录一并带出去：请求早就发了，正文也早就
+ * 在手上，此前却在 ok 分支里直接丢掉——于是「这家有哪些模型」只能靠用户手打精确
+ * 的 model id。模型发现因此搭在探测这条已经存在的链路上，而不是另加一次请求。
+ *
  * 两份规矩，别在实现里绕过：
  * 1. 每条 message 都要带下一步（去哪儿点什么），不是复述现象；
  * 2. 不把内部信息写进 message——网络错误码（ECONNREFUSED）、适配器占位环境变量名
- *    （RYAGENT_API_KEY_*）、内部路由路径都不是用户能处理的东西，要归类就归进 code。
+ *    （RYHARNESS_API_KEY_*）、内部路由路径都不是用户能处理的东西，要归类就归进 code。
  */
-async function verifyProvider(provider: ProviderConfig, verifyTimeoutMs: number): Promise<VerifyOutcome> {
+async function probeProvider(provider: ProviderConfig, verifyTimeoutMs: number): Promise<ProviderProbe> {
   const startedAt = Date.now()
   const keyConfigured = providerKeyConfigured(provider)
   if (provider.protocol !== 'ollama' && !keyConfigured) {
     return {
-      ok: false,
-      code: 'no-key',
-      message: '还没填 API Key：先在这行里粘贴这家服务的 Key，再回来测一次。',
-      latencyMs: 0,
+      outcome: {
+        ok: false,
+        code: 'no-key',
+        message: '还没填 API Key：先在这行里粘贴这家服务的 Key，再回来测一次。',
+        latencyMs: 0,
+      },
+      discovered: [],
     }
   }
   const apiKey = provider.apiKey ?? (provider.apiKeyEnv === undefined ? undefined : process.env[provider.apiKeyEnv])
@@ -351,68 +518,89 @@ async function verifyProvider(provider: ProviderConfig, verifyTimeoutMs: number)
     const latencyMs = Date.now() - startedAt
     if (response.ok) {
       return {
-        ok: true,
-        code: 'ok',
-        latencyMs,
-        message: provider.protocol === 'ollama' ? '本地模型服务在跑，可以直接用。' : '连接正常，API Key 有效。',
+        outcome: {
+          ok: true,
+          code: 'ok',
+          latencyMs,
+          message: provider.protocol === 'ollama' ? '本地模型服务在跑，可以直接用。' : '连接正常，API Key 有效。',
+        },
+        discovered: await readDiscoveredModels(response, provider.protocol ?? 'openai'),
       }
     }
     if (response.status === 401 || response.status === 403) {
       return {
-        ok: false,
-        code: 'bad-key',
-        latencyMs,
-        // 403 常常不是"key 错了"而是"这个模型没开/余额没了"：把两种可能都点出来，
-        // 用户照着查才不会来回换 key。
-        message:
-          'API Key 无效或没权限：请到供应商官网确认 Key 状态、可用模型与余额（余额不足也会这样报错），再重新填写。',
+        outcome: {
+          ok: false,
+          code: 'bad-key',
+          latencyMs,
+          // 403 常常不是"key 错了"而是"这个模型没开/余额没了"：把两种可能都点出来，
+          // 用户照着查才不会来回换 key。
+          message:
+            'API Key 无效或没权限：请到供应商官网确认 Key 状态、可用模型与余额（余额不足也会这样报错），再重新填写。',
+        },
+        discovered: [],
       }
     }
     if (response.status === 429) {
       return {
-        ok: false,
-        code: 'rate-limited',
-        latencyMs,
-        message: '被限流了：这家供应商暂时不接受这么多请求，等一两分钟再测就行，Key 本身没问题。',
+        outcome: {
+          ok: false,
+          code: 'rate-limited',
+          latencyMs,
+          message: '被限流了：这家供应商暂时不接受这么多请求，等一两分钟再测就行，Key 本身没问题。',
+        },
+        discovered: [],
       }
     }
     if (response.status === 404) {
       return {
-        ok: false,
-        code: 'not-found',
-        latencyMs,
-        message:
-          provider.protocol === 'ollama'
-            ? '本地服务在跑，但这个地址不像 Ollama，请检查 baseUrl（通常应为 http://127.0.0.1:11434/v1）。'
-            : '服务返回「找不到该地址」，请检查 baseUrl 是否写对（OpenAI 兼容一般以 /v1 结尾）。',
+        outcome: {
+          ok: false,
+          code: 'not-found',
+          latencyMs,
+          message:
+            provider.protocol === 'ollama'
+              ? '本地服务在跑，但这个地址不像 Ollama，请检查 baseUrl（通常应为 http://127.0.0.1:11434/v1）。'
+              : '服务返回「找不到该地址」，请检查 baseUrl 是否写对（OpenAI 兼容一般以 /v1 结尾）。',
+        },
+        discovered: [],
       }
     }
     return {
-      ok: false,
-      code: 'error',
-      latencyMs,
-      message: `服务返回了错误（HTTP ${response.status}）：稍后再测一次；一直这样就换个服务商，或找这家客服看看。`,
+      outcome: {
+        ok: false,
+        code: 'error',
+        latencyMs,
+        message: `服务返回了错误（HTTP ${response.status}）：稍后再测一次；一直这样就换个服务商，或找这家客服看看。`,
+      },
+      discovered: [],
     }
   } catch (error) {
     const latencyMs = Date.now() - startedAt
     const code = networkErrorCode(error)
     if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
       return {
-        ok: false,
-        code: 'timeout',
-        latencyMs,
-        message: `连接超时（${Math.round(verifyTimeoutMs / 1000)} 秒没响应）：请检查网络，或确认 baseUrl 与端口写对。`,
+        outcome: {
+          ok: false,
+          code: 'timeout',
+          latencyMs,
+          message: `连接超时（${Math.round(verifyTimeoutMs / 1000)} 秒没响应）：请检查网络，或确认 baseUrl 与端口写对。`,
+        },
+        discovered: [],
       }
     }
     if (code === 'ECONNREFUSED') {
       return {
-        ok: false,
-        code: 'service-down',
-        latencyMs,
-        message:
-          provider.protocol === 'ollama'
-            ? '本地模型服务没启动：请先在终端运行 ollama serve。'
-            : '连不上这个地址（对方拒绝了连接），请确认服务已启动、baseUrl 端口写对了。',
+        outcome: {
+          ok: false,
+          code: 'service-down',
+          latencyMs,
+          message:
+            provider.protocol === 'ollama'
+              ? '本地模型服务没启动：请先在终端运行 ollama serve。'
+              : '连不上这个地址（对方拒绝了连接），请确认服务已启动、baseUrl 端口写对了。',
+        },
+        discovered: [],
       }
     }
     // 域名解析不出来 ≠ 路由到了一台机器但连不上：前者是地址/网络写错了（改
@@ -420,25 +608,34 @@ async function verifyProvider(provider: ProviderConfig, verifyTimeoutMs: number)
     // 合成一句"网络不可达"会让人两头都改一遍。
     if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') {
       return {
-        ok: false,
-        code: 'dns',
-        latencyMs,
-        message: '域名解析不出来：请检查 baseUrl 里的域名有没有拼错、这台机器的网络是否正常（跟 Key 无关）。',
+        outcome: {
+          ok: false,
+          code: 'dns',
+          latencyMs,
+          message: '域名解析不出来：请检查 baseUrl 里的域名有没有拼错、这台机器的网络是否正常（跟 Key 无关）。',
+        },
+        discovered: [],
       }
     }
     if (code === 'EHOSTUNREACH' || code === 'ENETUNREACH') {
       return {
-        ok: false,
-        code: 'unreachable',
-        latencyMs,
-        message: '网络不可达：这台机器连不到那个地址，可能是网络或代理拦住了，换个网络或让网管放行。',
+        outcome: {
+          ok: false,
+          code: 'unreachable',
+          latencyMs,
+          message: '网络不可达：这台机器连不到那个地址，可能是网络或代理拦住了，换个网络或让网管放行。',
+        },
+        discovered: [],
       }
     }
     return {
-      ok: false,
-      code: 'error',
-      latencyMs,
-      message: '暂时连不上这家供应商：稍后再测一次；一直不通就检查 baseUrl，或换个服务商。',
+      outcome: {
+        ok: false,
+        code: 'error',
+        latencyMs,
+        message: '暂时连不上这家供应商：稍后再测一次；一直不通就检查 baseUrl，或换个服务商。',
+      },
+      discovered: [],
     }
   }
 }
@@ -541,11 +738,14 @@ export function registerProviderRoutes(router: Router, deps: ProviderRoutes): vo
       baseURL: input.baseUrl,
       protocol: input.protocol,
       displayName: input.displayName,
-      models: input.models.map((modelId) => {
-        return { id: modelId }
+      models: input.models.map((model) => {
+        return { id: model.id, ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }) }
       }),
       custom: true,
       ...(input.presetId === undefined ? {} : { presetId: input.presetId }),
+      // 思考强度支持随预设一起落库：用户按向导建好路由后，思考档位选择器就该亮起来，
+      // 而不必再手改 providers.json。自定义路由没有预设可依据，保持不声明。
+      ...(preset?.reasoningControl === undefined ? {} : { reasoningControl: preset.reasoningControl }),
     }
     next.providers[providerId] = provider
     // 路由先落盘（saveApiKey 只肯给 providers.json 里已有的供应商写 key），再写凭据，
@@ -567,6 +767,10 @@ export function registerProviderRoutes(router: Router, deps: ProviderRoutes): vo
   /**
    * 改供应商：只认 displayName / baseUrl / models / protocol 四个字段，缺省的项
    * 原样保留（前端可以只发改动的那些），其余键丢弃。改完同样热注册，不用重启。
+   *
+   * models 传的是**声明**而不是"增删补丁"：带 contextWindow 的按它写，没带的清掉旧值
+   * （设置页里清空输入框 = 撤掉这一条）。这样"界面上显的那个数字"与 providers.json 里
+   * 的那一份永远是同一个值，而内核的请求预算就是按后者算的。
    *
    * 两处 409，都是"再点一次会出事"而不是"请求不合法"：
    * - 改成另一条已存在的 baseUrl → 409 + 点名那一条；
@@ -590,17 +794,15 @@ export function registerProviderRoutes(router: Router, deps: ProviderRoutes): vo
       json(res, 409, { error: duplicateProviderText(duplicate), existingId: duplicate.id })
       return
     }
-    const models =
-      patch.models ??
-      provider.models.map((model) => {
-        return model.id
-      })
+    const keptIds = (patch.models ?? provider.models).map((model) => {
+      return model.id
+    })
     const removed = provider.models
       .map((model) => {
         return model.id
       })
       .filter((modelId) => {
-        return !models.includes(modelId)
+        return !keptIds.includes(modelId)
       })
     const agents = store.listAgents()
     const inUse = modelUsage(agents, providerId, removed)
@@ -608,11 +810,6 @@ export function registerProviderRoutes(router: Router, deps: ProviderRoutes): vo
       json(res, 409, { error: modelInUseText(inUse), models: inUse })
       return
     }
-    const previousModels = new Map(
-      provider.models.map((model) => {
-        return [model.id, model]
-      }),
-    )
     const next: ProvidersConfigFile = {
       ...deps.providers,
       providers: { ...deps.providers.providers },
@@ -622,11 +819,10 @@ export function registerProviderRoutes(router: Router, deps: ProviderRoutes): vo
       ...(patch.displayName === undefined ? {} : { displayName: patch.displayName }),
       ...(patch.protocol === undefined ? {} : { protocol: patch.protocol }),
       baseURL: baseUrl,
-      // 留着的模型沿用旧条目（name / contextWindow 是手写配置的一部分，不能因为
-      // 改个顺序就丢）；新加的只有 id。
-      models: models.map((modelId) => {
-        return previousModels.get(modelId) ?? { id: modelId }
-      }),
+      // 声明了模型列表就按它重建：留着的那几条沿用旧条目（name / description 是手写配置的
+      // 一部分，不能因为改个顺序就丢），contextWindow 则听这次声明的——用户清空输入框就是
+      // 要撤掉这条，界面上已经回到「未知」，配置里也得跟着撤（否则内核还照着旧窗口留历史）。
+      models: patch.models === undefined ? provider.models : applyDeclaredModels(provider.models, patch.models),
     }
     applyProviderConfig({ previous: snapshot(), next })
     json(res, 200, {
@@ -642,9 +838,14 @@ export function registerProviderRoutes(router: Router, deps: ProviderRoutes): vo
    * 连通性探测：拿当前凭据对 baseUrl 打一次最小请求（OpenAI 兼容 → models 列表，
    * Ollama → 本机原生 tags 端点），超时 8s。
    *
-   * 永远回 200 + `{ok, code, message, latencyMs}`：探测失败是设置页要展示的诊断信息，
-   * 不是服务端故障。code 是机器可读的分类（见 ProviderFailureCode），message 是
-   * 给人看的中文下一步——两者都不含网络错误码或内部路径。
+   * 永远回 200 + `{ok, code, message, latencyMs, discovered}`：探测失败是设置页
+   * 要展示的诊断信息，不是服务端故障。code 是机器可读的分类（见
+   * ProviderFailureCode），message 是给人看的中文下一步——两者都不含网络错误码
+   * 或内部路径。
+   *
+   * `discovered` 是这次请求顺手带回的模型目录（模型列表端点的响应体，见
+   * parseDiscoveredModels）。设置页的「从供应商拉取模型」直接用它，用户不必再
+   * 手打精确的 model id；探测失败时是空数组——连通性结论仍然由 ok/code 说了算。
    */
   router.post('/api/providers/:id/verify', async (req, res) => {
     const providerId = req.params.id as string
@@ -653,7 +854,35 @@ export function registerProviderRoutes(router: Router, deps: ProviderRoutes): vo
       json(res, 404, { error: `provider not found: ${providerId}` })
       return
     }
-    json(res, 200, await verifyProvider(provider, verifyTimeoutMs))
+    const probe = await probeProvider(provider, verifyTimeoutMs)
+    json(res, 200, { ...probe.outcome, discovered: probe.discovered })
+  })
+
+  /**
+   * 尚未保存的供应商草稿也能拉模型目录（POST /api/providers/discover）。
+   *
+   * 添加向导里用户正在填的那一条还没有路由 id，没法走 verify；而"必须先存一条空
+   * 模型列表的路由再发现模型"会让保存直接 400（模型列表不能为空），也谈不上
+   * 体验。这里直接对草稿打一次模型列表端点，**一次性**使用请求里的 Key：不落盘、
+   * 不回显、不进适配器配置，与 LlmModelDiscoveryRequest 的约定一致。
+   *
+   * 与 verify 一样永远回 200 + 中文结论；合法性和 baseUrl 归一走同一套白名单，
+   * 出错由 dispatch 回 400。
+   */
+  router.post('/api/providers/discover', async (req, res) => {
+    const input = parseDiscoverInput(await req.body())
+    const probe = await probeProvider(
+      {
+        baseURL: input.baseUrl,
+        protocol: input.protocol,
+        ...(input.apiKey === undefined ? {} : { apiKey: input.apiKey }),
+        // 草稿不注册进适配器，models 只是 ProviderConfig 类型上要求的字段；
+        // 这里给的空数组永远不会被谁读到。
+        models: [],
+      },
+      verifyTimeoutMs,
+    )
+    json(res, 200, { ...probe.outcome, models: probe.discovered })
   })
 
   /**

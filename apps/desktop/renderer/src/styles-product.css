@@ -22,12 +22,15 @@
   background: linear-gradient(to top, var(--bg-elevated) 62%, transparent);
 }
 
-/* ---- 通讯录卡片：操作区 ---- */
+/* ---- 通讯录卡片：操作区 ----
+   margin-top 用 auto 而不是固定值：卡片是 flex 列，按钮行前面几行文字的行数不定，
+   固定间距按内容高度算，同排三张卡的「发消息」能差 18px；auto 把按钮行推到卡片
+   底部，grid 同行等高于是自动对齐。 */
 .contact-actions {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
-  margin-top: var(--space-3);
+  margin-top: auto;
 }
 
 .btn-danger {
@@ -309,25 +312,9 @@
   text-align: center;
 }
 
-/* ---- 供应商行（可展开 + 内联配置 key） ---- */
-.provider-row {
-  flex-direction: column;
-  align-items: stretch;
-  gap: var(--space-2);
-}
-
-.provider-row-head {
-  width: 100%;
-  text-align: left;
-  background: none;
-  border: none;
-  cursor: pointer;
-}
-
-.provider-detail {
-  padding: var(--space-2) var(--space-3) var(--space-3);
-}
-
+/* ---- 供应商行（可展开 + 内联配置 key）----
+   旧版可展开供应商行的样式：全仓零引用（styles-provider.css 的注释也记着这件事），
+   留着只会让人以为"改这里能改供应商列表"。 */
 .model-list {
   list-style: none;
   margin: 0;
@@ -350,47 +337,410 @@
   font-size: var(--fs-xs);
 }
 
-/* ---- 聊天：可展开的"更早消息"提示 ---- */
-.chat-hint-btn {
-  display: block;
-  width: 100%;
-  padding: var(--space-2);
-  border: 1px solid var(--edge);
-  border-radius: var(--radius-md);
-  background: none;
+/* ---- 聊天：可展开的"更早消息"提示 ----
+   .chat-hint-btn 全仓零引用：现役的"加载更早消息"是 .chat-hint 里的按钮。 */
+
+/* ---- 聊天气泡：头像列（两侧共用） ----
+   40px 是这一列的定宽：agent 侧在左、用户侧在右（行是 row-reverse，同一个 DOM 位置
+   就落在镜像的两端）。宽度写死而不是跟着头像走，是为了让「组首带头像、组内只留白」
+   的两条消息把气泡边缘对齐——留白一抖动，横着扫一眼就看得出来。 */
+.bubble-avatar-gutter {
+  width: 40px;
+  flex-shrink: 0;
+  padding-top: 2px;
+}
+
+/* ---- 欢迎页：一个焦点，两行配角 ----
+   DOM 顺序（也是窄屏顺序）：问候上下文 → 凭据前置 → 待办 → 起步任务 → 输入 dock。
+   全页只有一句大标题、只有 composer 一块抬升面。
+   三条结构线：不重复左栏（只留待办）、去向只有一个控件（贴着 composer 的收件人行）、
+   起步建议只说自己是什么（真实的去向头像，不是一个「我是功能」的图标方块）。 */
+.welcome-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    'head'
+    'prereq'
+    'pending'
+    'suggest'
+    'compose';
+  /* 行高必须跟着内容走：默认的 stretch 会把剩余高度摊进每一行，首屏中段被
+     撑出几十像素的空白，输入 dock 被推下去。多余空间留在页脚上方。 */
+  align-content: start;
+  align-items: start;
+  min-width: 0;
+}
+
+.welcome-head { grid-area: head; min-width: 0; padding-top: var(--space-6); }
+.welcome-prereq { grid-area: prereq; min-width: 0; }
+.welcome-pending { grid-area: pending; min-width: 0; margin-top: var(--space-6); }
+.welcome-suggestions { grid-area: suggest; min-width: 0; margin-top: var(--space-6); }
+
+.welcome-context {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.welcome-context .welcome-cat { flex-shrink: 0; }
+
+.welcome-context-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px var(--space-2);
+  margin: 0;
+  min-width: 0;
   color: var(--text-secondary);
-  font: inherit;
-  cursor: pointer;
-  transition: background var(--dur-hover) var(--ease-out), color var(--dur-hover) var(--ease-out),
+  font-size: var(--fs-sm);
+}
+
+.welcome-context-line strong {
+  color: var(--text-primary);
+  font-size: var(--fs-base);
+  font-weight: 600;
+}
+
+/* 区块标题就是一行小字：踢掉「kick + h2 + 计数」那三件套。全页唯一的大标题是
+   .welcome-greeting，其余区块一律退到这一行的视觉重量以下——顺着页面摞小标题，
+   读起来才像落地页而不是聊天软件。 */
+.welcome-label {
+  margin: 0 0 var(--space-2);
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+/* 凭据卡继承 .apikey-card 的白面，但在主栏里不再居中缩成 520px。 */
+.welcome-prereq .apikey-card {
+  max-width: none;
+  margin: var(--space-4) 0 0;
+}
+
+/* ---- 待办行 ----
+   它复刻的是左栏那种"一行"，所以它自己就该是一行：白面、描边、阴影都在 styles.css
+   里撤掉了（那里是它唯一的定义处），只有悬停才浮出一个圆角矩形。 */
+.welcome-continue-avatars {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding-left: 2px;
+}
+
+.welcome-continue-avatar {
+  display: inline-flex;
+  margin-left: -6px;
+  border-radius: 50%;
+  /* 叠头像之间用页面底色切一刀，比给每个头像描边更安静。 */
+  box-shadow: 0 0 0 2px var(--bg-app);
+}
+
+.welcome-continue-avatar:first-child { margin-left: 0; }
+
+.welcome-continue-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  text-align: left;
+}
+
+.welcome-continue-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: var(--fs-base);
+  font-weight: 600;
+}
+
+.welcome-continue-title-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.welcome-continue-preview {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.welcome-continue-side {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+/* ---- 起步建议：一排安静的胶囊 ---- */
+.welcome-task-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* 覆盖 .welcome-chip 的基础形态：标题只有一行，去向由左端的头像说。
+   不再是竖排的一块工作面，也不再带一枚"发往…"的文字标签——那句话读屏器需要，
+   但它在胶囊上只是第四个盒子。 */
+.welcome-task { flex: 0 1 auto; }
+
+.welcome-task-avatars {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+/* 两位叠起来 = 小队，一位 = 单聊。同一个 20px 槽，不为群聊另开一档几何。 */
+.welcome-task-avatars .avatar + .avatar { margin-left: -9px; }
+
+.welcome-task-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- 输入 dock：全屏唯一的焦点，也是唯一一块抬升面 ----
+   收件人行贴在它上沿，像邮件的「收件人」字段：怎么写这句话、发给谁，是同一件事。
+   与会话页 .chat-input-col 同一个长相：同一根卡片档阴影 + 同一根 1px --edge 描边，
+   白卡压在白底上时阴影量不出边，少了这一根两处 composer 会再次画成两种控件。 */
+.welcome-compose {
+  grid-area: compose;
+  position: relative;
+  max-width: none;
+  min-width: 0;
+  margin: var(--space-5) 0 0;
+  padding: var(--space-2) var(--space-3) var(--space-3);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  border: 1px solid var(--edge);
+  box-shadow: var(--shadow-2);
+  text-align: left;
+  transition: box-shadow var(--dur-hover) var(--ease-out), background var(--dur-hover) var(--ease-out),
     border-color var(--dur-hover) var(--ease-out);
 }
 
-.chat-hint-btn:hover {
-  color: var(--text-primary);
-  background: var(--bg-elevated);
-  border-color: var(--edge-strong);
-}
-
-/* ---- 欢迎页：首屏直接能开口 ----
-   此前文案让用户「直接跟我说」却没有任何输入框，chip 一点还替用户把话发了出去。 */
-.welcome-compose {
-  max-width: 560px;
-  margin: 0 auto var(--space-6);
-  padding: var(--space-3);
-  border-radius: var(--radius-xl);
-  background: var(--bg-surface);
-  /* 与会话页 .chat-input-col 同一个长相：卡片档阴影一根，焦点环叠在上面，
-     不再有「描边 + 阴影 + 发丝线」三件套把两处 composer 画成两种控件。
-     text-align: left 是必需的——.welcome 整体居中，漏进来会让输入的文字也居中。 */
-  border: none;
-  box-shadow: var(--shadow-2);
-  text-align: left;
-  transition: box-shadow var(--dur-hover) var(--ease-out), background var(--dur-hover) var(--ease-out);
-}
-
 .welcome-compose:focus-within {
+  border-color: var(--amber-text);
   box-shadow: var(--shadow-2), 0 0 0 4px color-mix(in srgb, var(--amber-500) 18%, transparent),
     0 0 28px color-mix(in srgb, var(--amber-500) 12%, transparent);
+}
+
+/* 首屏的框比会话页高一行：它已经是全页唯一的焦点，不该先敲五个字才发现这么矮。 */
+.welcome-compose .chat-input-box textarea { min-height: 46px; }
+
+/* 收件人行：一排头像 + 另一端的小队胶囊。它取代了此前两处都写 target 的控件
+   （头像排与「跟 X 聊 / 开个小队」两格），同一个决定现在只画一遍。 */
+.welcome-addressee {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-2);
+}
+
+.welcome-addressee-label {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  flex-shrink: 0;
+}
+
+.welcome-team-row {
+  display: flex;
+  gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: none;
+}
+
+.welcome-team-row::-webkit-scrollbar { display: none; }
+
+/* 头像 + 一个名字。职能（总管 / 工程师）撤掉了：32px 头像底下挂两行字，整排就变成
+   一堆小卡片；职能属于通讯录与会话头部。 */
+.welcome-team-member {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 3px 10px 3px 4px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-lg);
+  background: none;
+  color: var(--text-primary);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--dur-hover) var(--ease-out), border-color var(--dur-hover) var(--ease-out);
+}
+
+.welcome-team-member:hover { background: var(--hover-bg); }
+
+/* 选中态沿用头像排本来的那套画法：琥珀软底 + 一圈同色淡边。
+   小队胶囊也用同一套——「同一个决定」不该有两种选中语言。 */
+.welcome-team-member.is-selected,
+.welcome-squad.is-selected {
+  border-color: color-mix(in srgb, var(--amber-text) 34%, transparent);
+  background: var(--amber-primary-soft);
+}
+
+.welcome-team-member .avatar { flex-shrink: 0; }
+
+.welcome-team-name {
+  color: var(--text-primary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.welcome-team-empty {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+/* 小队胶囊：收件人行的另一端，同一组 aria-pressed 语义。 */
+.welcome-squad {
+  margin-left: auto;
+  padding: 4px 12px;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--dur-hover) var(--ease-out), border-color var(--dur-hover) var(--ease-out);
+}
+
+.welcome-squad:hover { background: var(--hover-bg); }
+
+.welcome-squad:disabled { opacity: 0.5; cursor: default; }
+
+/* 读屏播报与静态标签共用这套隐藏：动作结果由选中态与输入框焦点给出。
+   .sr-only 是这套隐藏的通用名（头像选择器的人设说明也用它），
+   .welcome-live / .welcome-sr 是欢迎页沿用的旧名，保留是为了不改动既有调用点。 */
+.welcome-live,
+.welcome-sr,
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---- 页脚：两件与"下一步做什么"无关的事 ----
+   数据去哪了，以及示例数据怎么清掉。都不该和 composer 抢同一个视觉层，
+   所以这里没有分隔线把它们框成一节。 */
+.welcome-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  margin-top: auto;
+  padding-top: var(--space-5);
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+}
+
+.welcome-privacy-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  list-style: none;
+}
+
+.welcome-privacy-summary::-webkit-details-marker { display: none; }
+
+.welcome-privacy-summary:hover { color: var(--text-secondary); }
+
+.welcome-privacy-summary svg {
+  transition: transform var(--dur-hover) var(--ease-out);
+}
+
+.welcome-privacy[open] .welcome-privacy-summary svg { transform: rotate(90deg); }
+
+.welcome-privacy-detail {
+  margin: var(--space-2) 0 0;
+  max-width: 64ch;
+}
+
+/* 首启示例：它在页脚占一行 housekeeping，而不是一张会话卡。
+   首屏的会话行已经让给"待办"了，而首启示例既没有未读也不是主动开口——它在这块里
+   没有位置，可它仍然得删得掉，所以删除键跟着它退到这里，紧挨着隐私披露。 */
+.welcome-demo-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.welcome-demo-tag {
+  flex-shrink: 0;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-subtle);
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.welcome-demo-title { white-space: nowrap; }
+
+.welcome-demo-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: background var(--dur-hover) var(--ease-out), color var(--dur-hover) var(--ease-out);
+}
+
+.welcome-demo-clear:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+
+.welcome-demo-clear:disabled { opacity: 0.4; cursor: default; }
+
+/* 矮窗口：把卡片内边距和段间距各收一档，保证 1024×768 也能一屏看到输入 dock。 */
+@media (max-height: 840px) {
+  .welcome-head .welcome-greeting {
+    margin-top: var(--space-2);
+    font-size: 24px;
+  }
+
+  .welcome-pending,
+  .welcome-suggestions,
+  .welcome-compose { margin-top: var(--space-4); }
+
+  .welcome-foot { padding-top: var(--space-3); }
 }
 
 /* ---- 停止生成：不是故障，是用户自己的选择 ----
@@ -438,6 +788,57 @@
   background: var(--hover-bg);
 }
 
+/* 不可改的编辑控件：名字还要读，只把「可点」的暗示收掉。用 cursor 而不是整体
+   置灰——置灰会把名字一起变淡，而那是要读的内容。 */
+.me-inline-edit:disabled {
+  cursor: default;
+  color: var(--text-primary);
+}
+
+.me-inline-edit:disabled .me-pencil { display: none; }
+
+.me-inline-edit:disabled:hover { background: none; }
+
+/* 头像也是编辑控件：平时就是一张脸，悬停/聚焦时右下角浮出一枚笔尖角标。 */
+.me-avatar-btn {
+  position: relative;
+  border: none;
+  padding: 0;
+  background: none;
+  cursor: pointer;
+  line-height: 0;
+}
+
+.me-avatar-edit {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--amber-primary);
+  color: var(--amber-on-primary);
+  opacity: 0;
+  transition: opacity var(--dur-hover) var(--ease-out);
+}
+
+.me-avatar-btn:hover .me-avatar-edit,
+.me-avatar-btn:focus-visible .me-avatar-edit {
+  opacity: 1;
+}
+
+/* 焦点不能只剩浏览器默认描边压在头像图片上。 */
+.me-avatar-btn:focus-visible {
+  outline: 2px solid var(--amber-primary);
+  outline-offset: 2px;
+}
+
+.me-avatar-btn:disabled { cursor: default; }
+
+.me-avatar-btn:disabled .me-avatar-edit { display: none; }
 .me-name-inline {
   width: 100%;
   font-size: var(--fs-base);
@@ -508,7 +909,10 @@
   flex-shrink: 0;
 }
 
-/* 面板内的次级按钮：比 .btn 更矮更窄，一行放得下两个。 */
+/* 面板内的次级按钮：比 .btn 更矮更窄，一行放得下两个。
+   box-shadow: none 只撤掉抬升档，不动边缘——边缘来自同一元素上的 .btn 那根
+   1px --edge 描边（组件里一律写成 class="btn btn-mini"），所以 26px 的小控件
+   在白底上仍然站得住；改成 inset ring 就会被这行一起抹掉。 */
 .btn-mini {
   height: 26px;
   padding: 0 var(--space-2);
@@ -524,3 +928,1481 @@
   color: var(--text-secondary);
   line-height: 1.6;
 }
+
+/* ============================================================
+   建 Agent 工作台：左栏分层编辑 + 右栏吸顶身份卡
+   ------------------------------------------------------------
+   这个弹窗此前是一列原生控件（模板 <select> → 名字 → 头像格 →
+   四根裸滑杆 → 供应商/模型/工具），一屏塞不下、没有任何层次，
+   改完什么也看不见。新的结构分三层递进：身份 → 性格 → 它会做什么，
+   供应商/模型/工具收进「高级设置」；右栏那张身份卡是全过程的结果预览，
+   改任何一处输入它都立刻跟着变。
+
+   宽度与高度都只在这里改：.modal 是全站通用弹窗（540px / 86vh），工作台需要并排放
+   「编辑」与「结果」，而且性格（这个产品第一卖点）必须在首屏就露出标题与第一根滑杆。
+   所以用 :has(.studio) 精确命中这一个弹窗，而不是给通用弹窗改尺寸或新造一个变体类。
+   ============================================================ */
+.modal:has(.studio) {
+  width: 880px;
+  /* 通用弹窗是 86vh：这里留 4vh 给遮罩的呼吸，换来内容区多出的 ~40px。 */
+  max-height: min(92vh, 820px);
+}
+
+/* 真正决定「首屏能看到哪一屏」的是内容区上限，不是 .modal：
+   通用弹窗给的是 min(66vh, 620px)（够一个删除确认，不够一个建人工作台）。
+   底部再留一格：吸底操作条是 .modal-scroll 的兄弟，滚到底时最后一排（工具白名单）
+   会压在它下面，没有这格留白就永远差那么一条。 */
+.modal:has(.studio) .modal-scroll {
+  max-height: min(78vh, 640px);
+  padding-bottom: var(--space-6);
+}
+
+.studio {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 248px;
+  gap: var(--space-5);
+  align-items: start;
+}
+
+.studio-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+/* 身份卡吸顶：内容区可滚动，而「它变成了谁」必须一直看得见。 */
+.studio-rail {
+  position: sticky;
+  top: 0;
+}
+
+/* 分区靠一根发丝线分开，而不是靠更多的框：层级靠留白和标题说明，不靠套娃。 */
+.studio-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.studio-section + .studio-section {
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--divider);
+}
+
+/* .field 自带上下 margin，进了有 gap 的分区里会变成双倍间距，这里收归分区管。 */
+.studio-section .field,
+.advanced-panel .field {
+  margin: 0;
+}
+
+.studio-section-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.studio-section-icon {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  background: var(--amber-primary-soft);
+  color: var(--amber-text);
+}
+
+.studio-section-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.studio-section-text strong {
+  font-size: var(--fs-base);
+}
+
+.studio-section-text small {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+/* 分区标题行右侧的动作（如「换一批」）：贴右，且提示文字再长也不把它挤走。 */
+.studio-section-action {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* ---- 身份卡 ---- */
+.agent-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-5) var(--space-4);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  border: 1px solid var(--edge);
+  box-shadow: var(--shadow-1);
+}
+
+/* 光晕压在头像下面那圈垫板上：琥珀只做指示，不铺满整张卡。 */
+.agent-card-face {
+  padding: 3px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 3px var(--amber-primary-soft), var(--shadow-2);
+}
+
+.agent-card-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  text-align: center;
+}
+
+.agent-card-name {
+  font-size: var(--fs-title);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.agent-card-name.is-placeholder {
+  color: var(--text-disabled);
+}
+
+.agent-card-catch {
+  color: var(--amber-text);
+  font-size: var(--fs-sm);
+}
+
+.agent-card-catch.is-empty {
+  color: var(--text-disabled);
+}
+
+.agent-card-traits {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+
+.agent-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  justify-content: center;
+}
+
+.agent-card-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+/* ---- 模板卡片（横轨沿用 .template-rail 的排布与 hover 滚动条） ---- */
+.studio-templates {
+  /* 右缘渐隐：横轨总会被裁一刀，过去那一刀没有遮罩，静止时读起来像 bug 而不是
+     「右边还有」。用 mask 而不是盖一层不透明底色——遮罩不吃命中测试，最后一张卡
+     的 hover 与选中仍然是原样（盖底色就得给它写 pointer-events，脆得多）。
+     这里的 #000 是遮罩的 alpha 通道，不是往页面上画的颜色。 */
+  mask-image: linear-gradient(to right, #000 calc(100% - 56px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 56px), transparent 100%);
+}
+
+.template-pick {
+  position: relative;
+  scroll-snap-align: start;
+  flex: 0 0 236px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  text-align: left;
+  cursor: pointer;
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
+  animation: item-in var(--dur-in) var(--ease-out) backwards;
+  animation-delay: calc(min(var(--i, 0), 8) * 30ms);
+  transition: transform var(--dur-hover) var(--ease-out), box-shadow var(--dur-hover) var(--ease-out),
+    border-color var(--dur-hover) var(--ease-out), background var(--dur-hover) var(--ease-out);
+}
+
+.template-pick:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-2);
+}
+
+/* 选中态用琥珀描边 + 软底：与头像选择器的选中环同一套「我被选中了」语言。 */
+.template-pick.is-selected {
+  border-color: var(--amber-text);
+  background: var(--amber-primary-soft);
+}
+
+.template-pick-face {
+  flex-shrink: 0;
+  border-radius: 50%;
+}
+
+.template-pick-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.template-pick-text strong {
+  font-size: var(--fs-base);
+}
+
+.template-pick-text small {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.template-pick-check {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  color: var(--amber-text);
+}
+
+/* ---- 头像选择器 ---- */
+.face-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.face-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(60px, 1fr));
+  gap: var(--space-2);
+}
+
+.face-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: var(--space-1);
+  cursor: pointer;
+  line-height: 0;
+  border: 2px solid transparent;
+  border-radius: var(--radius-lg);
+  background: none;
+  transition: transform var(--dur-hover) var(--ease-spring), border-color var(--dur-hover) var(--ease-out),
+    background var(--dur-hover) var(--ease-out);
+}
+
+.face-cell:hover {
+  transform: translateY(-2px);
+  background: var(--hover-bg);
+}
+
+.face-cell:active {
+  transform: scale(0.96);
+}
+
+/* 选中的那一格：环 + 软底 + 放大。三样叠起来，在一排小圆图里才真的找得到。 */
+.face-cell.is-selected {
+  border-color: var(--amber-text);
+  background: var(--amber-primary-soft);
+  transform: scale(1.06);
+}
+
+/* 格子不带投影：这一排是控件，结果那张脸由右栏身份卡担任，两处都抬起来就没有主次了。 */
+.face-cell-art {
+  box-shadow: none;
+}
+
+.face-cell small {
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+  line-height: 1.3;
+}
+
+.face-cell.is-selected small {
+  color: var(--amber-text);
+  font-weight: 600;
+}
+
+/* 占位立绘（剪影）：它不是第 4 个正式角色，而是「这位助理还没有专属形象」。
+   与正式立绘同权重并排，用户会以为那就是它的样子——降权 + 一个角标把层级说清楚。
+   降权只压脸，不压名字：名字要读得见，脸才是那个「还没定」的部分。 */
+.face-cell.is-placeholder .face-cell-art { opacity: .55; }
+
+.face-cell-tag {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  padding: 0 4px;
+  border-radius: var(--radius-xs);
+  background: var(--bg-elevated);
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 1.4;
+  pointer-events: none;
+}
+
+/* 这一格是卡片式单选，角标要贴着卡片而不是贴着视口。 */
+.face-cell { position: relative; }
+
+/* ---- 性格卡 ----
+   底色比编辑区低一档（--bg-subtle 与输入框同档）：这张卡是「性格」这块内容的
+   容器，不是一个又一个输入框。 */
+.persona-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  border-radius: var(--radius-lg);
+  background: var(--bg-subtle);
+}
+
+.persona-traits {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.persona-trait {
+  display: grid;
+  grid-template-columns: 60px minmax(0, 1fr) 188px;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.persona-trait-label {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.persona-trait-score {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.persona-trait-slider {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.persona-trait input[type="range"] {
+  /* 取值就在组件手里：轨道左端到当前值那一段纯 CSS 画不出来（Chromium 没有进度段
+     伪元素），由 PersonaEditor 按分值覆写。默认值 0% 只在没有内联值的场合兜住。 */
+  --fill: 0%;
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  height: var(--slider-h);
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.persona-trait input[type="range"]::-webkit-slider-runnable-track {
+  height: var(--slider-track-h);
+  border-radius: var(--radius-pill);
+  background: linear-gradient(
+    90deg,
+    var(--amber-primary) var(--fill),
+    color-mix(in srgb, var(--amber-primary) 12%, var(--bg-surface)) var(--fill)
+  );
+  box-shadow: var(--ring-edge);
+}
+
+.persona-trait input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: var(--slider-thumb);
+  height: var(--slider-thumb);
+  /* 轨道在 runnable-track 上居中，拇指要自己往上顶半出差值，否则贴底 */
+  margin-top: calc((var(--slider-track-h) - var(--slider-thumb)) / 2);
+  border: none;
+  border-radius: 50%;
+  background: var(--amber-primary);
+  box-shadow: 0 0 0 2px var(--bg-surface), var(--shadow-1);
+}
+
+/* Firefox 的同名结构件：轨道一致，进度段由引擎按取值填（它没有 --fill 这条路）。 */
+.persona-trait input[type="range"]::-moz-range-track {
+  height: var(--slider-track-h);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--amber-primary) 12%, var(--bg-surface));
+  box-shadow: var(--ring-edge);
+}
+
+.persona-trait input[type="range"]::-moz-range-progress {
+  height: var(--slider-track-h);
+  border-radius: var(--radius-pill);
+  background: var(--amber-primary);
+}
+
+.persona-trait input[type="range"]::-moz-range-thumb {
+  width: var(--slider-thumb);
+  height: var(--slider-thumb);
+  border: none;
+  border-radius: 50%;
+  background: var(--amber-primary);
+  box-shadow: 0 0 0 2px var(--bg-surface), var(--shadow-1);
+}
+
+.persona-trait-scale {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  line-height: 1.3;
+}
+
+.persona-trait-band {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.persona-trait-band strong {
+  color: var(--amber-text);
+  font-size: var(--fs-sm);
+}
+
+.persona-trait-band small {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+
+.persona-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+/* ---- 高级设置：折叠的一行入口 ---- */
+.advanced {
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-lg);
+  background: var(--bg-subtle);
+  overflow: hidden;
+}
+
+.advanced-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  background: none;
+  border: none;
+  transition: background var(--dur-hover) var(--ease-out);
+}
+
+.advanced-toggle:hover {
+  background: var(--hover-bg);
+}
+
+.advanced-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.advanced-text strong {
+  font-size: var(--fs-sm);
+}
+
+.advanced-text small {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 模型组合存不下来时的入口标记：折叠区自己喊一声，省得用户去猜保存键为什么灰。 */
+.advanced-flag {
+  flex-shrink: 0;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
+  font-size: var(--fs-xs);
+}
+
+.advanced-chevron {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  transition: transform var(--dur-hover) var(--ease-out);
+}
+
+.advanced-chevron.is-open {
+  transform: rotate(90deg);
+}
+
+.advanced-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  border-top: 1px solid var(--divider);
+}
+
+/* 两栏里的模型下拉 min-width:auto：选项文字（「DeepSeek-V3（deepseek-ai/…）— 64K 上下文」）
+   很长，不收掉最小宽度它会按内容宽度把这一栏顶出去、盖住面板右缘。 */
+.advanced-panel .field-row .field {
+  min-width: 0;
+}
+
+/* ---- 工具白名单：一排原生 checkbox 改成可点的胶囊 ----
+   .tool-checks 继续负责排布（styles.css 的 flex + gap），这里只改每一格的长相。 */
+.tool-picker {
+  gap: var(--space-2);
+}
+
+.tool-picker label {
+  gap: var(--space-2);
+  padding: 5px var(--space-3);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-1);
+  transition: border-color var(--dur-hover) var(--ease-out), background var(--dur-hover) var(--ease-out);
+}
+
+.tool-picker label:hover {
+  border-color: var(--edge-strong);
+}
+
+.tool-picker label:has(input:checked) {
+  border-color: var(--amber-text);
+  background: var(--amber-primary-soft);
+}
+
+.tool-picker input {
+  accent-color: var(--amber-primary);
+}
+
+/* ---- 窄窗（1024 及以下）：两栏并排放不下，退回单列 ----
+   身份卡从竖排变成顶部一条摘要带：右栏没有了，它仍然必须在第一屏。
+   高度再降一档：单列的内容更长，给满高度会把遮罩上下的呼吸压没。 */
+@media (max-width: 1024px) {
+  .modal:has(.studio) {
+    width: 92vw;
+    max-height: min(88vh, 760px);
+  }
+
+  .modal:has(.studio) .modal-scroll {
+    max-height: min(72vh, 560px);
+  }
+
+  .studio {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .studio-rail {
+    position: static;
+    order: -1;
+  }
+
+  .agent-card {
+    flex-direction: row;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+  }
+
+  .agent-card-body {
+    flex: 1;
+    align-items: flex-start;
+    text-align: left;
+  }
+
+  .agent-card-tags {
+    justify-content: flex-start;
+  }
+
+  .persona-trait {
+    grid-template-columns: 56px minmax(0, 1fr);
+  }
+
+  /* 档位描述挪到尺子下面自己占一行：窄栏里挤在三列里必然折行成三行乱码。 */
+  .persona-trait-band {
+    grid-column: 2;
+  }
+
+  .persona-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ---- 独立插件页 ----
+   此前插件只是「我的」页第三段的一排开关：要滚过整个供应商区块才找得到，
+   关掉一个功能后也没有地方能立刻回到它。独立页把「有什么能力、开了什么、
+   关掉会失去什么」放在同一屏；入口同时出现在 rail 与「我的」页。 */
+.plugins-header {
+  align-items: flex-start;
+}
+
+.plugins-head-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.plugins-head-text h2 {
+  margin: 0;
+}
+
+.plugins-lede {
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.plugins-search {
+  width: min(260px, 34vw);
+  flex-shrink: 0;
+}
+
+.plugins-col {
+  max-width: 760px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.plugin-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.plugin-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: 0 var(--space-1);
+}
+
+.plugin-group-title {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.plugin-group-count {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.plugin-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.plugin-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
+  overflow: hidden;
+  transition:
+    border-color var(--dur-hover) var(--ease-out),
+    box-shadow var(--dur-hover) var(--ease-out),
+    background var(--dur-hover) var(--ease-out);
+}
+
+.plugin-card:hover {
+  border-color: var(--edge-strong);
+  box-shadow: var(--shadow-2);
+}
+
+/* 展开中的卡片把描边染成琥珀：它和 hover 的「抬起」是两种状态，颜色是唯一
+   不会与阴影混淆的选中信号。 */
+.plugin-card.is-open {
+  border-color: color-mix(in srgb, var(--amber-text) 45%, var(--edge));
+  box-shadow: var(--shadow-2);
+}
+
+.plugin-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+}
+
+.plugin-card-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  border: none;
+  background: none;
+  padding: 0;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  border-radius: var(--radius-md);
+}
+
+/* 卡片裁切了溢出，全局焦点环的 2px 外偏移会被裁掉一半；改成内偏移保证
+   键盘用户看得到完整的选中框。 */
+.plugin-card-main:focus-visible,
+.plugin-chevron:focus-visible {
+  outline: 2px solid var(--focus-outline);
+  outline-offset: -2px;
+}
+
+/* 图标位：内置用实心琥珀（它是底座），其余统一用 soft 底。不引入第二套图标，
+   也不给每块插件随机配色——颜色只表达「内置 vs 可开关」。 */
+.plugin-icon {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: var(--radius-md);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--amber-primary-soft);
+  color: var(--amber-text);
+}
+
+.plugin-card[data-group='core'] .plugin-icon {
+  background: var(--amber-primary);
+  color: var(--amber-on-primary);
+}
+
+.plugin-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.plugin-name {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: var(--fs-base);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugin-desc {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
+.plugin-core-note,
+.plugin-note {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
+.plugin-side {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.plugin-status {
+  padding: 2px 9px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-subtle);
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.plugin-status.is-running {
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+  color: var(--success);
+}
+
+.plugin-status.is-error {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
+}
+
+.plugin-switch {
+  min-width: 64px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.plugin-chevron {
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    background var(--dur-hover) var(--ease-out),
+    color var(--dur-hover) var(--ease-out);
+}
+
+.plugin-chevron:hover {
+  background: var(--hover-bg);
+  color: var(--amber-text);
+}
+
+.plugin-chevron-icon {
+  transition: transform var(--dur-hover) var(--ease-out);
+}
+
+.plugin-card.is-open .plugin-chevron-icon {
+  transform: rotate(90deg);
+}
+
+.plugin-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  border-top: 1px solid var(--divider);
+  animation: fade-in var(--dur-in) var(--ease-out);
+}
+
+.plugin-detail-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.plugin-detail-label {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.plugin-detail-text {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+}
+
+.plugin-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.plugin-chip {
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.plugin-chip.is-route {
+  font-family: var(--font-mono);
+}
+
+.plugin-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+}
+
+.plugins-empty {
+  padding: var(--space-8) var(--space-4);
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.plugins-empty h3 {
+  margin: 0 0 var(--space-2);
+  color: var(--text-primary);
+  font-size: var(--fs-md);
+}
+
+.plugins-empty p {
+  margin: 0 0 var(--space-3);
+  font-size: var(--fs-sm);
+}
+
+.plugins-unsupported {
+  padding: var(--space-6) var(--space-2);
+}
+
+/* 右栏待办区：插件关闭时的出口。此前只写「去我的页」让用户自己找回路径，
+   现在原地给一个按钮。 */
+.todo-plugin-off {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+@media (max-width: 720px) {
+  .plugins-header {
+    flex-wrap: wrap;
+  }
+
+  .plugins-search {
+    width: 100%;
+  }
+}
+
+/* 音色不可用：说明与安装卡都贴在音色行下面，不靠一次性 toast。 */
+.voice-unavailable {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  line-height: 1.55;
+}
+
+.voice-unavailable > span {
+  flex: 1;
+  min-width: 180px;
+}
+
+.voice-install-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-inline-size: 0;
+  margin: var(--space-2) 0 0;
+  padding: var(--space-3);
+  border: 1px dashed var(--edge-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+}
+
+.voice-install-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.voice-install-title {
+  flex: 1;
+  min-width: 180px;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  line-height: 1.55;
+}
+
+.voice-install-progress {
+  height: 6px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--bg-subtle);
+}
+
+.voice-install-progress > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--amber-primary);
+  transition: width var(--dur-in) var(--ease-out);
+}
+
+/* ---- RyVibe：一句话做出完整产品（Beta） ----
+
+   这一页的界面上不许出现「配置」「工作流」这类词：用户要做的只有两件事——说一句话、
+   点几下选项。所以输入框、选项胶囊、方案正文三样东西就够了，别的都不画。 */
+
+.vibe-page {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-5) var(--space-8);
+}
+
+.vibe-hero { padding-top: var(--space-4); }
+
+.vibe-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+  font-size: var(--fs-display);
+  letter-spacing: -.5px;
+}
+
+/* Beta 标记：一枚安静的标签——细边、无底色、文字压到次级。
+   之前用的是实心琥珀底 + 深琥珀字：它比页面标题还抢眼，读起来像"这里出事了"，
+   而 Beta 只想说"这个功能还在打磨"。 */
+.vibe-badge {
+  padding: 1px 9px;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: .04em;
+}
+
+.vibe-lede {
+  margin: 0 0 var(--space-5);
+  color: var(--text-secondary);
+  font-size: var(--fs-md);
+  line-height: 1.75;
+}
+
+.vibe-input {
+  width: 100%;
+  padding: var(--space-3) var(--space-4);
+  border: none;
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  box-shadow: var(--ring-edge);
+  font-family: inherit;
+  font-size: var(--fs-md);
+  line-height: 1.6;
+  resize: none;
+}
+
+.vibe-input:focus { outline: none; box-shadow: var(--focus-ring); }
+
+.vibe-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.vibe-start { padding: var(--space-2) var(--space-5); }
+
+.vibe-hint { color: var(--text-tertiary); font-size: var(--fs-xs); }
+
+.vibe-error {
+  margin: var(--space-3) 0 0;
+  color: var(--danger);
+  font-size: var(--fs-sm);
+}
+
+/* 起步示例：比任何说明文字都快——用户点一下就知道「一句话」长什么样。 */
+.vibe-examples {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-top: var(--space-6);
+}
+
+.vibe-examples-label { color: var(--text-tertiary); font-size: var(--fs-xs); }
+
+.vibe-example {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--dur-hover) var(--ease-out), color var(--dur-hover) var(--ease-out),
+    background var(--dur-hover) var(--ease-out);
+}
+
+.vibe-example:hover {
+  border-color: var(--amber-primary);
+  background: var(--amber-primary-soft);
+  color: var(--text-primary);
+}
+
+/* ---- 进行中 ---- */
+
+.vibe-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.vibe-header .vibe-title { margin: 0; font-size: var(--fs-title); }
+
+.vibe-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.vibe-spinner { flex-shrink: 0; }
+
+.vibe-reset { flex-shrink: 0; }
+
+.vibe-requirement {
+  margin: var(--space-4) 0 var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-left: 3px solid var(--amber-primary);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-size: var(--fs-base);
+  line-height: 1.7;
+}
+
+.vibe-squad { margin: 0 0 var(--space-2); color: var(--text-tertiary); font-size: var(--fs-xs); }
+
+.vibe-section { margin-top: var(--space-6); }
+
+.vibe-section-title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-2);
+  font-size: var(--fs-md);
+}
+
+.vibe-round { color: var(--text-tertiary); font-size: var(--fs-xs); font-weight: 400; }
+
+/* 盘问卡：所有问题在一张卡上，一次提交。
+   卡片是一块抬升面（--shadow-1 + 一根 --edge 描边），和"小队正在写的"那几段正文
+   区分开：卡是**要你动手**的，正文是**给你看的**。 */
+.vibe-card {
+  margin-top: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-1);
+}
+
+.vibe-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+  font-size: var(--fs-base);
+  font-weight: 600;
+}
+
+.vibe-card-hint { color: var(--text-tertiary); font-size: var(--fs-xs); font-weight: 400; }
+
+/* 一道题：题目 + 几个选项胶囊。 */
+.vibe-question + .vibe-question { margin-top: var(--space-4); }
+
+.vibe-question-text { margin: 0 0 var(--space-3); font-size: var(--fs-base); line-height: 1.6; }
+
+.vibe-options { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+
+.vibe-option {
+  padding: 6px 14px;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-pill);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  transition: border-color var(--dur-hover) var(--ease-out), background var(--dur-hover) var(--ease-out),
+    color var(--dur-hover) var(--ease-out), transform var(--dur-press) var(--ease-spring);
+}
+
+.vibe-option:hover:not(:disabled) {
+  border-color: var(--amber-primary);
+  background: var(--amber-primary-soft);
+}
+
+.vibe-option:active:not(:disabled) { transform: scale(var(--press-scale)); }
+.vibe-option:disabled { opacity: .55; cursor: not-allowed; }
+
+/* 预选中的那一个：默认就选中，用户不改也能直接提交。 */
+.vibe-option.is-chosen {
+  border-color: var(--amber-primary);
+  background: var(--amber-primary-soft);
+  color: var(--amber-text);
+  font-weight: 600;
+}
+
+.vibe-card-edit {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--amber-text);
+  font-family: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.vibe-card-edit:hover { text-decoration: underline; }
+
+.vibe-card-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+
+.vibe-card-submit { padding: var(--space-2) var(--space-4); }
+
+.vibe-card-skip { color: var(--text-secondary); }
+
+/* 答完的卡片折起来：留下的只有"你选了什么"，问题本身还在。 */
+.vibe-card.is-answered { background: var(--bg-subtle); box-shadow: none; }
+.vibe-card.is-answered .vibe-card-head { color: var(--text-secondary); font-weight: 500; }
+
+.vibe-answered-list { list-style: none; margin: 0; padding: 0; }
+.vibe-answered-list li {
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-1) 0;
+  font-size: var(--fs-sm);
+}
+.vibe-answered-q { color: var(--text-tertiary); }
+.vibe-answered-a { color: var(--text-primary); font-weight: 600; }
+
+/* 问答记录：问过什么、答了什么，一直留在页面上。 */
+.vibe-record { list-style: none; margin: 0; padding: 0; }
+.vibe-record-item {
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--amber-primary);
+  border-radius: var(--radius-xs);
+  background: var(--bg-surface);
+  font-size: var(--fs-sm);
+}
+.vibe-record-q { color: var(--text-tertiary); }
+.vibe-record-a { color: var(--text-primary); font-weight: 600; }
+
+/* 等待期的进度：小队开工到出方案之间可能有一两分钟，空转圈最容易让人放弃。 */
+.vibe-progress { margin-top: var(--space-4); }
+.vibe-progress-bar {
+  height: 2px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--bg-subtle);
+}
+.vibe-progress-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--amber-primary);
+  transition: width var(--dur-in) var(--ease-out);
+}
+.vibe-steps {
+  display: flex;
+  gap: var(--space-4);
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-xs);
+  color: var(--text-tertiary);
+}
+.vibe-steps li.is-done { color: var(--text-secondary); }
+.vibe-steps li.is-active { color: var(--amber-text); font-weight: 600; }
+
+/* 失败：必须长得和成功不一样。 */
+.vibe-failed {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  border-left: 3px solid var(--danger);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+}
+.vibe-failed strong { color: var(--danger); font-size: var(--fs-base); }
+.vibe-failed span { color: var(--text-secondary); font-size: var(--fs-sm); }
+.vibe-failed-actions { display: flex; gap: var(--space-2); margin-top: var(--space-2); }
+.vibe-retry { color: var(--amber-text); }
+
+/* 小队产出：谁写的 + 正文。 */
+.vibe-output {
+  margin-top: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+}
+
+.vibe-output-name { margin-bottom: var(--space-2); color: var(--text-secondary); font-size: var(--fs-xs); }
+
+.vibe-output-body { font-size: var(--fs-body); line-height: 1.7; }
+.vibe-output-body .md-p { margin: 0 0 var(--space-2); }
+.vibe-output-body .md-p:last-child { margin-bottom: 0; }
+
+.vibe-continue { margin-top: var(--space-5); }
+
+/* ---- 项目骨架：方案落成的那个目录 ----
+
+   这一块是 RyVibe 从「写了一段介绍」变成「做出一个东西」的地方，所以它不像
+   方案正文那样是一段文字，而是一张**抬升面**：上面有项目名、落在哪、里面有哪些
+   文件、点一下能预览。目录路径原样给出来——用户要能自己去文件管理器里找。 */
+
+.vibe-project {
+  margin-top: var(--space-5);
+  padding: var(--space-4);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-1);
+}
+
+.vibe-project-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.vibe-project-meta { min-width: 0; }
+
+.vibe-project-path {
+  margin: 2px 0 0;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+
+.vibe-open-folder { flex: none; }
+
+/* 文件列表：一排等宽的小按钮，点一下在下面预览。 */
+.vibe-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.vibe-file {
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  padding: 4px 9px;
+  cursor: pointer;
+  transition: background var(--dur-hover) var(--ease-out);
+}
+
+.vibe-file:hover { background: var(--amber-primary-soft); color: var(--amber-text); }
+
+/* 预览区：文件内容就地展开，不跳走。 */
+.vibe-preview {
+  margin-top: var(--space-3);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+  overflow: hidden;
+}
+
+.vibe-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--divider);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.vibe-preview-text {
+  margin: 0;
+  padding: var(--space-3);
+  max-height: 320px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.vibe-preview-frame {
+  display: block;
+  width: 100%;
+  height: 420px;
+  border: none;
+  background: #FFFFFF;
+}
+
+/* ---- 任务清单：接下来要做的事 ----
+
+   勾选框用品牌琥珀（accent-color 一行就够，不用自己画框）。勾完的字划掉变淡，
+   一眼能看出还剩几件事。 */
+
+.vibe-tasks { list-style: none; margin: var(--space-3) 0 0; padding: 0; }
+
+.vibe-task {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--divider);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  cursor: pointer;
+}
+
+.vibe-task:last-child { border-bottom: none; }
+
+.vibe-task input {
+  flex: none;
+  margin-top: 3px;
+  accent-color: var(--amber-primary);
+}
+
+.vibe-task.is-done { color: var(--text-tertiary); }
+.vibe-task.is-done span { text-decoration: line-through; }

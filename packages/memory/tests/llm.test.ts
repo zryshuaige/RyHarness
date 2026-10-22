@@ -1,5 +1,5 @@
-import { isHarnessError } from '@ryagent/llm'
-import { ChatMemoryLlm, MEMORY_LLM_CODES } from '@ryagent/memory'
+import { isHarnessError } from '@ryharness/llm'
+import { ChatMemoryLlm, MEMORY_LLM_CODES } from '@ryharness/memory'
 import { describe, expect, it } from 'vitest'
 
 interface Captured {

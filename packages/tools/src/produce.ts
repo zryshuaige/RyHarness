@@ -1,16 +1,16 @@
 /**
  * file_produce：把内容落成产物文件并返回"产物卡片"元数据——
  * 这是"发文件"能力的内核：UI 拿到卡片渲染成文件消息。
- * @module @ryagent/tools/produce
+ * @module @ryharness/tools/produce
  */
 
 import { mkdirSync, statSync, writeFileSync } from 'node:fs'
 import { extname, join } from 'node:path'
-import { type ProduceCard, type Tool, throwIfAborted } from '@ryagent/agent'
+import { type ProduceCard, type Tool, throwIfAborted } from '@ryharness/agent'
 import { resolveInWorkspace } from './workspace.ts'
 
 /** 产物统一落进工作区下的这个子目录。 */
-export const ARTIFACTS_DIR = '.ryagent-artifacts'
+export const ARTIFACTS_DIR = '.ryharness-artifacts'
 
 /** 常见扩展名 → MIME（覆盖不全时退回 octet-stream）。 */
 const MIME_BY_EXT: Readonly<Record<string, string>> = {
@@ -53,7 +53,7 @@ function guessMime(name: string): string {
 export { guessMime }
 
 /**
- * 把内容写入工作区 `.ryagent-artifacts/` 并返回产物卡片。
+ * 把内容写入工作区 `.ryharness-artifacts/` 并返回产物卡片。
  * 卡片字段（path/name/size/mime）即 UI 渲染文件消息所需的全部元数据。
  */
 export const fileProduce: Tool = {

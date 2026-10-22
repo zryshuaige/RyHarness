@@ -7,24 +7,34 @@ import type {
   ProviderInfo,
   TelemetrySnapshot,
   UsageReport,
+  UserProfile,
 } from '../api.ts'
+import { humanError } from '../lib/error-text.ts'
+import { humanTokens, LOCAL_DATA_NOTE } from '../lib/humanize.ts'
 import { toast } from '../lib/toast.ts'
+import { loadAutoSpeak, saveAutoSpeak } from '../lib/voice.ts'
+import { AnimalStudio, specOrDefault } from './AnimalStudio.tsx'
 import { Avatar } from './avatars/Avatar.tsx'
+import { Avatar3D } from './avatars/Avatar3D.tsx'
+import { BRAND_AVATAR } from './avatars/avatars.tsx'
+import { AvatarPicker } from './ContactsPage.tsx'
 import { Icon } from './Icon.tsx'
-import { MemoryHealth } from './MemoryPanel.tsx'
+import { KIND_LABELS, MemoryHealth } from './MemoryPanel.tsx'
 import { Modal } from './Modal.tsx'
 import type { ProviderApi } from './ProviderSettings.tsx'
 import { ProviderSettings } from './ProviderSettings.tsx'
 import { WorkspaceSection } from './WorkspaceSection.tsx'
 
-function reason(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
-
 interface MeApi extends ProviderApi {
   listAgentMemories(agentId: string): Promise<{ agent: MemoryRow[]; shared: MemoryRow[] }>
   patchAgent(id: string, patch: Record<string, unknown>): Promise<{ agent: AgentDef }>
   workspace(): Promise<{ path: string }>
+  /**
+   * 个人资料。可选：服务端版本落后时缺这两条，用户卡退回写死的「你」并说明改不了，
+   * 整页其余部分照常用——与下面 usage/memoryHealth 同一口径。
+   */
+  profile?(): Promise<{ profile: UserProfile }>
+  saveProfile?(patch: Partial<UserProfile>): Promise<{ profile: UserProfile }>
   /**
    * 用量账单与记忆健康度要读的数据面。方法可选：缺任一条只会让对应区块显示一句
    * 说明（服务端版本落后时最常走这条路），不该让「我的」页报错或空着。
@@ -37,7 +47,7 @@ interface MeApi extends ProviderApi {
 }
 
 /**
- * 「我的」页：用户卡（你）、猫管家卡（Ryen，昵称可改）、工作区、供应商、共享画像、关于。
+ * 「我的」页：用户卡（你）、猫管家卡（Ryen，昵称可改）、工作区、供应商、插件入口、共享画像、关于。
  *
  * 此前这一页只有一张卡，画的是 Ryen 的猫、写的是它的名字——页面叫「我的」，
  * 用户却找不到自己，编辑的还总是内置 agent 的名字。用户与 agent 是两件事，分开说。
@@ -49,6 +59,7 @@ export function MePage({
   theme,
   onThemeChange,
   onRyenPatched,
+  onOpenPlugins,
 }: {
   api: MeApi
   ryen: AgentDef | undefined
@@ -56,12 +67,52 @@ export function MePage({
   theme: 'light' | 'dark'
   onThemeChange: (theme: 'light' | 'dark') => void
   onRyenPatched?: () => void
+  /** 跳到独立插件页。可选：只渲染页面的测试不必接这条导航。 */
+  onOpenPlugins?: () => void
 }) {
   const [shared, setShared] = useState<MemoryRow[] | undefined>(undefined)
   const [sharedError, setSharedError] = useState<string | undefined>(undefined)
   const [editingName, setEditingName] = useState(false)
   const [nameDraft, setNameDraft] = useState('')
   const [showAbout, setShowAbout] = useState(false)
+  /**
+   * 用户自己的名字与头像。此前这块是写死的「你」+ 一个随机色块——页面叫「我的」，
+   * 用户却改不了自己叫什么，而这个名字是 agent 真正知道的那一个（服务端把它拼进
+   * 系统提示），不是界面上的一行装饰。
+   *
+   * undefined = 服务端没有这条能力（老版本），用户卡退回只读形态并说明。
+   */
+  const [profile, setProfile] = useState<UserProfile | undefined>(undefined)
+  const [profileReady, setProfileReady] = useState(false)
+  const [avatarDraft, setAvatarDraft] = useState<string | undefined>(undefined)
+  const [editingUser, setEditingUser] = useState(false)
+  const [userNameDraft, setUserNameDraft] = useState('')
+  // 与主题同一套存法（localStorage）：这是本机使用偏好，不该写进服务端配置。
+  const [autoSpeak, setAutoSpeak] = useState(loadAutoSpeak)
+  useEffect(() => {
+    if (api.profile === undefined) {
+      setProfileReady(true)
+      return
+    }
+    let alive = true
+    api
+      .profile()
+      .then(({ profile: next }) => {
+        if (!alive) return
+        setProfile(next)
+        setProfileReady(true)
+      })
+      .catch((error: unknown) => {
+        // 读不出来不该挡住整页：退回到缺省资料，头像与名字仍可改（改的那次会再报）。
+        if (!alive) return
+        setProfile({ name: '你', avatar: '' })
+        setProfileReady(true)
+        toast.error(`个人资料没读出来：${humanError(error, '再试一次')}`)
+      })
+    return () => {
+      alive = false
+    }
+  }, [api])
   useEffect(() => {
     if (ryen === undefined) return
     api
@@ -73,9 +124,15 @@ export function MePage({
       .catch((error: unknown) => {
         // 清空列表等于把「读不出来」说成「还没有画像」。
         setShared([])
-        setSharedError(reason(error))
+        setSharedError(humanError(error, '共享画像没读出来，再试一次'))
       })
   }, [api, ryen])
+
+  /**
+   * 用户卡能不能改。加载没回来之前先按「不能」处理：那几秒里点下去会走一次注定
+   * 失败的保存，与其给一个会回弹的按钮，不如先不亮。
+   */
+  const editable = profileReady && api.saveProfile !== undefined
 
   const saveName = async (): Promise<void> => {
     if (ryen === undefined) return
@@ -85,11 +142,39 @@ export function MePage({
     try {
       await api.patchAgent(ryen.id, { name: trimmed })
     } catch (error) {
-      toast.error(`改昵称失败：${reason(error)}`)
+      toast.error(`改昵称失败：${humanError(error, '昵称没能存上，再试一次')}`)
       return
     }
     toast.success(`猫管家现在叫「${trimmed}」`)
     onRyenPatched?.()
+  }
+
+  /** 行内改名的提交。空串与缺省名「你」都不写：空名字会造出一个没有主语的用户。 */
+  const commitUserName = async (): Promise<void> => {
+    setEditingUser(false)
+    const trimmed = userNameDraft.trim()
+    if (trimmed.length === 0 || trimmed === profile?.name) return
+    await saveProfile({ name: trimmed })
+  }
+
+  /** 存个人资料。失败就把草稿退回服务端那份，不让界面显示一个没存上的名字。 */
+  const saveProfile = async (patch: Partial<UserProfile>): Promise<void> => {
+    if (api.saveProfile === undefined) {
+      toast.error('这个版本的服务端还不支持改个人资料，升级后就能改了。')
+      return
+    }
+    const previous = profile
+    // 乐观更新：改名字/头像不该等一个往返才有反馈；存失败时下面会把状态退回去。
+    setProfile((prev) => {
+      return { name: prev?.name ?? '你', avatar: prev?.avatar ?? '', ...patch }
+    })
+    try {
+      const { profile: saved } = await api.saveProfile(patch)
+      setProfile(saved)
+    } catch (error) {
+      setProfile(previous)
+      toast.error(`没存上：${humanError(error, '再试一次')}`)
+    }
   }
 
   return (
@@ -100,11 +185,76 @@ export function MePage({
       <div className="page-scroll">
         <div className="page-scroll-col me-page">
           <div className="me-usercard">
-            <span className="me-avatar">
-              <Avatar name="你" seed="you" size={96} />
-            </span>
-            <p className="me-name is-static">你</p>
-            <p className="me-sub">这台电脑上的使用者 · 数据都在本机，不上传</p>
+            <button
+              type="button"
+              className="me-avatar me-avatar-btn"
+              aria-label={editable ? '换头像' : '换头像（这个版本的服务端还不支持）'}
+              title={editable ? '换头像' : '这个版本的服务端还不支持改头像'}
+              disabled={!editable}
+              onClick={() => {
+                setAvatarDraft(profile?.avatar === '' ? BRAND_AVATAR : (profile?.avatar ?? BRAND_AVATAR))
+              }}
+            >
+              <Avatar3D avatarKey={profile?.avatar} name={profile?.name ?? '你'} seed="you" size={96} tilt />
+              <span className="me-avatar-edit" aria-hidden="true">
+                <Icon name="pencil" size={14} />
+              </span>
+            </button>
+            {editingUser ? (
+              <input
+                className="me-name-inline"
+                value={userNameDraft}
+                aria-label="你的名字"
+                // biome-ignore lint/a11y/noAutofocus: 点击名字进入行内编辑，聚焦输入框是预期行为
+                autoFocus
+                maxLength={32}
+                onChange={(e) => {
+                  setUserNameDraft(e.target.value)
+                }}
+                onBlur={() => {
+                  void commitUserName()
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void commitUserName()
+                  if (e.key === 'Escape') setEditingUser(false)
+                }}
+              />
+            ) : (
+              <button
+                type="button"
+                className="me-name me-inline-edit"
+                title={editable ? '改你的名字' : '这个版本的服务端还不支持改名字'}
+                disabled={!editable}
+                onClick={() => {
+                  setUserNameDraft(profile?.name ?? '你')
+                  setEditingUser(true)
+                }}
+              >
+                {profile?.name ?? '你'} <Icon name="pencil" size={16} className="me-pencil" />
+              </button>
+            )}
+            <p className="me-sub">这台电脑上的使用者</p>
+            {/* 名字不是只在界面上换一换：服务端把它拼进 agent 的系统提示，改完
+                下一句对话就会用新名字叫你。说明写出来，免得用户以为这里只是标签。 */}
+            <p className="me-note">{LOCAL_DATA_NOTE} 改过的名字会随对话一起告诉每位助理。</p>
+          </div>
+
+          {/* 我的形象：一只可定制的立体动物。形状是参数化的（种类 × 毛色 × 花纹），
+              换一档只是改一个参数，不生成任何资源。 */}
+          <div className="me-section">
+            <AnimalStudio
+              // 资料是异步读回来的：key 让面板在资料到达时重挂一次，草稿就是
+              // 用户存好的那一只（而不是先停在默认狗上）。
+              key={profile?.avatar ?? 'no-avatar'}
+              current={specOrDefault(profile?.avatar)}
+              disabled={!editable}
+              onSave={(avatar) => {
+                void saveProfile({ avatar })
+              }}
+              onPickOther={() => {
+                setAvatarDraft(profile?.avatar === '' ? BRAND_AVATAR : (profile?.avatar ?? BRAND_AVATAR))
+              }}
+            />
           </div>
 
           {ryen !== undefined && (
@@ -140,10 +290,10 @@ export function MePage({
                         setEditingName(true)
                       }}
                     >
-                      {ryen.name} <Icon name="pencil" size={12} className="me-pencil" />
+                      {ryen.name} <Icon name="pencil" size={16} className="me-pencil" />
                     </button>
                   )}
-                  <div className="me-row-sub">猫管家总管 · 内置 Agent（改的是它的名字，不是你的）</div>
+                  <div className="me-row-sub">总管 · 内置</div>
                 </div>
                 <span className="badge">内置</span>
               </div>
@@ -154,7 +304,8 @@ export function MePage({
             <WorkspaceSection api={api} />
           </div>
 
-          <div className="me-section">
+          {/* id 给「配置云端音色」这类跨页跳转当锚点：切到本页后滚到供应商区块。 */}
+          <div className="me-section" id="provider-settings">
             <ProviderSettings
               api={api}
               providers={providers}
@@ -165,10 +316,32 @@ export function MePage({
           </div>
 
           <div className="me-section">
+            {/* 插件开关搬到独立页签后，这里只留一个入口：能力管理不再埋在设置页
+                第三段，用户也不必滚过整个供应商区块才能找到。 */}
+            <button
+              type="button"
+              className="me-row me-row-btn"
+              onClick={() => {
+                onOpenPlugins?.()
+              }}
+            >
+              <div className="me-row-body">
+                <div className="me-row-title">
+                  <Icon name="blocks" size={16} /> 插件
+                </div>
+                <div className="me-row-sub">开关与说明</div>
+              </div>
+              <span className="me-chevron" aria-hidden="true">
+                <Icon name="chevron-right" size={16} />
+              </span>
+            </button>
+          </div>
+
+          <div className="me-section">
             <div className="me-row" style={{ alignItems: 'flex-start' }}>
               <div className="me-row-body">
                 <div className="me-row-title">
-                  <Icon name="clipboard-list" size={15} /> 用量账单
+                  <Icon name="clipboard-list" size={16} /> 用量账单
                 </div>
                 <div className="me-row-sub">跨会话、跨供应商累计花了多少 token——换模型前先在这里比一比</div>
                 <UsageLedger api={api} />
@@ -177,7 +350,7 @@ export function MePage({
             <div className="me-row" style={{ alignItems: 'flex-start' }}>
               <div className="me-row-body">
                 <div className="me-row-title">
-                  <Icon name="brain" size={15} /> 记忆健康度
+                  <Icon name="brain" size={16} /> 记忆健康度
                 </div>
                 <div className="me-row-sub">长期记忆库的整体状态；单个 agent 的条目在右栏记忆面板里</div>
                 <MemoryHealth api={api} />
@@ -186,6 +359,29 @@ export function MePage({
           </div>
 
           <div className="me-section">
+            <div className="me-row">
+              <div className="me-row-body">
+                <div className="me-row-title">
+                  <Icon name="speaker" size={16} /> 助理回复时自动朗读
+                </div>
+                <div className="me-row-sub">
+                  单聊里说完一句就念一句；群聊不自动朗读。云端音色不可用时会自动改用系统语音。
+                </div>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={autoSpeak}
+                className={`btn btn-mini${autoSpeak ? ' btn-primary' : ''}`}
+                onClick={() => {
+                  const next = !autoSpeak
+                  setAutoSpeak(next)
+                  saveAutoSpeak(next)
+                }}
+              >
+                {autoSpeak ? '已开启' : '已关闭'}
+              </button>
+            </div>
             <div className="me-row">
               <div className="me-row-body">
                 <div className="me-row-title">外观主题</div>
@@ -202,7 +398,7 @@ export function MePage({
                     onThemeChange('light')
                   }}
                 >
-                  <Icon name="sun" size={14} /> 浅色
+                  <Icon name="sun" size={16} /> 浅色
                 </button>
                 {/* biome-ignore lint/a11y/useSemanticElements: 同上 */}
                 <button
@@ -214,7 +410,7 @@ export function MePage({
                     onThemeChange('dark')
                   }}
                 >
-                  <Icon name="moon" size={14} /> 暗色
+                  <Icon name="moon" size={16} /> 暗色
                 </button>
               </span>
             </div>
@@ -226,17 +422,17 @@ export function MePage({
               }}
             >
               <div className="me-row-body">
-                <div className="me-row-title">关于 RyAgent</div>
+                <div className="me-row-title">关于 RyHarness</div>
                 <div className="me-row-sub">版本、开源许可与第三方署名</div>
               </div>
               <span className="me-chevron" aria-hidden="true">
-                ›
+                <Icon name="chevron-right" size={16} />
               </span>
             </button>
             <div className="me-row" style={{ alignItems: 'flex-start' }}>
               <div className="me-row-body">
                 <div className="me-row-title">
-                  <Icon name="brain" size={15} /> {ryen?.name ?? 'Ryen'} 了解你
+                  <Icon name="brain" size={16} /> {ryen?.name ?? 'Ryen'} 了解你
                 </div>
                 <div className="me-row-sub">共享画像——从你们的对话中沉淀，注入每轮记忆</div>
                 {sharedError !== undefined ? (
@@ -249,7 +445,7 @@ export function MePage({
                       {shared.length === 0 && <li className="panel-empty">还没有画像，聊几轮就有了。</li>}
                       {shared.map((memory) => (
                         <li key={memory.id} className="memory-row">
-                          <span className={`memory-kind kind-${memory.kind}`}>{memory.kind}</span>
+                          <span className={`memory-kind kind-${memory.kind}`}>{KIND_LABELS[memory.kind]}</span>
                           <span className="memory-content">{memory.content}</span>
                         </li>
                       ))}
@@ -261,9 +457,50 @@ export function MePage({
           </div>
         </div>
       </div>
+      {avatarDraft !== undefined && (
+        <Modal
+          title="换头像"
+          onClose={() => {
+            setAvatarDraft(undefined)
+          }}
+        >
+          <div className="provider-form">
+            <AvatarPicker
+              value={avatarDraft}
+              onChange={(next) => {
+                setAvatarDraft(next)
+              }}
+            />
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="btn"
+                onClick={() => {
+                  setAvatarDraft(undefined)
+                }}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => {
+                  const chosen = avatarDraft
+                  setAvatarDraft(undefined)
+                  if (chosen !== undefined && chosen !== profile?.avatar) {
+                    void saveProfile({ avatar: chosen })
+                  }
+                }}
+              >
+                保存
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
       {showAbout && (
         <Modal
-          title="关于 RyAgent"
+          title="关于 RyHarness"
           onClose={() => {
             setShowAbout(false)
           }}
@@ -371,7 +608,7 @@ function UsageLedger({ api }: { api: MeApi }) {
         // 统计读不出来就说读不出来：空表和"真的没用过 token"长得一模一样。
         if (!alive) return
         setReport(undefined)
-        setProblem(`用量没读出来：${reason(error)}`)
+        setProblem(`用量没读出来：${humanError(error, '再试一次，或先关掉这一页')}`)
       })
     return () => {
       alive = false
@@ -400,8 +637,8 @@ function UsageLedger({ api }: { api: MeApi }) {
   return (
     <div className="usage-ledger">
       <p className="usage-total">
-        累计 {formatTokens(report.totals.total)} tokens · 输入 {formatTokens(report.totals.input)} · 输出{' '}
-        {formatTokens(report.totals.output)}
+        累计 {humanTokens(report.totals.total)} · 输入 {humanTokens(report.totals.input)} · 输出{' '}
+        {humanTokens(report.totals.output)}
         <span className="usage-scope">
           覆盖 {report.byConversation.length} 个会话 · {scopeLabel} · 只算模型回复的开销
         </span>
@@ -485,7 +722,7 @@ export function AboutContent() {
   return (
     <div className="about-body">
       <p>
-        <strong>RyAgent</strong> v0.1.0 · 单机多 Agent 即时通讯桌面应用
+        <strong>RyHarness</strong> v0.1.0 · 单机多 Agent 即时通讯桌面应用
       </p>
       <p>
         本体以 <strong>MIT License</strong> 发布（见仓库 LICENSE）。

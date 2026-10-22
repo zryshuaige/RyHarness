@@ -9,19 +9,19 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { Context } from '@ryagent/cordis'
-import type { ConsolidationResult, EvolveService } from '@ryagent/evolve'
-import { EvolveService as EvolveServiceImpl } from '@ryagent/evolve'
-import type { GenerateOptions, StreamChunk } from '@ryagent/llm'
-import { LlmAdapter } from '@ryagent/llm'
-import { RyAgentServer } from '@ryagent/server'
+import type { Context } from '@ryharness/cordis'
+import type { ConsolidationResult, EvolveService } from '@ryharness/evolve'
+import { EvolveService as EvolveServiceImpl } from '@ryharness/evolve'
+import type { GenerateOptions, StreamChunk } from '@ryharness/llm'
+import { LlmAdapter } from '@ryharness/llm'
+import { RyHarnessServer } from '@ryharness/server'
 import { afterEach, describe, expect, it } from 'vitest'
 
 const tmpDirs: string[] = []
-const running: RyAgentServer[] = []
+const running: RyHarnessServer[] = []
 
 function tempDataDir(prefix: string): string {
-  const dir = mkdtempSync(join(tmpdir(), `ryagent-evolve-${prefix}-`))
+  const dir = mkdtempSync(join(tmpdir(), `ryharness-evolve-${prefix}-`))
   tmpDirs.push(dir)
   return dir
 }
@@ -75,7 +75,7 @@ const FULL_ROUND: ConsolidationResult = {
  */
 async function startServer(
   options: { evolution?: 'off' | 'spy'; consolidationIntervalMs?: number; gateFirstRound?: boolean } = {},
-): Promise<{ server: RyAgentServer; runUntilIdleCalls: () => number; releaseFirstRound: () => void }> {
+): Promise<{ server: RyHarnessServer; runUntilIdleCalls: () => number; releaseFirstRound: () => void }> {
   const dataDir = tempDataDir('server')
   const evolutionMode = options.evolution ?? 'spy'
   let calls = 0
@@ -85,7 +85,7 @@ async function startServer(
   })
   let evolution: EvolveService | undefined
   if (evolutionMode === 'spy') {
-    const service = new EvolveServiceImpl({ dbPath: join(dataDir, 'ryagent.db') })
+    const service = new EvolveServiceImpl({ dbPath: join(dataDir, 'ryharness.db') })
     const original = service.runUntilIdle.bind(service)
     service.runUntilIdle = async (now?: number): Promise<ConsolidationResult> => {
       calls += 1
@@ -95,7 +95,7 @@ async function startServer(
     }
     evolution = service
   }
-  const server = await RyAgentServer.create({
+  const server = await RyHarnessServer.create({
     port: 0,
     dataDir,
     memory: null,

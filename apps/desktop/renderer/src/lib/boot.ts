@@ -3,15 +3,15 @@ import { useEffect, useState } from 'react'
 import { DEFAULT_API_BASE, readApiBaseFromLocation } from '../api.ts'
 
 /** 主进程就绪后派发的事件（window 事件，无 preload 依赖）。 */
-const API_BASE_EVENT = 'ryagent:api-base'
+const API_BASE_EVENT = 'ryharness:api-base'
 /** 主进程也可能直接挂全局变量（事件早于监听注册时兜底）。 */
-const API_BASE_GLOBAL = '__RYAGENT_API_BASE__'
+const API_BASE_GLOBAL = '__RYHARNESS_API_BASE__'
 /** 非 Electron 环境（浏览器直连 dev server）等不到事件，多久后回落到默认端口。 */
 const FALLBACK_DELAY_MS = 600
 
 /** preload 注入的桥（存在即说明跑在 Electron 里，API 地址一定会被主进程推过来）。 */
 function inElectron(): boolean {
-  return typeof window !== 'undefined' && (window as { ryagentDesktop?: unknown }).ryagentDesktop !== undefined
+  return typeof window !== 'undefined' && (window as { ryharnessDesktop?: unknown }).ryharnessDesktop !== undefined
 }
 
 function globalApiBase(): string | undefined {
@@ -43,10 +43,11 @@ export function useApiBase(): string | undefined {
     apply(globalApiBase())
     // Electron 里主进程一定会推（server 起不来时它自己弹错误框退出），不回落，
     // 否则随机端口的后端还没就绪就被判成「连不上」。浏览器直连才允许回落。
-    if (inElectron()) return () => {
-      cancelled = true
-      window.removeEventListener(API_BASE_EVENT, onEvent)
-    }
+    if (inElectron())
+      return () => {
+        cancelled = true
+        window.removeEventListener(API_BASE_EVENT, onEvent)
+      }
     const timer = setTimeout(() => {
       apply(globalApiBase() ?? DEFAULT_API_BASE)
     }, FALLBACK_DELAY_MS)

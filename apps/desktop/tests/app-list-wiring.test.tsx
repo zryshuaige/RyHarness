@@ -5,7 +5,7 @@
  * 搜索命中跳转也要经壳把目标会话摆到台面上。
  *
  * 断联判据用「地址」而不是「有没有发请求」：壳的地址来自主进程注入的
- * __RYAGENT_API_BASE__，列表自建客户端时回落到 resolveApiBase() 的默认端口
+ * __RYHARNESS_API_BASE__，列表自建客户端时回落到 resolveApiBase() 的默认端口
  * （32100）。两者不同，所以只认壳那条地址。
  */
 import { act } from 'react'
@@ -92,7 +92,7 @@ beforeEach(() => {
   FakeWebSocket.instances = []
   window.history.replaceState({}, '', '/')
   ;(globalThis as { WebSocket?: unknown }).WebSocket = FakeWebSocket
-  ;(window as unknown as Record<string, unknown>).__RYAGENT_API_BASE__ = HOST_BASE
+  ;(window as unknown as Record<string, unknown>).__RYHARNESS_API_BASE__ = HOST_BASE
   vi.stubGlobal('matchMedia', (query: string) => {
     return {
       matches: false,
@@ -140,7 +140,7 @@ afterEach(() => {
   for (const item of getToasts()) toast.dismiss(item.id)
   vi.unstubAllGlobals()
   ;(globalThis as { WebSocket?: unknown }).WebSocket = realWebSocket
-  delete (window as unknown as Record<string, unknown>).__RYAGENT_API_BASE__
+  delete (window as unknown as Record<string, unknown>).__RYHARNESS_API_BASE__
   window.history.replaceState({}, '', '/')
 })
 
@@ -223,7 +223,7 @@ describe('搜索命中跳转经壳切会话', () => {
     const listener = (event: Event): void => {
       jumped.push((event as CustomEvent<{ conversationId: string }>).detail.conversationId)
     }
-    window.addEventListener('ryagent:scroll-to-message', listener)
+    window.addEventListener('ryharness:scroll-to-message', listener)
     try {
       await search('周报')
       const hit = container.querySelector<HTMLButtonElement>('.search-hit')!
@@ -244,7 +244,7 @@ describe('搜索命中跳转经壳切会话', () => {
       ).toBe(true)
       expect(jumped).toEqual(['c2'])
     } finally {
-      window.removeEventListener('ryagent:scroll-to-message', listener)
+      window.removeEventListener('ryharness:scroll-to-message', listener)
     }
   })
 })

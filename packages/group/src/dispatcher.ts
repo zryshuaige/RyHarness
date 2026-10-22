@@ -18,14 +18,15 @@
  *   - A@B、B@A 互踢（A-B-A 模式）→ 停止；
  *   - 每次停止都写 dispatch 事件（reason: 'loop-guard' / 'max-turns'）。
  *   接力链始终串行：接力的 prompt 依赖上一个发言者的输出。
- * - **上下文**：所有成员共享群历史，发言带"名字:"前缀，按字符预算从
- *   最旧裁剪（默认 30k 字符，token 的近似）。
+ * - **上下文**：所有成员共享群历史，发言带"名字:"前缀，按 token 预算从
+ *   最旧裁剪（默认 {@link DEFAULT_HISTORY_BUDGET_TOKENS}，与协调器从库里取行
+ *   用的同一个数、同一种单位）。
  * - **配额**：一轮里所有成员共用同一个 {@link SessionQuota}，群聊的工具预算
  *   是"每条用户消息"的量级，不会因为接力链变长而被放大；由调用方传入跨轮
  *   复用的同一个闸才升级为"每会话"。
  * - **取消**：runTurn 接受 AbortSignal，透传给每个 AgentLoop 与工具；取消
  *   后不再接力，以 code=ABORTED 的 error 事件收尾。
- * @module @ryagent/group/dispatcher
+ * @module @ryharness/group/dispatcher
  */
 
 import type {
@@ -37,20 +38,117 @@ import type {
   Tool,
   ToolContext,
   ToolResult,
-} from '@ryagent/agent'
-import { ABORTED_CODE, AgentLoop, createSessionQuota, isAbortedError } from '@ryagent/agent'
-import type { AssistantMessage, LlmRuntime, ToolCallId } from '@ryagent/llm'
-import { errorChain } from '@ryagent/llm'
+  ToolSource,
+} from '@ryharness/agent'
+import {
+  ABORTED_CODE,
+  DEFAULT_HISTORY_BUDGET_TOKENS as AGENT_DEFAULT_HISTORY_BUDGET_TOKENS,
+  AgentLoop,
+  createSessionQuota,
+  isAbortedError,
+  listTools,
+} from '@ryharness/agent'
+import type { AssistantMessage, LlmRuntime, ToolCallId } from '@ryharness/llm'
+import { errorChain, estimateTokens } from '@ryharness/llm'
 import { parseMentions } from './mentions.ts'
 
-/** 调度员 system prompt 追加的路由指令。 */
-export const DISPATCHER_ROUTING_SUFFIX = [
-  '',
-  '你是本群的调度员，负责协调群成员。规则：',
-  '1. 能直接回答的问题直接回答，回复中不要 @ 任何人，一轮即结束。',
-  '2. 需要转交时，在回复中 @成员名（如 @CodeBot）把任务交出去。',
-  '3. 绝不 @ 自己。',
-].join('\n')
+/**
+ * 调度员 system prompt 追加的路由指令（**按群成员现生成**）。
+ *
+ * 为什么不能是一段写死的常量：里面那个示例名（曾经是 `@CodeBot`）会被模型照抄——
+ * 真机实测调度员直接在回复里喊「@CodeBot 去查…」，而群里根本没有这个人，接力链
+ * 于是永远派不出去，而且看上去一切正常（调度员回复了，只是没人接手）。示例必须
+ * 是这个群真实存在的成员名，最好连 id 一起给：模型有时会拿 id 称呼成员。
+ */
+export function dispatcherRoutingSuffix(members: readonly AgentDefinition[], dispatcherId: string): string {
+  const others = members.filter((member) => {
+    return member.id !== dispatcherId
+  })
+  const roster =
+    others.length === 0
+      ? '（本群没有其他成员，你只能自己回答）'
+      : others
+          .map((member) => {
+            return `@${member.name}（id: ${member.id}）`
+          })
+          .join('、')
+  // 示例必须用名单里的真人：真机实测模型会照抄示例名，抄真人抄得对，抄假人接力链静默失效。
+  const first = others[0]
+  const example =
+    first === undefined
+      ? []
+      : [`   示例：用户说「让${first.name}算个数」→ 你调用 handoff(to="${first.name}", task="算出用户要的数")。`]
+  return [
+    '',
+    '你是本群的调度员，负责协调群成员。规则：',
+    '1. 能直接回答的问题直接回答，不要交接，一轮即结束。',
+    '2. 需要把活交给别人时，调用 handoff 工具：to 写成员名或 id，task 写清楚要对方做什么。',
+    `   可交接的成员：${roster}`,
+    ...example,
+    '3. 光在文字里说「我让某人去办」不算交接，必须调用 handoff 工具。',
+    '4. 绝不交给自己，也绝不在 to 里编造名单之外的名字——写错名字等于没派出去。',
+  ].join('\n')
+}
+
+/**
+ * 非调度员成员的交接提示（调度员用 {@link dispatcherRoutingSuffix}）。
+ *
+ * 接力链上任何一位都可能需要把活往下传（工程师算完 → 管家点评）。调度员的 suffix
+ * 只挂在调度员身上，其他成员原本一句交接指引都没有——工具在白名单里，模型却不知
+ * 道何时该用，接力于是永远只有一跳。这里给一段短的：什么时候交、交给谁、怎么交。
+ */
+export function memberHandoffSuffix(members: readonly AgentDefinition[], selfId: string): string {
+  const others = members.filter((member) => {
+    return member.id !== selfId
+  })
+  if (others.length === 0) return ''
+  const roster = others
+    .map((member) => {
+      return `@${member.name}（id: ${member.id}）`
+    })
+    .join('、')
+  return [
+    '',
+    '你在一个多人群组里。做完自己的部分后：',
+    `- 如果需要另一位成员继续（点评、补充、汇总），调用 handoff 工具交过去。可交接的成员：${roster}`,
+    '- 光在文字里说「让某人看看」不算交接，必须调用 handoff 工具。',
+    '- 不需要别人接手就直接收尾，不要为交接而交接。',
+  ].join('\n')
+}
+
+/**
+ * 交接行的行首标记：模型偶尔不肯用工具时会退回写这一行（见 handoffText）。
+ * 它是工具通道失效时的兜底，不是主路径。
+ */
+const HANDOFF_MARKER = '[交办]'
+
+/** 交接工具名（模型通过它把任务交给另一位成员，见 handoffTool）。 */
+const HANDOFF_TOOL = 'handoff'
+
+/** 一轮里被工具登记的交接请求（谁交给谁、交什么活）。 */
+interface HandoffRequest {
+  fromId: string
+  toId: string
+  task: string
+}
+
+/**
+ * 从调度员回复里取出**用于解析交接的那段文本**。
+ *
+ * 为什么要单独一段：路由信号是「@ 某人」。真机实测模型会照抄示例里的成员名却
+ * 忘了 @ 号（回复写着「让工程师查最近没去过的店」，一个 @ 都没有），接力链于是静默
+ * 失效——界面上只看到调度员答了话，没人接手。约定一个显式标记后，交接语义落在
+ * 标记行里：正文里顺口提到成员（"管家说上次那家不错"）不会被误判成派工。
+ *
+ * 找不到标记行时退回整段文本：模型完全自由发挥（直接写 @工程师 而不加标记）时，
+ * 老行为仍然成立，不至于把接力弄丢。
+ */
+export function handoffText(outputText: string): string {
+  const marked = outputText.split('\n').filter((line) => {
+    return line.includes(HANDOFF_MARKER)
+  })
+  return marked.length === 0 ? outputText : marked.join('\n')
+}
 
 /** 群历史条目（已由协调器格式化并裁剪）。 */
 export interface GroupHistoryEntry {
@@ -76,8 +174,8 @@ export interface GroupDispatcherOptions {
   members: readonly AgentDefinition[]
   /** 调度员 agent id（无 @ 消息的默认入口）。 */
   dispatcherId: string
-  /** 共享工具集。 */
-  tools: readonly Tool[]
+  /** 共享工具集：数组或按名注册表（每个成员按自己的白名单解析）。 */
+  tools: ToolSource
   /** 长期记忆钩子（每个发言 agent 各自的空间 + 共享画像）。 */
   memory?: AgentMemoryHooks
   /** 自我进化钩子（playbook 注入 + 每轮轨迹入队）。 */
@@ -92,30 +190,63 @@ export interface GroupDispatcherOptions {
   maxTurns?: number
   /** 入口 @ 多成员并行扇出的并发上限，默认 3（供应商限流保护）。 */
   fanoutConcurrency?: number
+  /**
+   * 「你在跟谁说话」身份句（可选）：群成员与单聊一样要知道用户的名字，
+   * 否则群聊里会出现「单聊叫得出名字、群里退回『您』」这种割裂。
+   * 与协调器转发的是同一个钩子，来源见 apps/server/src/routes/profile.ts。
+   */
+  identity?: () => string | undefined
 }
 
-/** 群历史字符预算默认值（token 的字符数近似）。 */
-export const DEFAULT_HISTORY_BUDGET_CHARS = 30_000
+/**
+ * 群历史窗口的默认 token 预算。
+ *
+ * 直接取 @ryharness/agent 的同一个常量，而不是在这里另写一份：协调器从库里取行
+ * 用的也是这个数，两边口径一旦分叉（这里退回字符、那里用 token），群历史就会在
+ * ASCII 文本上被再收一刀、中文上被放行四倍，而症状只表现为"模型好像忘事"。
+ */
+export const DEFAULT_HISTORY_BUDGET_TOKENS = AGENT_DEFAULT_HISTORY_BUDGET_TOKENS
 
 /** 入口 @ 多成员并行扇出的默认并发上限。 */
 export const DEFAULT_FANOUT_CONCURRENCY = 3
 
 const DEFAULT_MAX_TURNS = 8
 
-/** 把群历史格式化为"名字: 内容"行，并按预算从最旧裁剪。 */
-export function buildGroupContext(history: readonly GroupHistoryEntry[], budgetChars: number): string {
+/**
+ * 把群历史格式化为"名字: 内容"行，并按 token 预算从最旧裁剪。
+ *
+ * 口径是真 token（{@link estimateTokens}）而不是字符数：字符口径只在纯 ASCII 下
+ * 近似成立，同一份预算在中文群聊里会多送 4 倍；而 ASCII 群聊恰恰是"看起来没超、
+ * 实际被收窄"的那一侧。逐行权重与 @ryharness/session 的
+ * {@link HISTORY_BUDGET_TOKENS} 权重函数（`estimateTokens(行) + 1` 的换行）逐条
+ * 对齐，因此同一个预算在两边裁出的行集相同。
+ * @param history - 协调器已格式化并按同一口径裁过的群历史条目。
+ * @param budgetTokens - token 预算；非有限值（`Infinity`）表示不裁。
+ */
+export function buildGroupContext(history: readonly GroupHistoryEntry[], budgetTokens: number): string {
+  if (!Number.isFinite(budgetTokens)) return history.map(groupLine).join('\n')
   const lines = history.map((entry) => {
-    return `${entry.speaker}: ${entry.text}`
+    return { text: groupLine(entry), tokens: estimateTokens(groupLine(entry)) + 1 }
   })
   let total = lines.reduce((sum, line) => {
-    return sum + line.length + 1
+    return sum + line.tokens
   }, 0)
   let start = 0
-  while (total > budgetChars && start < lines.length) {
-    total -= (lines[start] as string).length + 1
+  while (total > budgetTokens && start < lines.length) {
+    total -= (lines[start] as { text: string; tokens: number }).tokens
     start++
   }
-  return lines.slice(start).join('\n')
+  return lines
+    .slice(start)
+    .map((line) => {
+      return line.text
+    })
+    .join('\n')
+}
+
+/** 群历史的一行（与 @ryharness/session 的 groupHistoryRowWeight 同一拼法）。 */
+function groupLine(entry: GroupHistoryEntry): string {
+  return `${entry.speaker}: ${entry.text}`
 }
 
 function messageText(message: AssistantMessage): string {
@@ -173,7 +304,7 @@ function abortedEvent(): GroupEvent {
   return { type: 'error', message: 'agent run aborted', code: ABORTED_CODE }
 }
 
-/** 记忆钩子可选的批量召回面（@ryagent/memory 的 MemoryService 提供）。 */
+/** 记忆钩子可选的批量召回面（@ryharness/memory 的 MemoryService 提供）。 */
 interface MemoryRecallMany {
   recallMany(agentIds: readonly string[], inputText: string): Promise<Map<string, string | undefined>>
 }
@@ -193,7 +324,7 @@ function supportsRecallMany(memory: AgentMemoryHooks): memory is AgentMemoryHook
  *
  * 视图的作用域只有这一次扇出：接力链每轮输入不同，不共享。
  */
-class FanoutMemory implements AgentMemoryHooks {
+class FanoutMemory {
   /** 按输入文本缓存的共享召回结果（同一段输入只建一次 promise）。 */
   private readonly byText = new Map<string, Promise<Map<string, string | undefined>>>()
 
@@ -210,6 +341,44 @@ class FanoutMemory implements AgentMemoryHooks {
 
   enqueueExtraction(agentId: string, agentName: string, conversationId: string, turnText: string): void {
     this.memory.enqueueExtraction(agentId, agentName, conversationId, turnText)
+  }
+
+  /**
+   * 交回 AgentLoop 的钩子形状。
+   *
+   * 同步召回与后台补正按底层是否实现**条件**透传：漏掉它们，扇出里的成员就退回
+   * await 路径，首 token 前白白多等一次 embedding 网络往返；而补一个恒定存在、
+   * 永远返回 undefined 的 recallSync 更糟——AgentLoop 会以为同步路径跑过了而跳过
+   * await 兜底，记忆在群聊里静默失效。
+   */
+  asHooks(): AgentMemoryHooks {
+    // bind 不是多余动作：memory 可能是 MemoryService（原型方法 + this 状态，
+    // recallRefine 还有 this 相关的默认参数），裸取出来调用会在进入函数体之前就抛
+    // TypeError，再被 catch 吞成「本轮没注入记忆」——静默失效比崩更难查。
+    const sync = this.memory.recallSync?.bind(this.memory)
+    const refine = this.memory.recallRefine?.bind(this.memory)
+    return {
+      recall: (agentId, inputText) => {
+        return this.recall(agentId, inputText)
+      },
+      enqueueExtraction: (agentId, agentName, conversationId, turnText) => {
+        return this.enqueueExtraction(agentId, agentName, conversationId, turnText)
+      },
+      ...(sync === undefined
+        ? {}
+        : {
+            recallSync: (agentId: string, inputText: string) => {
+              return sync(agentId, inputText)
+            },
+          }),
+      ...(refine === undefined
+        ? {}
+        : {
+            recallRefine: (agentId: string, inputText: string, deadlineMs?: number) => {
+              return refine(agentId, inputText, deadlineMs)
+            },
+          }),
+    }
   }
 
   private shared(inputText: string): Promise<Map<string, string | undefined>> {
@@ -242,6 +411,8 @@ interface MemberTurnOutcome {
   assistant?: AssistantMessage
   /** 该成员是否以失败/取消收尾（不再接力）。 */
   halted: boolean
+  /** 该成员用 handoff 工具登记的交接请求（扇出路径的接力信号）。 */
+  handoffs?: HandoffRequest[]
 }
 
 /** 扇出增量项：事件边生成边转发，outcome 在该成员收尾时给出。 */
@@ -306,7 +477,7 @@ export class GroupDispatcher {
         return member.id === options.dispatcherId
       })
     ) {
-      throw new Error(`@ryagent/group: dispatcher "${options.dispatcherId}" is not a group member`)
+      throw new Error(`@ryharness/group: dispatcher "${options.dispatcherId}" is not a group member`)
     }
   }
 
@@ -320,14 +491,16 @@ export class GroupDispatcher {
     text: string
     history: readonly GroupHistoryEntry[]
     workspaceRoot: string
+    /** 当前会话 id：按会话落数据的工具（待办）据此分组；缺省时那类工具会拒绝执行。 */
+    conversationId?: string
     turnIndex: number
-    historyBudgetChars?: number
+    historyBudgetTokens?: number
     /** 调用方取消信号：取消后不再接力，以 code=ABORTED 的 error 事件收尾。 */
     signal?: AbortSignal
   }): AsyncGenerator<GroupEvent> {
     const { members, dispatcherId } = this.options
     const signal = input.signal
-    const budget = input.historyBudgetChars ?? DEFAULT_HISTORY_BUDGET_CHARS
+    const budget = input.historyBudgetTokens ?? DEFAULT_HISTORY_BUDGET_TOKENS
     const context = buildGroupContext(input.history, budget)
     const memberById = new Map(
       members.map((member) => {
@@ -337,6 +510,7 @@ export class GroupDispatcher {
     const turnIndex = input.turnIndex
     const toolContext: ToolContext = {
       workspaceRoot: input.workspaceRoot,
+      ...(input.conversationId === undefined ? {} : { conversationId: input.conversationId }),
       ...(signal === undefined ? {} : { signal }),
     }
     if (signal?.aborted === true) {
@@ -362,6 +536,10 @@ export class GroupDispatcher {
     let turns = 0
     let relayText = ''
     let stopped = false
+    // handoff 工具登记的交接任务：成员被工具派工时，它的 prompt 必须带上任务本身——
+    // 真机实测不带任务的接力 prompt 只有上一位的正文（「交给我，先去办。」），接手
+    // 成员根本不知道要做什么，只能回「需要做什么？」。
+    const handoffTasks = new Map<string, { fromId: string; task: string }>()
 
     // ---- 入口 @ 多目标并行扇出 ----
     // 多个 @ 目标并发起跑（上限 fanoutConcurrency），谁先出首 token 谁先出，
@@ -384,7 +562,7 @@ export class GroupDispatcher {
       if (unknownId !== undefined) {
         yield {
           type: 'error',
-          message: `@ryagent/group: agent "${unknownId}" is not a group member`,
+          message: `@ryharness/group: agent "${unknownId}" is not a group member`,
           code: 'UNKNOWN_AGENT',
         }
         stopped = true
@@ -416,11 +594,51 @@ export class GroupDispatcher {
 
           const outputText = messageText(assistant)
           relayText = outputText
-          if (parseMentions(outputText, [member]).length > 0) {
+          // 交接工具登记的请求优先（结构化信号）；没有才退回文本里的 @/[交办]。
+          const relayedByTool = new Set<string>()
+          // 派工方是否已经发过言：它接过话就算做过判断，此后成员再 @ 它是回程收口，
+          // 不是新任务。
+          //
+          // 判据用 speakers（发言事实）而不是 handoffTasks（工具调用记录），因为
+          // 真机上 Ryen 派工常常就是正文里一句「@CodeBot 你来」——工具没被调用，
+          // 按工具判会把回程当成正常调度，用户看到的仍是「派工方在原地复述」。
+          const dispatcherSpoke = speakers.includes(this.options.dispatcherId)
+          // 工具交接同样要走收口判据（与串行路径同一口径，详见该处的完整说明）：
+          // 成员把活交回派工方而派工方已经发过言，这条 @/交接是报备不是新任务。
+          // 此前这里只对正文 @ 做了这个判断（下面那处），工具交接一路排到队列里，
+          // 于是扇出场景同样留下「交接 + 循环保护」两条矛盾的轨迹。
+          const toolHandoffs = (outcome.handoffs ?? []).filter((handoff) => {
+            return handoff.toId !== member.id
+          })
+          const relayToolHandoffs = dispatcherSpoke
+            ? toolHandoffs.filter((handoff) => {
+                return handoff.toId !== this.options.dispatcherId
+              })
+            : toolHandoffs
+          for (const handoff of relayToolHandoffs) {
+            if (relayedByTool.has(handoff.toId)) continue
+            relayedByTool.add(handoff.toId)
+            relayed.push(handoff.toId)
+            handoffTasks.set(handoff.toId, { fromId: member.id, task: handoff.task })
+            yield {
+              type: 'dispatch',
+              fromAgent: member.id,
+              toAgent: handoff.toId,
+              reason: `交接：${handoff.task}`,
+              turnIndex,
+            }
+          }
+          const routingText = handoffText(outputText)
+          if (relayedByTool.size === 0 && parseMentions(routingText, [member]).length > 0) {
             yield { type: 'dispatch', fromAgent: member.id, toAgent: member.id, reason: 'loop-guard', turnIndex }
             continue
           }
-          for (const target of parseMentions(outputText, members)) {
+          for (const target of parseMentions(routingText, members)) {
+            if (relayedByTool.has(target.id)) continue
+            // 同串行路径的收口语义（见下方 wrap-up 处的完整说明）：派工方自己
+            // 派过活之后，成员再 @ 它是道谢/报备，不是新任务。扇出时派工方正在
+            // 等所有人的结果，成员把它排回队列只会让 Ryen 复述一遍派工。
+            if (target.id === this.options.dispatcherId && dispatcherSpoke) continue
             relayed.push(target.id)
             yield {
               type: 'dispatch',
@@ -464,7 +682,7 @@ export class GroupDispatcher {
       if (member === undefined) {
         yield {
           type: 'error',
-          message: `@ryagent/group: agent "${nextId}" is not a group member`,
+          message: `@ryharness/group: agent "${nextId}" is not a group member`,
           code: 'UNKNOWN_AGENT',
         }
         break
@@ -481,11 +699,33 @@ export class GroupDispatcher {
       }
 
       // ---- 生成回复 ----
-      const promptText = this.promptText(context, speakers.length === 0 ? input.text : relayText)
+      // 被 handoff 工具派工的成员拿到的是任务本身；文本接力的成员拿到上一位的发言。
+      const pendingTask = handoffTasks.get(nextId)
+      const taskFrom =
+        pendingTask === undefined
+          ? undefined
+          : (members.find((m) => {
+              return m.id === pendingTask.fromId
+            })?.name ?? pendingTask.fromId)
+      const body =
+        pendingTask === undefined
+          ? speakers.length === 0
+            ? input.text
+            : relayText
+          : `——${taskFrom} 交给你的任务——\n${pendingTask.task}`
+      const promptText = this.promptText(context, body)
       let assistant: AssistantMessage | undefined
-      const loop = this.createLoop(this.definitionOf(member), (message) => {
-        assistant = message
-      })
+      // 交接工具先把请求攒在这轮里，等这一位说完再统一转成 dispatch 事件
+      // （工具执行发生在 AgentLoop 内部，事件流由外层按顺序 yield）。
+      const handoffs: HandoffRequest[] = []
+      const loop = this.createLoop(
+        this.definitionOf(member),
+        (message) => {
+          assistant = message
+        },
+        undefined,
+        [this.handoffTool(member, handoffs)],
+      )
       let failed = false
       try {
         for await (const event of memberEvents(
@@ -518,12 +758,99 @@ export class GroupDispatcher {
       // ---- 接力解析 ----
       const outputText = messageText(assistant)
       relayText = outputText
-      const selfMentioned = parseMentions(outputText, [member]).length > 0
-      if (selfMentioned) {
+      // 交接工具登记的请求优先（结构化、模型守得住）；没有才退回文本里的 @ 提及。
+      const byTool = handoffs.filter((handoff) => {
+        return handoff.toId !== member.id
+      })
+      // 工具交接也要认「回程收口」：成员把活交回派工方、而派工方这轮已经发过言，
+      // 这一轮就到此为止。
+      //
+      // 此前只有下面 wrapsUp 那条（正文 @）认，工具这条路漏了——而工具恰恰是系统
+      // 提示里明确推荐的方式（模型常照抄成员名却漏掉 @ 号，tool calling 却可靠）。
+      // 漏掉的后果不是「派工方又说一遍」（A-B-A 护栏拦得住那个），而是**先排了一条
+      // 「交接」假产**，紧接着护栏再补一条 loop-guard：界面上两条互相矛盾的轨迹并排，
+      // 用户看到的就是「别人做完了，调度员还在说指派」——活早干完了。
+      const dispatcherSpoke = speakers.includes(this.options.dispatcherId)
+      const wrapUpByTool =
+        dispatcherSpoke &&
+        byTool.some((handoff) => {
+          return handoff.toId === this.options.dispatcherId
+        })
+      // 收口只摘掉交回派工方的那一条：同一句里若还派给了别的成员，那部分是真活，
+      // 照常排进队列，不因为一次收口把整轮掐掉。
+      const relayHandoffs = wrapUpByTool
+        ? byTool.filter((handoff) => {
+            return handoff.toId !== this.options.dispatcherId
+          })
+        : byTool
+      const seenTargets = new Set<string>()
+      for (const handoff of relayHandoffs) {
+        if (seenTargets.has(handoff.toId)) continue
+        seenTargets.add(handoff.toId)
+        queue.push(handoff.toId)
+        handoffTasks.set(handoff.toId, { fromId: member.id, task: handoff.task })
+        yield {
+          type: 'dispatch',
+          fromAgent: member.id,
+          toAgent: handoff.toId,
+          reason: `交接：${handoff.task}`,
+          turnIndex,
+        }
+      }
+      if (wrapUpByTool && relayHandoffs.length === 0) {
+        // 收口掉的就是链条的尾巴：留一条终止事件，轨迹才有头有尾（与 wrapsUp 同口径）。
+        yield {
+          type: 'dispatch',
+          fromAgent: member.id,
+          toAgent: this.options.dispatcherId,
+          reason: 'loop-guard',
+          turnIndex,
+        }
+        break
+      }
+      // 与扇出路径同一口径：只解析 [交办] 行（无标记行时退回整段）。
+      const routingText = handoffText(outputText)
+      const selfMentioned = parseMentions(routingText, [member]).length > 0
+      if (selfMentioned && byTool.length === 0) {
         yield { type: 'dispatch', fromAgent: member.id, toAgent: member.id, reason: 'loop-guard', turnIndex }
         break
       }
-      for (const target of parseMentions(outputText, members)) {
+      // @ 的目标是派工方、而派工方这轮已经发过言 = 回程收口：链条到此为止。
+      //
+      // 真机症状：用户要一份 PDF，CodeBot 交付后正文写「@Ryen 请查收」，于是
+      // 排产出一条 CodeBot → Ryen 的接力；Ryen 刚派过活，再被拉回来只会复述
+      // 「已经安排给 CodeBot 了」——活明明干完了，用户看到的是它在原地打转。
+      //
+      // 之前只有 A-B-A 护栏兜着：它确实阻止了 Ryen 再生成，但**已经先吐了一条
+      // relay 派工事件**，界面上于是留下「接力 → 循环保护」两条互相矛盾的轨迹，
+      // 观感比真的转圈还糟。所以判据前移到「派工方发过言 + @ 指向派工方」——
+      // 此时这条 @ 是道谢/报备，不是新任务，直接收口。
+      //
+      // 事件类型沿用 loop-guard 而不是新造一个：终止这件事的对外契约早已是它
+      // （UI 按它渲染警示色、测试按它断言），换名字等于凭空改契约；而「为什么停」
+      // 的差别已经体现在「不再先吐一条假接力」上。
+      const mentions = parseMentions(routingText, members)
+      const wrapsUp =
+        dispatcherSpoke &&
+        mentions.some((target) => {
+          return target.id === this.options.dispatcherId
+        })
+      if (wrapsUp && byTool.length === 0) {
+        yield {
+          type: 'dispatch',
+          fromAgent: member.id,
+          toAgent: this.options.dispatcherId,
+          reason: 'loop-guard',
+          turnIndex,
+        }
+        break
+      }
+      const targets = mentions.filter((target) => {
+        return dispatcherSpoke && target.id === this.options.dispatcherId ? false : true
+      })
+      for (const target of targets) {
+        if (seenTargets.has(target.id)) continue
+        seenTargets.add(target.id)
         queue.push(target.id)
         yield { type: 'dispatch', fromAgent: member.id, toAgent: target.id, reason: `relay @${target.name}`, turnIndex }
       }
@@ -537,28 +864,105 @@ export class GroupDispatcher {
     return context.length > 0 ? `${context}\n\n——新消息——\n${body}` : body
   }
 
-  /** 调度员发言时追加路由指令。 */
+  /**
+   * 成员定义（按身份微调）。
+   *
+   * 调度员：追加路由指令（{@link dispatcherRoutingSuffix}），并把 handoff 加进工具
+   * 白名单——AgentLoop 按 definition.tools 过滤工具，忘了加，模型看得见工具声明却
+   * 调不动，交接静默失效（这正是最初那版接线漏掉的一环）。
+   * 其他成员：追加交接提示（{@link memberHandoffSuffix}）——接力链上任何一位都可能
+   * 要把活往下传，不给指引，模型不知道 handoff 该在什么时候用，接力永远只有一跳。
+   */
   private definitionOf(member: AgentDefinition): AgentDefinition {
-    return member.id === this.options.dispatcherId
-      ? { ...member, systemPrompt: member.systemPrompt + DISPATCHER_ROUTING_SUFFIX }
-      : member
+    const isDispatcher = member.id === this.options.dispatcherId
+    return {
+      ...member,
+      tools: member.tools.includes(HANDOFF_TOOL) ? member.tools : [...member.tools, HANDOFF_TOOL],
+      systemPrompt:
+        member.systemPrompt +
+        (isDispatcher
+          ? dispatcherRoutingSuffix(this.options.members, this.options.dispatcherId)
+          : memberHandoffSuffix(this.options.members, member.id)),
+    }
   }
 
   private createLoop(
     definition: AgentDefinition,
     onAssistantMessage: (message: AssistantMessage) => void,
     memory?: AgentMemoryHooks,
+    extraTools: readonly Tool[] = [],
   ): AgentLoop {
     const hooks = memory ?? this.options.memory
     return new AgentLoop({
       definition,
       llm: this.options.llm,
-      tools: this.options.tools,
+      tools: [...listTools(this.options.tools), ...extraTools],
       onAssistantMessage,
       quota: this.quota,
       ...(hooks === undefined ? {} : { memory: hooks }),
+      ...(this.options.identity === undefined ? {} : { identity: this.options.identity }),
       ...(this.options.evolution === undefined ? {} : { evolution: this.options.evolution }),
     })
+  }
+
+  /**
+   * 交接工具：把活交给群里另一位成员。
+   *
+   * 为什么必须是工具而不是「回复里写 @名字」：真机（DeepSeek-V3）实测，模型会照抄
+   * 提示里的成员名却漏掉 @ 号（回复是「让工程师查最近没去过的店」，一个 @ 都没有），
+   * 接力链于是静默失效——界面上只看到调度员答了话，没人接手，而且没有任何报错。
+   * 工具调用是结构化的：同一个模型在同一轮里的 tool calling 完全可靠（冒烟脚本里
+   * `echo` 工具的参数 JSON 一次成型），所以把路由信号放到工具参数里。
+   *
+   * 目标只认本群成员的名字或 id：名单外的名字在 execute 里直接报错，模型会看到
+   * 中文失败原因并在下一轮改对，而不是把活派给不存在的人。
+   */
+  private handoffTool(from: AgentDefinition, sink: HandoffRequest[]): Tool {
+    const roster = this.options.members
+      .filter((member) => {
+        return member.id !== from.id
+      })
+      .map((member) => {
+        return `${member.name}（${member.id}）`
+      })
+      .join('、')
+    return {
+      name: HANDOFF_TOOL,
+      description:
+        `把任务交接给群里的另一位成员。可交接的成员：${roster || '（没有其他成员）'}。` +
+        '自己能答就直接答；需要别人做（或需要别人的信息）时才调用。',
+      parameters: {
+        type: 'object',
+        properties: {
+          to: { type: 'string', description: '接手成员的显示名或 id，如「工程师」或「ryen-team-coding」' },
+          task: { type: 'string', description: '交给对方要做的具体事情，写清楚交付什么' },
+        },
+        required: ['to', 'task'],
+      },
+      execute: async (args: unknown): Promise<ToolResult> => {
+        const { to, task } = (args ?? {}) as { to?: unknown; task?: unknown }
+        const name = typeof to === 'string' ? to.trim() : ''
+        const detail = typeof task === 'string' ? task.trim() : ''
+        if (name.length === 0 || detail.length === 0) {
+          return { content: '交接失败：to 与 task 都要填。', isError: true }
+        }
+        const target =
+          this.options.members.find((member) => {
+            return member.name === name || member.id === name
+          }) ?? undefined
+        if (target === undefined) {
+          return {
+            content: `交接失败：「${name}」不在本群。可交接的是：${roster || '（没有其他成员）'}`,
+            isError: true,
+          }
+        }
+        if (target.id === from.id) {
+          return { content: '交接失败：不能交给自己。', isError: true }
+        }
+        sink.push({ fromId: from.id, toId: target.id, task: detail })
+        return { content: `已交给 ${target.name}：${detail}`, isError: false }
+      },
+    }
   }
 
   /**
@@ -587,7 +991,7 @@ export class GroupDispatcher {
             targets.map((target) => {
               return target.id
             }),
-          )
+          ).asHooks()
     let failure: unknown
     let next = 0
     const worker = async (): Promise<void> => {
@@ -649,12 +1053,14 @@ export class GroupDispatcher {
     memory?: AgentMemoryHooks,
   ): Promise<MemberTurnOutcome> {
     let assistant: AssistantMessage | undefined
+    const handoffs: HandoffRequest[] = []
     const loop = this.createLoop(
       this.definitionOf(member),
       (message) => {
         assistant = message
       },
       memory,
+      [this.handoffTool(member, handoffs)],
     )
     let failed = false
     try {
@@ -674,6 +1080,7 @@ export class GroupDispatcher {
     return {
       halted: failed || assistant === undefined,
       ...(assistant === undefined ? {} : { assistant }),
+      ...(handoffs.length === 0 ? {} : { handoffs }),
     }
   }
 }

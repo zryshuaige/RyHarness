@@ -15,20 +15,23 @@
  * 不阻塞主循环（P0）：本包所有重活都在服务进程的事件循环里跑，因此
  * - 每轮管线有超时上限与阶段级失败隔离（LLM 挂掉不影响确定性计数）；
  * - 巩固（O(n²) 判重 + 溯源关联 + 归档 UPDATE）按切片推进，runOnce() 只做有界
- *   的一片就返回，剩余工作让出事件循环后台续跑，受总预算约束；
+ *   的一片就返回，剩余工作让出事件循环后台续跑，受总预算约束——状态机本身在
+ *   {@link module:@ryharness/evolve/sweeper}，本类只做调度与转发；
  * - 每轮都记账耗时与处理条目数（{@link EvolveService.metrics}）供服务端聚合。
- * @module @ryagent/evolve/service
+ * @module @ryharness/evolve/service
  */
 
 import type { EvolveLlm, PlaybookDelta, TurnTrajectory } from './llm.ts'
 import { CURATOR_ENTRY_LIMIT, NEGATIVE_FEEDBACK_RE } from './llm.ts'
 import type { EvolutionRoundMetrics, EvolveMetricsSnapshot, RoundKind } from './metrics.ts'
 import { RoundRecorder } from './metrics.ts'
-import { maxOverlap, textOverlap } from './relevance.ts'
+import { maxOverlap } from './relevance.ts'
 import type { PlaybookSection } from './schema.ts'
 import { AUTO_DEPRECATE_HARMFUL, CONVERT_HIT_THRESHOLD } from './schema.ts'
 import type { EntryOrigin, EntryOriginInput, PlaybookEntry } from './store.ts'
 import { EvolveStore } from './store.ts'
+import type { ConsolidationResult, MemorySweep } from './sweeper.ts'
+import { Sweeper } from './sweeper.ts'
 
 /** 一轮轨迹 + 注入归因（AgentLoop 在编译后记录）。 */
 export interface EvolutionTurn extends TurnTrajectory {
@@ -42,30 +45,6 @@ export interface CompiledEvolution {
   text: string
   playbookEntryIds: string[]
   reflectionIds: string[]
-}
-
-/**
- * 一轮巩固的结果。前 5 个字段是原有口径（server 直接 JSON 回去），其余是
- * 面向 P0 的可观测字段：这次调用阻塞了多久、扫了多少行、还有没有剩余切片。
- */
-export interface ConsolidationResult {
-  expiredReflections: number
-  mergedMemories: number
-  dormant: number
-  archivedDormant: number
-  archivedSuperseded: number
-  /** 扫描过的记忆行数（判重比较 + 溯源关联）。 */
-  scannedMemories: number
-  /** 本轮新写的条目↔记忆溯源条数。 */
-  linkedOrigins: number
-  /** 隔离掉的失败次数（单个空间失败不影响整轮）。 */
-  errors: number
-  /** 本次调用真正占住事件循环的时间（毫秒）。 */
-  durationMs: number
-  /** 还有切片在后台续跑（或已被预算截断）：返回值只是本片的结果。 */
-  pending: boolean
-  /** 本轮因预算耗尽丢掉了剩余工作。 */
-  truncated: boolean
 }
 
 /** playbook 条目的证据链（explain 面板/接口的数据源）。 */
@@ -96,20 +75,8 @@ const REFLECTION_INJECT_MAX = 3
  * auto-deprecate 建立在噪声之上。
  */
 const ATTRIBUTION_RELEVANCE_THRESHOLD = 0.15
-/** 巩固：长期零访问记忆的归档门槛（天）。 */
-const DORMANT_ARCHIVE_DAYS = 90
-/** 巩固：陈旧软删链的归档保留期（天）。 */
-const SUPERSEDED_RETENTION_DAYS = 180
-/** 判重合并的余弦阈值（归一化向量，点积即余弦）。 */
-const MERGE_COSINE_THRESHOLD = 0.95
 /** 溯源关联：条目与记忆的最小词面重叠系数（同一件事才会被关联）。 */
 const MEMORY_ORIGIN_MIN_OVERLAP = 0.3
-/** 溯源关联：单条记忆最多被引用的条目数上限。 */
-const MEMORY_ORIGIN_MAX_REFS = 3
-/** 溯源关联：每个空间最多回看多少条手册条目（手册前排的才有解释价值）。 */
-const ORIGIN_ENTRY_SCAN = 40
-/** 单轮巩固最多保留的「会话+轮次」溯源数（一条轨迹记多个来源时防膨胀）。 */
-const TRAJECTORY_ORIGIN_LIMIT = 8
 /** 归因集合上限：会话数无界增长会让这张 map 变成慢泄漏。 */
 const ATTRIBUTION_MAX_KEYS = 512
 
@@ -120,9 +87,6 @@ const SECTION_LABELS: Record<PlaybookSection, string> = {
   tooling: '工具用法',
 }
 const SECTION_ORDER: PlaybookSection[] = ['strategy', 'pitfall', 'preference', 'tooling']
-
-/** 巩固周期内的反思有效期（30 天）。 */
-const REFLECTION_TTL_MS = 30 * 86_400_000
 
 /** 调度与限流参数（默认值按本地桌面规模调过，可整体覆盖）。 */
 export interface EvolveLimits {
@@ -168,36 +132,14 @@ export interface EvolveServiceOptions {
   limits?: Partial<EvolveLimits>
 }
 
-/** 记忆巩固需要的最小存储面（由 @ryagent/memory 的 MemoryStore 满足）。 */
-export interface MemorySweep {
-  listSpaces(): string[]
-  /** active 记忆行：`content` 除了判重还要用于「条目↔记忆」溯源关联。 */
-  listActiveEmbeddings(spaceId: string): {
-    id: string
-    content: string
-    embedding: Float32Array | null
-    accessCount: number
-    updatedAt: number
-  }[]
-  supersede(id: string, status: 'superseded'): void
-  /**
-   * 长期零访问记忆 → inactive（不物理删除）。返回归档条数。
-   *
-   * `limit` 是**必须透传**的分片参数：给出时只归档至多 limit 行（调用方反复
-   * 调用到返回数小于 limit 为止）。整段 UPDATE 在服务进程的事件循环里能把主
-   * 循环冻住 1.8s；漏传 limit 不会算错行数，但那一段又会变回一次性阻塞。
-   */
-  archiveDormant(dormantAfterMs: number, now: number, limit?: number): number
-  /** 陈旧软删链（保留当前有效版本的直接前身）→ inactive。返回归档条数。`limit` 语义同上。 */
-  archiveColdSuperseded(maxAgeMs: number, now: number, limit?: number): number
-}
-
 export class EvolveService implements AgentEvolutionHooks {
   readonly store: EvolveStore
   private readonly llm: EvolveLlm | undefined
   private readonly log: (message: string) => void
   private readonly limits: EvolveLimits
   private readonly recorder: RoundRecorder
+  /** 巩固状态机（分片推进 + 可恢复续跑）：构造后 attach 一次宿主依赖即可。 */
+  private readonly sweeper = new Sweeper()
   /** 待处理的每轮轨迹（单 writer 串行消费；容量上限见 maxQueuedTurns）。 */
   private readonly tasks: TurnTask[] = []
   private draining: Promise<void> | undefined
@@ -205,15 +147,12 @@ export class EvolveService implements AgentEvolutionHooks {
   private droppedTurns = 0
   /** 最近注入归因：`${conversationId}:${agentId}` → 注入集合（👍/👎 归因用）。 */
   private readonly attribution = new Map<string, { playbookEntryIds: string[]; reflectionIds: string[] }>()
+  /**
+   * 记忆侧接缝（{@link MemorySweep}）。只用来把 👍/👎 转发过去：强化时的清理与
+   * 归档在 Sweeper 里，只有反馈需要在本类发（它跟着 recordFeedback 走）。
+   */
+  private memorySweep: MemorySweep | undefined
   private consolidationTimer: ReturnType<typeof setInterval> | undefined
-  private memory: MemorySweep | undefined
-  /** 在跑的巩固切片状态（跨 runOnce 调用续跑）。 */
-  private sweep: SweepState | undefined
-  private sweepDrain: Promise<void> | undefined
-  /** 本轮巩固的状态（runUntilIdle 要在跑完后拿它算完整口径）。 */
-  private sweepRound: SweepState | undefined
-  /** 最近一轮巩固的完整结果（后台续跑结束后刷新）。 */
-  private lastConsolidation: ConsolidationResult | undefined
   private closed = false
 
   constructor(options: EvolveServiceOptions) {
@@ -229,12 +168,33 @@ export class EvolveService implements AgentEvolutionHooks {
       options.onRound === undefined
         ? new RoundRecorder(this.limits.metricsRounds)
         : new RoundRecorder(this.limits.metricsRounds, options.onRound)
+    this.attachSweeper()
+  }
+
+  /**
+   * 接上巩固状态机——本类与 {@link Sweeper} 之间**唯一**的接缝。
+   *
+   * 状态机（24 个游标字段 + 十几个 advance* 方法）整体在 sweeper.ts 里，它只向
+   * 宿主要四样东西：手册存储、调度参数、日志、巩固埋点。于是这里的 runOnce /
+   * runUntilIdle 都退化成转发，再加一个巩固阶段也不会把本类拖回上帝类。
+   */
+  attachSweeper(): void {
+    this.sweeper.attach({
+      store: this.store,
+      limits: this.limits,
+      log: (message) => {
+        this.log(message)
+      },
+      recordConsolidation: (round) => {
+        this.record({ kind: 'consolidate', ...round })
+      },
+    })
   }
 
   close(): void {
     this.closed = true
     this.stopConsolidation()
-    this.sweep = undefined
+    this.sweeper.close()
     this.tasks.length = 0
     this.store.close()
   }
@@ -323,7 +283,7 @@ export class EvolveService implements AgentEvolutionHooks {
     if (this.tasks.length >= this.limits.maxQueuedTurns) {
       this.tasks.shift()
       this.droppedTurns += 1
-      this.log(`@ryagent/evolve: turn queue overflow (${this.limits.maxQueuedTurns}), dropped oldest turn`)
+      this.log(`@ryharness/evolve: turn queue overflow (${this.limits.maxQueuedTurns}), dropped oldest turn`)
     }
     this.tasks.push({
       agentId,
@@ -371,9 +331,7 @@ export class EvolveService implements AgentEvolutionHooks {
       }
       await draining
     }
-    while (this.sweepDrain !== undefined) {
-      await this.sweepDrain
-    }
+    await this.sweeper.drain()
   }
 
   private startDrain(): void {
@@ -404,7 +362,7 @@ export class EvolveService implements AgentEvolutionHooks {
       processed += this.attributeTurn(task)
     } catch (error) {
       this.record({ kind: 'turn', startedAt, processed, ok: false, error })
-      this.log(`@ryagent/evolve: attribution failed: ${describe(error)}`)
+      this.log(`@ryharness/evolve: attribution failed: ${describe(error)}`)
       return
     }
     if (this.llm === undefined) {
@@ -420,7 +378,7 @@ export class EvolveService implements AgentEvolutionHooks {
       this.record({ kind: 'turn', startedAt, processed, ok: true })
     } catch (error) {
       this.record({ kind: 'turn', startedAt, processed, ok: false, error })
-      this.log(`@ryagent/evolve: turn pipeline aborted: ${describe(error)}`)
+      this.log(`@ryharness/evolve: turn pipeline aborted: ${describe(error)}`)
     }
   }
 
@@ -440,7 +398,7 @@ export class EvolveService implements AgentEvolutionHooks {
         entry.harmful + (failed ? 1 : 0) >= AUTO_DEPRECATE_HARMFUL
       ) {
         this.store.setEntryStatus(entryId, 'deprecated')
-        this.log(`@ryagent/evolve: entry ${entryId} auto-deprecated (harmful>=${AUTO_DEPRECATE_HARMFUL})`)
+        this.log(`@ryharness/evolve: entry ${entryId} auto-deprecated (harmful>=${AUTO_DEPRECATE_HARMFUL})`)
       }
     }
 
@@ -494,7 +452,7 @@ export class EvolveService implements AgentEvolutionHooks {
         })
         processed += 1
       } catch (error) {
-        this.log(`@ryagent/evolve: reflection failed: ${describe(error)}`)
+        this.log(`@ryharness/evolve: reflection failed: ${describe(error)}`)
       }
     }
 
@@ -517,7 +475,7 @@ export class EvolveService implements AgentEvolutionHooks {
       })
       processed += this.applyDeltas(task, deltas)
     } catch (error) {
-      this.log(`@ryagent/evolve: curator failed: ${describe(error)}`)
+      this.log(`@ryharness/evolve: curator failed: ${describe(error)}`)
     }
     return processed
   }
@@ -606,6 +564,10 @@ export class EvolveService implements AgentEvolutionHooks {
    * 👎：即时反思入库 + 归因条目 harmful+1；👍：归因条目 helpful+1。
    * 归因 = 该 agent 在该会话最近一次注入的集合（串行队列下的近似）。
    * 反馈同时写进溯源：条目被 👍/👎 过这件事要能在手册里被看见。
+   *
+   * 同一个信号还会转发给记忆侧（{@link MemorySweep.recordFeedback}，未接线时跳过）：
+   * 此前反馈只回灌 playbook，记忆零通路，于是 recall 是单向棘轮——一条错误记忆
+   * 被注入过就只会随着每次召回越来越稳，用户点了 👎 也拉不回来。
    */
   recordFeedback(input: {
     agentId: string
@@ -613,6 +575,8 @@ export class EvolveService implements AgentEvolutionHooks {
     signal: 'thumb_up' | 'thumb_down'
     userText?: string
     assistantText?: string
+    /** 来源消息 id：落进 feedback_events 供路由按 (messageId, signal) 去重。 */
+    messageId?: string
   }): void {
     const startedAt = Date.now()
     const feedbackId = this.store.recordFeedback({
@@ -620,10 +584,18 @@ export class EvolveService implements AgentEvolutionHooks {
       conversationId: input.conversationId,
       turnIndex: -1,
       signal: input.signal,
+      messageId: input.messageId,
     })
+    let memoryHits = 0
+    try {
+      memoryHits = this.memorySweep?.recordFeedback?.({ agentId: input.agentId, signal: input.signal }) ?? 0
+    } catch (error) {
+      // 记忆侧失败不该吃掉整个反馈：playbook 的计数与溯源已经落库了。
+      this.log(`@ryharness/evolve: memory feedback skipped: ${describe(error)}`)
+    }
     const injected = this.attribution.get(`${input.conversationId}:${input.agentId}`)
     if (injected === undefined) {
-      this.record({ kind: 'feedback', startedAt, processed: 0, ok: true })
+      this.record({ kind: 'feedback', startedAt, processed: memoryHits, ok: true })
       return
     }
     const label = input.signal === 'thumb_up' ? '👍 认可' : '👎 差评'
@@ -635,7 +607,12 @@ export class EvolveService implements AgentEvolutionHooks {
         this.store.addCounts(entryId, { helpful: 1 })
         this.store.recordOrigins(entryId, origin())
       }
-      this.record({ kind: 'feedback', startedAt, processed: injected.playbookEntryIds.length, ok: true })
+      this.record({
+        kind: 'feedback',
+        startedAt,
+        processed: injected.playbookEntryIds.length + memoryHits,
+        ok: true,
+      })
       return
     }
     for (const entryId of injected.playbookEntryIds) {
@@ -665,7 +642,12 @@ export class EvolveService implements AgentEvolutionHooks {
       })
       this.startDrain()
     }
-    this.record({ kind: 'feedback', startedAt, processed: injected.playbookEntryIds.length, ok: true })
+    this.record({
+      kind: 'feedback',
+      startedAt,
+      processed: injected.playbookEntryIds.length + memoryHits,
+      ok: true,
+    })
   }
 
   // ---- 可解释性证据链 ----
@@ -698,66 +680,25 @@ export class EvolveService implements AgentEvolutionHooks {
   }
 
   // ---- 巩固调度（收编记忆遗留项）----
+  //
+  // 下面四个方法全是转发：状态机（游标、三个阶段、分片续跑、失败隔离）在
+  // {@link Sweeper} 里。留在这里是为了 server 侧调用点与语义都不变。
 
   /** 挂载记忆清扫面（runOnce 的判重合并用）。 */
   attachMemorySweep(sweep: MemorySweep): void {
-    this.memory = sweep
+    this.memorySweep = sweep
+    this.sweeper.attachMemorySweep(sweep)
   }
 
   /**
-   * 巩固任务（幂等）：
-   * 1. 到期反思清理（>30 天未转正 → expired，一条 UPDATE，直接同步做完）；
-   * 2. 重复记忆合并：同空间 embedding 余弦 >0.95 的对 → supersede 旧条目
-   *    （确定性阈值，不再烧 LLM——桌面规模下足够，LLM 判重留给未来）；
-   * 3. 条目↔记忆溯源关联：把词面重合的记忆记进 entry_origins（证据链的
-   *    「从哪几条记忆来」）；
-   * 4. 记忆归档（保守）：90 天零访问 → inactive；180 天以上的软删链中间版本
-   *    → inactive。都不物理删除，只移出检索面（dormant 只统计日志等于让记忆
-   *    库无界增长）。
+   * 巩固任务（幂等）：同步做有界的一片就返回，剩余切片让出事件循环后台续跑。
+   * 三个阶段（判重合并 / 条目↔记忆溯源 / 记忆归档）与失败隔离都在 {@link Sweeper}
+   * 里；本方法只做转发，调用方（server 的周期调度与手动触发）不受影响。
    *
-   * 分片执行：2–4 是 O(n²) 的重活，跑在服务进程的事件循环里，一次性跑完会把
-   * 整个 server 冻住（实测可到数十秒）。这里 runOnce() 只同步做**有界的一片**
-   * （默认 ≤12ms 或 ≤2000 次比较，先到者为准），剩下的切片让出事件循环后台
-   * 续跑，并受整轮预算约束；单个空间出错只跳过该空间。归档（4）内部还按
-   * {@link EvolveLimits.consolidationArchiveChunkRows} 行一片推进——它是两条
-   * UPDATE，不切片的话单次就能冻住主循环 1.8s。
+   * @param now - 本轮的「现在」；测试可注入以固定归档门槛的判定时刻。
    */
   runOnce(now = Date.now()): ConsolidationResult {
-    const startedAt = Date.now()
-    const expired = this.store.expireReflections(REFLECTION_TTL_MS, now)
-    const state = this.sweep ?? this.beginSweep(now)
-    const slice = this.sweepSlice(state, this.limits.consolidationSliceUnits, this.limits.consolidationSliceMs)
-    this.sweepRound = state
-    this.sweep = state.completed || state.timedOut ? undefined : state
-    this.resumeSweep(state)
-    const result = this.consolidationResult(state, expired, slice.blockedMs)
-    this.record({ kind: 'consolidate', startedAt, durationMs: slice.blockedMs, processed: slice.units, ok: true })
-    if (expired > 0 || result.mergedMemories > 0 || result.dormant > 0 || result.linkedOrigins > 0) {
-      this.log(
-        `@ryagent/evolve: consolidate expired=${expired} merged=${result.mergedMemories} dormant=${result.dormant} ` +
-          `origins=${result.linkedOrigins} archived=${result.archivedDormant + result.archivedSuperseded} ` +
-          `(dormant=${result.archivedDormant} superseded=${result.archivedSuperseded}) scanned=${result.scannedMemories} ` +
-          `blocked=${slice.blockedMs}ms pending=${result.pending}`,
-      )
-    }
-    return result
-  }
-
-  private consolidationResult(state: SweepState, expiredReflections: number, blockedMs: number): ConsolidationResult {
-    return {
-      expiredReflections,
-      mergedMemories: state.merged,
-      dormant: state.dormant,
-      archivedDormant: state.archivedDormant,
-      archivedSuperseded: state.archivedSuperseded,
-      scannedMemories: state.scanned,
-      linkedOrigins: state.origins,
-      errors: state.errors,
-      durationMs: blockedMs,
-      // 预算耗尽时没有「后台还在跑」这回事，剩余工作已被丢弃（truncated 标记）。
-      pending: !state.completed && !state.timedOut,
-      truncated: state.timedOut,
-    }
+    return this.sweeper.runOnce(now)
   }
 
   /**
@@ -766,305 +707,12 @@ export class EvolveService implements AgentEvolutionHooks {
    * （runOnce 返回的只是第一片的快照）。
    */
   async runUntilIdle(now = Date.now()): Promise<ConsolidationResult> {
-    const result = this.runOnce(now)
-    while (this.sweepDrain !== undefined) await this.sweepDrain
-    const state = this.sweepRound
-    if (state === undefined) return result
-    const final = this.consolidationResult(state, result.expiredReflections, result.durationMs)
-    this.lastConsolidation = final
-    return final
-  }
-
-  private beginSweep(now: number): SweepState {
-    return {
-      now,
-      deadline: Date.now() + this.limits.consolidationBudgetMs,
-      phase: 'dedupe',
-      spaces: [],
-      spaceIndex: 0,
-      rows: [],
-      loaded: false,
-      scannedSpace: false,
-      rowIndex: 0,
-      colIndex: 0,
-      entries: [],
-      entryIndex: 0,
-      memIndex: 0,
-      matches: [],
-      merged: 0,
-      dormant: 0,
-      scanned: 0,
-      origins: 0,
-      errors: 0,
-      archivedDormant: 0,
-      archivedSuperseded: 0,
-      archiveStage: 'dormant',
-      completed: false,
-      timedOut: false,
-    }
-  }
-
-  /** 跑一片（同步、有界）。返回本次消耗的比较次数与占用事件循环的毫秒数。 */
-  private sweepSlice(state: SweepState, maxUnits: number, maxMs: number): { units: number; blockedMs: number } {
-    const startedAt = Date.now()
-    let units = 0
-    while (!state.completed && units < maxUnits) {
-      if (Date.now() - startedAt >= maxMs) break
-      units += this.advance(state)
-    }
-    return { units, blockedMs: Date.now() - startedAt }
-  }
-
-  /** 一步推进（一个游标单位）。返回本次消耗的单位数（阶段切换按 1 计）。 */
-  private advance(state: SweepState): number {
-    if (state.phase === 'dedupe') return this.advanceDedupe(state)
-    if (state.phase === 'origins') return this.advanceOrigins(state)
-    return this.advanceArchive(state)
-  }
-
-  private advanceDedupe(state: SweepState): number {
-    if (!state.loaded) {
-      state.spaces = this.memory === undefined ? [] : this.loadSpaces(state)
-      state.loaded = true
-      return 1
-    }
-    if (state.spaceIndex >= state.spaces.length) return this.enterOriginsPhase(state)
-    if (state.rows.length === 0 && !state.scannedSpace) {
-      const space = state.spaces[state.spaceIndex] as string
-      state.rows = this.memory === undefined ? [] : this.loadRows(state, space)
-      state.scannedSpace = true
-      state.rowIndex = 0
-      state.colIndex = 1
-      return 1
-    }
-    const a = state.rows[state.rowIndex] as SweepRow | undefined
-    if (a === undefined) return this.nextDedupeSpace(state)
-    if (a.embedding === null || state.colIndex >= state.rows.length) return this.leaveDedupeRow(state)
-    const b = state.rows[state.colIndex] as SweepRow
-    if (b.embedding !== null && cosine(a.embedding, b.embedding) > MERGE_COSINE_THRESHOLD) {
-      try {
-        this.memory?.supersede(b.id, 'superseded')
-        state.merged += 1
-      } catch (error) {
-        state.errors += 1
-        this.log(`@ryagent/evolve: supersede failed on ${b.id}: ${describe(error)}`)
-      }
-    }
-    state.colIndex += 1
-    state.scanned += 1
-    return 1
-  }
-
-  /** 离开当前行（它的两两比较已经做完）：顺手记一次 dormant，再换行。 */
-  private leaveDedupeRow(state: SweepState): number {
-    const row = state.rows[state.rowIndex] as SweepRow | undefined
-    // dormant 是状态快照而非动作：零访问且超期就该被归档，与有没有向量无关
-    // （记忆侧 archiveDormant 也是按访问时间全量 UPDATE 的）。每行只数一次。
-    if (row !== undefined && row.accessCount === 0 && state.now - row.updatedAt > DORMANT_ARCHIVE_DAYS * 86_400_000) {
-      state.dormant += 1
-    }
-    state.rowIndex += 1
-    state.colIndex = state.rowIndex + 1
-    if (state.rowIndex < state.rows.length) return 1
-    return this.nextDedupeSpace(state)
-  }
-
-  private nextDedupeSpace(state: SweepState): number {
-    state.spaceIndex += 1
-    state.rows = []
-    state.scannedSpace = false
-    state.rowIndex = 0
-    state.colIndex = 1
-    return 1
-  }
-
-  private enterOriginsPhase(state: SweepState): number {
-    state.phase = 'origins'
-    state.spaceIndex = 0
-    state.entries = []
-    state.entryIndex = 0
-    state.loaded = false
-    return 1
-  }
-
-  /** 条目↔记忆溯源：把词面重合的记忆记进 entry_origins。 */
-  private advanceOrigins(state: SweepState): number {
-    if (!state.loaded) {
-      if (state.spaces.length === 0 || state.spaceIndex >= state.spaces.length) {
-        state.phase = 'archive'
-        return 1
-      }
-      const space = state.spaces[state.spaceIndex] as string
-      state.entries = this.store.listActiveForCompile(space, ORIGIN_ENTRY_SCAN)
-      state.rows = this.memory === undefined ? [] : this.loadRows(state, space).slice(0, this.limits.memoryOriginScan)
-      state.entryIndex = 0
-      state.memIndex = 0
-      state.matches = []
-      state.loaded = true
-      return 1
-    }
-    if (state.entryIndex >= state.entries.length) {
-      state.spaceIndex += 1
-      state.entries = []
-      state.rows = []
-      state.loaded = false
-      if (state.spaceIndex >= state.spaces.length) state.phase = 'archive'
-      return 1
-    }
-    if (state.memIndex >= state.rows.length) return this.finishOriginEntry(state)
-    const entry = state.entries[state.entryIndex] as PlaybookEntry
-    const row = state.rows[state.memIndex] as SweepRow
-    state.memIndex += 1
-    state.scanned += 1
-    if (textOverlap(entry.content, row.content) >= this.limits.memoryOriginMinOverlap) {
-      state.matches.push({ refId: row.id, detail: row.content.slice(0, 60) })
-    }
-    return 1
-  }
-
-  private finishOriginEntry(state: SweepState): number {
-    const entry = state.entries[state.entryIndex] as PlaybookEntry
-    const top = state.matches.slice(0, MEMORY_ORIGIN_MAX_REFS)
-    try {
-      state.origins += this.store.recordOrigins(
-        entry.id,
-        top.map((match) => {
-          return { kind: 'memory' as const, refId: match.refId, detail: match.detail }
-        }),
-      )
-    } catch (error) {
-      state.errors += 1
-      this.log(`@ryagent/evolve: recordOrigins failed on ${entry.id}: ${describe(error)}`)
-    }
-    state.entryIndex += 1
-    state.memIndex = 0
-    state.matches = []
-    return 1
-  }
-
-  /**
-   * 归档相位：一行行搬，搬完一段就换下一段。
-   *
-   * 归档是两条 UPDATE（dormant + 陈旧软删链），不切片就是一次 1.8s 级的同步
-   * 阻塞，把整个 server 冻住——而它就在服务进程的事件循环里。每片只归档
-   * `consolidationArchiveChunkRows` 行，片与片之间由后台续跑让出事件循环；
-   * 一段归档返回数小于片长即视为搬空，转下一段，两段搬完整轮结束。
-   * 语义（哪些行算陈旧）与整段 UPDATE 完全一致，只是拆开执行。
-   */
-  private advanceArchive(state: SweepState): number {
-    const limit = Math.max(1, this.limits.consolidationArchiveChunkRows)
-    if (state.archiveStage === 'dormant') {
-      const archived = this.archiveCall(state, () => {
-        return this.memory?.archiveDormant(DORMANT_ARCHIVE_DAYS * 86_400_000, state.now, limit) ?? 0
-      })
-      state.archivedDormant += archived
-      if (archived < limit) state.archiveStage = 'superseded'
-      return 1
-    }
-    const archived = this.archiveCall(state, () => {
-      return this.memory?.archiveColdSuperseded(SUPERSEDED_RETENTION_DAYS * 86_400_000, state.now, limit) ?? 0
-    })
-    state.archivedSuperseded += archived
-    if (archived < limit) state.completed = true
-    return 1
-  }
-
-  /** 归档调用的失败隔离：一段抛错只丢这一段（并跳过它），不带走整轮。 */
-  private archiveCall(state: SweepState, run: () => number): number {
-    if (this.memory === undefined) return 0
-    try {
-      return run()
-    } catch (error) {
-      state.errors += 1
-      this.log(`@ryagent/evolve: archive failed: ${describe(error)}`)
-      return 0
-    }
-  }
-
-  /** 列出待巩固的空间；抛错按空集处理（一个空间挂掉不该废掉整轮）。 */
-  private loadSpaces(state: SweepState): string[] {
-    try {
-      return this.memory?.listSpaces() ?? []
-    } catch (error) {
-      state.errors += 1
-      this.log(`@ryagent/evolve: listSpaces failed: ${describe(error)}`)
-      return []
-    }
-  }
-
-  private loadRows(state: SweepState, space: string): SweepRow[] {
-    try {
-      return this.memory?.listActiveEmbeddings(space) ?? []
-    } catch (error) {
-      state.errors += 1
-      this.log(`@ryagent/evolve: listActiveEmbeddings failed (space=${space}): ${describe(error)}`)
-      return []
-    }
-  }
-
-  /** 后台续跑剩余切片：每片之间让出事件循环，整轮受预算约束。 */
-  private resumeSweep(state: SweepState): void {
-    if (state.completed || state.timedOut || this.closed || this.sweepDrain !== undefined) return
-    const drain = this.drainSweep(state).finally(() => {
-      if (this.sweepDrain === drain) this.sweepDrain = undefined
-    })
-    this.sweepDrain = drain
-  }
-
-  private async drainSweep(state: SweepState): Promise<void> {
-    const startedAt = Date.now()
-    let units = 0
-    let blockedMs = 0
-    let failure: unknown
-    try {
-      while (!state.completed && !this.closed) {
-        if (Date.now() >= state.deadline) {
-          state.timedOut = true
-          this.log(
-            `@ryagent/evolve: consolidation exceeded ${this.limits.consolidationBudgetMs}ms budget, ` +
-              'remaining work dropped and retried next round',
-          )
-          break
-        }
-        await yieldToEventLoop()
-        const slice = this.sweepSlice(state, this.limits.consolidationSliceUnits, this.limits.consolidationSliceMs)
-        units += slice.units
-        blockedMs += slice.blockedMs
-      }
-    } catch (error) {
-      failure = error
-      state.errors += 1
-      this.log(`@ryagent/evolve: consolidation aborted: ${describe(error)}`)
-    }
-    // 跑完或被预算截断，这一轮的状态都不再续跑：下一轮从干净游标重来
-    // （续着半截游标只会让"本轮计数"无限累加）。
-    if (state.completed || state.timedOut || this.closed) this.sweep = undefined
-    if (this.sweepRound === state) {
-      this.lastConsolidation = this.consolidationResult(
-        state,
-        this.lastConsolidation?.expiredReflections ?? 0,
-        blockedMs,
-      )
-    }
-    // 记的是「这一段真正占住事件循环的时间」，不是含让出的墙钟——
-    // 服务端要看的是"进化/巩固把主进程卡了多久"。
-    this.record({
-      kind: 'consolidate',
-      startedAt,
-      durationMs: blockedMs,
-      processed: units,
-      ok: failure === undefined,
-      ...(failure === undefined ? {} : { error: failure }),
-    })
-    this.log(
-      `@ryagent/evolve: consolidate tail units=${units} blocked=${blockedMs}ms completed=${state.completed} ` +
-        `timedOut=${state.timedOut} errors=${state.errors}`,
-    )
+    return this.sweeper.runUntilIdle(now)
   }
 
   /** 最近一轮巩固的完整结果（含后台续跑后的最终计数）。 */
   lastConsolidationResult(): ConsolidationResult | undefined {
-    return this.lastConsolidation
+    return this.sweeper.lastResult()
   }
 
   /** 启动周期巩固（默认 6 小时）；返回停止函数。可关：不调用即可。 */
@@ -1075,7 +723,7 @@ export class EvolveService implements AgentEvolutionHooks {
       try {
         this.runOnce()
       } catch (error) {
-        this.log(`@ryagent/evolve: consolidate failed: ${describe(error)}`)
+        this.log(`@ryharness/evolve: consolidate failed: ${describe(error)}`)
       }
     }, intervalMs)
     // 周期任务不该拖住进程退出（内嵌模式/测试），与 server 的 WS 心跳一致。
@@ -1091,13 +739,6 @@ export class EvolveService implements AgentEvolutionHooks {
       this.consolidationTimer = undefined
     }
   }
-}
-
-function cosine(a: Float32Array, b: Float32Array): number {
-  if (a.length !== b.length) return -1
-  let dot = 0
-  for (let i = 0; i < a.length; i++) dot += (a[i] as number) * (b[i] as number)
-  return dot
 }
 
 /** 归因判定的上下文文本：用户输入、工具名、助手回复。 */
@@ -1132,13 +773,6 @@ function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-/** 让出一个宏任务：后台切片之间主循环要能处理 HTTP/WS 事件。 */
-function yieldToEventLoop(): Promise<void> {
-  return new Promise((resolve) => {
-    setImmediate(resolve)
-  })
-}
-
 /**
  * 超时包装。超时后底层 promise 仍会跑完（LLM 请求没法中断），这里只是不再
  * 阻塞管线；给原 promise 挂 catch 是必须的，否则迟到的 reject 变成
@@ -1171,50 +805,6 @@ interface TurnTask {
   forcedReason?: string
   turn: EvolutionTurn
   relevantEntryIds: readonly string[]
-}
-
-/** 记忆清扫面返回的一行。 */
-interface SweepRow {
-  id: string
-  content: string
-  embedding: Float32Array | null
-  accessCount: number
-  updatedAt: number
-}
-
-type SweepPhase = 'dedupe' | 'origins' | 'archive'
-
-/** 归档相位的两段：长期零访问 → 陈旧软删链。 */
-type ArchiveStage = 'dormant' | 'superseded'
-
-/** 巩固的游标状态（跨 runOnce 续跑，让出事件循环而不是重头再来）。 */
-interface SweepState {
-  now: number
-  deadline: number
-  phase: SweepPhase
-  spaces: string[]
-  spaceIndex: number
-  rows: SweepRow[]
-  /** 当前空间/阶段的数据是否已装载（区分「没装」与「装到 0 行」）。 */
-  loaded: boolean
-  scannedSpace: boolean
-  rowIndex: number
-  colIndex: number
-  entries: PlaybookEntry[]
-  entryIndex: number
-  memIndex: number
-  matches: { refId: string; detail: string }[]
-  merged: number
-  dormant: number
-  scanned: number
-  origins: number
-  errors: number
-  archivedDormant: number
-  archivedSuperseded: number
-  /** 归档相位走到哪一段了（每段内部按片推进）。 */
-  archiveStage: ArchiveStage
-  completed: boolean
-  timedOut: boolean
 }
 
 const ORIGIN_KIND_LABELS: Record<EntryOrigin['kind'], string> = {

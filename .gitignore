@@ -12,9 +12,98 @@ dist/
 .DS_Store
 /data/
 apps/desktop/main/
+# 截图模式的一次性产物：每次跑都变，入库即腐烂。入库的正式画面在
+# apps/desktop/docs/（那里是 redesign4-*.png 这类被 README 引用的地方）。
 apps/desktop/capture.png
+apps/desktop/capture-contacts.png
+apps/desktop/capture-me.png
+apps/desktop/dark-capture.png
+apps/desktop/dark-capture-contacts.png
+apps/desktop/dark-capture-me.png
+# 交互巡检（RYHARNESS_REVIEW=1）拍的过程截图：每次跑都变，入库即腐烂。
+# 入库的正式画面是 apps/desktop/docs/review-studio.png（形象定制面板全貌），
+# 其余那几张不入库。
+apps/desktop/review-*.png
+# 界面巡检（RYHARNESS_AUDIT=1）拍的过程截图：每次跑都变，入库即腐烂。
+apps/desktop/audit-*.png
+# 窄窗实拍（RYHARNESS_NARROW=1）：把窗口变窄后拍右栏抽屉，同样是一次性产物。
+apps/desktop/narrow-*.png
 apps/desktop/release/
+# 打包产物的备用目录：默认的 apps/desktop/release/ 里有个删不掉的 app.asar
+# （回收站接口对它一律报 "The system call level is not correct"，而删除动作不允许
+# 绕过回收站），electron-builder 清理那一步会卡住，所以改用这个新目录出包。
+# 用法：node_modules/.bin/electron-builder --projectDir apps/desktop --win
+#         --config.directories.output=release-fresh
+apps/desktop/release-fresh/
+apps/desktop/release-installer/
+apps/desktop/release-final/
+apps/desktop/release-v2/
+apps/desktop/release-v3/
+apps/desktop/release-v4/
+apps/desktop/release-v5/
+apps/desktop/release-ryharness/
+# 改名后的最终成果物目录（两个版本：安装包 + 免安装版 zip）。同样不入库。
+apps/desktop/ryharness-release/
+# 打包的中间目录：先打到干净目录再把成果物拷进上面的正式目录。直接打进正式目录会被
+# 上一轮遗留的 app.asar 句柄顶掉（EBUSY），而那个句柄要等宿主松开才能删。
+apps/desktop/ryharness-stage/
+# 视频生成的中间物与产物：提示词、提交参数、成片与任务映射。一次性产物，不入库。
+prepared-media/
+videos/
+# 打包验证的临时产物（electron-builder 的 win-unpacked）。同样不入库。
+# 这一条目前还兼着另一个用途：回收站接口（DeleteDirectory）会拒删 win-unpacked
+# 里的 app.asar（"The system call level is not correct"），而删除动作不允许绕过
+# 回收站，于是这个 15MB 的文件只能靠 .gitignore 挡住，别让它混进提交。
+apps/desktop/release-verify/
+# 桌面外壳安全整改的打包验证产物（同样只出 --dir，不出安装包）：用来实测
+# asar 里 react-dom / @dicebear / workspace 包源码还在不在。跟 release-verify
+# 一样只放临时产物，win-unpacked 里的 app.asar 也不入库。
+apps/desktop/release-shell-check/
+apps/desktop/release-shell-check2/
+apps/desktop/release-shell-check3/
+apps/desktop/release-shell-check4/
+# electron-builder 的默认输出目录在仓库根（不是 apps/desktop/release）：
+# 它是几百 MB 的安装包与 win-unpacked，既不该入库，也不该进 biome 的
+# 扫描范围——它里面有一个 JSON 不是 biome 格式化过的，会让 `pnpm lint`
+# 报错，而 CI 的 lint 步骤是硬门禁。带前导 / 锚定到仓库根。
+/RyHarness-release/
+# 改名前（RyAgent 时代）的旧打包目录：同样不入库。
+RyAgent-release/
+# 动物形象的**原图**（AI 生成的 1K 白底大图，18 张约 27MB）：中间产物，不入库——
+# 派生产物（抠完的 512px WebP）入库，原图不入库，理由同下面的品牌资产一节。
+# 要重建：node apps/desktop/scripts/fetch-animal-assets.mjs 取回原图，
+# 再 electron apps/desktop/scripts/cutout-animal-assets.mjs 抠图。
+/apps/desktop/assets/animals-raw/
+# 立绘生成管线的原始导出（cat/dog/fox/mask/NaN）：由 apps/desktop/scripts/
+# gen-portraits.mjs 读入、归一化后产出 apps/desktop/assets/portraits/*.webp。
+# 源图是中间产物，不入库——派生产物入库、原图不入库，理由同下面的
+# 品牌资产一节。带前导 / 锚定，免得命中别处的同名目录。
+/src/
 coverage/
 *.tsbuildinfo
 vendor/*/lib/
 vendor/*/*/lib/
+
+# 评审与端到端过程的整屏截图不入库：单张动辄几百 KB，几十张就把仓库撑大十几 MB，
+# 而且很容易把开发者桌面上的私人信息一起拍进去。要看过程截图请看 PR 与 issue 附件。
+# 一律带前导 / 锚定到仓库根：本仓吃过 `lib/` 漏锚定的亏，pattern 意外命中别处的同名
+# 目录时，git 只会安静地不收文件，等发现时源码已经漏了一轮。
+# 注意：.gitignore 只挡「新文件」，清掉已入库的历史截图得直接删文件、随提交一起走。
+/docs/review*/
+/docs/e2e-*.png
+/docs/review-fix-*.png
+# 头像转头的过程证据（指针移到不同角度各拍一张）：一次性的状态证据，不入库。
+# 正式画面是 apps/desktop/docs/review-studio.png（形象定制面板全貌）。
+/apps/desktop/docs/review-turn-*.png
+/apps/desktop/docs/review-studio-bear.png
+/apps/desktop/docs/review-studio-hue.png
+# 品牌资产只入库母版与派生图标（apps/desktop/assets/**），尺寸阶梯的验证图不入库——
+# 理由不是「是不是品牌资产」，而是「贡献者会不会读到」：它是纯派生物，源在仓里
+# （assets/brand/mark.png + scripts/gen-icon.mjs），跑一遍就有；一入库就开始腐烂，
+# 母版改一次这些 PNG 就变成骗人的旧图而无人察觉；且全仓零引用。
+# 同目录的 redesign4-*.png 被 apps/desktop/README.md「实测截图」一节引用，
+# 是给人看的正式画面，保持入库。
+
+# 各 lane 的临时草稿目录（图标试画、比对拼版等）。带前导 / 锚定，免得命中别处同名目录。
+/.tmp-icons/
+/.zwork/
