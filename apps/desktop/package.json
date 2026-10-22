@@ -30,7 +30,7 @@
     "@ryharness/session": "workspace:*",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
-    "@vitejs/plugin-react": "^5.0.0",
+    "@vitejs/plugin-react": "^6.1.2",
     "electron": "44.7.2",
     "electron-builder": "^26.17.0",
     "jsdom": "^26.0.0",
