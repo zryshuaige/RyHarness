@@ -44,7 +44,7 @@ jobs:
           if ($t -notmatch '^v\d+\.\d+\.\d+') { throw "tag 必须是 vX.Y.Z 形式，收到的是：$t" }
           "tag=$t" >> $env:GITHUB_OUTPUT
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # tag 校验要 `git rev-parse refs/tags/<tag>`，浅克隆拿不到 tag 列表。
           fetch-depth: 0
@@ -104,7 +104,7 @@ jobs:
     env:
       RELEASE_TAG: ${{ needs.verify.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.verify.outputs.tag }}
           fetch-depth: 0
@@ -207,7 +207,7 @@ jobs:
     env:
       RELEASE_TAG: ${{ needs.verify.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.verify.outputs.tag }}
 

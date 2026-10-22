@@ -31,7 +31,7 @@ jobs:
     # 硬性上限：依赖安装 + 构建 + 测试不应超过 20 分钟，超了就是卡死。
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
@@ -103,7 +103,7 @@ jobs:
     # 失败也不让整条工作流变红：性能用例会因机器负载抖动，红了只会养成忽略红灯的习惯。
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
