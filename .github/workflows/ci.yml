@@ -131,7 +131,7 @@ jobs:
       - name: Upload numbers
         # always()：性能用例挂掉时那半截输出同样是定位问题的线索。
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: perf-numbers-${{ github.run_number }}
           path: perf-results.json

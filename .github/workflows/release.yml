@@ -190,7 +190,7 @@ jobs:
         run: pnpm --filter @ryharness/desktop exec electron-builder --win nsis
 
       - name: Upload installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: installer
           path: apps/desktop/release/*.exe
