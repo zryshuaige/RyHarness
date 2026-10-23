@@ -1063,6 +1063,9 @@ export function App() {
                   setTab('chats')
                   setActiveId(id)
                 }}
+                onOpenAgent={(agentId) => {
+                  void openDirectChat(agentId)
+                }}
               />
             </div>
           </section>

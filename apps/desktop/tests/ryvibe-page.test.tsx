@@ -330,6 +330,23 @@ describe('RyVibe 页面', () => {
     expect(container.textContent).toContain('读需求')
   })
 
+  it('小队里每个人都能点开单独聊：多 agent 的可见性靠这个', async () => {
+    const opened: string[] = []
+    const withProject: VibeSessionView = { ...session, status: 'done', project }
+    const api = stub({ session: withProject, sessions: [withProject] })
+    act(() => {
+      root = createRoot(container)
+      root.render(<RyVibePage api={api} onOpenAgent={(agentId) => opened.push(agentId)} />)
+    })
+    await settle()
+    const members = [...container.querySelectorAll<HTMLButtonElement>('.vibe-squad-member')]
+    expect(members.map((button) => button.textContent)).toEqual(['Ryen', '工程师'])
+    await act(async () => {
+      must(members[1], '工程师按钮').click()
+    })
+    expect(opened).toEqual(['eng'])
+  })
+
   it('方案落成了项目：目录、文件清单、预览都在', async () => {
     const withProject: VibeSessionView = { ...session, status: 'done', project }
     const api = stub({

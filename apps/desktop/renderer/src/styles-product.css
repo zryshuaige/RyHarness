@@ -2117,6 +2117,21 @@
 
 .vibe-squad { margin: 0 0 var(--space-2); color: var(--text-tertiary); font-size: var(--fs-xs); }
 
+/* 小队里的每个人都能点开单独聊：链接的样子，但仍然是按钮（键盘可达）。 */
+.vibe-squad-member {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--amber-text);
+  font: inherit;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--amber-text) 40%, transparent);
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.vibe-squad-member:hover { text-decoration-color: var(--amber-text); }
+
 .vibe-section { margin-top: var(--space-6); }
 
 .vibe-section-title {

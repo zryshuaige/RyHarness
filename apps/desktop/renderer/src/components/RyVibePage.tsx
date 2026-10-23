@@ -79,6 +79,14 @@ export interface RyVibePageProps {
   api: RyVibeApi
   /** 点「在聊天里继续」时把用户带进那个会话。 */
   onOpenConversation?: (conversationId: string) => void
+  /**
+   * 点小队里某位成员时，直接开一段跟他的单聊。
+   *
+   * 此前小队名单只是一行文字：用户看到「Ryen、CodeBot」，想知道「刚才是谁写的这段」
+   * 就只能去通讯录里翻。Cursor 那套最便宜的抄法就是**任一个 agent 都能点开**——
+   * 多 agent 的可见性靠这个撑起来：知道谁在、点一下就能单独问他。
+   */
+  onOpenAgent?: (agentId: string) => void
 }
 
 /**
@@ -369,7 +377,7 @@ function stepOf(session: VibeSessionView, outputCount: number): number {
   return outputCount > 0 ? 2 : 1
 }
 
-export function RyVibePage({ api, onOpenConversation }: RyVibePageProps) {
+export function RyVibePage({ api, onOpenConversation, onOpenAgent }: RyVibePageProps) {
   const [requirement, setRequirement] = useState('')
   const [session, setSession] = useState<VibeSessionView | undefined>(undefined)
   const [questions, setQuestions] = useState<VibeQuestionView[]>([])
@@ -755,13 +763,31 @@ export function RyVibePage({ api, onOpenConversation }: RyVibePageProps) {
       )}
 
       <blockquote className="vibe-requirement">{session.requirement}</blockquote>
+      {/* 小队名单：每个人都能点开单独聊。多 agent 的可见性靠这个——用户能一眼看清
+          刚才是谁写的，点一下就能接着单独问他。 */}
       <p className="vibe-squad">
         小队：
-        {session.squad
-          .map((member) => {
-            return member.name
-          })
-          .join('、')}
+        {session.squad.map((member, index) => {
+          return (
+            <span key={member.id}>
+              {index > 0 ? '、' : null}
+              {onOpenAgent === undefined ? (
+                member.name
+              ) : (
+                <button
+                  type="button"
+                  className="vibe-squad-member"
+                  title={`跟 ${member.name} 单聊`}
+                  onClick={() => {
+                    onOpenAgent(member.id)
+                  }}
+                >
+                  {member.name}
+                </button>
+              )}
+            </span>
+          )
+        })}
       </p>
 
       {session.status === 'failed' && (
