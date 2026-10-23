@@ -61,9 +61,9 @@ function renderInline(tokens: Token[] | undefined, ctx?: InlineContext): ReactNo
       }
       case 'escape':
         return (token as Tokens.Escape).text
-      default: // text / html / 未识别 token：一律按纯文本渲染（React 自动转义）。
-      // 有 @ 上下文时交给它切段；没有就按原文返回，与从前逐字一致。
-      {
+      default: {
+        // 有 @ 上下文时交给它切段；没有就按原文返回，与从前逐字一致。
+        // text / html / 未识别 token：一律按纯文本渲染（React 自动转义）。
         const source = (token as Tokens.Text).raw ?? (token as Tokens.Text).text
         if (ctx?.renderText !== undefined) return ctx.renderText(source, key)
         return source
