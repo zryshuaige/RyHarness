@@ -96,11 +96,16 @@
      顶栏 20px），同一条纵向边线上于是差出 12px，输入卡还因此比消息列宽 24px
      （窄窗未触到 max-width 时，差值全部落在左右两边）。 */
   --gutter-x: var(--space-8);
-  /* 列表栏宽的降级阶梯：1200px 以下聊天区才是重灾区（1024px 窗口里 72+300+280
-     之外只剩 372px 给消息列），先把列表让出去；右栏在同一断点直接退场（见 @media），
-     1200px 以上的收窄/收起仍由用户自己决定。 */
+  /* 列表栏宽的降级阶梯。
+     1200px 以下聊天区才是重灾区——但**右栏在同一断点已经改成覆盖式抽屉，不占布局
+     宽度**（见下面的 @media）。所以 1199 档里并没有一列 280px 的右栏要躲，降级
+     仍按「右栏常驻」的旧账让 60px，就是白让：聊天区一点没多，列表栏的标题反倒
+     被砍到只剩四个字（实测 240px 档：标题实得 64px ≈ 4 个汉字，「产品三人组」
+     显示成「产品三…」）。
+     于是 1199 档只让到 280px（标题实得 104px，够读出完整会话名），真正的
+     窄窗（≤1040px）才退到 200px——那一档窗口真的放不下三栏。 */
   --list-panel-w: 300px;
-  --list-panel-w-md: 240px;
+  --list-panel-w-md: 280px;
   --list-panel-w-sm: 200px;
   /* 气泡操作条的外置通道宽度，跟消息列一起自适应（cqw = .chat-col 宽度的 1%）。
      118px 是天花板（两枚反馈 + 复制共三枚 28px 按钮加呼吸）；100px 是它排进
@@ -433,7 +438,9 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
   transition: width var(--dur-in) var(--ease-out);
 }
 /* 窄窗口降级：聊天区在 1024px 窗口里原本只剩 372px（72+300+280 之外全没了）。
-   列表先让出宽度；右栏不再整块退场，改成覆盖式抽屉（见下面那条 @media）。 */
+   列表先让出宽度；右栏不再整块退场，改成覆盖式抽屉（见下面那条 @media）。
+   让到 280px 而不是 240px：右栏在这一档已经是不占位的抽屉，没有一列 280px
+   要躲——再让 60px 只是把会话名挤成四个字，聊天区一点没多。 */
 @media (max-width: 1199px) {
   .list-panel { width: var(--list-panel-w-md); }
 }
@@ -558,7 +565,13 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
 }
 .conversation-item-body { flex: 1; min-width: 0; }
 .conversation-item-top { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-2); }
-.conversation-item-top strong { font-size: var(--fs-md); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 标题吃掉徽标与时间戳之外的全部宽度。
+   没有 flex:1 时它只占内容宽度，justify-content:space-between 会把时间戳推到最右、
+   中间空出一段——那截空白是从标题的预算里扣掉的，标题于是更早被截断。 */
+.conversation-item-top strong {
+  flex: 1; min-width: 0;
+  font-size: var(--fs-md); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .conversation-item-top time { color: var(--text-secondary); font-size: var(--fs-xs); flex-shrink: 0; }
 .conversation-item-bottom { display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); margin-top: 2px; }
 .preview { color: var(--text-secondary); font-size: var(--fs-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -607,8 +620,9 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
 
 /* 行内状态徽标：置顶走琥珀（与 .badge 同档），已静音是中性灰——静音不该比置顶更显眼。 */
 .conversation-item-flag { margin-right: var(--space-1); vertical-align: middle; flex-shrink: 0; }
+/* 已静音与未读徽标是**并存**的（静音不该吞掉未读数），两者之间留一点缝。 */
 .conversation-item-flag.is-muted {
-  margin-right: 0; padding: 1px 8px; border-radius: var(--radius-pill);
+  margin-right: var(--space-1); padding: 1px 8px; border-radius: var(--radius-pill);
   background: var(--bg-subtle); color: var(--text-secondary);
   font-size: var(--fs-xs); white-space: nowrap;
 }
@@ -1278,11 +1292,19 @@ button.tool-row:disabled { cursor: default; }
 }
 .artifact-list li:last-child { border-bottom: none; }
 .artifact-list .artifact-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.artifact-list a { color: var(--amber-text); text-decoration: none; font-weight: 600; font-size: var(--fs-xs); }
+/* 两个动作的命中区不能只有文字那么高（12px 字 + padding:0 ≈ 24×14px）。
+   WCAG 2.5.8 的下限是 24×24px——指针用户点「预览」与「下载」时，两个 14px 高、
+   长得一模一样、只隔 8px 的目标极易互点。给它们 24px 高的命中区（视觉不变，
+   靠行高而不是 padding 把版面撑开）。 */
+.artifact-list a {
+  color: var(--amber-text); text-decoration: none; font-weight: 600; font-size: var(--fs-xs);
+  display: inline-flex; align-items: center; min-height: 24px; padding: 0 4px; border-radius: var(--radius-sm);
+}
 /* 「预览」是 <button> 而非 <a>：它不导航，只在应用内开一个框，所以外观必须跟上一行对齐。 */
 .artifact-list button {
-  color: var(--amber-text); background: none; border: none; padding: 0; cursor: pointer;
+  color: var(--amber-text); background: none; border: none; padding: 0 4px; cursor: pointer;
   font-weight: 600; font-size: var(--fs-xs); font-family: inherit;
+  display: inline-flex; align-items: center; min-height: 24px; border-radius: var(--radius-sm);
 }
 .artifact-list li .icon { color: var(--amber-text); }
 /* 主操作（打开）之外的第二动作更安静：两个琥珀按钮并排会把一行读成两个并列的“主要动作” */
@@ -1313,8 +1335,10 @@ button.tool-row:disabled { cursor: default; }
 .todo-list { list-style: none; margin: 0; padding: 0; }
 .todo-list li { border-bottom: 1px solid var(--divider); }
 .todo-list li:last-child { border-bottom: none; }
-.todo-text { display: flex; align-items: flex-start; gap: 8px; padding: 7px 0; font-size: var(--fs-sm); cursor: pointer; }
-.todo-text input { margin: 3px 0 0; accent-color: var(--amber-primary); }
+/* 与 RyVibe 页的 .vibe-task 同一套行距与复选框处理：同一份待办在两个页面长成
+   两个样子，用户来回看会觉得是两个东西。 */
+.todo-text { display: flex; align-items: flex-start; gap: var(--space-3); padding: var(--space-2) 0; font-size: var(--fs-sm); cursor: pointer; }
+.todo-text input { flex: none; margin: 3px 0 0; accent-color: var(--amber-primary); }
 .todo-text.is-done span { color: var(--text-tertiary); text-decoration: line-through; }
 
 .relay-list {

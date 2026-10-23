@@ -332,7 +332,13 @@ describe('会话行尾操作', () => {
       return node.textContent
     })
     expect(titles[0]).toContain('小码')
-    expect(titles[0]).toContain('置顶')
+    // 「置顶」徽标在 `<strong>` **外面**：它跟会话名挤在一个截断盒子里时，标题实得
+    // 只剩一百来像素，徽标一挂就把名字吃成一个「…」。所以标题盒子只装名字，
+    // 徽标自己另立一格。
+    const flags = [...container.querySelectorAll('.conversation-item .conversation-item-flag')].map((node) => {
+      return node.textContent
+    })
+    expect(flags[0]).toContain('置顶')
     // 再点一次是取消（操作面板还开着，不用重新展开）。
     await act(async () => {
       buttonByText('取消置顶', container).click()
@@ -341,7 +347,7 @@ describe('会话行尾操作', () => {
     expect(recorded.patches[1]).toEqual(['c2', { pinned: false }])
   })
 
-  it('静音：发 PATCH，且未读徽标让位给「已静音」', async () => {
+  it('静音：发 PATCH，且「已静音」与未读徽标**并存**（静音不该吞掉未读数）', async () => {
     const { api, recorded } = fakeApi(() => {
       return Promise.resolve({ results: [] })
     })
@@ -354,7 +360,11 @@ describe('会话行尾操作', () => {
     })
     expect(recorded.patches).toEqual([['c2', { muted: true }]])
     expect(container.textContent).toContain('已静音')
-    expect(container.querySelector('.unread-badge')).toBeNull()
+    // 此前这里是「未读徽标让位给已静音」：静音会话把未读数整个换掉，于是
+    // 「静音且有 3 条未读」与「静音且没有未读」长得完全一样——最该被提醒的那批
+    // 恰恰被静音吞了。两个标记现在并存。
+    expect(container.querySelector('.unread-badge')?.textContent).toBe('2')
+    expect(container.querySelector('.conversation-item-flag.is-muted')?.textContent).toBe('已静音')
   })
 
   it('置顶失败会回滚本地状态并说明原因', async () => {
@@ -646,7 +656,11 @@ describe('删除 / 置顶的补间接线', () => {
       return node.textContent
     })
     expect(titles[0]).toContain('小码')
-    expect(titles[0]).toContain('置顶')
+    // 徽标在标题盒子之外（见上面那条用例的理由）。
+    const flags = [...container.querySelectorAll('.conversation-item .conversation-item-flag')].map((node) => {
+      return node.textContent
+    })
+    expect(flags[0]).toContain('置顶')
   })
 
   it('删除：补间包住本地移除，其余行原样留在列表里', async () => {

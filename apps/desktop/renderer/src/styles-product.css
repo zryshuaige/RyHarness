@@ -433,6 +433,14 @@
   letter-spacing: 0.04em;
 }
 
+/* 标题后面的计数（「还有 3 条」）：比标题更轻，但看得见。 */
+.welcome-label-count {
+  margin-left: var(--space-2);
+  color: var(--text-secondary);
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
 /* 凭据卡继承 .apikey-card 的白面，但在主栏里不再居中缩成 520px。 */
 .welcome-prereq .apikey-card {
   max-width: none;
@@ -2492,7 +2500,13 @@
   cursor: pointer;
 }
 
-.vibe-task:last-child { border-bottom: none; }
+/* 去掉最后一条的下边线。
+   注意目标是 `.vibe-tasks li:last-child .vibe-task`，不是 `.vibe-task:last-child`：
+   `<label>` 是 `<li>` 的**唯一**子元素，于是每个 label 都命中 `:last-child`——
+   写错目标的结果是**每一行都没有分隔线**，整份任务清单塌成一列认不出行的文字。
+   同一份样式表里 `.todo-list li:last-child` / `.artifact-list li:last-child` 都写对了，
+   只有这条偏了目标。 */
+.vibe-tasks li:last-child .vibe-task { border-bottom: none; }
 
 .vibe-task input {
   flex: none;

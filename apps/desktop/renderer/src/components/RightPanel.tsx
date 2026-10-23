@@ -132,6 +132,18 @@ export function RightPanel({
         </button>
       )}
       <div className="panel-body">
+        {/* 待办排在**最前**：它是这一栏里唯一能动手的东西（能勾、能清空），
+            而下面那些全是参考资料——助理是谁、这场群里有谁、产出过哪些文件。
+            用户点开右栏，多半就是为了勾掉一件事；把它压在资料卡后面，等于把
+            唯一可操作的清单塞到首屏之外。 */}
+        {conversation !== undefined && (
+          <TodoSection
+            api={api}
+            conversationId={conversation.id}
+            updatedAt={conversation.updatedAt}
+            onOpenPlugins={onOpenPlugins}
+          />
+        )}
         {conversation === undefined ? (
           <p className="panel-empty">选择一个会话查看详情</p>
         ) : conversation.kind === 'direct' ? (
@@ -154,15 +166,6 @@ export function RightPanel({
             onPreview={onPreview}
             onShowMemories={setMemoryFor}
             onShowPlaybook={setPlaybookFor}
-          />
-        )}
-        {/* 待办挂在所有会话类型上：群聊里的「谁跟一下」同样需要一个可勾选的清单。 */}
-        {conversation !== undefined && (
-          <TodoSection
-            api={api}
-            conversationId={conversation.id}
-            updatedAt={conversation.updatedAt}
-            onOpenPlugins={onOpenPlugins}
           />
         )}
         {/* 用量一行带过：GET /api/conversations/:id 早就把 usage 算好送回来了，
@@ -494,7 +497,7 @@ const ArtifactList = memo(function ArtifactList({
           <Cat size={56} shape="circle" />
         </span>
         <p className="panel-empty">本会话还没有产物文件</p>
-        <p className="panel-empty">还没有文件。</p>
+        <p className="panel-empty">助理产出文件后会出现在这里。</p>
       </div>
     )
   }
@@ -524,7 +527,10 @@ const ArtifactList = memo(function ArtifactList({
               预览
             </button>
           )}
-          <a className="is-quiet" href={fileUrl(artifact.name)} download={artifact.name}>
+          {/* `file-open` 不能少：静默样式的规则是 `.file-open.is-quiet`（两个类），
+              只写 `is-quiet` 就不命中，下载会落回 `.artifact-list a` 的主操作样式——
+              于是「预览」与「下载」同色同字重，两个并列的主要动作。 */}
+          <a className="file-open is-quiet" href={fileUrl(artifact.name)} download={artifact.name}>
             下载
           </a>
         </li>
@@ -710,7 +716,10 @@ const GroupInfo = memo(function GroupInfo({
             <Avatar avatarKey={member.avatar} name={member.name} seed={member.id} size={44} />
             <span
               className="member-name"
-              title={conversation.dispatcherAgentId === member.id ? '本会话的调度者' : undefined}
+              // 名字在三列网格里会被截断（六七个汉字），所以**全名必须能拿回来**：
+              // 调度者另给一句说明，普通成员给全名——原来只有调度者有 title，
+              // 于是普通成员截断后 hover 也看不到自己是谁。
+              title={conversation.dispatcherAgentId === member.id ? `${member.name} · 本会话的调度者` : member.name}
             >
               {conversation.dispatcherAgentId === member.id ? (
                 <span style={DISPATCH_MARK_STYLE}>

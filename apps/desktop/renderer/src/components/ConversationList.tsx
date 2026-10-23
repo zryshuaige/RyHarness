@@ -887,31 +887,35 @@ export function ConversationList({
                       {avatarOf(conversation)}
                       <div className="conversation-item-body">
                         <div className="conversation-item-top">
-                          <strong>
-                            {(conversation.pinned ?? false) && (
-                              <span className="badge conversation-item-flag">置顶</span>
-                            )}
-                            {/* 主动消息的角标：点这一行就进那个会话，看到的是它自己开口说的回顾，
-                            不是用户问出来的对话。 */}
-                            {conversation.proactive === true && (
-                              <span className="badge conversation-item-flag" data-proactive="true">
-                                主动
-                              </span>
-                            )}
-                            {texts.title}
-                          </strong>
+                          {/* 徽标在 `<strong>` **外面**。
+                              放在里面时，它会占掉标题那 122px 预算里的一大截：列表栏
+                              300px 减去内边距、48px 头像、行尾的 ⋯ 按钮与时间戳，
+                              标题实得就一百多像素——「置顶 + 主动」两个徽标一挂，
+                              会话名只剩一个「…」，用户根本认不出哪条是哪条。
+                              徽标移到外面后，标题独占截断盒子，徽标自己也不会被截。 */}
+                          {(conversation.pinned ?? false) && <span className="badge conversation-item-flag">置顶</span>}
+                          {/* 主动消息的角标：点这一行就进那个会话，看到的是它自己开口说的回顾，
+                          不是用户问出来的对话。 */}
+                          {conversation.proactive === true && (
+                            <span className="badge conversation-item-flag" data-proactive="true">
+                              主动
+                            </span>
+                          )}
+                          <strong>{texts.title}</strong>
                           <time>{formatTime(conversation.updatedAt)}</time>
                         </div>
                         <div className="conversation-item-bottom">
                           <span className="preview">{texts.preview}</span>
-                          {conversation.muted === true ? (
+                          {/* 静音与未读**并存**，不是二选一：静音把未读数整个换掉之后，
+                              「静音且有 3 条未读」和「静音且没有未读」长得一模一样，
+                              而最该被提醒的那一批恰恰被静音吞了。 */}
+                          {conversation.muted === true && (
                             <span className="conversation-item-flag is-muted">已静音</span>
-                          ) : (
-                            (conversation.unreadCount ?? 0) > 0 && (
-                              <span className="unread-badge">
-                                {(conversation.unreadCount ?? 0) > 99 ? '99+' : conversation.unreadCount}
-                              </span>
-                            )
+                          )}
+                          {(conversation.unreadCount ?? 0) > 0 && (
+                            <span className="unread-badge">
+                              {(conversation.unreadCount ?? 0) > 99 ? '99+' : conversation.unreadCount}
+                            </span>
                           )}
                         </div>
                       </div>

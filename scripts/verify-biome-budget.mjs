@@ -202,7 +202,6 @@ allow('lint/correctness/noUnusedImports', {
   'packages/agent/src/loop.ts': 1,
   'packages/session/tests/coordinator-wiring.test.ts': 1,
   'scripts/check-embedding.ts': 1,
-  'scripts/smoke-siliconflow.ts': 1,
 })
 // 未使用的局部变量。
 allow('lint/correctness/noUnusedVariables', {

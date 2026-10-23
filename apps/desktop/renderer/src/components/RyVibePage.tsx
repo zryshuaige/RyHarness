@@ -330,7 +330,16 @@ function ProjectCard({
  * 用户在这里就能勾，不用去聊天页右侧找——那才是「接下来做什么」的落点。勾选走
  * 待办插件的接口，所以聊天页那边看到的也是同一份状态。
  */
-function TaskList({ todos, onToggle }: { todos: readonly TodoItem[]; onToggle: (id: string, done: boolean) => void }) {
+function TaskList({
+  todos,
+  busyId,
+  onToggle,
+}: {
+  todos: readonly TodoItem[]
+  /** 正在提交的那一条：勾选期间禁用，连点会并发提交。 */
+  busyId: string | undefined
+  onToggle: (id: string, done: boolean) => void
+}) {
   if (todos.length === 0) return null
   return (
     <section className="vibe-section">
@@ -343,6 +352,10 @@ function TaskList({ todos, onToggle }: { todos: readonly TodoItem[]; onToggle: (
                 <input
                   type="checkbox"
                   checked={todo.done}
+                  // 提交期间禁用这一条：此前不禁用，连点两下会并发提交，
+                  // 两个请求都乐观改本地状态，后到的那个失败回滚会把正确的
+                  // 状态又改回去——用户看着像"勾上又弹回来"。
+                  disabled={busyId === todo.id}
                   onChange={(event) => {
                     onToggle(todo.id, event.target.checked)
                   }}
@@ -400,6 +413,8 @@ export function RyVibePage({ api, onOpenConversation, onOpenAgent }: RyVibePageP
   const [error, setError] = useState<string | undefined>(undefined)
   /** 落盘时写进待办的任务清单。 */
   const [todos, setTodos] = useState<TodoItem[]>([])
+  /** 正在提交的那一条待办：勾选期间禁用它，连点会并发提交。 */
+  const [todoBusy, setTodoBusy] = useState<string | undefined>(undefined)
   /** 正在预览的项目文件。 */
   const [preview, setPreview] = useState<ProjectPreview | undefined>(undefined)
   /** 已经从服务端找过一轮没有（避免重复找）。 */
@@ -623,12 +638,17 @@ export function RyVibePage({ api, onOpenConversation, onOpenAgent }: RyVibePageP
         return item.id === id ? { ...item, done } : item
       })
     })
+    setTodoBusy(id)
     void (async () => {
       try {
         await api.setTodoDone?.(session.conversationId, id, done)
       } catch (err) {
         toast.error(humanError(err, '这条没勾上，再点一次'))
         await refresh(session.id)
+      } finally {
+        setTodoBusy((current) => {
+          return current === id ? undefined : current
+        })
       }
     })()
   }
@@ -890,7 +910,7 @@ export function RyVibePage({ api, onOpenConversation, onOpenAgent }: RyVibePageP
         />
       )}
 
-      <TaskList todos={todos} onToggle={toggleTodo} />
+      <TaskList todos={todos} busyId={todoBusy} onToggle={toggleTodo} />
 
       {error !== undefined && <p className="vibe-error">{error}</p>}
 

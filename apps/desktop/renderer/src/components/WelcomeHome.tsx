@@ -175,9 +175,10 @@ export function WelcomeHome({
    * 重复变得不那么难看，不会让重复消失。等待才是不显眼却必须被抬起来的那件事；
    * 什么都没等着的时候，这一块整个不渲染。
    */
-  const pending = visible.find((conversation) => {
+  const pendingList = visible.filter((conversation) => {
     return (conversation.unreadCount ?? 0) > 0 || conversation.proactive === true
   })
+  const pending = pendingList[0]
   const demo = visible.find((conversation) => {
     return conversation.title.startsWith(DEMO_CONVERSATION_PREFIX)
   })
@@ -498,7 +499,12 @@ export function WelcomeHome({
             起真正"有人等你"的那一条；没有待办时整块不渲染，而不是留一张空卡占位。 */}
         {pending !== undefined && (
           <section className="welcome-recent welcome-pending" aria-label="等你回一句">
-            <p className="welcome-label">等你回一句</p>
+            {/* 「等你回一句」是复数语义，却只显示第一条——用户分不清是只有一条在等，
+                还是别的被漏掉了。超过一条时把数说出来。 */}
+            <p className="welcome-label">
+              等你回一句
+              {pendingList.length > 1 && <span className="welcome-label-count">还有 {pendingList.length - 1} 条</span>}
+            </p>
             <button
               type="button"
               className="welcome-recent-item welcome-pending-row"

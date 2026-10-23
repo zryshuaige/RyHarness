@@ -1127,7 +1127,7 @@ describe('窄窗口：列表面板先让宽度', () => {
   const base = sheet('styles.css')
   const tokens = themeTokens(base)
 
-  it('1200px 以下列表让到 240px，1040px 以下让到 200px（1024 窗口的聊天区不再只剩 372px）', () => {
+  it('1200px 以下列表让到 280px，1040px 以下让到 200px（1024 窗口的聊天区不再只剩 372px）', () => {
     expect(ruleBody(base, '.list-panel')).toContain('width: var(--list-panel-w)')
     const md = blockAfter(base, '@media (max-width: 1199px)')
     const sm = blockAfter(base, '@media (max-width: 1040px)')
@@ -1136,7 +1136,12 @@ describe('窄窗口：列表面板先让宽度', () => {
     const mdWidth = Number.parseFloat(resolveValue(/width:\s*([^;]+);/.exec(md)?.[1] ?? '0', tokens))
     const smWidth = Number.parseFloat(resolveValue(/width:\s*([^;]+);/.exec(sm)?.[1] ?? '0', tokens))
     const full = Number.parseFloat(resolveValue('var(--list-panel-w)', tokens))
-    expect([full, mdWidth, smWidth]).toEqual([300, 240, 200])
+    expect([full, mdWidth, smWidth]).toEqual([300, 280, 200])
+    // 1199 档让到 280 而不是 240：右栏在这一档已经是**不占位**的覆盖式抽屉，
+    // 没有一列 280px 要躲——再让 60px 只是把会话名挤成四个字（实测列表栏 240px
+    // 时标题实得 64px ≈ 4 个汉字，「产品三人组」显示成「产品三…」），聊天区
+    // 一点没多。
+    expect(mdWidth).toBeGreaterThanOrEqual(280)
     // 1024px 窗口：72(rail) + 200(列表) + 280(右栏) 之外，聊天区还剩 472px
     const rail = Number(/width:\s*(\d+)px/.exec(ruleBody(base, '.rail'))?.[1] ?? 0)
     const right = Number(/width:\s*(\d+)px/.exec(ruleBody(base, '.right-panel'))?.[1] ?? 0)

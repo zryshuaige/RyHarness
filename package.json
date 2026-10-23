@@ -33,7 +33,8 @@
     "build": "pnpm -r run build",
     "version:check": "node scripts/bump.mjs --check",
     "version:bump": "node scripts/bump.mjs --set",
-    "smoke:siliconflow": "tsx scripts/smoke-siliconflow.ts",
+    "smoke:provider": "tsx scripts/smoke-provider.ts",
+    "smoke:siliconflow": "tsx scripts/smoke-provider.ts",
     "demo:agent": "tsx scripts/demo-agent.ts",
     "demo:group": "tsx scripts/demo-group.ts",
     "demo:server": "tsx scripts/demo-server.ts"

@@ -1,24 +1,37 @@
 /**
- * SiliconFlow 冒烟脚本（tsx 运行）。
+ * 真实供应商冒烟脚本（tsx 运行）。
  *
- *   pnpm smoke:siliconflow
+ *   pnpm smoke:provider
  *
- * 组装 cordis Context → 挂载 LlmRuntime + OpenAI 兼容适配器（siliconflow
- * 路由）→ 跑两个场景：
+ * 组装 cordis Context → 挂载 LlmRuntime + OpenAI 兼容适配器 → 跑两个场景：
  *   (a) 流式对话，逐字打印 text-delta；
  *   (b) 一轮 tool calling（echo 工具），验证模型发起 tool_call 且参数 JSON
  *       组装完整。
  *
- * API key 读取顺序：环境变量 SILICONFLOW_API_KEY → RyHarness/.env（gitignored）。
- * 缺失时打印提示并以退出码 0 跳过（不是失败）。模型可用 SILICONFLOW_MODEL
- * 覆盖，默认 deepseek-ai/DeepSeek-V4-Pro。
+ * ## 为什么从"只测 SiliconFlow"改成"测任意一家"
+ *
+ * 上一版把供应商写死在脚本里，于是每换一个模型厂商都得改一遍脚本才能验。
+ * 而本仓的模型目录是**逐家按官方文档核实**的（model id、思考参数方言、上下文
+ * 窗口），这些声明会过期——MiniMax 那一档就因为官方把 `M3.1-Flash-Preview` 转正成
+ * `MiniMax-M3.1-Flash`，旧 id 直接 404。目录里的每一条都该有一条**真跑过**的路。
+ *
+ * 配置从环境变量读（key 不进仓库）：
+ * - `RYHARNESS_SMOKE_PROVIDER` 供应商名，默认 `siliconflow`；
+ * - `RYHARNESS_SMOKE_MODEL`     模型 id，默认按供应商取；
+ * - `RYHARNESS_SMOKE_API_KEY`   凭据（也兼容 `SILICONFLOW_API_KEY`）；
+ * - `RYHARNESS_SMOKE_BASE_URL`  端点，默认取该供应商的预设；
+ * - `RYHARNESS_SMOKE_EFFORT`    思考档位（low/medium/high/xhigh/max），不给就不发。
+ *
+ * 端点与模型默认值都取自 `apps/server/src/config.ts` 的**预设表**——也就是界面上
+ * "从预设建一家"用的那份。脚本跟界面读同一份事实，就不会出现"脚本里能跑、界面上
+ * 建出来却跑不了"。
  */
-import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Context } from '@ryharness/cordis'
 import type { StreamChunk, ToolCallBlock } from '@ryharness/llm'
-import LlmRuntime, { createUserMessage } from '@ryharness/llm'
+import LlmRuntime, { ReasoningEffortId as brandReasoningEffortId, createUserMessage } from '@ryharness/llm'
 import { apply } from '@ryharness/llm-openai'
+import { PROVIDER_PRESETS } from '../apps/server/src/config.ts'
 
 // .env 交给 Node 标准库解析（引擎要求 ^22.19||>=24），不再各写一份正则。
 try {
@@ -27,38 +40,58 @@ try {
   // 没有 .env 就只用环境变量。
 }
 const env = process.env as Record<string, string>
-const apiKey = env.SILICONFLOW_API_KEY
+
+const provider = env.RYHARNESS_SMOKE_PROVIDER ?? 'siliconflow'
+const preset = PROVIDER_PRESETS.find((candidate) => {
+  return candidate.id === provider
+})
+const apiKey = env.RYHARNESS_SMOKE_API_KEY ?? env[`${provider.toUpperCase()}_API_KEY`] ?? env.SILICONFLOW_API_KEY
 if (apiKey === undefined || apiKey.length === 0) {
-  console.log('[smoke] 未找到 SILICONFLOW_API_KEY（环境变量或 RyHarness/.env），跳过 SiliconFlow 冒烟。')
-  console.log('[smoke] 设置后重试：pnpm smoke:siliconflow')
+  console.log(`[smoke] 未找到 ${provider} 的凭据，跳过。`)
+  console.log('[smoke] 设置 RYHARNESS_SMOKE_API_KEY（或该供应商的 <NAME>_API_KEY）后重试。')
   process.exit(0)
 }
 
-const model = env.SILICONFLOW_MODEL ?? 'deepseek-ai/DeepSeek-V4-Pro'
-const provider = 'siliconflow'
+const model = env.RYHARNESS_SMOKE_MODEL ?? preset?.defaultModel ?? preset?.models[0]
+if (model === undefined) {
+  console.log(`[smoke] 供应商 ${provider} 没有可用模型（预设里也没有），跳过。`)
+  process.exit(0)
+}
+const baseURL = env.RYHARNESS_SMOKE_BASE_URL ?? preset?.baseUrl
+if (baseURL === undefined) {
+  console.log(`[smoke] 供应商 ${provider} 没有预设端点，请用 RYHARNESS_SMOKE_BASE_URL 指定。`)
+  process.exit(0)
+}
+/** 思考档位：只在预设声明支持时才发（发错方言 = 整轮 400）。 */
+const effort = env.RYHARNESS_SMOKE_EFFORT
+const reasoningControl = preset?.reasoningControl
+/** 档位 id 是品牌类型：只能由它自己的构造函数造，不能拿裸字符串冒充。 */
+const effortId = effort === undefined ? undefined : brandReasoningEffortId(effort)
 
 const ctx = new Context()
 await ctx.plugin(LlmRuntime)
 apply(ctx, {
   providers: {
     [provider]: {
-      baseURL: 'https://api.siliconflow.cn/v1',
+      baseURL,
       apiKey,
-      displayName: 'SiliconFlow',
+      displayName: preset?.displayName ?? provider,
       models: [{ id: model, contextWindow: 64_000 }],
+      ...(reasoningControl === undefined ? {} : { reasoningControl }),
     },
   },
 })
 
 try {
   // ---- 场景 (a)：流式对话 ----
-  console.log(`[smoke] (a) 流式对话：${provider} / ${model}`)
+  console.log(`[smoke] (a) 流式对话：${provider} / ${model}${effort === undefined ? '' : ` / effort=${effort}`}`)
   const stream = ctx.llm.stream({
     provider,
     model,
     messages: [
       createUserMessage({ content: [{ type: 'text', text: '用一句中文介绍你自己。' }], source: { kind: 'user' } }),
     ],
+    ...(effortId === undefined ? {} : { reasoningEffort: effortId }),
   })
   let text = ''
   let usage: Extract<StreamChunk, { type: 'usage' }>['usage'] | undefined
@@ -91,6 +124,7 @@ try {
         source: { kind: 'user' },
       }),
     ],
+    ...(effortId === undefined ? {} : { reasoningEffort: effortId }),
     tools: [
       {
         name: 'echo',

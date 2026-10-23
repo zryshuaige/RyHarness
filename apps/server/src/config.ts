@@ -310,18 +310,30 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     displayName: 'MiniMax',
     protocol: 'openai',
     baseUrl: 'https://api.minimaxi.com/v1',
-    // M3 是当前按量可调的旗舰（1M 上下文、原生多模态、思考可关）；M3.1-Flash-Preview
-    // 是唯一支持 reasoning_effort 五档（low…max）的，但官方限定「仅 M Plan /
-    // MiniMax Code 订阅 Key」，按量 Key 调它会失败——所以放在后面并在此注明。
-    // M2.5 / M2.7 已公告 2026-11-18 下线，不再收录。
-    models: ['MiniMax-M3', 'MiniMax-M3.1-Flash-Preview'],
-    // M3 是按量可调的那档；M3.1-Flash-Preview 只认订阅 Key，按量 Key 调它会失败。
-    defaultModel: 'MiniMax-M3',
+    // 2026-10-23 实测 /v1/models（国内站两个域名都通：api.minimaxi.com 与
+    // api.minimax.cn；api.minimax.io 是国际站，订阅 Key 在那边 401）。
+    //
+    // **模型 id 是 `MiniMax-M3.1-Flash`，不带 `-Preview`**：官方 2026-10-19 已把
+    // M3.1 Flash 从预览转正，`/models` 里那个带 `-Preview` 的条目已经不存在了——
+    // 照着旧 id 建路由，用户点下去只会拿到 404。
+    //
+    // M3.1-Flash 放在前面：它是官方面向真实工作的日常主力（1M 上下文、原生多模态、
+    // 思考深度可调），M3 留作同代旗舰。
+    models: ['MiniMax-M3.1-Flash', 'MiniMax-M3'],
+    defaultModel: 'MiniMax-M3.1-Flash',
     docsUrl: 'https://platform.minimaxi.com/document/Models',
-    // MiniMax OpenAI 兼容文档：reasoning_effort（low/medium/high/xhigh/max，仅 M3.1 生效）
-    // 与 thinking.type（adaptive/disabled）都认。M3.1 收到 disabled 会 400（官方码 2013），
-    // 但那是该模型自身的行为，恒开思考也正是它的真实状态。
-    reasoningControl: 'thinking-adaptive',
+    // **必须是 `effort`，不能是 `thinking-adaptive`**。
+    //
+    // MiniMax 官方文档写明：思考**不可关闭**，传 `thinking:{type:'disabled'}` 或
+    // `effort:"none"` 一律 400（原文 "requires adaptive thinking"）。而
+    // `thinking-adaptive` 这条路由，用户把思考调到「关」时内核就会真的发
+    // `thinking:{type:'disabled'}` 出去——于是每一轮请求都 400，用户看不出是自己
+    // 哪句话错了。
+    //
+    // `effort` 正好是 MiniMax 的正确形态：选档位发 `reasoning_effort`（官方支持
+    // low/medium/high/xhigh/max，省略时默认 max），选「关思考」则什么都不发——
+    // 不发就是恒开思考，永远不会 400。
+    reasoningControl: 'effort',
   },
   {
     id: 'openrouter',

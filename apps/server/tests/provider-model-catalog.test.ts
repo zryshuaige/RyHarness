@@ -130,6 +130,40 @@ describe('模板默认模型', () => {
 })
 
 /**
+ * MiniMax 预设的两条硬约束（2026-10-23 实测官方 /v1/models 与 chat/completions 钉下）。
+ *
+ * 两条都不会在编译期或启动期暴露：模型 id 写错，界面照常显示，直到用户真的发一次
+ * 请求才由供应商 404 告诉他；思考方言写错更隐蔽——只有用户把思考调到「关」才炸，
+ * 而那个档位平时没人碰。
+ */
+describe('MiniMax 预设', () => {
+  const minimax = PROVIDER_PRESETS.find((preset) => {
+    return preset.id === 'minimax'
+  })
+
+  it('模型 id 是 MiniMax-M3.1-Flash，不带 -Preview（官方 2026-10-19 已转正）', () => {
+    // 官方 /v1/models 现在返回的 9 个模型里没有带 -Preview 的那条；照旧 id 建路由，
+    // 用户点下去只会拿到 404。
+    expect(minimax?.models).toContain('MiniMax-M3.1-Flash')
+    expect(
+      minimax?.models.some((model) => {
+        return model.endsWith('-Preview')
+      }),
+    ).toBe(false)
+    expect(minimax?.defaultModel).toBe('MiniMax-M3.1-Flash')
+  })
+
+  it('思考档位走 effort，不走 thinking-adaptive（后者会让用户选「关思考」时整轮 400）', () => {
+    // 实测：MiniMax-M3.1-Flash 收到 thinking:{type:'disabled'} 直接 400
+    // （官方原文 "requires adaptive thinking"）。而 thinking-adaptive 这条路由在用户
+    // 选「关思考」时内核就会真的发这个字段出去——于是每一轮都 400。
+    // effort 则是官方形态：发 reasoning_effort（low/high 实测均正常），选「关思考」
+    // 时什么都不发 = 恒开思考，永远不 400。
+    expect(minimax?.reasoningControl).toBe('effort')
+  })
+})
+
+/**
  * 内置目录的升级刷新。
  *
  * 老安装的 providers.json 里 SiliconFlow 只挂着早期那三五个模型。目录不刷的
