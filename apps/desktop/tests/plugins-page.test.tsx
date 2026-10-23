@@ -589,7 +589,8 @@ describe('App 导航', () => {
     })
   })
 
-  it('rail 有「插件」页签、也有「RyVibe（Beta）」页签；「我的」入口也能跳过去', async () => {    await act(async () => {
+  it('rail 有「插件」页签、也有「RyVibe（Beta）」页签；「我的」入口也能跳过去', async () => {
+    await act(async () => {
       root = createRoot(container)
       root.render(<App />)
       await Promise.resolve()

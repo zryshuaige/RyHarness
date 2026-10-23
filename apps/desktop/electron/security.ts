@@ -81,7 +81,11 @@ export function allowedPermission(permission: string): boolean {
  * 背后是带 shellExec 的 agent 工具链。每次启动随机 256 位 token 的防线被一个环境
  * 变量整个绕过，界面上还没有任何提示。
  */
-export function envTokenAllowed(env: { CI?: string | undefined; RYHARNESS_CAPTURE?: string | undefined; RYAGENT_CAPTURE?: string | undefined }): boolean {
+export function envTokenAllowed(env: {
+  CI?: string | undefined
+  RYHARNESS_CAPTURE?: string | undefined
+  RYAGENT_CAPTURE?: string | undefined
+}): boolean {
   return env.CI === 'true' || env.RYHARNESS_CAPTURE === '1' || env.RYAGENT_CAPTURE === '1'
 }
 

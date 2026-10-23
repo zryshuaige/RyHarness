@@ -57,7 +57,9 @@ class MockAdapter extends LlmAdapter {
 
 const tmpDirs: string[] = []
 
-async function startServer(replies: string[]): Promise<{ server: RyHarnessServer; adapter: MockAdapter; base: string }> {
+async function startServer(
+  replies: string[],
+): Promise<{ server: RyHarnessServer; adapter: MockAdapter; base: string }> {
   const dataDir = mkdtempSync(join(tmpdir(), 'ryharness-server-test-'))
   tmpDirs.push(dataDir)
   const adapter = new MockAdapter(replies)

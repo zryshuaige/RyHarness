@@ -401,7 +401,8 @@ describe('错误条可读化', () => {
       type: 'error',
       conversationId: 'c1',
       code: 'MISSING_CREDENTIAL',
-      message: '@ryharness/llm-openai: provider "siliconflow" needs its API key in the RYHARNESS_KEY_SILICONFLOW variable',
+      message:
+        '@ryharness/llm-openai: provider "siliconflow" needs its API key in the RYHARNESS_KEY_SILICONFLOW variable',
     })
     const banner = container.querySelector('.error-banner')
     expect(banner?.textContent).toContain('API Key')

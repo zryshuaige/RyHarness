@@ -1,0 +1,24 @@
+# 行尾：仓库里一律存 LF，Windows 上 checkout 也拿到 LF。
+#
+# 没有这一条时，Windows 的 git 会把 LF 转成 CRLF（core.autocrlf=true 的默认行为），
+# 于是**每一个文件**在 biome 眼里都是格式偏差——CI 的 lint 步骤会红在"全仓 482 处
+# format 错误"上，而开发机上是干净的。这种红最难查：代码一个字都没改，红灯却亮了。
+* text=auto eol=lf
+
+# 二进制：不做行尾转换，也不让 git 试图把它们当文本。
+*.png binary
+*.webp binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.mp4 binary
+*.woff2 binary
+*.pdf binary
+*.exe binary
+*.zip binary
+*.asar binary
+
+# Windows 的批处理必须 CRLF：cmd.exe 按 CRLF 解析脚本，LF 会把它连成一行。
+*.bat text eol=crlf
+*.cmd text eol=crlf

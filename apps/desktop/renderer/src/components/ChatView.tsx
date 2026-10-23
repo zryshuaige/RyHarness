@@ -1,9 +1,9 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { AgentDef, ApiClient, Conversation, MessageRow, WsEvent } from '../api.ts'
 import { ApiRequestError, messageText } from '../api.ts'
+import { builtinBadge } from '../lib/agents.ts'
 import { rowArtifacts } from '../lib/artifacts.ts'
 import { authedFetch } from '../lib/authed-fetch.ts'
-import { builtinBadge } from '../lib/agents.ts'
 import type { Command } from '../lib/commands.ts'
 import { errorDetail, humanError } from '../lib/error-text.ts'
 import { formatTime } from '../lib/format.ts'
@@ -36,8 +36,8 @@ import { AsyncState } from './AsyncState.tsx'
 import { Cat } from './Cat.tsx'
 import { ChatInput } from './ChatInput.tsx'
 import { Icon } from './Icon.tsx'
+import type { MentionEntry, MentionOptions, MentionProfile } from './MentionText.tsx'
 import { type BubbleAgent, MessageBubble, messagePlainText, RelayChain } from './MessageBubble.tsx'
-import { type MentionEntry, type MentionOptions, type MentionProfile } from './MentionText.tsx'
 import { PanelSkeleton } from './Skeleton.tsx'
 import { ToastHost } from './ToastHost.tsx'
 import { TypingDots } from './TypingDots.tsx'
@@ -897,9 +897,11 @@ export function ChatView({
   const mentionEntriesRef = useRef<readonly MentionEntry[]>([])
   const mentionEntries = useMemo(() => {
     const previous = mentionEntriesRef.current
-    const byId = new Map(previous.map((entry) => {
-      return [entry.id, entry]
-    }))
+    const byId = new Map(
+      previous.map((entry) => {
+        return [entry.id, entry]
+      }),
+    )
     const next: MentionEntry[] = []
     let changed = previous.length !== agents.length
     for (const agent of agents) {

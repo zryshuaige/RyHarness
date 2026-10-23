@@ -824,9 +824,7 @@ describe('暗色用户不被按在浅色上', () => {
     // 主题键在两处（外部引导脚本与 App）必须是同一个。取键的方式有两种：直接读
     // localStorage，或走 lib/storage 的旧键回落层——两种都认。
     const keyOf = (source: string): string | undefined => {
-      return (
-        /localStorage\.getItem\('([^']+)'\)/.exec(source)?.[1] ?? /readSetting\('([^']+)'\)/.exec(source)?.[1]
-      )
+      return /localStorage\.getItem\('([^']+)'\)/.exec(source)?.[1] ?? /readSetting\('([^']+)'\)/.exec(source)?.[1]
     }
     const keyInBoot = keyOf(themeBoot)
     const keyInApp = keyOf(app)

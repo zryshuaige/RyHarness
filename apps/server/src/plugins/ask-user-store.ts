@@ -330,9 +330,11 @@ export class QuestionStore {
       return entry.answeredAt !== undefined && entry.deliveredAt !== undefined
     })
     if (done.length <= KEEP_DELIVERED_QUESTIONS) return [...questions]
-    const dropped = new Set(done.slice(0, done.length - KEEP_DELIVERED_QUESTIONS).map((entry) => {
-      return entry.id
-    }))
+    const dropped = new Set(
+      done.slice(0, done.length - KEEP_DELIVERED_QUESTIONS).map((entry) => {
+        return entry.id
+      }),
+    )
     return questions.filter((entry) => {
       return !dropped.has(entry.id)
     })

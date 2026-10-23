@@ -44,12 +44,14 @@ export interface DataDirMigrationResult {
  * 目录里的数据库也要改名：新名字下找不到文件的话，服务端会建一个空库，用户看到的
  * 就是"数据全没了"——那比迁移失败更糟。
  */
-export function migrateLegacyDataDir(input: {
-  /** 新的数据目录（<userData>\ryharness-data）。 */
-  dataDir: string
-  /** 老的数据目录（%APPDATA%\RyAgent\ryagent-data）。 */
-  legacyDataDir: string
-} & DataDirMigrationIo): DataDirMigrationResult {
+export function migrateLegacyDataDir(
+  input: {
+    /** 新的数据目录（<userData>\ryharness-data）。 */
+    dataDir: string
+    /** 老的数据目录（%APPDATA%\RyAgent\ryagent-data）。 */
+    legacyDataDir: string
+  } & DataDirMigrationIo,
+): DataDirMigrationResult {
   if (input.exists(input.dataDir)) return { migrated: false, reason: 'new-exists' }
   if (!input.exists(input.legacyDataDir)) return { migrated: false, reason: 'no-legacy' }
   try {

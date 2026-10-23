@@ -7,8 +7,8 @@
 import type { Token, Tokens } from 'marked'
 import { lexer } from 'marked'
 import { type ReactNode, useMemo, useState } from 'react'
-import { type MentionOptions, MentionText } from './MentionText.tsx'
 import { Icon } from './Icon.tsx'
+import { type MentionOptions, MentionText } from './MentionText.tsx'
 
 /** 只允许安全协议的链接地址；不安全返回 undefined（调用方降级为文本）。 */
 export function safeHref(href: string | null | undefined): string | undefined {
@@ -61,14 +61,13 @@ function renderInline(tokens: Token[] | undefined, ctx?: InlineContext): ReactNo
       }
       case 'escape':
         return (token as Tokens.Escape).text
-      default:
-        // text / html / 未识别 token：一律按纯文本渲染（React 自动转义）。
-        // 有 @ 上下文时交给它切段；没有就按原文返回，与从前逐字一致。
-        {
-          const source = (token as Tokens.Text).raw ?? (token as Tokens.Text).text
-          if (ctx?.renderText !== undefined) return ctx.renderText(source, key)
-          return source
-        }
+      default: // text / html / 未识别 token：一律按纯文本渲染（React 自动转义）。
+      // 有 @ 上下文时交给它切段；没有就按原文返回，与从前逐字一致。
+      {
+        const source = (token as Tokens.Text).raw ?? (token as Tokens.Text).text
+        if (ctx?.renderText !== undefined) return ctx.renderText(source, key)
+        return source
+      }
     }
   })
 }
