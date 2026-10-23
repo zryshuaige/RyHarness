@@ -13,7 +13,7 @@
  *   RYHARNESS_REVIEW=1 pnpm --filter @ryharness/desktop capture
  */
 import { spawn, spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -32,8 +32,26 @@ const electron = spawn('pnpm', ['run', 'start'], {
   cwd: here,
   stdio: 'inherit',
   shell: true,
-  env: { ...process.env, RYHARNESS_CAPTURE: '1', RYHARNESS_DATA_DIR: dataDir },
+  env: captureEnv(),
 })
+
+/**
+ * 截图模式的环境变量。
+ *
+ * 两处都要处理，否则截图拍到的不是"新用户第一次打开"的样子：
+ * 1. **空 .env**：开发态会去读仓库根的 .env（本机那里面有 SILICONFLOW_API_KEY），
+ *    于是供应商显示"凭据已备"，「先挑一家」那一屏永远拍不到。指一个**空的** .env
+ *    即可——候选路径取第一个存在的文件，命中就停。
+ * 2. **摘掉环境变量里的 key**：万一别处又注入了一遍。
+ */
+function captureEnv() {
+  const env = { ...process.env, RYHARNESS_CAPTURE: '1', RYHARNESS_DATA_DIR: dataDir }
+  delete env.SILICONFLOW_API_KEY
+  const blankEnvFile = join(dataDir, 'blank.env')
+  writeFileSync(blankEnvFile, '', 'utf8')
+  env.RYHARNESS_ENV_FILE = blankEnvFile
+  return env
+}
 
 /**
  * 收尾：把 electron 整棵树杀掉。

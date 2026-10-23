@@ -17,9 +17,17 @@ apps/desktop/main/
 apps/desktop/capture.png
 apps/desktop/capture-contacts.png
 apps/desktop/capture-me.png
+apps/desktop/capture-vibe.png
+apps/desktop/capture-project.png
+apps/desktop/capture-providers.png
 apps/desktop/dark-capture.png
 apps/desktop/dark-capture-contacts.png
 apps/desktop/dark-capture-me.png
+apps/desktop/dark-capture-vibe.png
+apps/desktop/dark-capture-project.png
+apps/desktop/dark-capture-providers.png
+# @提及名片的排障证据：同样是一次性产物（正式画面在 docs/）。
+apps/desktop/mention-card.png
 # 交互巡检（RYHARNESS_REVIEW=1）拍的过程截图：每次跑都变，入库即腐烂。
 # 入库的正式画面是 apps/desktop/docs/review-studio.png（形象定制面板全貌），
 # 其余那几张不入库。

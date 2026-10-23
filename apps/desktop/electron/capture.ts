@@ -41,6 +41,29 @@ const THEME_KEY = 'ryharness-theme'
 /** 每一套拍完歇一会儿：切主题是一次 View Transition，等它落定再拍。 */
 const SETTLE_MS = 1200
 
+/**
+ * 按**名字**切到某个 rail 页签。
+ *
+ * 为什么不写下标：页签会增减（RyVibe 插进聊天下面那一次），硬编码下标当场就错，
+ * 而且错出来的图看着还挺正常——「我的」被拍成插件页时，图上没有任何异常可查，
+ * 只有对着清单数才发现少了一屏。名字是稳定的，顺序不是。
+ */
+async function gotoTab(window: BrowserWindow, label: string): Promise<void> {
+  await window.webContents.executeJavaScript(
+    `(() => {
+      const tab = [...document.querySelectorAll('.rail-tab')].find((node) => {
+        return (node.textContent ?? '').includes(${JSON.stringify(label)})
+      })
+      if (!tab) return false
+      tab.click()
+      return true
+    })()`,
+  )
+  await new Promise((resolve) => {
+    return setTimeout(resolve, SETTLE_MS)
+  })
+}
+
 export async function runCapture(
   server: RyHarnessServer,
   here: string,
@@ -212,13 +235,10 @@ export async function runCapture(
     writeFileSync(join(docsDir, shot.file), image.toPNG())
     console.log(`[capture] saved ${shot.file}（${shot.theme}）`)
 
-    // 切到通讯录：点 rail 上第二个页签（真实点击，不碰 React 内部状态）
-    await window.webContents.executeJavaScript(
-      `(() => { const tabs = document.querySelectorAll('.rail-tab'); if (tabs[1]) tabs[1].click(); return true })()`,
-    )
-    await new Promise((resolve) => {
-      return setTimeout(resolve, SETTLE_MS)
-    })
+    // 切到通讯录：按**名字**点页签，不按下标。
+    // 下标会随页签增减而错位——RyVibe 插进聊天下面那一次，就把「我的」拍成了插件页，
+    // 而图上看不出错（插件页也挺好看的），只有对着清单才发现少了一屏。
+    await gotoTab(window, '通讯录')
     const contactsImage = await window.webContents.capturePage()
     const contactsFile = shot.file.replace(/\.png$/, '-contacts.png')
     writeFileSync(join(here, contactsFile), contactsImage.toPNG())
@@ -226,25 +246,43 @@ export async function runCapture(
     console.log(`[capture] saved ${contactsFile}（${shot.theme}）`)
 
     // 切到「我的」页：那张形象定制面板（立体动物 + 毛色 + 花纹）要拍出实图。
-    await window.webContents.executeJavaScript(
-      `(() => { const tabs = document.querySelectorAll('.rail-tab'); if (tabs[3]) tabs[3].click(); return true })()`,
-    )
-    await new Promise((resolve) => {
-      return setTimeout(resolve, SETTLE_MS)
-    })
+    await gotoTab(window, '我的')
     const meImage = await window.webContents.capturePage()
     const meFile = shot.file.replace(/\.png$/, '-me.png')
     writeFileSync(join(here, meFile), meImage.toPNG())
     writeFileSync(join(docsDir, meFile), meImage.toPNG())
     console.log(`[capture] saved ${meFile}（${shot.theme}）`)
 
-    // RyVibe：独立页面的样子（首屏就是一句话 + 一个开始）。
-    await window.webContents.executeJavaScript(
-      `(() => { const tabs = document.querySelectorAll('.rail-tab'); if (tabs[1]) tabs[1].click(); return true })()`,
+    // 模型供应商的「先挑一家」网格：截图模式下没有配 key 的供应商，所以这张图
+    // 拍到的就是用户第一次打开设置页看到的那一屏——厂商由他挑，不替他定。
+    const hasPicker = await window.webContents.executeJavaScript(
+      `(() => {
+        const node = document.querySelector('.provider-picker'); if (!node) return false; node.scrollIntoView({block:'start'}); return true })()`,
     )
-    await new Promise((resolve) => {
-      return setTimeout(resolve, SETTLE_MS)
-    })
+    if (hasPicker !== true) {
+      const diag = await window.webContents.executeJavaScript(
+        `(() => ({
+          section: document.querySelectorAll('#provider-settings').length,
+          picker: document.querySelectorAll('.provider-picker').length,
+          tiles: document.querySelectorAll('.provider-pick-tile').length,
+          head: (document.querySelector('#provider-settings')?.textContent ?? '').slice(0, 80)
+        }))()`,
+      )
+      console.log('[capture] provider picker 未出现', JSON.stringify(diag))
+    }
+    if (hasPicker === true) {
+      await new Promise((resolve) => {
+        return setTimeout(resolve, SETTLE_MS)
+      })
+      const pickerImage = await window.webContents.capturePage()
+      const pickerFile = shot.file.replace(/\.png$/, '-providers.png')
+      writeFileSync(join(here, pickerFile), pickerImage.toPNG())
+      writeFileSync(join(docsDir, pickerFile), pickerImage.toPNG())
+      console.log(`[capture] saved ${pickerFile}（${shot.theme}）`)
+    }
+
+    // RyVibe：独立页面的样子（首屏就是一句话 + 一个开始）。
+    await gotoTab(window, 'RyVibe')
     const vibeImage = await window.webContents.capturePage()
     const vibeFile = shot.file.replace(/\.png$/, '-vibe.png')
     writeFileSync(join(here, vibeFile), vibeImage.toPNG())
@@ -268,12 +306,7 @@ export async function runCapture(
     }
 
     // 切回聊天页，下一轮从聊天页开始拍
-    await window.webContents.executeJavaScript(
-      `(() => { const tabs = document.querySelectorAll('.rail-tab'); if (tabs[0]) tabs[0].click(); return true })()`,
-    )
-    await new Promise((resolve) => {
-      return setTimeout(resolve, SETTLE_MS)
-    })
+    await gotoTab(window, '聊天')
   }
 
   // 交互巡检：把"鼠标移到头像不同位置""点了哪只动物""选了哪种毛色"这些
@@ -389,9 +422,7 @@ async function runInteractionReview(window: BrowserWindow, here: string, docsDir
 
   /** 移到通讯录页。 */
   const gotoContacts = async (): Promise<void> => {
-    await run(
-      `(() => { const tabs = document.querySelectorAll('.rail-tab'); if (tabs[1]) tabs[1].click(); return true })()`,
-    )
+    await gotoTab(window, '通讯录')
   }
 
   /**
@@ -432,9 +463,7 @@ async function runInteractionReview(window: BrowserWindow, here: string, docsDir
   await shoot('review-turn-reset.png')
 
   // 「我的」页：形象定制面板（滚到底，露出动物行与毛色行）
-  await run(
-    `(() => { const tabs = document.querySelectorAll('.rail-tab'); if (tabs[3]) tabs[3].click(); return true })()`,
-  )
+  await gotoTab(window, '我的')
   await run(`(() => {
     const studio = document.querySelector('.animal-studio')
     if (studio) studio.scrollIntoView({ block: 'end' })
