@@ -670,6 +670,12 @@ describe('删除供应商', () => {
     const dataDir = tempDataDir('delete')
     const server = await RyHarnessServer.create({ port: 0, dataDir })
     try {
+      // 先给内置那家配上凭据：用户已经有一家能用的，后加的私有网关就不会被内置
+      // 助理认领（内置助理只跟着「用户自己挑的那家」走，已经能用时不动）。
+      await sendJson(server.url, '/api/settings/api-key', 'POST', {
+        providerId: 'siliconflow',
+        apiKey: 'sk-builtin',
+      })
       await sendJson(server.url, '/api/providers', 'POST', {
         displayName: '私有网关',
         protocol: 'openai',
@@ -708,7 +714,8 @@ describe('删除供应商', () => {
       // 路由与 key 一起落盘清掉，不留孤儿。
       const config = readJsonFile(join(dataDir, 'config', 'providers.json'))
       expect((config.providers as Record<string, unknown>)[customId]).toBeUndefined()
-      expect(readApiKeys(join(dataDir, 'config', 'api-keys.json'))).toEqual({})
+      // 内置那家的凭据留着（它跟这次删除无关），被删的那条不在里面了。
+      expect(readApiKeys(join(dataDir, 'config', 'api-keys.json'))).toEqual({ siliconflow: 'sk-builtin' })
     } finally {
       await server.close()
     }
@@ -720,6 +727,12 @@ describe('编辑供应商', () => {
     const dataDir = tempDataDir('patch')
     const server = await RyHarnessServer.create({ port: 0, dataDir })
     try {
+      // 同上：先有一家能用的，内置助理才不会跟着改到这条新路由上
+      // （被助理引用的路由改模型会被 409 拦下——那是另一条用例在守的规矩）。
+      await sendJson(server.url, '/api/settings/api-key', 'POST', {
+        providerId: 'siliconflow',
+        apiKey: 'sk-builtin',
+      })
       const created = await sendJson(server.url, '/api/providers', 'POST', {
         displayName: '私有网关',
         protocol: 'openai',

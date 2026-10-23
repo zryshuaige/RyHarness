@@ -217,14 +217,17 @@ function ProviderItem({
   onChanged,
   onDelete,
   onEdit,
+  initiallyOpen,
 }: {
   provider: ProviderInfo
   api: ProviderApi
   onChanged: () => void
   onDelete: (provider: ProviderInfo) => void
   onEdit: (provider: ProviderInfo) => void
+  /** 初始就展开（用户刚在「先挑一家」的网格里点过这一家）。 */
+  initiallyOpen?: boolean
 }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(initiallyOpen === true)
   const [key, setKey] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | undefined>(undefined)
@@ -608,6 +611,7 @@ function ProviderGroup({
   onChanged,
   onDelete,
   onEdit,
+  initiallyOpenIds,
 }: {
   label: string
   providers: ProviderInfo[]
@@ -615,6 +619,8 @@ function ProviderGroup({
   onChanged: () => void
   onDelete: (provider: ProviderInfo) => void
   onEdit: (provider: ProviderInfo) => void
+  /** 这些条目初始就是展开的（用户刚在「先挑一家」里点过它）。 */
+  initiallyOpenIds?: ReadonlySet<string>
 }) {
   if (providers.length === 0) return null
   return (
@@ -629,6 +635,7 @@ function ProviderGroup({
             onChanged={onChanged}
             onDelete={onDelete}
             onEdit={onEdit}
+            initiallyOpen={initiallyOpenIds?.has(provider.id) === true}
           />
         )
       })}
@@ -1282,16 +1289,19 @@ function AddProviderModal({
   providers,
   onClose,
   onAdded,
+  initialPreset,
 }: {
   api: ProviderApi
   /** 已有供应商：用来把配过的预设标成「已添加」，而不是让用户再点一次生成重复项。 */
   providers: ProviderInfo[]
   onClose: () => void
   onAdded: () => void
+  /** 打开时直接落在某一家上（用户刚在「先挑一家」的网格里点过它）。 */
+  initialPreset?: ProviderPreset
 }) {
   const [presets, setPresets] = useState<ProviderPreset[] | undefined>(undefined)
   const [loadFailed, setLoadFailed] = useState(false)
-  const [selected, setSelected] = useState<ProviderPreset | 'custom' | undefined>(undefined)
+  const [selected, setSelected] = useState<ProviderPreset | 'custom' | undefined>(initialPreset)
 
   useEffect(() => {
     let cancelled = false
@@ -1417,12 +1427,42 @@ export function ProviderSettings({
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState<ProviderInfo | undefined>(undefined)
   const [deleting, setDeleting] = useState<ProviderInfo | undefined>(undefined)
+  /** 供应商预设目录：一张网格让用户**自己挑一家**，而不是默认点名某一家。 */
+  const [presets, setPresets] = useState<ProviderPreset[]>([])
+  /** 用户在网格里点过的那家：已存在就展开它，不存在就打开添加向导（预选）。 */
+  const [pickedPreset, setPickedPreset] = useState<ProviderPreset | undefined>(undefined)
+  /** 需要初始展开的条目（用户刚点过的那家）。 */
+  const [openIds, setOpenIds] = useState<ReadonlySet<string>>(new Set())
+
+  useEffect(() => {
+    let cancelled = false
+    if (api.providerPresets === undefined) return
+    api
+      .providerPresets()
+      .then(({ presets: list }) => {
+        // 后端没给 presets 字段（老服务端 / 替身）时别把 state 设成 undefined——
+        // 下一行 presets.length 会直接崩，整个设置页跟着白屏。
+        if (!cancelled) setPresets(list ?? [])
+      })
+      .catch(() => {
+        // 读不到预设就当没有：设置页照常有列表，不因为这个接口挂了就整个不能用。
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [api])
+
   const builtin = providers.filter((provider) => {
     return provider.custom !== true
   })
   const custom = providers.filter((provider) => {
     return provider.custom === true
   })
+  /** 一家能用的都没有：先把「挑一家」摆在最前面，别让他面对一个默认选项。 */
+  const configured = providers.filter((provider) => {
+    return provider.apiKeyConfigured || isLocalService(provider)
+  })
+  const needPick = configured.length === 0 && presets.length > 0
   return (
     <>
       <div className="provider-section-head">
@@ -1434,12 +1474,51 @@ export function ProviderSettings({
           type="button"
           className="btn provider-add-btn"
           onClick={() => {
+            // 从这个按钮进来就回到「选哪一家」那一步，别带着上一次挑过的那家进来。
+            setPickedPreset(undefined)
             setAdding(true)
           }}
         >
           <Icon name="plus" size={16} /> 添加供应商
         </button>
       </div>
+      {needPick && (
+        <section className="provider-picker">
+          <p className="provider-note">先挑一家：哪家都行，之后在下面随时能换。key 只存在这台机器上。</p>
+          <div className="provider-picker-grid">
+            {presets.map((preset) => {
+              // 已经建过路由的那家（内置的 SiliconFlow）直接展开它填 key，
+              // 不要再走一遍添加向导——那会多出一条同地址的重复路由。
+              const installed = providers.find((provider) => {
+                return provider.id === preset.id
+              })
+              return (
+                <button
+                  key={preset.id}
+                  type="button"
+                  className="provider-pick-tile"
+                  onClick={() => {
+                    setPickedPreset(preset)
+                    if (installed === undefined) {
+                      setAdding(true)
+                      return
+                    }
+                    setOpenIds((prev) => {
+                      return new Set([...prev, installed.id])
+                    })
+                  }}
+                >
+                  <ProviderIcon id={preset.id} name={preset.displayName} size={36} />
+                  <span className="provider-preset-name">{preset.displayName}</span>
+                  <span className="provider-preset-sub">
+                    {installed === undefined ? presetSummary(preset) : '已添加 · 点这里填 key'}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+        </section>
+      )}
       {providers.length === 0 ? (
         // 首次加载时 providers 也是空数组，所以这句话必须两种情况都成立，
         // 不能一上来就喊「服务端没起来」。
@@ -1455,6 +1534,7 @@ export function ProviderSettings({
             onChanged={onChanged}
             onDelete={setDeleting}
             onEdit={setEditing}
+            initiallyOpenIds={openIds}
           />
           <ProviderGroup
             label="自定义供应商"
@@ -1463,6 +1543,7 @@ export function ProviderSettings({
             onChanged={onChanged}
             onDelete={setDeleting}
             onEdit={setEditing}
+            initiallyOpenIds={openIds}
           />
         </div>
       )}
@@ -1485,11 +1566,14 @@ export function ProviderSettings({
           providers={providers}
           onClose={() => {
             setAdding(false)
+            setPickedPreset(undefined)
           }}
           onAdded={() => {
             setAdding(false)
+            setPickedPreset(undefined)
             onChanged()
           }}
+          initialPreset={pickedPreset}
         />
       )}
       {deleting !== undefined && (

@@ -606,7 +606,8 @@ describe('P1-4 亲密度外显', () => {
 })
 
 describe('P1-5 定位叙事：先说人格', () => {
-  const rootReadme = readFileSync(join(REPO, 'README.md'), 'utf8')
+  // 根 README 是英文版（对标 dsh 的 README 结构），中文叙事在 README.zh.md。
+  const rootReadme = readFileSync(join(REPO, 'README.zh.md'), 'utf8')
   const desktopReadme = readFileSync(join(REPO, 'apps/desktop/README.md'), 'utf8')
 
   it('两份 README 的定位段都把人格/亲密度/首次相遇说在前面', () => {
@@ -629,8 +630,8 @@ describe('P1-5 定位叙事：先说人格', () => {
   })
 
   it('根 README 的功能清单把人格排在机制条目之前', () => {
-    const list = rootReadme.split('## 特性')[1] ?? ''
-    expect(list).toContain('人格与关系')
-    expect(list.indexOf('人格与关系')).toBeLessThan(list.indexOf('**群聊**'))
+    const list = rootReadme.split('## 它能做什么')[1] ?? ''
+    expect(list).toContain('有人格的助理')
+    expect(list.indexOf('有人格的助理')).toBeLessThan(list.indexOf('会互相接力的群聊'))
   })
 })

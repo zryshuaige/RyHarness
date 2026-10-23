@@ -7,7 +7,7 @@ English | [中文](README.zh.md)
 [![pnpm](https://img.shields.io/badge/pnpm-11-F69220.svg)](https://pnpm.io)
 [![Electron](https://img.shields.io/badge/Electron-44-47848F.svg)](https://electronjs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-6-3178C6.svg)](https://www.typescriptlang.org)
-[![tests](https://img.shields.io/badge/tests-198%20files-brightgreen)](https://github.com/zryshuaige/RyHarness/actions)
+[![tests](https://img.shields.io/badge/tests-199%20files-brightgreen)](https://github.com/zryshuaige/RyHarness/actions)
 
 RyHarness is a desktop app for AI agents that live on your own machine. You keep a
 small team of them — each with its own personality, its own memory, its own tools —
@@ -56,11 +56,12 @@ pnpm --filter @ryharness/desktop start
 
 `pnpm --filter @ryharness/desktop dev` runs it with Vite hot reload instead.
 
-Then give it a model provider: **Settings → Model providers** and paste an API
-key (it is stored in the OS keychain), or set `SILICONFLOW_API_KEY` in your
-environment. Any OpenAI-compatible provider works — point `config/providers.json`
-in the data directory at yours. The embedding model is a separate setting, so
-switching providers does not silently reuse someone else's vectors.
+Then give it a model provider: the first screen asks you to pick one — SiliconFlow,
+DeepSeek, Moonshot, Zhipu, MiniMax, OpenRouter, OpenAI or Ollama — and then paste
+that provider's API key (it is stored in the OS keychain). Any OpenAI-compatible
+provider works: point `config/providers.json` in the data directory at yours. The
+embedding model is a separate setting, so switching providers does not silently reuse
+someone else's vectors.
 
 ## What it does
 

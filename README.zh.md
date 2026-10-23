@@ -2,9 +2,13 @@
 
 [English](README.md) | 中文
 
-RyHarness 是一个跑在自己机器上的 AI 助理桌面应用。你可以养一小队助理——每个人有自己的
-性格、自己的记忆、自己能用的工具——他们像同事一样替你干活：谁接下这件事、什么时候该
-交给下一位、最后的结果是什么，都留在聊天里，而且交到你手上的是能打开的东西。
+## 这是什么
+
+**定位**：**人格**是第一卖点——四维性格、亲密度、生日与**首次相遇**这些关系养成才是主角，
+Agent 内核只是让它们能干活的地基。
+
+RyHarness 不是"一个通用助手 + 一个输入框"。它更像**一群有人格、有记忆、会互相搭话的
+助理**：像微信里的联系人那样和你相处，也像工作伙伴一样把东西做出来交给你。
 
 <img src="apps/desktop/docs/capture.png" width="900" alt="RyHarness 聊天界面" />
 
@@ -43,10 +47,10 @@ pnpm --filter @ryharness/desktop start
 
 `pnpm --filter @ryharness/desktop dev` 是带热重载的开发模式。
 
-接着配一个模型供应商：**设置 → 模型供应商** 里粘贴 API Key（存进系统密钥库），或者在
-系统环境变量里设 `SILICONFLOW_API_KEY`。任何 OpenAI 兼容的供应商都行，改数据目录下的
-`config/providers.json` 指过去即可。向量模型是单独一条配置，换供应商时不会偷偷沿用上一个
-的 embedding。
+接着配一个模型供应商：首屏会先让你挑一家（SiliconFlow / DeepSeek / Moonshot / 智谱 GLM /
+MiniMax / OpenRouter / OpenAI / Ollama），挑完再填那家的 API Key——存进系统密钥库，不写进
+任何配置文件。任何 OpenAI 兼容的供应商都行，改数据目录下的 `config/providers.json` 指过去即可。
+向量模型是单独一条配置，换供应商时不会偷偷沿用上一个的 embedding。
 
 ## 它能做什么
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { matchShortcut, SEARCH_FOCUS_EVENT } from '../../shared/shortcuts.ts'
-import type { AgentDef, AgentTemplate, Conversation, ProviderInfo } from './api.ts'
+import type { AgentDef, AgentTemplate, Conversation, ProviderInfo, ProviderPreset } from './api.ts'
 import { ApiClient } from './api.ts'
 import type { ArtifactTarget } from './components/ArtifactPreview.tsx'
 import { ArtifactPreview } from './components/ArtifactPreview.tsx'
@@ -238,6 +238,8 @@ export function App() {
   const [agents, setAgents] = useState<AgentDef[]>([])
   const [templates, setTemplates] = useState<AgentTemplate[]>([])
   const [providers, setProviders] = useState<ProviderInfo[]>([])
+  /** 供应商预设目录：首屏「先挑一家」用。 */
+  const [presets, setPresets] = useState<ProviderPreset[]>([])
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [listLoading, setListLoading] = useState(true)
   const [activeId, setActiveId] = useState<string | undefined>(undefined)
@@ -472,11 +474,13 @@ export function App() {
       // 全屏页——而这次刷新每轮对话结束、每次标记已读都会触发，也就是说用户在
       // 正常使用中会被随机弹出主界面。失败的那一项保留上一次的旧值继续渲染，
       // 首屏（此前没有任何数据）才升级成整屏错误页。
-      const [agentRes, templateRes, providerRes, conversationRes] = await Promise.allSettled([
+      const [agentRes, templateRes, providerRes, conversationRes, presetRes] = await Promise.allSettled([
         client.listAgents(),
         client.templates(),
         client.providers(),
         client.conversations(),
+        // 供应商预设目录：首屏要靠它让用户**自己挑一家**，而不是默认点名某一家。
+        client.providerPresets(),
       ])
       if (agentRes.status === 'fulfilled') {
         setAgents((prev) => {
@@ -499,6 +503,10 @@ export function App() {
         setProviders((prev) => {
           return sameList(prev, providerRes.value.providers) ? prev : providerRes.value.providers
         })
+      }
+      if (presetRes.status === 'fulfilled') {
+        // 老服务端或异常回包里可能没有 presets 字段：兜一个空数组，别让首屏白屏。
+        setPresets(presetRes.value.presets ?? [])
       }
       if (conversationRes.status === 'fulfilled') {
         setConversations((prev) => {
@@ -1010,8 +1018,28 @@ export function App() {
                   conversations={conversations}
                   providers={providers}
                   providersLoading={listLoading}
+                  presets={presets}
                   onSaveApiKey={async (providerId, apiKey) => {
                     await api.setApiKey(providerId, apiKey)
+                    await refresh()
+                  }}
+                  onSaveProviderKey={async (preset, apiKey) => {
+                    // 这家还没建过路由就先建一条（带 key），建过就只补 key。
+                    const existing = providers.find((provider) => {
+                      return provider.id === preset.id
+                    })
+                    if (existing === undefined) {
+                      await api.createProvider({
+                        displayName: preset.displayName,
+                        protocol: preset.protocol,
+                        baseUrl: preset.baseUrl,
+                        models: preset.models,
+                        apiKey,
+                        presetId: preset.id,
+                      })
+                    } else {
+                      await api.setApiKey(existing.id, apiKey)
+                    }
                     await refresh()
                   }}
                   onSend={(text, target) => {

@@ -39,7 +39,7 @@ jobs:
           $t = $env:INPUT_TAG.Trim()
           if ($t -eq '') { $t = $env:GITHUB_REF_NAME }
           if ($t -eq '') { throw '无法确定要发布的 tag：用 push tag 触发，或在 workflow_dispatch 里填 tag' }
-          # workflow_dispatch 也可能从分支上跑，那样 GITHUB_REF_NAME 是 master——
+          # workflow_dispatch 也可能从分支上跑，那样 GITHUB_REF_NAME 是 main——
           # 早失败好过最后一步 gh release create 才炸。
           if ($t -notmatch '^v\d+\.\d+\.\d+') { throw "tag 必须是 vX.Y.Z 形式，收到的是：$t" }
           "tag=$t" >> $env:GITHUB_OUTPUT

@@ -1,33 +1,33 @@
 # 默认评审人。
 #
-# @zry 是当前唯一的提交者（取自 git log），发布到 GitHub 后请核对成真实用户名。
+# @zryshuaige 是当前唯一的提交者（GitHub 账号 zryshuaige），所有路径都要他过目。
 # 写不存在的用户名不会报错，只是没人收到评审请求——宁可写错也不要留空路径。
 #
 # 按路径分工，不按人：换维护者时只需要改这一处。分工理由见 CONTRIBUTING.md。
 
 # 地基与对外契约：改这里等于改所有包的编译前提
-/packages/util/            @zry
-/packages/typert/          @zry
-/vendor/                   @zry
-/pnpm-lock.yaml            @zry
-/tsconfig.base.json        @zry
+/packages/util/            @zryshuaige
+/packages/typert/          @zryshuaige
+/vendor/                   @zryshuaige
+/pnpm-lock.yaml            @zryshuaige
+/tsconfig.base.json        @zryshuaige
 
 # 内核包
-/packages/agent/           @zry
-/packages/group/           @zry
-/packages/memory/          @zry
-/packages/evolve/          @zry
-/packages/session/         @zry
-/packages/tools/           @zry
-/packages/llm/             @zry
+/packages/agent/           @zryshuaige
+/packages/group/           @zryshuaige
+/packages/memory/          @zryshuaige
+/packages/evolve/          @zryshuaige
+/packages/session/         @zryshuaige
+/packages/tools/           @zryshuaige
+/packages/llm/             @zryshuaige
 
 # 客户端与服务端
-/apps/desktop/             @zry
-/apps/server/              @zry
+/apps/desktop/             @zryshuaige
+/apps/server/              @zryshuaige
 
 # 工程基建与门禁（lint / 测试 / CI / 发版）：动这里要连 CI 结果一起看
-/.github/                  @zry
-/scripts/verify-*.mjs      @zry
-/vitest.config.ts          @zry
-/vitest.perf.config.ts     @zry
-/biome.json                @zry
+/.github/                  @zryshuaige
+/scripts/verify-*.mjs      @zryshuaige
+/vitest.config.ts          @zryshuaige
+/vitest.perf.config.ts     @zryshuaige
+/biome.json                @zryshuaige

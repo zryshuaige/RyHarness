@@ -173,6 +173,25 @@
   font-size: var(--fs-sm);
 }
 
+/* 首屏的供应商选择：卡片只留名字，网格自己按宽度排。 */
+.welcome-preset-grid {
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+}
+/* 「换一家」：回到挑厂商那一步，而不是把整张卡关掉。 */
+.provider-pick-back {
+  margin-top: var(--space-2);
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.provider-pick-back:hover { color: var(--text-primary); }
+
 /* ---- 会话列表空态：顶部对齐 + 下一步引导 ---- */
 .empty-state-actions {
   display: flex;

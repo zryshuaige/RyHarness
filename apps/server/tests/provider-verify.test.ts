@@ -285,6 +285,12 @@ describe('供应商的引用关系（usedBy）', () => {
     const dataDir = tempDataDir('usedby')
     const server = await RyHarnessServer.create({ port: 0, dataDir })
     try {
+      // 先给内置那家配上凭据：用户已经有一家能用的，后面新建的私有网关就不会被
+      // 内置助理认领（内置助理只跟着「用户自己挑的那家」走），usedBy 才是干净的。
+      await sendJson(server.url, '/api/settings/api-key', 'POST', {
+        providerId: 'siliconflow',
+        apiKey: 'sk-builtin',
+      })
       const created = await sendJson(server.url, '/api/providers', 'POST', {
         displayName: '私有网关',
         protocol: 'openai',

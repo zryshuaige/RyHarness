@@ -291,6 +291,43 @@
   white-space: nowrap;
 }
 
+/* ---- 「先挑一家」：设置页顶部的厂商网格 ----
+
+   刻意**不**复用 .provider-preset-tile：那个 class 是添加向导里的格子，两处同名会让
+   按 class 定位的测试与样式互相串味（向导在弹窗里，这张网格在页面上）。这里是另一
+   套更轻的外观：图标 + 名字 + 一行副标题。 */
+.provider-picker { margin-bottom: var(--space-4); }
+
+.provider-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.provider-pick-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-2);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  cursor: pointer;
+  transition: border-color var(--dur-hover) var(--ease-out), box-shadow var(--dur-hover) var(--ease-out);
+}
+
+.provider-pick-tile:hover {
+  border-color: var(--edge-strong);
+  box-shadow: var(--shadow-1);
+}
+
+.provider-pick-tile:focus-visible {
+  outline: 2px solid var(--focus-outline);
+  outline-offset: -2px;
+}
+
 /* 副标题：协议 / 模型数那一层。名字是决策依据，这行只是让人少点一次。 */
 .provider-preset-sub {
   font-size: var(--fs-xs);

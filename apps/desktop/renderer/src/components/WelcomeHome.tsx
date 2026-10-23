@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { AgentDef, Conversation, ProviderInfo } from '../api.ts'
+import type { AgentDef, Conversation, ProviderInfo, ProviderPreset } from '../api.ts'
 import { authedFetch } from '../lib/authed-fetch.ts'
 import { useApiBase } from '../lib/boot.ts'
 import { humanError } from '../lib/error-text.ts'
@@ -12,6 +12,7 @@ import { Avatar } from './avatars/Avatar.tsx'
 import { Cat } from './Cat.tsx'
 import { ChatInput } from './ChatInput.tsx'
 import { Icon } from './Icon.tsx'
+import { ProviderIcon } from './ProviderSettings.tsx'
 
 /** 按时辰问候（纯函数，供测试）。 */
 export function greetingForHour(hour: number): string {
@@ -119,7 +120,9 @@ export function WelcomeHome({
   conversations,
   providers,
   providersLoading,
+  presets,
   onSaveApiKey,
+  onSaveProviderKey,
   onSend,
   onOpenConversation,
 }: {
@@ -132,7 +135,21 @@ export function WelcomeHome({
    * 「还没有可用来源」与「还没读完来源」——后者不该催用户去填 Key。
    */
   providersLoading?: boolean
+  /**
+   * 可选的供应商预设目录（/api/provider-presets）。
+   *
+   * 给了它，首屏就是**先挑一家再填 key**：用户自己选，而不是被默认到某一家。
+   * 没给（老服务端或测试的最小替身）时退回旧行为——点名唯一那家缺 key 的供应商。
+   */
+  presets?: ProviderPreset[]
   onSaveApiKey: (providerId: string, apiKey: string) => Promise<void>
+  /**
+   * 给某一家填 key（可选）。
+   *
+   * 与 onSaveApiKey 的差别：这条知道用户挑的是**哪个预设**，于是能把一家还没建
+   * 路由的供应商先建起来再存 key——不必让用户先去「我的」页建一遍。
+   */
+  onSaveProviderKey?: (preset: ProviderPreset, apiKey: string) => Promise<void>
   onSend: (text: string, target: WelcomeTarget) => void
   onOpenConversation: (id: string) => void
 }) {
@@ -165,6 +182,10 @@ export function WelcomeHome({
   const unconfigured = usable || loadingProviders ? undefined : firstProviderMissingKey(providers)
   /** 连"缺哪家"都说不出来（供应商列表空）：给三条并列的路，别只点名一家。 */
   const noSourceHint = usable || loadingProviders ? undefined : missingProviderHint(providers)
+  /** 供应商预设目录：给了就先让用户挑一家，而不是默认点名某一家。 */
+  const presetList = presets ?? []
+  /** 用户挑中的那家；undefined = 还没挑。 */
+  const [pickedPreset, setPickedPreset] = useState<ProviderPreset | undefined>(undefined)
   const [key, setKey] = useState('')
   const [saving, setSaving] = useState(false)
   const [keyError, setKeyError] = useState<string | undefined>(undefined)
@@ -336,48 +357,100 @@ export function WelcomeHome({
           )}
           {!loadingProviders && !usable && (
             <div className="apikey-card">
-              <p className="apikey-title">先填一个 API Key</p>
-              {unconfigured !== undefined ? (
+              {presetList.length > 0 && pickedPreset === undefined ? (
                 <>
-                  <p className="apikey-hint">还没有配置 {unconfigured.displayName} 的凭据，聊天会用不了。</p>
-                  <div className="apikey-row">
-                    <input
-                      type="password"
-                      value={key}
-                      placeholder={`${unconfigured.displayName} API Key`}
-                      autoComplete="off"
-                      aria-label={`${unconfigured.displayName} API Key`}
-                      onChange={(e) => {
-                        setKey(e.target.value)
-                      }}
-                    />
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      disabled={saving || key.trim().length === 0}
-                      onClick={() => {
-                        setSaving(true)
-                        setKeyError(undefined)
-                        onSaveApiKey(unconfigured.id, key.trim())
-                          .catch((error: unknown) => {
-                            setKeyError(humanError(error, '这条 Key 没存下来，再点一次保存。'))
-                          })
-                          .finally(() => {
-                            setSaving(false)
-                          })
-                      }}
-                    >
-                      {saving ? '保存中' : '保存'}
-                    </button>
+                  <p className="apikey-title">先选一家模型供应商</p>
+                  <p className="apikey-hint">哪家都行，key 只存在你这台机器上。换厂商随时能改，助理会跟着走。</p>
+                  <div className="provider-picker-grid welcome-preset-grid">
+                    {presetList.map((preset) => {
+                      return (
+                        <button
+                          key={preset.id}
+                          type="button"
+                          className="provider-pick-tile"
+                          onClick={() => {
+                            setPickedPreset(preset)
+                            setKey('')
+                            setKeyError(undefined)
+                          }}
+                        >
+                          <ProviderIcon id={preset.id} name={preset.displayName} size={36} />
+                          <span className="provider-preset-name">{preset.displayName}</span>
+                        </button>
+                      )
+                    })}
                   </div>
-                  {keyError !== undefined && <p className="apikey-error">{keyError}</p>}
                 </>
               ) : (
-                // 一条能用的来源都没有、连"缺哪家 key"都指不出来时：只说清楚有哪几条路，
-                // 输入框给不出来（给一个也存不进去）。
                 <>
-                  <p className="apikey-hint">{noSourceHint ?? '到「我的 → 模型供应商」里加一家，再回来开口。'}</p>
-                  <p className="provider-note">填好之前，下面的输入框是关着的——现在发出去一定失败。</p>
+                  <p className="apikey-title">
+                    {pickedPreset === undefined ? '先填一个 API Key' : `填 ${pickedPreset.displayName} 的 key`}
+                  </p>
+                  {pickedPreset !== undefined || unconfigured !== undefined ? (
+                    <>
+                      <p className="apikey-hint">
+                        {pickedPreset === undefined
+                          ? `还没有配置 ${unconfigured?.displayName ?? ''} 的凭据，聊天会用不了。`
+                          : '存在本机的密钥库里，不写进任何配置文件。'}
+                      </p>
+                      <div className="apikey-row">
+                        <input
+                          type="password"
+                          value={key}
+                          placeholder={`${pickedPreset?.displayName ?? unconfigured?.displayName ?? ''} API Key`}
+                          autoComplete="off"
+                          aria-label={`${pickedPreset?.displayName ?? unconfigured?.displayName ?? ''} API Key`}
+                          onChange={(e) => {
+                            setKey(e.target.value)
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          disabled={saving || key.trim().length === 0}
+                          onClick={() => {
+                            if (pickedPreset === undefined && unconfigured === undefined) return
+                            setSaving(true)
+                            setKeyError(undefined)
+                            const task =
+                              pickedPreset !== undefined && onSaveProviderKey !== undefined
+                                ? onSaveProviderKey(pickedPreset, key.trim())
+                                : onSaveApiKey((pickedPreset ?? unconfigured)?.id ?? '', key.trim())
+                            task
+                              .catch((error: unknown) => {
+                                setKeyError(humanError(error, '这条 Key 没存下来，再点一次保存。'))
+                              })
+                              .finally(() => {
+                                setSaving(false)
+                              })
+                          }}
+                        >
+                          {saving ? '保存中' : '保存'}
+                        </button>
+                      </div>
+                      {keyError !== undefined && <p className="apikey-error">{keyError}</p>}
+                      {pickedPreset !== undefined && (
+                        <button
+                          type="button"
+                          className="provider-pick-back"
+                          onClick={() => {
+                            setPickedPreset(undefined)
+                            setKey('')
+                            setKeyError(undefined)
+                          }}
+                        >
+                          换一家
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    // 一条能用的来源都没有、连"缺哪家 key"都指不出来时：只说清楚有哪几条路，
+                    // 输入框给不出来（给一个也存不进去）。
+                    <>
+                      <p className="apikey-hint">{noSourceHint ?? '到「我的 → 模型供应商」里加一家，再回来开口。'}</p>
+                      <p className="provider-note">填好之前，下面的输入框是关着的——现在发出去一定失败。</p>
+                    </>
+                  )}
                 </>
               )}
             </div>

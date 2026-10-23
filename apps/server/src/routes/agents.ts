@@ -124,7 +124,14 @@ export function registerAgentRoutes(router: Router, deps: AgentRoutes): void {
     let persona: Partial<AgentPersona> | undefined = overrides.persona
     if (templateKey !== undefined) {
       try {
-        const instantiated = instantiateTemplate(templateKey, overrides)
+        // 模板的默认 provider/model 是写死的那一家（模板要能在**没有任何供应商**
+        // 配置时也能落库）。但用户已经配好别家时，照抄模板就等于建出一个用不了的
+        // 助理——所以这两个字段在用户没显式指定时，改跟"第一个有凭据的供应商"。
+        const instantiated = instantiateTemplate(templateKey, {
+          ...overrides,
+          ...(overrides.provider === undefined && fallback !== undefined ? { provider: fallback.providerId } : {}),
+          ...(overrides.model === undefined && fallback !== undefined ? { model: fallback.model } : {}),
+        })
         definition = instantiated
         persona =
           overrides.persona === undefined ? instantiated.persona : { ...instantiated.persona, ...overrides.persona }

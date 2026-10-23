@@ -60,6 +60,7 @@ import { voicePlugin } from './plugins/voice.ts'
 import { voicePiperPlugin } from './plugins/voice-piper.ts'
 import { webReadPlugin } from './plugins/web-read.ts'
 import { ProactiveDigest } from './proactive.ts'
+import { retargetBuiltinAgents } from './provider-routing.ts'
 import { HttpRequestError, json, Router } from './router.ts'
 import { registerAgentRoutes } from './routes/agents.ts'
 import { type ConversationState, registerConversationRoutes, type TurnConversation } from './routes/conversations.ts'
@@ -1221,6 +1222,9 @@ export class RyHarnessServer {
         this.refreshProviders(next)
       },
       verifyTimeoutMs: this.verifyTimeoutMs,
+      onProviderConfigured: (providerId) => {
+        retargetBuiltinAgents(store, this.providers, providerId)
+      },
     })
 
     registerSettingsRoutes(router, {
@@ -1230,6 +1234,9 @@ export class RyHarnessServer {
         this.refreshProviders(next)
       },
       workspaceRoot: this.workspaceRoot,
+      onProviderConfigured: (providerId) => {
+        retargetBuiltinAgents(store, this.providers, providerId)
+      },
     })
 
     registerPluginRoutes(router, { plugins: this.plugins })

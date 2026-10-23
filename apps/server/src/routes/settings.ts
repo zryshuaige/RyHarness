@@ -16,6 +16,13 @@ export interface SettingsRoutes {
   refreshProviders: (next: ProvidersConfigFile) => void
   /** 工具读写文件的工作区根目录。 */
   workspaceRoot: string
+  /**
+   * 刚给某家配好凭据之后叫一声（可选）。
+   *
+   * 内置助理的默认路由要跟着用户挑的那家走：此前写死硅基流动，用户配了别家也
+   * 用不了。组合根在这里接上「把还指着没凭据的内置助理切过去」。
+   */
+  onProviderConfigured?: (providerId: string) => void
 }
 
 /** 设置路由：API key 凭据与工作区。 */
@@ -43,7 +50,10 @@ export function registerSettingsRoutes(router: Router, deps: SettingsRoutes): vo
       return
     }
     // 热更新：把新 key 合并进配置并重新注册适配器，用户不用重启。
-    refreshProviders(mergeApiKeys(deps.providers, loadApiKeys(dataDir)))
+    const merged = mergeApiKeys(deps.providers, loadApiKeys(dataDir))
+    refreshProviders(merged)
+    // 助理的默认路由跟着用户挑的那家走（组合根负责真正改 agents 表）。
+    deps.onProviderConfigured?.(providerId)
     json(res, 200, { providerId, configured: true })
   })
 

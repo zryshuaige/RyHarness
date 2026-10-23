@@ -232,6 +232,110 @@ describe('欢迎主页', () => {
   })
 })
 
+describe('首屏挑供应商', () => {
+  const presets = [
+    {
+      id: 'siliconflow',
+      displayName: 'SiliconFlow',
+      protocol: 'openai',
+      baseUrl: 'https://api.siliconflow.cn/v1',
+      models: ['deepseek-ai/DeepSeek-V4-Flash'],
+    },
+    {
+      id: 'deepseek',
+      displayName: 'DeepSeek',
+      protocol: 'openai',
+      baseUrl: 'https://api.deepseek.com',
+      models: ['deepseek-chat'],
+    },
+  ]
+
+  let container: HTMLDivElement
+  /** 只在交互那两条里建过；静态渲染那条没有 root。 */
+  let root: Root | undefined
+
+  beforeEach(() => {
+    container = document.createElement('div')
+    document.body.appendChild(container)
+  })
+
+  afterEach(() => {
+    if (root !== undefined) {
+      act(() => {
+        root?.unmount()
+      })
+      root = undefined
+    }
+    container.remove()
+  })
+
+  it('首屏是「先挑一家」的网格，而不是默认点名某一家', () => {
+    const html = renderToStaticMarkup(
+      <WelcomeHome
+        ryen={undefined}
+        agents={[]}
+        conversations={[]}
+        providers={[{ id: 'siliconflow', displayName: 'SiliconFlow', apiKeyConfigured: false, models: [] }]}
+        presets={presets}
+        onSaveApiKey={() => {
+          return Promise.resolve()
+        }}
+        onSaveProviderKey={() => {
+          return Promise.resolve()
+        }}
+        onSend={() => {}}
+        onOpenConversation={() => {}}
+      />,
+    )
+    expect(html).toContain('先选一家模型供应商')
+    expect(html).toContain('DeepSeek')
+    // 还没挑的时候，不该已经把某一家写进输入框的占位符里。
+    expect(html).not.toContain('SiliconFlow API Key')
+  })
+
+  it('挑了哪家就填哪家的 key，保存也走用户挑的那家', async () => {
+    const onSaveProviderKey = vi.fn(async () => {
+      return undefined
+    })
+    act(() => {
+      root = createRoot(container)
+      root.render(
+        <WelcomeHome
+          ryen={undefined}
+          agents={[]}
+          conversations={[]}
+          providers={[{ id: 'siliconflow', displayName: 'SiliconFlow', apiKeyConfigured: false, models: [] }]}
+          presets={presets}
+          onSaveApiKey={() => {
+            return Promise.resolve()
+          }}
+          onSaveProviderKey={onSaveProviderKey}
+          onSend={() => {}}
+          onOpenConversation={() => {}}
+        />,
+      )
+    })
+    const tiles = container.querySelectorAll<HTMLButtonElement>('.provider-pick-tile')
+    expect(tiles).toHaveLength(2)
+    await act(async () => {
+      tiles[1]?.click()
+    })
+    expect(container.textContent).toContain('填 DeepSeek 的 key')
+    const input = container.querySelector<HTMLInputElement>('input[type="password"]')
+    expect(input).not.toBeNull()
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+    await act(async () => {
+      setter?.call(input, 'sk-test-key')
+      input?.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const save = container.querySelector<HTMLButtonElement>('.apikey-row .btn-primary')
+    await act(async () => {
+      save?.click()
+    })
+    expect(onSaveProviderKey).toHaveBeenCalledWith(expect.objectContaining({ id: 'deepseek' }), 'sk-test-key')
+  })
+})
+
 describe('示例会话：一键删除真的删得掉', () => {
   let container: HTMLDivElement
   let root: Root

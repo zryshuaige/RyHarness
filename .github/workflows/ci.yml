@@ -2,10 +2,10 @@ name: CI
 
 on:
   push:
-    # 仓库主线分支是 master，不是 main（GitHub 新仓库默认名会误导人）。
-    branches: [master]
+    # 主线分支是 main（建仓时按 GitHub 惯例起的名；早先写的 master 是本地旧名）。
+    branches: [main]
   pull_request:
-    branches: [master]
+    branches: [main]
   workflow_dispatch:
   schedule:
     # 夜间跑一遍性能清单：它对机器负载敏感，混在默认通道里只会让「测试全绿」变成噪声，

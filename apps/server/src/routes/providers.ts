@@ -34,6 +34,13 @@ export interface ProviderRoutes {
   refreshProviders: (next: ProvidersConfigFile) => void
   /** 连通性探测超时毫秒。 */
   verifyTimeoutMs: number
+  /**
+   * 刚给某家配好凭据之后叫一声（可选）。
+   *
+   * 内置助理的默认路由要跟着用户挑的那家走：此前写死硅基流动，用户配了别家也
+   * 用不了。组合根在这里接上「把还指着没凭据的内置助理切过去」。
+   */
+  onProviderConfigured?: (providerId: string) => void
 }
 
 /** POST /api/providers 的入参（校验后）。 */
@@ -761,6 +768,8 @@ export function registerProviderRoutes(router: Router, deps: ProviderRoutes): vo
         if (input.apiKey !== undefined) deleteApiKey(dataDir, providerId)
       },
     })
+    // 助理的默认路由跟着用户挑的那家走（组合根负责真正改 agents 表）。
+    deps.onProviderConfigured?.(providerId)
     json(res, 201, { provider: providerInfo(providerId, deps.providers.providers[providerId] as ProviderConfig, []) })
   })
 
