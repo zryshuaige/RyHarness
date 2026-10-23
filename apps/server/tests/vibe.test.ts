@@ -9,7 +9,7 @@
  * 3. **失败与恢复**：一轮失败后状态是 failed（不是"方案好了"），答完的答案进小队
  *    共同看到的正文，跨会话的题 id 会被挡下。
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Context } from '@ryharness/cordis'
@@ -568,6 +568,47 @@ describe('vibe_scaffold 工具：方案落成项目骨架', () => {
     ).toEqual(['建数据表', '做分类页'])
     // 这次 RyVibe 记下了项目
     expect(vibe.get(session.id)?.project?.files).toHaveLength(4)
+  })
+
+  it('产物形态决定文件清单：要一张表就不该落出个 index.html', async () => {
+    const { vibe, workspaceRoot, tool } = scaffoldSetup('scaffold-sheet')
+    await vibe.create({
+      conversationId: 'c1',
+      requirement: '把开支列出来',
+      skillId: 'grill-me',
+      memberAgentIds: ['a1'],
+    })
+    const result = await tool.execute(
+      {
+        name: '本月开支',
+        summary: '把这个月的开支列出来',
+        tasks: ['把账单抄进表里'],
+        deliverable: 'sheet',
+        artifactName: '开支表',
+        content: '项目,金额\n房租,3200',
+      },
+      { workspaceRoot, conversationId: 'c1', agentId: 'a1' },
+    )
+    expect(result.isError).not.toBe(true)
+    const dir = join(workspaceRoot, 'projects', '本月开支')
+    expect(readdirSync(dir).sort()).toEqual(['README.md', 'TODO.md', '开支表.csv'])
+    expect(readFileSync(join(dir, '开支表.csv'), 'utf8')).toContain('房租,3200')
+  })
+
+  it('形态非法就拒：别把 typo 默默当成 app', async () => {
+    const { vibe, workspaceRoot, tool } = scaffoldSetup('scaffold-bad-kind')
+    await vibe.create({
+      conversationId: 'c1',
+      requirement: '把开支列出来',
+      skillId: 'grill-me',
+      memberAgentIds: ['a1'],
+    })
+    const result = await tool.execute(
+      { name: 'x', summary: 'y', tasks: ['a'], deliverable: 'spreadsheet' },
+      { workspaceRoot, conversationId: 'c1', agentId: 'a1' },
+    )
+    expect(result.isError).toBe(true)
+    expect(result.content).toContain('app / doc / sheet / flow')
   })
 
   it('落第二次：目录覆盖，任务不重复加', async () => {

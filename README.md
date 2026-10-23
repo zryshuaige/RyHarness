@@ -63,12 +63,15 @@ and the dispatcher picks someone by reading the sentence. When one agent finishe
 its part and the next one is a better fit, it says so and passes the job along.
 The chain is visible in the sidebar.
 
-### RyVibe: one sentence in, a working project out
+### RyVibe: one sentence in, something you can use out
 
-Say what you want. The team asks you a few things — as multiple-choice cards, not a
-form — and then writes the plan, drops it on disk as a project folder (README,
-plan, task list, and a first page you can open), and puts the tasks into your
-todo list.
+Say what you want. The first thing the team asks is what you actually want at the
+end — an app you can open, a document, a table, or a process you'll follow again
+each time. The rest are multiple-choice cards, not a form: the options are written
+the way you'd answer them ("on my phone", "just me", "a link to send people"),
+never in implementation terms ("how many screens", "web or desktop"). Then the
+result lands on disk — a project folder, a document, a sheet, a flow — and the
+tasks go into your todo list.
 
 <img src="apps/desktop/docs/capture-project.png" width="900" alt="RyVibe with a project on disk" />
 

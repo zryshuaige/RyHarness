@@ -57,17 +57,46 @@ export interface VibeProject {
   createdAt: number
 }
 
+/** 产物形态：用户到底要个什么东西。 */
+export type DeliverableKind = 'app' | 'doc' | 'sheet' | 'flow'
+
+/** 允许的形态（入参校验用）。 */
+export const DELIVERABLE_KINDS: readonly DeliverableKind[] = ['app', 'doc', 'sheet', 'flow']
+
+/** 各形态的默认交付物文件名（不含扩展名）。 */
+const DEFAULT_ARTIFACT_NAME: Record<DeliverableKind, string> = {
+  app: '首个页面',
+  doc: '交付物',
+  sheet: '清单',
+  flow: '流程',
+}
+
 /** 落盘要什么。 */
 export interface ScaffoldInput {
   /** 工作区根目录（绝对路径）。 */
   workspaceRoot: string
   /** 项目名。 */
   name: string
-  /** 一句话说明：这个产品做什么。 */
+  /** 一句话说明：这个东西做什么。 */
   summary: string
   /** 任务清单。 */
   tasks: readonly string[]
-  /** README 正文；不给就按 summary 与任务清单生成一份。 */
+  /**
+   * 产物形态。
+   *
+   * 此前只有一种（app），于是「帮我写封邮件」也会被落成一个软件项目骨架——那不是
+   * 用户要的东西。四个形态对应四种真实诉求：
+   * - `app`：一个能打开的小程序（网页 / 桌面）。
+   * - `doc`：一份文档（方案、报告、邮件、说明）。
+   * - `sheet`：一张表或一份清单。
+   * - `flow`：一个以后每次照着做的流程。
+   */
+  deliverable?: DeliverableKind
+  /** 交付物的文件名（不含扩展名）。缺省按形态给一个默认名。 */
+  artifactName?: string
+  /** 交付物正文（doc / flow 是 markdown，sheet 是 CSV）。缺省给一份骨架。 */
+  content?: string
+  /** README 正文；不给就按形态自动生成一份。 */
   readme?: string
   /** 完整方案正文（Markdown）；不给就写一份最小的。 */
   plan?: string
@@ -121,22 +150,45 @@ function taskLines(tasks: readonly string[]): string {
 /**
  * README 正文。
  *
- * 模型给了就用它给的（那通常更好）；没给就拼一份**能看懂的**：这是什么、怎么跑起来、
- * 做到什么算完成、文件在哪。
+ * 按形态换内容：app 讲「怎么跑起来」，文档讲「这份东西给谁看、怎么用」，表讲
+ * 「口径是什么」，流程讲「什么时候触发、谁来接手」。一份 README 说错形态的话，
+ * 用户打开目录第一眼就觉得"这不是我要的"。
  */
 export function renderReadme(input: ScaffoldInput): string {
   if (input.readme !== undefined && input.readme.trim().length > 0) {
     return input.readme.trim()
   }
+  const kind = input.deliverable ?? 'app'
+  const head = [`# ${input.name.trim()}`, '', input.summary.trim(), '']
+  if (kind === 'app') {
+    return [
+      ...head,
+      '## 怎么跑起来',
+      '',
+      '双击 `index.html` 就能看到首个页面。它不依赖任何构建步骤，也不需要联网。',
+      '',
+      '## 做到什么算完成',
+      '',
+      taskLines(input.tasks),
+      '',
+      '## 这个目录里有什么',
+      '',
+      '- `README.md` —— 这个文件',
+      '- `PLAN.md` —— 完整方案（目标用户、功能清单、技术方案、里程碑）',
+      '- `TODO.md` —— 任务清单，逐条打勾',
+      '- `index.html` —— 首个能打开的页面',
+    ].join('\n')
+  }
+  const artifact = artifactFileName(input, kind)
+  const what =
+    kind === 'doc'
+      ? ['## 这份东西给谁看', '', '读者是谁、他在什么场合看、看完要做什么决定。', '']
+      : kind === 'sheet'
+        ? ['## 口径', '', '每一列是什么、从哪来、什么时候更新。空着的列不要留。', '']
+        : ['## 什么时候走这个流程', '', '触发条件、每一步谁做、交给谁。', '']
   return [
-    `# ${input.name.trim()}`,
-    '',
-    input.summary.trim(),
-    '',
-    '## 怎么跑起来',
-    '',
-    '双击 `index.html` 就能看到首个页面。它不依赖任何构建步骤，也不需要联网。',
-    '',
+    ...head,
+    ...what,
     '## 做到什么算完成',
     '',
     taskLines(input.tasks),
@@ -144,10 +196,38 @@ export function renderReadme(input: ScaffoldInput): string {
     '## 这个目录里有什么',
     '',
     '- `README.md` —— 这个文件',
-    '- `PLAN.md` —— 完整方案（目标用户、功能清单、技术方案、里程碑）',
+    `- \`${artifact}\` —— ${kind === 'sheet' ? '数据表' : kind === 'flow' ? '流程' : '正文'}`,
     '- `TODO.md` —— 任务清单，逐条打勾',
-    '- `index.html` —— 首个能打开的页面',
   ].join('\n')
+}
+
+/** 交付物的文件名（含扩展名）。 */
+function artifactFileName(input: ScaffoldInput, kind: DeliverableKind): string {
+  const base = input.artifactName?.trim() ?? ''
+  const cleaned = base.replace(/[\\/:*?"<>|]/gu, '').trim()
+  const name = cleaned.length === 0 ? DEFAULT_ARTIFACT_NAME[kind] : cleaned
+  return kind === 'sheet' ? `${name}.csv` : `${name}.md`
+}
+
+/**
+ * 交付物正文（doc / sheet / flow）。
+ *
+ * 模型给了就用它给的（那才是用户要的东西）；没给就给一份**该形态的骨架**——
+ * 文档骨架是章节，表骨架是列，流程骨架是步骤。宁可给一个能接着填的空架子，
+ * 也不给一份别的形态的东西。
+ */
+export function renderArtifact(input: ScaffoldInput, kind: DeliverableKind): string {
+  const content = input.content?.trim() ?? ''
+  if (content.length > 0) return content
+  const title = input.name.trim()
+  const summary = input.summary.trim()
+  if (kind === 'doc') {
+    return [`# ${title}`, '', summary, '', '## 背景', '', '## 要点', '', '## 下一步', ''].join('\n')
+  }
+  if (kind === 'sheet') {
+    return ['名称,数量,备注', `${title},,${summary}`].join('\n')
+  }
+  return [`# ${title}`, '', summary, '', '## 步骤', '', '1. ', '2. ', '3. ', '', '## 谁接下一步', ''].join('\n')
 }
 
 /** 任务清单文件。 */
@@ -240,6 +320,9 @@ ${items}
 /**
  * 把项目骨架落进工作区。
  *
+ * 文件清单**按产物形态走**：用户要一张表，就不该在目录里看见 `index.html` 与
+ * `PLAN.md`；要一份邮件，就不该落成一堆代码骨架。
+ *
  * 同一项目重复落盘会覆盖同名目录里的同名文件：RyVibe 的重试与「改一版再来」
  * 走的都是这条路，覆盖正是想要的行为（不该每次都留一份 `记账工具-2`）。
  */
@@ -247,12 +330,20 @@ export function scaffoldProject(input: ScaffoldInput): VibeProject {
   const slug = slugOf(input.name)
   const dir = resolveInWorkspace(input.workspaceRoot, join(PROJECTS_DIR, slug))
   mkdirSync(dir, { recursive: true })
-  const documents: { name: string; content: string }[] = [
-    { name: 'README.md', content: renderReadme(input) },
-    { name: 'PLAN.md', content: renderPlan(input) },
-    { name: 'TODO.md', content: renderTodo(input) },
-    { name: 'index.html', content: renderPage(input) },
-  ]
+  const kind = input.deliverable ?? 'app'
+  const documents: { name: string; content: string }[] =
+    kind === 'app'
+      ? [
+          { name: 'README.md', content: renderReadme(input) },
+          { name: 'PLAN.md', content: renderPlan(input) },
+          { name: 'TODO.md', content: renderTodo(input) },
+          { name: 'index.html', content: renderPage(input) },
+        ]
+      : [
+          { name: 'README.md', content: renderReadme(input) },
+          { name: 'TODO.md', content: renderTodo(input) },
+          { name: artifactFileName(input, kind), content: renderArtifact(input, kind) },
+        ]
   const files: VibeProjectFile[] = []
   for (const document of documents) {
     const path = join(dir, document.name)

@@ -123,6 +123,10 @@ export async function runCapture(
    *
    * 页面挂载时会靠 GET /api/vibe 把上一次找回来，所以这张图拍的是**真实界面**
    * （问答记录 + 盘问卡 + 预选项），不是摆拍。
+   *
+   * 演示题也按**用户的说法**写：先问"最后要个什么东西"，再问"谁会用"。此前这里
+   * 写的是"这东西跑在哪""第一版要几屏"——那是开发者的话，用户根本不会这样回答，
+   * 拍出来等于给评审看了一份反例。
    */
   const vibeSession = await server.vibeStore.create({
     conversationId: conversation.id,
@@ -133,15 +137,15 @@ export async function runCapture(
   const answered = await server.questionStore.ask({
     conversationId: conversation.id,
     agentId: 'ryen',
-    question: '这东西跑在哪？',
-    options: ['网页', '桌面', '手机'],
+    question: '你最后想要个什么东西？',
+    options: ['一个能打开的小程序', '一份文档', '一张表', '一个以后照着做的流程'],
   })
-  await server.questionStore.answer(answered.id, { text: '网页', selected: ['网页'] })
+  await server.questionStore.answer(answered.id, { text: '一个能打开的小程序', selected: ['一个能打开的小程序'] })
   await server.questionStore.ask({
     conversationId: conversation.id,
     agentId: coder.id,
-    question: '第一版要几屏？',
-    options: ['1 屏', '2-3 屏', '先做一屏'],
+    question: '这东西谁会用？',
+    options: ['就我自己', '我们几个人', '客户自己来'],
   })
   await server.vibeStore.setStatus(vibeSession.id, 'asking')
   /**

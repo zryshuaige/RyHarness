@@ -1,9 +1,12 @@
 /**
- * RyVibe：一句话做出完整产品（Beta）。
+ * RyVibe：一句话做出能开工的东西（Beta）。
  *
- * 这一页的承诺只有一句：**你说一句话，出来一份能开工的方案**。所以界面上不许出现
+ * 这一页的承诺只有一句：**你说一句话，出来一个能接着用的东西**。所以界面上不许出现
  * 「配置」「工作流」「选择角色」这类词——用户要做的只有两件事：说一句话、点几下
  * 选项。小队把需求问清楚的过程被收在页面里，而不是甩给用户一叠表单。
+ *
+ * 也不许默认他要的是一个软件：他可能只要一份文档、一张表，或者一个以后照着做的
+ * 流程。盘问的第一问就是「最后要的东西是个什么」，落盘的文件清单跟着那个答案走。
  *
  * 底下其实是一个真的群会话：问题与答案走的是同一套提问/注入机制，方案落在那个
  * 会话里。所以这一页的结果不是一段凭空生成的文本——用户想接着追问，点「在聊天里
@@ -21,19 +24,29 @@ import { toast } from '../lib/toast.ts'
 import { Icon } from './Icon.tsx'
 import { Markdown } from './Markdown.tsx'
 
-/** 起步示例：让用户知道「一句话」长什么样，比任何说明文字都快。 */
+/**
+ * 起步示例：让用户知道「一句话」长什么样，比任何说明文字都快。
+ *
+ * 四个例子覆盖四种产物（软件 / 流程 / 文档 / 表）——只给软件的例子，用户会以为
+ * RyVibe 只能做软件，于是把「写封邮件」这类需求不好意思提出来。
+ */
 const EXAMPLES = [
   '给独立开发者做一个记账工具，能分类、能看趋势',
-  '一个宠物医院用的预约小程序，提醒别忘了带疫苗本',
   '把我们的周报流程做成自动的：每周五出报告',
+  '给客户写封道歉邮件，正式但不生硬',
+  '把这个月的开支列成一张表',
 ]
 
 /** 轮询间隔（ms）：小队还在写时 1.2 秒一次（页面要跟手）；轮到用户点选时退到 4 秒。 */
 const POLL_BUSY_MS = 1200
 const POLL_IDLE_MS = 4000
 
-/** 小队干活的三个阶段：空窗期最要有事可说。 */
-const STEPS = ['读需求', '拆功能', '写方案'] as const
+/**
+ * 小队干活的三个阶段：空窗期最要有事可说。
+ *
+ * 措辞不绑形态：「拆功能」「写方案」是软件的话，用户要一份邮件时这三步就没意义了。
+ */
+const STEPS = ['读需求', '想清楚', '做出来'] as const
 
 /** 页面需要的 api 形状（测试可以只给这几个方法）。 */
 export interface RyVibeApi {
@@ -125,7 +138,7 @@ function QuestionCard({
   return (
     <div className="vibe-card">
       <div className="vibe-card-head">
-        <span>小队想先问清楚这几件事</span>
+        <span>小队有几件事想跟你确认</span>
         <span className="vibe-card-hint">不用写，选一个就行</span>
       </div>
       {questions.map((question) => {
@@ -309,11 +322,11 @@ function statusLine(session: VibeSessionView): string {
   if (session.status === 'failed') return '没做出来'
   if (session.status === 'asking') {
     return session.pendingAnswers > 0
-      ? `小队想先问清楚 ${session.pendingAnswers} 件事，选完就出方案`
+      ? `小队想先问清楚 ${session.pendingAnswers} 件事，选完就开工`
       : '小队正在整理你的选择…'
   }
   if (session.status === 'building') return '小队正在做…'
-  return '方案好了'
+  return '做好了'
 }
 
 /** 小队走到第几步了。 */
@@ -569,9 +582,9 @@ export function RyVibePage({ api, onOpenConversation }: RyVibePageProps) {
             <span className="vibe-badge">Beta</span>
           </h1>
           <p className="vibe-lede">
-            说一句你想要的东西，小队会把它问成一份能开工的方案。
+            说一句你想要的东西，小队会先问清楚你到底要个什么。
             <br />
-            需求不清楚的地方，小队会带着选项来问你——你点一下就行。
+            一个能打开的小程序、一份文档、一张表，还是一个以后照着做的流程——小队带着选项来问你，你点一下就行。
           </p>
           <textarea
             className="vibe-input"
@@ -733,7 +746,7 @@ export function RyVibePage({ api, onOpenConversation }: RyVibePageProps) {
 
       {output.length > 0 && (
         <section className="vibe-section">
-          <h2 className="vibe-section-title">{session.status === 'done' ? '方案' : '小队正在写的'}</h2>
+          <h2 className="vibe-section-title">{session.status === 'done' ? '做好的东西' : '小队正在做的'}</h2>
           {output.map((item, index) => {
             return (
               <article key={`${item.seq}`} className="vibe-output">

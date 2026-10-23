@@ -16,6 +16,8 @@
 
 import type { Tool, ToolContext, ToolResult } from '@ryharness/agent'
 import {
+  DELIVERABLE_KINDS,
+  type DeliverableKind,
   MAX_PROJECT_NAME_LENGTH,
   MAX_PROJECT_SUMMARY_LENGTH,
   MAX_PROJECT_TASK_LENGTH,
@@ -115,6 +117,20 @@ export function createScaffoldTool(deps: {
           type: 'string',
           description: '首个页面的完整 HTML；不给就生成一个能打开的骨架页。',
         },
+        deliverable: {
+          type: 'string',
+          enum: ['app', 'doc', 'sheet', 'flow'],
+          description:
+            '用户到底要个什么东西：app=一个能打开的小程序，doc=一份文档（方案/报告/邮件），sheet=一张表或清单，flow=一个以后照着做的流程。按你问到的「最后要的东西是个什么」给，别一律当软件。',
+        },
+        artifactName: {
+          type: 'string',
+          description: '交付物的文件名（不含扩展名）；doc/sheet/flow 时用得上。',
+        },
+        content: {
+          type: 'string',
+          description: '交付物正文：doc/flow 用 Markdown，sheet 用 CSV。给了就用它给的，别拿别的东西顶替。',
+        },
       },
       required: ['name', 'summary', 'tasks'],
     },
@@ -151,6 +167,16 @@ export function createScaffoldTool(deps: {
       const readme = stringField(parsed, 'readme')?.trim()
       const plan = stringField(parsed, 'plan')?.trim()
       const page = stringField(parsed, 'page')?.trim()
+      const content = stringField(parsed, 'content')?.trim()
+      const artifactName = stringField(parsed, 'artifactName')?.trim()
+      const deliverable = stringField(parsed, 'deliverable')?.trim()
+      if (
+        deliverable !== undefined &&
+        deliverable.length > 0 &&
+        !DELIVERABLE_KINDS.includes(deliverable as DeliverableKind)
+      ) {
+        return failure(`deliverable 只能是 ${DELIVERABLE_KINDS.join(' / ')}。`)
+      }
       if (readme !== undefined && readme.length > MAX_DOC_LENGTH) {
         return failure(`README 太长了（${readme.length} 字，上限 ${MAX_DOC_LENGTH}）。`)
       }
@@ -160,11 +186,19 @@ export function createScaffoldTool(deps: {
       if (page !== undefined && page.length > MAX_DOC_LENGTH) {
         return failure(`页面代码太长了（${page.length} 字，上限 ${MAX_DOC_LENGTH}）。`)
       }
+      if (content !== undefined && content.length > MAX_DOC_LENGTH) {
+        return failure(`交付物正文太长了（${content.length} 字，上限 ${MAX_DOC_LENGTH}）。`)
+      }
       const project = scaffoldProject({
         workspaceRoot: deps.workspaceRoot,
         name,
         summary,
         tasks,
+        ...(deliverable === undefined || deliverable.length === 0
+          ? {}
+          : { deliverable: deliverable as DeliverableKind }),
+        ...(artifactName === undefined || artifactName.length === 0 ? {} : { artifactName }),
+        ...(content === undefined || content.length === 0 ? {} : { content }),
         ...(readme === undefined || readme.length === 0 ? {} : { readme }),
         ...(plan === undefined || plan.length === 0 ? {} : { plan }),
         ...(page === undefined || page.length === 0 ? {} : { page }),
