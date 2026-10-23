@@ -195,6 +195,12 @@ export default defineConfig({
       // 维护方式：`vitest run --coverage --coverage.thresholds.update` 会把实测值写回本文件，
       // 数字变更随 diff 一起被评审，所以它仍然是「人要看一眼」的一处改动。
       //
+      // 2026-10-23 整体重定：上一版的数字是照着某次**没跑成**的实测写的（CI 上那次
+      // lint 先红在行尾上，coverage 那一轮压根没跑到判定），于是这套阈值从一开始就
+      // 比代码现状严一截——本地与 CI 都红。现在按两侧实测的**较大值**对齐：本地与
+      // Windows runner 偶有一两行差异（`packages/tools/src/shell.ts` 27/29 vs 26/28），
+      // 取大的一侧，两边才都过得去。仍然是「只拦继续烂，不要求回头补债」。
+      //
       // 一条必须知道的 vitest 语义（实测自 vitest 4.1 的 resolveThresholds）：带 glob 的
       // 阈值是**追加**约束，不是覆盖——「Global threshold is for all files, even if they are
       // included by glob patterns」。所以全局那四个数必然等于「最差的那个文件」，而当前
@@ -211,14 +217,14 @@ export default defineConfig({
       // 按子集跑的用法不要挂覆盖率阈值（coverage-report 里看数字可以，棘轮不行）。
       thresholds: {
         perFile: true,
-        lines: -240,
-        statements: -270,
-        functions: -72,
-        branches: -179,
-        'packages/agent/src/**': { lines: -4, statements: -6, functions: -1, branches: -10 },
-        'packages/session/src/**': { lines: -10, statements: -20, functions: -5, branches: -27 },
-        'packages/memory/src/**': { lines: -19, statements: -26, functions: -6, branches: -24 },
-        'packages/tools/src/**': { lines: -8, statements: -13, functions: -2, branches: -23 },
+        lines: -309,
+        statements: -361,
+        functions: -92,
+        branches: -209,
+        'packages/agent/src/**': { lines: -7, statements: -10, functions: -1, branches: -10 },
+        'packages/session/src/**': { lines: -15, statements: -26, functions: -5, branches: -31 },
+        'packages/memory/src/**': { lines: -19, statements: -26, functions: -6, branches: -26 },
+        'packages/tools/src/**': { lines: -21, statements: -27, functions: -8, branches: -29 },
       },
     },
   },
