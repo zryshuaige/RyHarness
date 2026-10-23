@@ -259,13 +259,14 @@ export class SessionStore {
     const now = Date.now()
     const existing = this.getAgent(input.id)
     this.stmt(`
-      INSERT INTO agents (id, name, avatar, system_prompt, provider, model, temperature, reasoning_effort, tools, persona, is_builtin, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO agents (id, name, avatar, system_prompt, provider, model, temperature, reasoning_effort, tools, persona, is_builtin, route_locked, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (id) DO UPDATE SET
         name = excluded.name, avatar = excluded.avatar, system_prompt = excluded.system_prompt,
         provider = excluded.provider, model = excluded.model, temperature = excluded.temperature,
         reasoning_effort = excluded.reasoning_effort,
-        tools = excluded.tools, persona = excluded.persona, updated_at = excluded.updated_at
+        tools = excluded.tools, persona = excluded.persona,
+        route_locked = excluded.route_locked, updated_at = excluded.updated_at
     `).run(
       input.id,
       input.name,
@@ -282,6 +283,9 @@ export class SessionStore {
         normalizePersona(input.persona === undefined ? existing?.persona : { ...existing?.persona, ...input.persona }),
       ),
       input.isBuiltin === true ? 1 : 0,
+      // 没给 routeLocked 时沿用库里的那份：服务器自动改绑不该顺手把「用户手动挑过
+      // 路由」这个标记抹掉，抹掉等于把用户的选择重新交回默认值。
+      (input.routeLocked ?? existing?.routeLocked) === true ? 1 : 0,
       existing?.createdAt ?? now,
       now,
     )
@@ -369,6 +373,7 @@ export class SessionStore {
       // persona 列可能是 NULL（v6 之前的行）或脏 JSON：一律走归一，读出来必是完整一份。
       persona: normalizePersona(parseJsonValue(row.persona)),
       isBuiltin: Number(row.is_builtin) === 1,
+      ...(Number(row.route_locked) === 1 ? { routeLocked: true } : {}),
       createdAt: Number(row.created_at),
       updatedAt: Number(row.updated_at),
     }

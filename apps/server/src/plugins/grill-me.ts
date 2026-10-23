@@ -9,7 +9,8 @@
  *
  * 为什么不用现成的 `ask_user` 就够了：`ask_user` 允许问开放题、允许一轮问很多题、
  * 也不管总共问了几轮。而 RyVibe 的产品承诺是「用户全程只需要点几下」——所以
- * 盘问工具自己带三条硬约束：**每题必带选项、一轮最多两题、最多两轮**。
+ * 盘问工具自己带三条硬约束：**每题必带选项、一轮最多四题、一轮问完就停**。
+ * 名额由 RyVibe 的存储层记账（一轮最多四题、只问一轮），
  * 约束落在工具里（模型绕不过去），而不是写在 skill 正文里（模型可能不听）。
  *
  * 工具只对「正在进行的那次 RyVibe」可用：它靠会话 id 反查 RyVibe 的记录，
@@ -38,7 +39,7 @@ export const MAX_GRILL_OPTIONS = 5
 export const MAX_GRILL_QUESTION = 120
 
 /** 工具回给模型的停止信号：问够了就别再问，去出方案。 */
-export const GRILL_STOP = '这一轮的问题已经问够了（或者已经问满两轮）。不要再问用户；请直接给出你的结论或方案。'
+export const GRILL_STOP = '这一轮的问题已经问够了（或者已经问满四题）。不要再问用户；请直接给出你的结论或方案。'
 
 function argsOf(args: unknown): Record<string, unknown> {
   return typeof args === 'object' && args !== null ? (args as Record<string, unknown>) : {}

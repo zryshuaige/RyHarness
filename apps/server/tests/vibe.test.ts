@@ -18,6 +18,7 @@ import { LlmAdapter } from '@ryharness/llm'
 import {
   createGrillTool,
   createScaffoldTool,
+  DELIVERABLE_KINDS,
   GRILL_ME_SKILL,
   GRILL_STOP,
   GRILL_TOOL_NAME,
@@ -609,6 +610,73 @@ describe('vibe_scaffold 工具：方案落成项目骨架', () => {
     )
     expect(result.isError).toBe(true)
     expect(result.content).toContain('app / doc / sheet / flow')
+  })
+
+  it('换形态重落盘：上一形态的文件不留下来（目录里多出来的文件会被当成落盘坏了）', async () => {
+    const { vibe, workspaceRoot, tool } = scaffoldSetup('scaffold-switch')
+    await vibe.create({
+      conversationId: 'c1',
+      requirement: '把开支列出来',
+      skillId: 'grill-me',
+      memberAgentIds: ['a1'],
+    })
+    const context = { workspaceRoot, conversationId: 'c1', agentId: 'a1' }
+    const dir = join(workspaceRoot, 'projects', '开支')
+    await tool.execute({ name: '开支', summary: '列出来', tasks: ['抄进表里'], deliverable: 'app' }, context)
+    expect(readdirSync(dir).sort()).toEqual(['PLAN.md', 'README.md', 'TODO.md', 'index.html'])
+    await tool.execute(
+      {
+        name: '开支',
+        summary: '列出来',
+        tasks: ['抄进表里'],
+        deliverable: 'sheet',
+        artifactName: '开支表',
+        content: '项目,金额',
+      },
+      context,
+    )
+    // 上一形态的 index.html 与 PLAN.md 不能再躺在目录里。
+    expect(readdirSync(dir).sort()).toEqual(['README.md', 'TODO.md', '开支表.csv'])
+  })
+
+  it('形态与字段对不上就说出来：别把正文悄悄丢掉', async () => {
+    const { vibe, workspaceRoot, tool } = scaffoldSetup('scaffold-mismatch')
+    await vibe.create({
+      conversationId: 'c1',
+      requirement: '写封邮件',
+      skillId: 'grill-me',
+      memberAgentIds: ['a1'],
+    })
+    const context = { workspaceRoot, conversationId: 'c1', agentId: 'a1' }
+    // doc 形态给了页面：那是 app 的字段，丢掉它等于把用户的东西扔了。
+    const mismatch = await tool.execute(
+      { name: '道歉邮件', summary: '写给客户', tasks: ['写正文'], deliverable: 'doc', content: '正文', page: '<html>' },
+      context,
+    )
+    expect(mismatch.isError).toBe(true)
+    expect(mismatch.content).toContain('不写页面和方案')
+    // app 形态给了 content：app 的正文是 page 与 plan。
+    const mismatch2 = await tool.execute(
+      { name: '记账工具', summary: '记账', tasks: ['做表'], deliverable: 'app', content: '正文' },
+      context,
+    )
+    expect(mismatch2.isError).toBe(true)
+    expect(mismatch2.content).toContain('app 形态不收 content')
+    // doc 形态不给正文也不行：落一个空骨架等于交白卷。
+    const empty = await tool.execute(
+      { name: '道歉邮件', summary: '写给客户', tasks: ['写正文'], deliverable: 'doc' },
+      context,
+    )
+    expect(empty.isError).toBe(true)
+    expect(empty.content).toContain('要把正文给出来')
+  })
+
+  it('形态枚举只有一份：工具 schema 与实现同源（两份手抄迟早漂）', async () => {
+    const { tool } = scaffoldSetup('scaffold-enum')
+    const schema = tool.parameters as {
+      properties?: { deliverable?: { enum?: readonly string[] } }
+    }
+    expect([...(schema.properties?.deliverable?.enum ?? [])]).toEqual([...DELIVERABLE_KINDS])
   })
 
   it('落第二次：目录覆盖，任务不重复加', async () => {

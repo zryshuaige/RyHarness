@@ -23,6 +23,7 @@ import { humanError } from '../lib/error-text.ts'
 import { toast } from '../lib/toast.ts'
 import { Icon } from './Icon.tsx'
 import { Markdown } from './Markdown.tsx'
+import { VibeArtifactPreview } from './VibeArtifactPreview.tsx'
 
 /**
  * 起步示例：让用户知道「一句话」长什么样，比任何说明文字都快。
@@ -91,13 +92,19 @@ export interface RyVibePageProps {
  * - **一次提交**：所有答案一起交，答案进小队共同看到的那条正文里。
  * - **可以跳过**：按默认方案来，不追问。
  * - **提交后还能改**：改主意重交一次，小队按新答案重出方案。
+ *
+ * 「提交后还能改」这一条曾经是个**空承诺**：提交后服务端把题标成已答，前端又把已答的
+ * 题从待答列表里滤掉，整张卡于是从 DOM 上消失——「你已经选好了 / 改一下」那一支从来
+ * 没有机会渲染。用户答错了只能重开一轮（重新说一遍需求、重新答一遍）。
  */
 function QuestionCard({
   questions,
   picks,
+  drafts,
   submitted,
   busy,
   onPick,
+  onDraft,
   onSubmit,
   onSkip,
   onEdit,
@@ -105,12 +112,16 @@ function QuestionCard({
   questions: VibeQuestionView[]
   /** 当前选择（questionId → 选项）。 */
   picks: Record<string, string>
+  /** 用户自己写的答案（questionId → 他写的那句话）。 */
+  drafts: Record<string, string>
   /** 已提交的答案；undefined = 卡片还开着。 */
   submitted: Record<string, string> | undefined
   busy: boolean
   onPick: (questionId: string, option: string) => void
+  onDraft: (questionId: string, text: string) => void
   onSubmit: () => void
-  onSkip: () => void
+  /** 「按你们的默认方案来」：改主意那一轮没有它（都已经答过了）。 */
+  onSkip?: () => void
   onEdit: () => void
 }) {
   if (submitted !== undefined) {
@@ -139,16 +150,17 @@ function QuestionCard({
     <div className="vibe-card">
       <div className="vibe-card-head">
         <span>小队有几件事想跟你确认</span>
-        <span className="vibe-card-hint">不用写，选一个就行</span>
+        <span className="vibe-card-hint">选一个就行，也可以自己写</span>
       </div>
       {questions.map((question) => {
         const current = picks[question.id] ?? question.options[0] ?? ''
+        const draft = drafts[question.id] ?? ''
         return (
           <div key={question.id} className="vibe-question">
             <p className="vibe-question-text">{question.question}</p>
             <div className="vibe-options">
               {question.options.map((option) => {
-                const chosen = current === option
+                const chosen = current === option && draft.trim().length === 0
                 return (
                   <button
                     key={option}
@@ -164,6 +176,19 @@ function QuestionCard({
                 )
               })}
             </div>
+            {/* 自己写一句：没有这一行，选项之外的话就没地方说了——用户只能把
+                「我自己说」这个选项当成答案交上去，等于什么都没说。 */}
+            <input
+              type="text"
+              className="vibe-own-answer"
+              value={draft}
+              placeholder="都不对？我自己说"
+              aria-label={`${question.question} —— 自己写一句`}
+              disabled={busy}
+              onChange={(event) => {
+                onDraft(question.id, event.target.value)
+              }}
+            />
           </div>
         )
       })}
@@ -171,9 +196,11 @@ function QuestionCard({
         <button type="button" className="btn btn-primary vibe-card-submit" disabled={busy} onClick={onSubmit}>
           就这样，开始出方案
         </button>
-        <button type="button" className="btn vibe-card-skip" disabled={busy} onClick={onSkip}>
-          按你们的默认方案来
-        </button>
+        {onSkip !== undefined && (
+          <button type="button" className="btn vibe-card-skip" disabled={busy} onClick={onSkip}>
+            按你们的默认方案来
+          </button>
+        )}
       </div>
     </div>
   )
@@ -213,6 +240,14 @@ interface ProjectPreview {
   content: string
 }
 
+/** 产物形态的中文名：页面上要让人一眼看出"这是个软件还是一张表"。 */
+const KIND_LABEL: Record<VibeProjectView['kind'], string> = {
+  app: '软件',
+  doc: '文档',
+  sheet: '表格',
+  flow: '流程',
+}
+
 /**
  * 项目区块：方案落成的那个目录。
  *
@@ -237,7 +272,10 @@ function ProjectCard({
     <section className="vibe-project">
       <div className="vibe-project-head">
         <div className="vibe-project-meta">
-          <h2 className="vibe-section-title">{project.name}</h2>
+          <h2 className="vibe-section-title">
+            {project.name}
+            <span className="vibe-project-kind">{KIND_LABEL[project.kind]}</span>
+          </h2>
           <p className="vibe-project-path" title={project.dir}>
             {project.dir}
           </p>
@@ -271,13 +309,7 @@ function ProjectCard({
               收起
             </button>
           </div>
-          {preview.name.endsWith('.html') ? (
-            // 预览里的脚本一律不跑：sandbox 空值就是禁脚本、禁表单、禁弹窗。
-            // 页面本身在磁盘上双击打开是能跑的，这里只给用户看个样子。
-            <iframe className="vibe-preview-frame" title={preview.name} sandbox="" srcDoc={preview.content} />
-          ) : (
-            <pre className="vibe-preview-text">{preview.content}</pre>
-          )}
+          <VibeArtifactPreview name={preview.name} content={preview.content} />
         </div>
       )}
     </section>
@@ -344,8 +376,17 @@ export function RyVibePage({ api, onOpenConversation }: RyVibePageProps) {
   const [output, setOutput] = useState<VibeOutputView[]>([])
   /** 用户在卡片上点过的选择（questionId → 选项）；没点过的用预选项（第一个）。 */
   const [picks, setPicks] = useState<Record<string, string>>({})
+  /** 用户自己写的答案（questionId → 他写的那句话）。 */
+  const [drafts, setDrafts] = useState<Record<string, string>>({})
   /** 已提交的答案；undefined = 卡片还开着。 */
   const [submitted, setSubmitted] = useState<Record<string, string> | undefined>(undefined)
+  /**
+   * 「改一下」进入的状态：把已答的题也放回可编辑的视图里。
+   *
+   * 服务端是支持的（重复回答会覆盖上一次），缺的只是这个入口——没有它，整轮盘问就是
+   * 一次性提交，答错了只能重开一轮。
+   */
+  const [editing, setEditing] = useState(false)
   const [starting, setStarting] = useState(false)
   const [answering, setAnswering] = useState(false)
   const [error, setError] = useState<string | undefined>(undefined)
@@ -371,11 +412,21 @@ export function RyVibePage({ api, onOpenConversation }: RyVibePageProps) {
         // 任务清单：服务端下发的那份（落盘时写进待办的）。
         setTodos(state.todos ?? [])
         // 增量：产出只会变多，重发整份的话一段长方案每 1.2 秒就要传一次。
+        // **按 seq 去重**：轮询与提交会重叠（用户在建造期答完题，服务端回包与下一次
+        // 轮询可能同时在飞），两次请求读到同一个游标，同一段产出会被服务端发两遍，
+        // 客户端各追加一次 —— 屏幕上于是出现两份一样的方案。
         setOutput((prev) => {
-          return [...prev, ...state.output]
+          const next = [...prev]
+          for (const item of state.output) {
+            if (next.some((old) => old.seq === item.seq)) continue
+            next.push(item)
+          }
+          return next.length === prev.length ? prev : next
         })
         const last = state.output.at(-1)
-        if (last !== undefined) outputCursorRef.current = last.seq
+        if (last !== undefined && last.seq > outputCursorRef.current) {
+          outputCursorRef.current = last.seq
+        }
         setError(undefined)
       } catch (err) {
         setError(humanError(err, '没拿到小队的进度，再试一次'))
@@ -425,19 +476,34 @@ export function RyVibePage({ api, onOpenConversation }: RyVibePageProps) {
    * 轮到用户点选了，就退到 4 秒一次——那段时间状态基本不会变，一直 1.2 秒地刷
    * 只是白打后端。'done' 之后彻底不轮询；**页面看不见时也停**（用户去开会了，
    * 页面还挂在那儿一秒一次地打后端没有意义）。
+   *
+   * **窗口重新可见时要自己接上**：此前隐藏时直接 return（连定时器都不挂），而
+   * effect 的依赖里没有可见性、也没有 visibilitychange 监听——于是用户最小化一次
+   * 窗口，这一轮在界面上就永远停在旧状态（还写着「小队正在做…」），而服务端
+   * 还在跑。建造期有一两分钟，这一次最小化就够把这一轮作废。
    */
   useEffect(() => {
     if (session === undefined) return
     if (session.status === 'done') return
-    if (document.hidden) return
     const id = session.id
-    timerRef.current = window.setTimeout(
-      () => {
-        void refresh(id)
-      },
-      session.busy ? POLL_BUSY_MS : POLL_IDLE_MS,
-    )
+    const arm = (): void => {
+      if (document.hidden) return
+      timerRef.current = window.setTimeout(
+        () => {
+          void refresh(id)
+        },
+        session.busy ? POLL_BUSY_MS : POLL_IDLE_MS,
+      )
+    }
+    arm()
+    const onVisible = (): void => {
+      if (document.hidden) return
+      void refresh(id)
+      arm()
+    }
+    document.addEventListener('visibilitychange', onVisible)
     return () => {
+      document.removeEventListener('visibilitychange', onVisible)
       if (timerRef.current !== undefined) {
         window.clearTimeout(timerRef.current)
         timerRef.current = undefined
@@ -456,6 +522,7 @@ export function RyVibePage({ api, onOpenConversation }: RyVibePageProps) {
       setQuestions([])
       setOutput([])
       setPicks({})
+      setDrafts({})
       setSubmitted(undefined)
       setTodos([])
       setPreview(undefined)
@@ -477,19 +544,26 @@ export function RyVibePage({ api, onOpenConversation }: RyVibePageProps) {
         return question.answered !== true
       })
       .map((question) => {
+        // 自己写了字就交字，没写才交选项。写了字还把预选项一起交上去，
+        // 小队看到的是两句而不是一句，反而更糊。
+        const draft = (drafts[question.id] ?? '').trim()
+        const useDraft = draft.length > 0 && !skipped
         return {
           questionId: question.id,
-          selected: [picks[question.id] ?? question.options[0] ?? ''],
+          selected: useDraft ? [] : [picks[question.id] ?? question.options[0] ?? ''],
+          ...(useDraft ? { text: draft } : {}),
         }
       })
     if (answers.length === 0) return
     setAnswering(true)
     try {
       await api.answerVibe(session.id, { answers, ...(skipped ? { skipped: true } : {}) })
+      setEditing(false)
       setSubmitted(
         Object.fromEntries(
           answers.map((answer) => {
-            return [answer.questionId, answer.selected[0] ?? '']
+            const text = answer.text ?? ''
+            return [answer.questionId, text.length > 0 ? text : (answer.selected[0] ?? '')]
           }),
         ),
       )
@@ -506,6 +580,7 @@ export function RyVibePage({ api, onOpenConversation }: RyVibePageProps) {
     if (session === undefined) return
     setSubmitted(undefined)
     setPicks({})
+    setDrafts({})
     setOutput([])
     outputCursorRef.current = 0
     void (async () => {
@@ -523,6 +598,7 @@ export function RyVibePage({ api, onOpenConversation }: RyVibePageProps) {
     setQuestions([])
     setOutput([])
     setPicks({})
+    setDrafts({})
     setSubmitted(undefined)
     setError(undefined)
     setRequirement('')
@@ -651,6 +727,10 @@ export function RyVibePage({ api, onOpenConversation }: RyVibePageProps) {
   const answered = questions.filter((question) => {
     return question.answered === true
   })
+  /** 卡片上正在编辑的题：改主意时是全部题，平时只看待答的。 */
+  const editable = editing ? questions : pending
+  /** 卡片该不该画：待答的题在，或者刚提交完还没点「改一下」。 */
+  const showCard = pending.length > 0 || submitted !== undefined
 
   return (
     <div className="vibe-page">
@@ -719,26 +799,37 @@ export function RyVibePage({ api, onOpenConversation }: RyVibePageProps) {
         </section>
       )}
 
-      {pending.length > 0 && (
+      {showCard && (
         <section className="vibe-section">
           <QuestionCard
-            questions={pending}
+            questions={editable}
             picks={picks}
-            submitted={submitted}
+            drafts={drafts}
+            submitted={editing ? undefined : submitted}
             busy={answering}
             onPick={(questionId, option) => {
               setPicks((prev) => {
                 return { ...prev, [questionId]: option }
               })
             }}
+            onDraft={(questionId, text) => {
+              setDrafts((prev) => {
+                return { ...prev, [questionId]: text }
+              })
+            }}
             onSubmit={() => {
               void submit(false)
             }}
-            onSkip={() => {
-              void submit(true)
-            }}
+            onSkip={
+              editing
+                ? undefined
+                : () => {
+                    void submit(true)
+                  }
+            }
             onEdit={() => {
-              setSubmitted(undefined)
+              // 「改一下」：把已答的题放回可编辑的视图，答案还在（picks / drafts 没清）。
+              setEditing(true)
             }}
           />
         </section>

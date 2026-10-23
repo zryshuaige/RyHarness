@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { AgentDef, AgentTemplate, ProviderInfo } from '../renderer/src/api.ts'
 import { BRAND_AVATAR } from '../renderer/src/components/avatars/avatars.tsx'
+import { ContactCard } from '../renderer/src/components/ContactCard.tsx'
 import { AvatarPicker, ContactsPage, CreateAgentModal } from '../renderer/src/components/ContactsPage.tsx'
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '../renderer/src')
@@ -92,6 +93,17 @@ const agents: AgentDef[] = [
 ]
 
 describe('通讯录', () => {
+  it('助理卡是 memo 的：别人的状态一变，不该把三十张卡一起重画', () => {
+    // 性能实测里这一项让每轮重渲成本翻倍（10 位 0.72ms → 1.58ms，30 位 1.81ms →
+    // 4.32ms）：点一下「试听」，语音状态一变，整页卡片就跟着重画一遍。
+    // 这条断言把它钉住：哪天有人把 memo 去掉（或者把回调改成每次新建的 props），
+    // 这里会红。
+    expect(ContactCard.$$typeof).toBe(Symbol.for('react.memo'))
+    // 点击回调不能直接当 props 传：父级每次渲染都重建它们，浅比较永远不成立。
+    const source = readFileSync(resolve(SRC, 'components/ContactsPage.tsx'), 'utf8')
+    expect(source).toContain('handlers.current = { onChat, onEditAgent, onDeleteAgent }')
+  })
+
   it('卡片上看得见这位的脾气与声音：四条性格、口头禅、试听键', () => {
     const vivid: AgentDef = {
       id: 'mine',

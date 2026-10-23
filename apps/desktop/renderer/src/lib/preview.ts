@@ -7,7 +7,7 @@
  */
 
 /** 内嵌预览的渲染器种类。 */
-export type PreviewKind = 'image' | 'pdf' | 'html' | 'markdown' | 'text' | 'code' | 'external'
+export type PreviewKind = 'image' | 'pdf' | 'html' | 'markdown' | 'table' | 'text' | 'code' | 'external'
 
 /**
  * `<img>` 直接能画的位图/矢量图。
@@ -76,8 +76,16 @@ const CODE_EXT = new Set([
   'vue',
 ])
 
+/**
+ * 当表看的文件。
+ *
+ * 表格与纯文本分开：CSV 用 `<pre>` 打出来是一屏逗号，用户要自己数列——把它摆成格子
+ * 才是"看见这张表"。
+ */
+const TABLE_EXT = new Set(['csv', 'tsv'])
+
 /** 当纯文本看的文件（没有语法高亮的那一支）。 */
-const TEXT_EXT = new Set(['txt', 'text', 'log', 'csv', 'tsv'])
+const TEXT_EXT = new Set(['txt', 'text', 'log'])
 
 /** Office 二进制格式：没有纯前端的渲染器，只能交给系统程序。 */
 const OFFICE_EXT = new Set(['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp'])
@@ -104,6 +112,7 @@ export function previewKindOf(name: string, mime = ''): PreviewKind {
   if (ext === 'pdf') return 'pdf'
   if (HTML_EXT.has(ext)) return 'html'
   if (MARKDOWN_EXT.has(ext)) return 'markdown'
+  if (TABLE_EXT.has(ext)) return 'table'
   if (CODE_EXT.has(ext)) return 'code'
   if (TEXT_EXT.has(ext)) return 'text'
   if (OFFICE_EXT.has(ext)) return 'external'
@@ -118,7 +127,7 @@ export function previewKindOf(name: string, mime = ''): PreviewKind {
 
 /** 需要把整份读成字符串再渲染的种类（其余交给 `<img>` / `<iframe>` 直接吃 URL）。 */
 export function needsTextBody(kind: PreviewKind): boolean {
-  return kind === 'markdown' || kind === 'text' || kind === 'code' || kind === 'html'
+  return kind === 'markdown' || kind === 'table' || kind === 'text' || kind === 'code' || kind === 'html'
 }
 
 /**

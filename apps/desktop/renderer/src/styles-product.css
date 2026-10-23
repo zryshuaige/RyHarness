@@ -2397,6 +2397,68 @@
   background: #FFFFFF;
 }
 
+/* Markdown 预览：渲染成文档，不是把源码倒出来。 */
+.vibe-preview-doc {
+  padding: var(--space-3) var(--space-4);
+  max-height: 420px;
+  overflow: auto;
+  background: var(--bg-subtle);
+}
+
+.vibe-preview-doc > :first-child { margin-top: 0; }
+.vibe-preview-doc > :last-child { margin-bottom: 0; }
+
+/* 表格预览：一张表就该是格子，不是逗号。（聊天里的产物预览也用这一套。） */
+.artifact-table-wrap {
+  max-height: 420px;
+  overflow: auto;
+}
+
+.artifact-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+
+.artifact-table th,
+.artifact-table td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--divider);
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+.artifact-table th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.artifact-note {
+  margin: 0;
+  padding: var(--space-3);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+/* 产物形态：项目名旁边挂一枚小标签，一眼看出这是个软件还是一张表。 */
+.vibe-project-kind {
+  display: inline-block;
+  margin-left: var(--space-2);
+  padding: 1px var(--space-2);
+  border: 1px solid color-mix(in srgb, var(--amber-text) 34%, transparent);
+  border-radius: 999px;
+  background: var(--amber-primary-soft);
+  color: var(--amber-text);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  vertical-align: middle;
+}
+
 /* ---- 任务清单：接下来要做的事 ----
 
    勾选框用品牌琥珀（accent-color 一行就够，不用自己画框）。勾完的字划掉变淡，

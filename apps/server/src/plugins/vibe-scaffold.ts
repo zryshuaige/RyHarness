@@ -31,6 +31,8 @@ import type { TodoStore } from './todo-store.ts'
 
 /** 单份文档（README / 方案 / 页面）的字数上限。 */
 const MAX_DOC_LENGTH = 60_000
+/** 交付物文件名的字数上限：Windows 的路径上限 255 字符，超了整个落盘会抛 ENOENT。 */
+const MAX_ARTIFACT_NAME_LENGTH = 60
 
 function argsOf(args: unknown): Record<string, unknown> {
   return typeof args === 'object' && args !== null ? (args as Record<string, unknown>) : {}
@@ -81,10 +83,14 @@ export function createScaffoldTool(deps: {
   return {
     name: SCAFFOLD_TOOL_NAME,
     description: [
-      '把定稿的方案落成一个能打开的项目骨架：',
-      '在工作区 projects/<项目名>/ 下写 README.md、PLAN.md、TODO.md 和首个页面 index.html，',
-      '同时把任务清单逐条写进当前会话的待办（用户能在聊天页右侧看到并打勾）。',
-      '方案想清楚了才调用它——每个项目只落一次，重复调用会覆盖同名目录。',
+      '把定稿的结果落成文件：',
+      '先看用户要的到底是什么形态，再按形态给字段——**填错字段会被挡回来，不会被悄悄丢掉**：',
+      '· app（一个能打开的小程序）：readme / plan（方案正文）/ page（那个 HTML 页面）；',
+      '· doc（一份文档：方案、报告、邮件）：content 放正文，artifactName 给文件名；',
+      '· sheet（一张表或清单）：content 放 CSV，artifactName 给文件名；',
+      '· flow（一个以后照着做的流程）：content 放步骤，artifactName 给文件名。',
+      '不管哪种形态，任务清单都会逐条写进当前会话的待办（用户能在聊天页右侧看到并打勾）。',
+      '形态想清楚了才调用它——每个项目只落一次，重复调用会覆盖同名目录。',
       '只在这一次 RyVibe 里用；普通聊天不要调用它。',
     ].join(''),
     parameters: {
@@ -111,15 +117,15 @@ export function createScaffoldTool(deps: {
         },
         plan: {
           type: 'string',
-          description: '完整方案正文（Markdown）；不给就只写项目名、说明与任务清单。',
+          description: 'app 形态的方案正文（Markdown）；其他形态别填这个。',
         },
         page: {
           type: 'string',
-          description: '首个页面的完整 HTML；不给就生成一个能打开的骨架页。',
+          description: 'app 形态的页面 HTML；其他形态别填这个。',
         },
         deliverable: {
           type: 'string',
-          enum: ['app', 'doc', 'sheet', 'flow'],
+          enum: [...DELIVERABLE_KINDS],
           description:
             '用户到底要个什么东西：app=一个能打开的小程序，doc=一份文档（方案/报告/邮件），sheet=一张表或清单，flow=一个以后照着做的流程。按你问到的「最后要的东西是个什么」给，别一律当软件。',
         },
@@ -189,14 +195,31 @@ export function createScaffoldTool(deps: {
       if (content !== undefined && content.length > MAX_DOC_LENGTH) {
         return failure(`交付物正文太长了（${content.length} 字，上限 ${MAX_DOC_LENGTH}）。`)
       }
+      if (artifactName !== undefined && artifactName.length > MAX_ARTIFACT_NAME_LENGTH) {
+        return failure(`交付物文件名最多 ${MAX_ARTIFACT_NAME_LENGTH} 字，说短一点。`)
+      }
+      // **形态与字段对不上就说出来**：静默丢掉正文是最坏的一种失败——用户拿到一个
+      // 空骨架，回执还说"已落盘"，他不会知道自己的内容没了。
+      const kind: DeliverableKind =
+        deliverable === undefined || deliverable.length === 0 ? 'app' : (deliverable as DeliverableKind)
+      if (kind === 'app') {
+        if (content !== undefined && content.length > 0) {
+          return failure('app 形态不收 content：那个 HTML 页面放 page，方案正文放 plan。')
+        }
+      } else {
+        if ((page !== undefined && page.length > 0) || (plan !== undefined && plan.length > 0)) {
+          return failure(`${kind} 形态不写页面和方案：正文放 content，文件名放 artifactName。`)
+        }
+        if (content === undefined || content.length === 0) {
+          return failure(`${kind} 形态要把正文给出来：正文放 content（sheet 用 CSV，其余用 Markdown）。`)
+        }
+      }
       const project = scaffoldProject({
         workspaceRoot: deps.workspaceRoot,
         name,
         summary,
         tasks,
-        ...(deliverable === undefined || deliverable.length === 0
-          ? {}
-          : { deliverable: deliverable as DeliverableKind }),
+        ...(deliverable === undefined || deliverable.length === 0 ? {} : { deliverable: kind }),
         ...(artifactName === undefined || artifactName.length === 0 ? {} : { artifactName }),
         ...(content === undefined || content.length === 0 ? {} : { content }),
         ...(readme === undefined || readme.length === 0 ? {} : { readme }),

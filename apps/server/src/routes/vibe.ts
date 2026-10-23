@@ -7,7 +7,7 @@
  *    （skill 注入系统提示）与盘问工具（见 server 的 skillContext / extraTools 装配）。
  * 3. 小队看完需求：需求够清楚就直接出方案；不够清楚就**盘问**——每题带选项，
  *    用户点一下就是答案（见 plugins/grill-me.ts）。
- * 4. 用户点完，这轮收口，小队继续；两轮之内必须给方案。
+ * 4. 用户点完，这轮收口，小队继续；问完这一轮就该给方案。
  *
  * 页面不订阅 WS：它轮询 {@link GET /api/vibe/:id} 拿「现在问到哪、还差几个答案、
  * 方案出来没有」。这比把整条对话搬进一个页面简单得多，也让「一句话进、一份方案出」
@@ -21,6 +21,7 @@ import { QuestionError, type QuestionStore } from '../plugins/ask-user-store.ts'
 import { GRILL_ME_SKILL_ID } from '../plugins/skills.ts'
 import type { TodoItem, TodoStore } from '../plugins/todo-store.ts'
 import { HttpRequestError, json, type Router, strField } from '../router.ts'
+import type { DeliverableKind } from '../vibe/project.ts'
 import {
   MAX_REQUIREMENT_LENGTH,
   MAX_ROUNDS,
@@ -53,11 +54,13 @@ export interface VibeRoutesDeps {
   isTurnActive: (conversationId: string) => boolean
 }
 
-/** 落盘的项目骨架（页面据此显示「项目已生成」）。 */
+/** 落盘的项目骨架（页面据此显示形态、预览文件）。 */
 export interface VibeProjectView {
   name: string
   /** 目录名（slug）。 */
   slug: string
+  /** 产物形态：app / doc / sheet / flow。 */
+  kind: DeliverableKind
   /** 项目目录的绝对路径。 */
   dir: string
   /** 写出去的文件。 */
@@ -250,8 +253,10 @@ function summaryOf(
 ): string {
   const head = skipped ? '就按你们的默认方案来，不用再问了。' : '我选好了，按这些继续。'
   const lines = answered.map((entry) => {
-    const choice =
-      entry.selected !== undefined && entry.selected.length > 0 ? entry.selected.join('、') : (entry.answer ?? '')
+    // 自己写的字优先于选项：用户写在题下面的那句话才是他要的答案，顺手勾着的
+    // 那个选项只是预选，不该盖掉他写的内容。
+    const own = entry.answer?.trim() ?? ''
+    const choice = own.length > 0 ? own : (entry.selected ?? []).join('、')
     return `· ${entry.question} → ${choice}`
   })
   return lines.length === 0 ? head : [head, ...lines].join('\n')
@@ -309,6 +314,7 @@ export function registerVibeRoutes(router: Router, deps: VibeRoutesDeps): void {
             project: {
               name: session.project.name,
               slug: session.project.slug,
+              kind: session.project.kind,
               dir: session.project.dir,
               files: session.project.files.map((file) => {
                 return { name: file.name, size: file.size }
@@ -488,7 +494,9 @@ export function registerVibeRoutes(router: Router, deps: VibeRoutesDeps): void {
       if (text.trim().length === 0 && (item.selected === undefined || item.selected.length === 0)) {
         throw new HttpRequestError(400, '选一个，或者自己写一句', 'VIBE_BAD_ANSWER')
       }
-      const answer = item.selected === undefined || item.selected.length === 0 ? text : item.selected.join('、')
+      // **自己写的字优先于选项**：用户在题下面写了话，那个字就是他真正要的答案；
+      // 顺手勾着的那个选项只是预选，不该盖掉他写的内容。
+      const answer = text.trim().length > 0 ? text.trim() : (item.selected ?? []).join('、')
       try {
         await questions.answer(item.questionId, {
           text: answer,

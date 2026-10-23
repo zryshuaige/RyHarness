@@ -17,7 +17,7 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import type { VibeProject, VibeProjectFile } from './project.ts'
+import type { DeliverableKind, VibeProject, VibeProjectFile } from './project.ts'
 
 /**
  * 一次 RyVibe 的状态。
@@ -146,6 +146,9 @@ function parseProject(value: unknown): VibeProject | undefined {
   if (typeof dir !== 'string' || dir.length === 0) return undefined
   if (typeof createdAt !== 'number' || !Number.isFinite(createdAt)) return undefined
   if (!Array.isArray(files)) return undefined
+  // 形态是后加的字段：老存档里没有，按 app 认（旧存档只有软件形态这一种可能）。
+  const kind: DeliverableKind =
+    value.kind === 'doc' || value.kind === 'sheet' || value.kind === 'flow' ? value.kind : 'app'
   const parsed: VibeProjectFile[] = []
   for (const raw of files) {
     if (!isRecord(raw)) continue
@@ -155,7 +158,7 @@ function parseProject(value: unknown): VibeProject | undefined {
     if (typeof size !== 'number' || !Number.isFinite(size)) continue
     parsed.push({ name: fileName, path, size })
   }
-  return { name, slug, dir, files: parsed, createdAt }
+  return { name, slug, kind, dir, files: parsed, createdAt }
 }
 
 /** 临时文件名序号：同一毫秒内两次写也要落在不同文件上。 */
@@ -267,9 +270,9 @@ export class VibeStore {
   /**
    * 问一道新题之前先占一个名额。
    *
-   * 返回 false 表示**这一轮已经问够了**（或已经问满两轮）：调用方据此拒绝这次
-   * 提问，模型就会停手去做别的事。计数与写入在同一条队列里，六位 agent 并发调用
-   * 时也只会有前两个算数。
+   * 返回 false 表示**这一轮已经问够了**（一轮最多四题，且只问一轮）：调用方据此拒绝
+   * 这次提问，模型就会停手去做别的事。计数与写入在同一条队列里，六位 agent 并发调用
+   * 时也只会有前几个算数。
    *
    * 之所以先占名额再落问题：提问存储里没有「删掉一道题」这个动作，先记后判会留下
    * 一道用户其实不该看到的题。

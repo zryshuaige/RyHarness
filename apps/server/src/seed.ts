@@ -175,8 +175,13 @@ export const AGENT_TEMPLATES: Readonly<Record<string, AgentTemplate>> = {
   },
 }
 
-/** 模板 agent 与用户自建 agent 共用的默认路由（与 instantiateTemplate 一致）。 */
-const DEFAULT_PROVIDER = 'siliconflow'
+/**
+ * 模板 agent 与用户自建 agent 共用的默认路由（与 instantiateTemplate 一致）。
+ *
+ * 它同时是「这是种子默认值、不是用户挑的」的判据：用户改过的 agent 路由不再
+ * 等于它（见 provider-routing.ts 的 retargetBuiltinAgents）。
+ */
+export const SEED_DEFAULT_PROVIDER = 'siliconflow'
 
 /**
  * 首启小队里除 Ryen 之外的成员。id 固定：重复启动只会覆盖同一条记录。
@@ -244,7 +249,7 @@ export function ensureSeedAgents(
       name: template.name,
       ...(template.avatar === undefined ? {} : { avatar: template.avatar }),
       systemPrompt: template.suggestedSystemPrompt,
-      provider: DEFAULT_PROVIDER,
+      provider: SEED_DEFAULT_PROVIDER,
       model: template.defaultModel,
       tools: [...template.defaultTools],
       persona: template.persona,
@@ -275,7 +280,7 @@ export function instantiateTemplate(
       ? {}
       : { avatar: overrides.avatar ?? template.avatar }),
     systemPrompt: overrides.systemPrompt ?? template.suggestedSystemPrompt,
-    provider: overrides.provider ?? DEFAULT_PROVIDER,
+    provider: overrides.provider ?? SEED_DEFAULT_PROVIDER,
     model: overrides.model ?? template.defaultModel,
     tools: overrides.tools ?? [...template.defaultTools],
     // 人格按字段覆盖模板：用户调过的四个维度不该被模板默认值盖回去。

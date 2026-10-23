@@ -76,6 +76,25 @@ function agentFieldOverrides(
   return overrides
 }
 
+/**
+ * 改完之后，这条路由算不算「用户自己挑的」。
+ *
+ * 只有**真的换了** provider / model 才算：助理编辑表单会把整张表单原样 PATCH 回来，
+ * 也就是说改个名字也会带着 provider 一起发上来——那一次并没有「挑路由」的意思，
+ * 要是照样锁上，用户给别家配好凭据之后这位内置助理就再也不跟着走了。
+ *
+ * 已经锁着的保持锁着（服务器自动搬过的那次不算锁）。
+ */
+function routeLockedAfterEdit(
+  existing: { provider: string; model: string; routeLocked?: boolean },
+  overrides: Partial<Omit<AgentDefinition, 'id' | 'isBuiltin'>>,
+): boolean {
+  if (existing.routeLocked === true) return true
+  const providerChanged = overrides.provider !== undefined && overrides.provider !== existing.provider
+  const modelChanged = overrides.model !== undefined && overrides.model !== existing.model
+  return providerChanged || modelChanged
+}
+
 /** 人格字段：按 partial 收，类型不对抛 400。归一在存储层做（缺字段按旧值/默认值补）。 */
 function personaOverrides(value: unknown): Partial<AgentPersona> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -160,6 +179,9 @@ export function registerAgentRoutes(router: Router, deps: AgentRoutes): void {
       ...definition,
       ...(persona === undefined ? {} : { persona }),
       isBuiltin: false,
+      // 用户自己建（或从模板实例化）的助理，路由是他挑的：标成「手动挑过」，
+      // 以后服务器不会拿「跟着用户刚配好的那家走」的规则去动它。
+      routeLocked: true,
     })
     json(res, 201, { agent: stored })
   })
@@ -186,6 +208,9 @@ export function registerAgentRoutes(router: Router, deps: AgentRoutes): void {
       agent: store.upsertAgent({
         ...merged,
         ...(overrides.persona === undefined ? {} : { persona: { ...existing.persona, ...overrides.persona } }),
+        // 手动改过 provider / model = 用户自己挑了这条路由，标上锁：以后用户再给别家
+        // 配好凭据，内置助理那条「跟着走」的规则就不该把这位的选择改回去。
+        routeLocked: routeLockedAfterEdit(existing, overrides),
       }),
     })
   })

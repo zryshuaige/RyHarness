@@ -18,6 +18,7 @@ import { errorDetail, humanError } from '../lib/error-text.ts'
 import { formatSize } from '../lib/format.ts'
 import { humanMime } from '../lib/humanize.ts'
 import { HTML_PREVIEW_MAX_BYTES, needsTextBody, previewKindOf } from '../lib/preview.ts'
+import { CsvTable } from './CsvTable.tsx'
 import { Icon } from './Icon.tsx'
 import { Markdown } from './Markdown.tsx'
 
@@ -188,6 +189,10 @@ function PreviewBody({
         <Markdown text={text} />
       </div>
     )
+  }
+  // CSV 当表看：用 `<pre>` 打出来是一屏逗号，用户得自己数列。
+  if (kind === 'table') {
+    return <CsvTable content={text} />
   }
   if (kind === 'external') {
     return <p className="attach-preview-none">这种格式不能内嵌预览。用右上角的动作把它交给系统程序，或下载下来再看。</p>

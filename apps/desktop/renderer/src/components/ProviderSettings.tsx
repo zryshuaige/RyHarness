@@ -63,6 +63,7 @@ import {
   removedModelIds,
 } from '../lib/provider-health.ts'
 import { providerLetterBg, providerLogo } from '../lib/provider-logos.ts'
+import { presetSummary } from '../lib/provider-presets.ts'
 import { toast } from '../lib/toast.ts'
 import { ConfirmDialog } from './ConfirmDialog.tsx'
 import { Icon } from './Icon.tsx'
@@ -1275,12 +1276,6 @@ function ProviderForm({
       </div>
     </form>
   )
-}
-
-/** 预设副标题：协议 + 推荐模型数。免 key 的协议直说，免得以为点进去还要填 key。 */
-function presetSummary(preset: ProviderPreset): string {
-  if (isKeylessProtocol(preset.protocol)) return `${protocolLabel(preset.protocol)} · 免 key`
-  return `${protocolLabel(preset.protocol)} · ${preset.models.length} 个模型`
 }
 
 /** 添加向导：第一步预设网格（含「自定义」），第二步表单。 */

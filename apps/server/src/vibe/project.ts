@@ -18,8 +18,8 @@
  * @module @ryharness/server/vibe/project
  */
 
-import { mkdirSync, statSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { extname, join } from 'node:path'
 import { resolveInWorkspace } from '@ryharness/tools'
 
 /** 项目统一落在工作区下的这个子目录里。 */
@@ -50,6 +50,13 @@ export interface VibeProject {
   name: string
   /** 目录名（slug）。 */
   slug: string
+  /**
+   * 产物形态。
+   *
+   * 落库而不只是存在当次响应里：页面要说得清「这是个软件还是一张表」，重落盘也要
+   * 知道上一形态是什么、该清掉哪些残留。
+   */
+  kind: DeliverableKind
   /** 项目目录的绝对路径。 */
   dir: string
   /** 写出去的文件。 */
@@ -63,9 +70,13 @@ export type DeliverableKind = 'app' | 'doc' | 'sheet' | 'flow'
 /** 允许的形态（入参校验用）。 */
 export const DELIVERABLE_KINDS: readonly DeliverableKind[] = ['app', 'doc', 'sheet', 'flow']
 
-/** 各形态的默认交付物文件名（不含扩展名）。 */
-const DEFAULT_ARTIFACT_NAME: Record<DeliverableKind, string> = {
-  app: '首个页面',
+/**
+ * 各形态的默认交付物文件名（不含扩展名）。
+ *
+ * 只有非 app 形态有「交付物」这个角色——app 形态的交付物就是那个 HTML 页面，名字固定
+ * 成 `index.html`。
+ */
+const DEFAULT_ARTIFACT_NAME: Record<Exclude<DeliverableKind, 'app'>, string> = {
   doc: '交付物',
   sheet: '清单',
   flow: '流程',
@@ -202,7 +213,7 @@ export function renderReadme(input: ScaffoldInput): string {
 }
 
 /** 交付物的文件名（含扩展名）。 */
-function artifactFileName(input: ScaffoldInput, kind: DeliverableKind): string {
+function artifactFileName(input: ScaffoldInput, kind: Exclude<DeliverableKind, 'app'>): string {
   const base = input.artifactName?.trim() ?? ''
   const cleaned = base.replace(/[\\/:*?"<>|]/gu, '').trim()
   const name = cleaned.length === 0 ? DEFAULT_ARTIFACT_NAME[kind] : cleaned
@@ -325,6 +336,10 @@ ${items}
  *
  * 同一项目重复落盘会覆盖同名目录里的同名文件：RyVibe 的重试与「改一版再来」
  * 走的都是这条路，覆盖正是想要的行为（不该每次都留一份 `记账工具-2`）。
+ *
+ * **换形态重落盘时会清掉上一形态的残留**：同一个项目名先落成 app、再落成 sheet，
+ * 目录里不该同时躺着 `index.html`（上一形态的）与 `开支表.csv`（这一形态的）——
+ * 界面上只列本次的文件，用户打开文件夹看到多出来的两个，只会觉得落盘坏了。
  */
 export function scaffoldProject(input: ScaffoldInput): VibeProject {
   const slug = slugOf(input.name)
@@ -344,6 +359,10 @@ export function scaffoldProject(input: ScaffoldInput): VibeProject {
           { name: 'TODO.md', content: renderTodo(input) },
           { name: artifactFileName(input, kind), content: renderArtifact(input, kind) },
         ]
+  removeStaleArtifacts(
+    dir,
+    documents.map((document) => document.name),
+  )
   const files: VibeProjectFile[] = []
   for (const document of documents) {
     const path = join(dir, document.name)
@@ -353,8 +372,39 @@ export function scaffoldProject(input: ScaffoldInput): VibeProject {
   return {
     name: input.name.trim(),
     slug,
+    kind,
     dir,
     files,
     createdAt: Date.now(),
+  }
+}
+
+/**
+ * 清掉上一形态留下的文件。
+ *
+ * 只删**本次不产出、且是我们自己会产出的那类文件**（.md / .csv / .html）：
+ * - 限定在项目目录的**直接子文件**：用户自己放进去的东西不碰。
+ * - 限定扩展名：源码、图片、数据文件一律不碰。
+ * - 删失败只记一笔：清理是锦上添花，删不掉不该让整轮落盘失败。
+ */
+function removeStaleArtifacts(dir: string, keep: readonly string[]): void {
+  const kept = new Set(keep)
+  let entries: string[] = []
+  try {
+    entries = readdirSync(dir)
+  } catch {
+    return
+  }
+  for (const entry of entries) {
+    if (kept.has(entry)) continue
+    const ext = extname(entry).toLowerCase()
+    if (ext !== '.md' && ext !== '.csv' && ext !== '.html') continue
+    try {
+      const full = join(dir, entry)
+      if (!statSync(full).isFile()) continue
+      rmSync(full, { force: true })
+    } catch {
+      // 删不掉就留着：下一次落盘会覆盖同名文件，残留顶多是多一个文件。
+    }
   }
 }

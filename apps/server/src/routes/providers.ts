@@ -22,6 +22,7 @@ import {
   saveApiKey,
   writeProvidersConfig,
 } from '../config.ts'
+import type { RetargetedAgent } from '../provider-routing.ts'
 import { HttpRequestError, json, type Router } from '../router.ts'
 
 /** 供应商路由的依赖。 */
@@ -38,9 +39,10 @@ export interface ProviderRoutes {
    * 刚给某家配好凭据之后叫一声（可选）。
    *
    * 内置助理的默认路由要跟着用户挑的那家走：此前写死硅基流动，用户配了别家也
-   * 用不了。组合根在这里接上「把还指着没凭据的内置助理切过去」。
+   * 用不了。组合根在这里接上「把还指着没凭据的内置助理切过去」，并把切了谁回给
+   * 界面——静默改掉用户助理的模型，用户是看不见的。
    */
-  onProviderConfigured?: (providerId: string) => void
+  onProviderConfigured?: (providerId: string) => RetargetedAgent[]
 }
 
 /** POST /api/providers 的入参（校验后）。 */
@@ -769,8 +771,12 @@ export function registerProviderRoutes(router: Router, deps: ProviderRoutes): vo
       },
     })
     // 助理的默认路由跟着用户挑的那家走（组合根负责真正改 agents 表）。
-    deps.onProviderConfigured?.(providerId)
-    json(res, 201, { provider: providerInfo(providerId, deps.providers.providers[providerId] as ProviderConfig, []) })
+    // 切了谁一并回给界面：静默改掉用户助理的模型，用户是看不见的。
+    const retargeted = deps.onProviderConfigured?.(providerId) ?? []
+    json(res, 201, {
+      provider: providerInfo(providerId, deps.providers.providers[providerId] as ProviderConfig, []),
+      retargeted,
+    })
   })
 
   /**

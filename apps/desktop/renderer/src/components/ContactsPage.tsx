@@ -8,13 +8,11 @@ import {
   useState,
 } from 'react'
 import type { AgentDef, AgentPersona, AgentTemplate, ApiClient, ProviderInfo } from '../api.ts'
-import { builtinBadge } from '../lib/agents.ts'
 import { isPortraitKey, PORTRAITS, portraitOf } from '../lib/brand-portraits.ts'
 import { humanError } from '../lib/error-text.ts'
-import { modelPair, providerLabel } from '../lib/humanize.ts'
+import { providerLabel } from '../lib/humanize.ts'
 import { catalogFromProvider, groupModels, modelMeta, modelTitle } from '../lib/model-catalog.ts'
 import {
-  affinityTier,
   birthdayFromInput,
   birthdayInputValue,
   clampTrait,
@@ -56,6 +54,7 @@ import { Avatar3D } from './avatars/Avatar3D.tsx'
 import { AVATAR_STYLE_BY_KEY, AVATAR_STYLES, BRAND_AVATAR, dicebearSvg, randomAvatarSpec } from './avatars/avatars.tsx'
 import { Cat } from './Cat.tsx'
 import { ConfirmDialog } from './ConfirmDialog.tsx'
+import { ContactCard, type ContactCardHandlers } from './ContactCard.tsx'
 import { GroupSettingsModal } from './GroupSettingsModal.tsx'
 import { Icon, type IconName } from './Icon.tsx'
 import { Modal } from './Modal.tsx'
@@ -93,15 +92,6 @@ interface FaceOption {
   /** 有值 = DiceBear 风格格（走本地生成 SVG），无值 = 走 <Avatar>（品牌与立绘）。 */
   styleKey?: string
 }
-
-/**
- * 卡片操作行贴底。
- *
- * 卡片是 flex 列，而按钮行前面的文字行数不定：同一排三张卡的「发消息」能差 18px。
- * `.contact-actions` 的固定 margin-top 治不了这个（它按内容高度算，不按卡片高度），
- * 这里改用 auto 把按钮行推到卡片底部——grid 同行等高，于是三张卡自动对齐。
- */
-const cardActionsStyle: CSSProperties = { marginTop: 'auto' }
 
 /** 分区小标题：图标 + 层次名 + 一句「为什么值得动它」，右侧可以挂一个动作。 */
 function SectionTitle({
@@ -564,6 +554,15 @@ export function ContactsPage({
     }
   }, [])
   const voicePlayback = useVoicePlayback(voicePlayer)
+  /**
+   * 点击回调装进一个稳定的 ref。
+   *
+   * 卡片是 memo 组件，props 全是稳定引用时才会跳过重画。父级每次渲染都重建
+   * `onChat` / `onEditAgent` / `onDeleteAgent`，直接当 props 传下去的话浅比较永远
+   * 不成立——点一下「试听」，语音状态一变，三十张卡就一起重画一遍。
+   */
+  const handlers = useRef<ContactCardHandlers['current']>({ onChat, onEditAgent, onDeleteAgent })
+  handlers.current = { onChat, onEditAgent, onDeleteAgent }
   /** 正在出声的那张卡片（key 形如 agent-voice-<id>）。 */
   const speakingAgentId =
     voicePlayback.status === 'speaking' && voicePlayback.key?.startsWith('agent-voice-') === true
@@ -625,106 +624,15 @@ export function ContactsPage({
                   <p className="contact-prompt">从模板开始，挑头像、定人设</p>
                 </button>
                 {sorted.map((agent, index) => {
-                  // 存量 agent 没有 persona 字段，读出来按默认人格渲染，卡片才不会空白。
-                  const persona = normalizePersona(agent.persona)
-                  const badge = builtinBadge(agent)
-                  const speaking = speakingAgentId === agent.id
-                  const hasVoice = persona.voiceId !== NO_VOICE_ID
                   return (
-                    <article key={agent.id} className="contact-card" style={stagger(index + 1)}>
-                      <Avatar3D avatarKey={agent.avatar} name={agent.name} seed={agent.id} size={56} tilt />
-                      <h3>
-                        {agent.name}
-                        {badge !== undefined && <span className="badge">{badge}</span>}
-                      </h3>
-                      {/* 模型标识是开发者单位：直接上屏是「siliconflow / deepseek-ai/DeepSeek-V3」，
-                          走 humanize 的统一口径。 */}
-                      <p className="contact-model">{modelPair(agent.provider, agent.model)}</p>
-                      {/* 性格四条：这位助理什么脾气，一眼看完，比一句话省事。
-                          每条给「档位名」而不只是数字——「自来熟」比「外向 72」好懂。 */}
-                      <dl className="contact-traits">
-                        {TRAIT_META.map((meta) => {
-                          const score = clampTrait(persona[meta.key])
-                          return (
-                            <div key={meta.key} className="contact-trait">
-                              <dt>{meta.label}</dt>
-                              <dd>
-                                <span className="contact-trait-bar" aria-hidden="true">
-                                  <span style={{ width: `${score}%` }} />
-                                </span>
-                                <span className="contact-trait-value">{traitBand(meta, score).label}</span>
-                              </dd>
-                            </div>
-                          )
-                        })}
-                      </dl>
-                      {/* 口头禅：他常挂在嘴边的那句话，比系统提示更能让人记住这位是谁。 */}
-                      {persona.catchphrase.length > 0 && (
-                        <p className="contact-catchphrase">「{persona.catchphrase}」</p>
-                      )}
-                      <p className="provider-note">
-                        亲密度 {persona.affinity}/100 · {affinityTier(persona.affinity).label}
-                      </p>
-                      <div className="contact-actions" style={cardActionsStyle}>
-                        <button
-                          type="button"
-                          className="btn btn-primary"
-                          onClick={() => {
-                            onChat(agent.id)
-                          }}
-                        >
-                          发消息
-                        </button>
-                        {/* 听听他：每位助理都有自己的音色，念一句他自己的口头禅。
-                            音色是这位的「声音」，放在卡片上才看得见、也才用得上。 */}
-                        <button
-                          type="button"
-                          className="btn contact-voice"
-                          disabled={!hasVoice}
-                          title={hasVoice ? `听听 ${agent.name} 的声音` : '这位还没选音色（编辑里能选）'}
-                          onClick={() => {
-                            if (voicePlayer === undefined) return
-                            if (speaking) {
-                              voicePlayer.stop()
-                              return
-                            }
-                            const text = persona.catchphrase.length > 0 ? persona.catchphrase : `我是${agent.name}。`
-                            void voicePlayer.speak({
-                              text,
-                              profileId: persona.voiceId,
-                              key: `agent-voice-${agent.id}`,
-                            })
-                          }}
-                        >
-                          <Icon name={speaking ? 'square' : 'volume-2'} size={14} />
-                          {speaking ? '停止' : '听听'}
-                        </button>
-                        {/* 内置 agent 只锁删除（服务端本来就 409），不锁编辑：
-                            Ryen 是这个家里唯一一位一直在用的助理，把它钉死在出厂模型上
-                            等于让用户连换个便宜模型都得绕开产品。改完能存住，靠的是
-                            服务端「种子只补缺、不覆盖」那条，不是界面上的假象。 */}
-                        <button
-                          type="button"
-                          className="btn"
-                          onClick={() => {
-                            onEditAgent(agent)
-                          }}
-                        >
-                          编辑
-                        </button>
-                        {!agent.isBuiltin && (
-                          <button
-                            type="button"
-                            className="btn btn-danger"
-                            onClick={() => {
-                              onDeleteAgent(agent)
-                            }}
-                          >
-                            删除
-                          </button>
-                        )}
-                      </div>
-                    </article>
+                    <ContactCard
+                      key={agent.id}
+                      agent={agent}
+                      index={index}
+                      speaking={speakingAgentId === agent.id}
+                      voicePlayer={voicePlayer}
+                      handlers={handlers}
+                    />
                   )
                 })}
               </div>

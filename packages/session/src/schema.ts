@@ -11,7 +11,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import { bigrams, messageSearchText } from './fts.ts'
 
 /** 当前 schema 版本；每次变更表结构时 +1 并追加迁移函数。 */
-export const SCHEMA_VERSION = 10
+export const SCHEMA_VERSION = 11
 
 /** 版本 1：初始表结构。 */
 function migrateV1(db: DatabaseSync): void {
@@ -206,6 +206,29 @@ function migrateV10(db: DatabaseSync): void {
   db.exec('ALTER TABLE conversations ADD COLUMN deleted_at INTEGER')
 }
 
+/**
+ * 版本 11：agents 增加 route_locked —— 「这条路由是用户自己挑的，别自动改」。
+ *
+ * 内置助理的供应商会在用户配好新 key 时自动跟着走（见 apps/server 的
+ * provider-routing.ts）。要判断「当前这条路由是系统自动指的，还是用户手动挑的」，
+ * 光看 provider 字段是看不出来的：自动搬过一次之后，provider 已经不等于种子
+ * 默认值了，于是那位助理从此再也不会跟着走——哪怕它现在指着的这家已经没凭据、
+ * 用户也已经配好了别家，它会一直卡在「没有凭据」上。
+ *
+ * 这一列把「谁决定的」记下来：用户手动改过路由 → 置 1，服务器此后不再动它；
+ * 系统自动搬的保持 0，下一次仍然能跟着走。存量行一律 0（= 没被用户手动锁过）。
+ */
+function migrateV11(db: DatabaseSync): void {
+  const columns = db.prepare('PRAGMA table_info(agents)').all() as { name: string }[]
+  if (
+    columns.some((column) => {
+      return column.name === 'route_locked'
+    })
+  )
+    return
+  db.exec('ALTER TABLE agents ADD COLUMN route_locked INTEGER NOT NULL DEFAULT 0')
+}
+
 /** 全部迁移：索引即目标版本。新增迁移只追加，不改动既有条目。 */
 export const MIGRATIONS: Readonly<Record<number, (db: DatabaseSync) => void>> = {
   1: migrateV1,
@@ -218,6 +241,7 @@ export const MIGRATIONS: Readonly<Record<number, (db: DatabaseSync) => void>> = 
   8: migrateV8,
   9: migrateV9,
   10: migrateV10,
+  11: migrateV11,
 }
 
 function userVersion(db: DatabaseSync): number {

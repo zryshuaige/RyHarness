@@ -5,6 +5,7 @@
 
 import type { ProvidersConfigFile } from '../config.ts'
 import { deleteApiKey, loadApiKeys, mergeApiKeys, saveApiKey } from '../config.ts'
+import type { RetargetedAgent } from '../provider-routing.ts'
 import { json, type Router } from '../router.ts'
 
 /** 设置路由的依赖。 */
@@ -22,7 +23,7 @@ export interface SettingsRoutes {
    * 内置助理的默认路由要跟着用户挑的那家走：此前写死硅基流动，用户配了别家也
    * 用不了。组合根在这里接上「把还指着没凭据的内置助理切过去」。
    */
-  onProviderConfigured?: (providerId: string) => void
+  onProviderConfigured?: (providerId: string) => RetargetedAgent[]
 }
 
 /** 设置路由：API key 凭据与工作区。 */
@@ -53,8 +54,8 @@ export function registerSettingsRoutes(router: Router, deps: SettingsRoutes): vo
     const merged = mergeApiKeys(deps.providers, loadApiKeys(dataDir))
     refreshProviders(merged)
     // 助理的默认路由跟着用户挑的那家走（组合根负责真正改 agents 表）。
-    deps.onProviderConfigured?.(providerId)
-    json(res, 200, { providerId, configured: true })
+    const retargeted = deps.onProviderConfigured?.(providerId) ?? []
+    json(res, 200, { providerId, configured: true, retargeted })
   })
 
   /**

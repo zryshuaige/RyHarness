@@ -124,6 +124,16 @@ export interface ProviderPreset {
   baseUrl: string
   /** 推荐模型 id 列表。 */
   models: string[]
+  /**
+   * 「给新用户用的那一档」：助理改绑到这家时默认用它，而不是列表第一条。
+   *
+   * 为什么不能盲取第一条：每家列表的第一档不一定是新用户能用的——
+   * Moonshot 的 kimi-k3 需先充值解锁（赠送的代金券不适用，用赠送额度建的 key
+   * 调它直接 404 / 无权限）；智谱的 glm-5.3 思考程度默认 max（每轮都慢一截）；
+   * OpenRouter 头两档是旗舰价（$4/$20 与 $10/$50 每百万）。改绑是服务端静默做的，
+   * 用户看不见这一层，于是「跟着走」就等于「跟着最贵或用不了的那档走」。
+   */
+  defaultModel?: string
   /** 官网/文档链接（UI 上「去官网申请 API Key」）。 */
   docsUrl?: string
   /**
@@ -211,6 +221,8 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     models: SILICONFLOW_MODELS.map((model) => {
       return model.id
     }),
+    // 列表第一档（DeepSeek-V4-Flash）本身就是给新用户的那档。
+    defaultModel: 'deepseek-ai/DeepSeek-V4-Flash',
     docsUrl: 'https://docs.siliconflow.cn/cn/userguide/quickstart',
     // SiliconFlow 是聚合网关，其文档未承诺 reasoning_effort 的透传行为；不声明，
     // 用户不会看到一个可能静默失效的控件。
@@ -222,6 +234,8 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     baseUrl: 'https://api.deepseek.com',
     // deepseek-flash 即 DeepSeek-V4.1-Flash（2026-10 升级后模型名不变）；pro 是旗舰。
     models: ['deepseek-flash', 'deepseek-v4-pro'],
+    // flash 那一档：新用户默认它（旗舰 pro 留给要旗舰的人自己从下拉里选）。
+    defaultModel: 'deepseek-flash',
     docsUrl: 'https://api-docs.deepseek.com/zh-cn/',
     // DeepSeek 官方文档明确 reasoning_effort（low/medium/high）作用于推理模型。
     reasoningControl: 'effort',
@@ -248,6 +262,9 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     // 256K，即 262_144。
     // 海外站是 platform.kimi.ai / api.moonshot.ai，两站 Key 不可混用，跨站要改 baseUrl。
     models: ['kimi-k3', 'kimi-k2.7-code', 'kimi-k2.7-code-highspeed', 'kimi-k2.6'],
+    // kimi-k3 要先充值解锁（赠送的代金券不适用），k2.7-code 恒开思考且不能关；
+    // 给新用户默认 k2.6——它是这一族里唯一能用 thinking.type 在开/关之间切的。
+    defaultModel: 'kimi-k2.6',
     docsUrl: 'https://platform.kimi.com/docs/models',
     // Kimi 官方文档：顶层 reasoning_effort + thinking.type 开关都认，关思考用 disabled。
     reasoningControl: 'thinking-adaptive',
@@ -280,6 +297,9 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     // 订阅 / 额度限制：glm-5.3-flashx 官方标注「套餐当前暂未开放」，只能按量付费，
     // 所以排在同代普通档之后；glm-4.7-flash 是当前唯一免费的文本模型，但限 1 并发。
     models: ['glm-5.3', 'glm-5.3-flash', 'glm-5.3-flashx', 'glm-5.2', 'glm-4.7-flash'],
+    // 同代的普通档（5.3-flash）：5.3 思考默认 max 太慢，5.3-flashx 官方标注套餐未开放，
+    // 4.7-flash 是唯一免费的但限 1 并发。glm-5.2 还能关思考，留给想关的人自己选。
+    defaultModel: 'glm-5.3-flash',
     docsUrl: 'https://docs.bigmodel.cn/cn/guide/start/model-overview',
     // 智谱《深度思考》文档：GLM-5.x 的 thinking.type 只接受 enabled，档位走 reasoning_effort；
     // 只有 glm-5.2 还认 disabled，所以只发 reasoning_effort、不发 thinking 更安全。
@@ -295,6 +315,8 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     // MiniMax Code 订阅 Key」，按量 Key 调它会失败——所以放在后面并在此注明。
     // M2.5 / M2.7 已公告 2026-11-18 下线，不再收录。
     models: ['MiniMax-M3', 'MiniMax-M3.1-Flash-Preview'],
+    // M3 是按量可调的那档；M3.1-Flash-Preview 只认订阅 Key，按量 Key 调它会失败。
+    defaultModel: 'MiniMax-M3',
     docsUrl: 'https://platform.minimaxi.com/document/Models',
     // MiniMax OpenAI 兼容文档：reasoning_effort（low/medium/high/xhigh/max，仅 M3.1 生效）
     // 与 thinking.type（adaptive/disabled）都认。M3.1 收到 disabled 会 400（官方码 2013），
@@ -337,6 +359,9 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
       'google/gemini-4-argon',
       'google/gemini-3.8-flash',
     ],
+    // 便宜快的那一档（haiku）：默认给旗舰价（$4/$20 每百万）不是个好主意，
+    // 用户刚配好 key 时跑的是自己付钱的每一轮。
+    defaultModel: 'anthropic/claude-haiku-5.5',
     docsUrl: 'https://openrouter.ai/models',
     // OpenRouter 的 API 参考把 reasoning 列为统一参数并直通各上游。不声明等于
     // 让用户永远调不了思考深度，而它是 OpenRouter 最有用的统一能力之一。
@@ -375,6 +400,9 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     // Responses API，所以这两条只有纯对话可用。留在同一个下拉框里不加说明，用户按
     // 「最新最强」选下去，会在第一次工具调用上撞到 400。
     models: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-6-luna', 'gpt-6.1-sol'],
+    // GPT-5.6 全系在 Chat Completions 上能直接调工具（GPT-6 两条不支持工具调用），
+    // 所以给新用户的默认档在 5.6 这一族里。
+    defaultModel: 'gpt-5.6-sol',
     docsUrl: 'https://developers.openai.com/api/docs/models',
     // OpenAI reasoning 指南：reasoning_effort 是标准字段。注意 GPT-6.1 不接受 none/
     // minimal，所以目录里只给 low/medium/high 这三档。

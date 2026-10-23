@@ -3,7 +3,7 @@
  * RyVibe 页面：一句话进、点几下选项、出一份方案。
  *
  * 断言的是**用户真的只需要这两下动作**：说一句话 → 选一次提交。中间任何一步需要
- * 用户填表、点「下一步」、或者等两轮，这个页面的承诺就破了。
+ * 用户填表、点「下一步」、或者等第二轮，这个页面的承诺就破了。
  */
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -76,6 +76,7 @@ function must<T>(node: T | null | undefined, what: string): T {
 const project: VibeProjectView = {
   name: '记账工具',
   slug: '记账工具',
+  kind: 'app',
   dir: 'C:\\data\\workspace\\projects\\记账工具',
   files: [
     { name: 'README.md', size: 120 },
@@ -168,6 +169,18 @@ function typeInto(textarea: HTMLTextAreaElement, value: string): void {
   act(() => {
     setter.call(textarea, value)
     textarea.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+}
+
+/** 往 input 里打字（React 受控输入要走原生 setter）。 */
+function typeIntoInput(input: HTMLInputElement, value: string): void {
+  const setter = must(
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set,
+    'input.value 的原生 setter',
+  )
+  act(() => {
+    setter.call(input, value)
+    input.dispatchEvent(new Event('input', { bubbles: true }))
   })
 }
 
@@ -336,7 +349,82 @@ describe('RyVibe 页面', () => {
       must(container.querySelector<HTMLButtonElement>('.vibe-file'), 'README.md 按钮').click()
     })
     await settle()
-    expect(container.querySelector('.vibe-preview-text')?.textContent).toContain('# 记账工具')
+    // Markdown 渲染成文档，而不是把 `# 记账工具` 这行源码倒出来。
+    expect(container.querySelector('.vibe-preview-doc h1')?.textContent).toBe('记账工具')
+  })
+
+  it('表形态：预览摆成表格，形态也写在项目名旁边', async () => {
+    const sheetProject: VibeProjectView = {
+      name: '本月开支',
+      slug: '本月开支',
+      kind: 'sheet',
+      dir: 'C:\\data\\workspace\\projects\\本月开支',
+      files: [
+        { name: 'README.md', size: 120 },
+        { name: 'TODO.md', size: 80 },
+        { name: '清单.csv', size: 64 },
+      ],
+      createdAt: 0,
+    }
+    const withSheet: VibeSessionView = { ...session, status: 'done', project: sheetProject }
+    const api = stub({
+      session: withSheet,
+      sessions: [withSheet],
+      files: { '清单.csv': '项目,金额\n房租,1200\n吃饭,380' },
+    })
+    render(api)
+    await settle()
+    expect(container.querySelector('.vibe-project-kind')?.textContent).toBe('表格')
+    const csv = [...container.querySelectorAll<HTMLButtonElement>('.vibe-file')].find((button) => {
+      return button.textContent === '清单.csv'
+    })
+    await act(async () => {
+      must(csv, '清单.csv 按钮').click()
+    })
+    await settle()
+    // 表就是表：几行几列摆成格子，而不是一屏逗号。
+    const cells = [...container.querySelectorAll('.artifact-table th, .artifact-table td')].map((cell) => {
+      return cell.textContent
+    })
+    expect(cells).toEqual(['项目', '金额', '房租', '1200', '吃饭', '380'])
+  })
+
+  it('答完也能改：提交后卡片还在，「改一下」点得到', async () => {
+    const api = stub({ questions })
+    render(api)
+    typeInto(must(container.querySelector<HTMLTextAreaElement>('.vibe-input'), '.vibe-input'), '做个记账工具')
+    await act(async () => {
+      must(container.querySelector<HTMLButtonElement>('.vibe-start'), '.vibe-start').click()
+    })
+    await settle()
+    await act(async () => {
+      must(container.querySelector<HTMLButtonElement>('.vibe-card-submit'), '.vibe-card-submit').click()
+    })
+    await settle()
+    // 答错了要能回去改：卡片不能从 DOM 上消失，「改一下」也不能是空气。
+    expect(container.querySelector('.vibe-card')).not.toBeNull()
+    expect(container.querySelector('.vibe-card-edit')).not.toBeNull()
+    expect(container.textContent).toContain('你已经选好了')
+  })
+
+  it('每题能自己写一句：写了字的那题按写的交，不按预选项', async () => {
+    const api = stub({ questions })
+    render(api)
+    typeInto(must(container.querySelector<HTMLTextAreaElement>('.vibe-input'), '.vibe-input'), '做个记账工具')
+    await act(async () => {
+      must(container.querySelector<HTMLButtonElement>('.vibe-start'), '.vibe-start').click()
+    })
+    await settle()
+    const own = must(container.querySelector<HTMLInputElement>('.vibe-own-answer'), '.vibe-own-answer')
+    typeIntoInput(own, '我们公司内部用')
+    await act(async () => {
+      must(container.querySelector<HTMLButtonElement>('.vibe-card-submit'), '.vibe-card-submit').click()
+    })
+    await settle()
+    const call = api.answerVibe.mock.calls.at(-1)
+    expect(call?.[1].answers[0]).toEqual({ questionId: 'q1', selected: [], text: '我们公司内部用' })
+    // 没写字的那题照旧交选项。
+    expect(call?.[1].answers[1]).toEqual({ questionId: 'q2', selected: ['1 屏'] })
   })
 
   it('任务清单能勾：勾完就发给待办', async () => {

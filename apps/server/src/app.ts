@@ -1223,7 +1223,7 @@ export class RyHarnessServer {
       },
       verifyTimeoutMs: this.verifyTimeoutMs,
       onProviderConfigured: (providerId) => {
-        retargetBuiltinAgents(store, this.providers, providerId)
+        return retargetBuiltinAgents(store, this.providers, providerId)
       },
     })
 
@@ -1235,7 +1235,7 @@ export class RyHarnessServer {
       },
       workspaceRoot: this.workspaceRoot,
       onProviderConfigured: (providerId) => {
-        retargetBuiltinAgents(store, this.providers, providerId)
+        return retargetBuiltinAgents(store, this.providers, providerId)
       },
     })
 

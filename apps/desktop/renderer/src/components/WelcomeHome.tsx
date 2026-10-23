@@ -4,7 +4,13 @@ import { authedFetch } from '../lib/authed-fetch.ts'
 import { useApiBase } from '../lib/boot.ts'
 import { humanError } from '../lib/error-text.ts'
 import { humanPreview, LOCAL_DATA_NOTE } from '../lib/humanize.ts'
-import { firstProviderMissingKey, hasUsableProvider, missingProviderHint } from '../lib/provider-health.ts'
+import {
+  firstProviderMissingKey,
+  hasUsableProvider,
+  isKeylessProtocol,
+  missingProviderHint,
+} from '../lib/provider-health.ts'
+import { presetSummary } from '../lib/provider-presets.ts'
 import { markConversationRemoved, markConversationRestored } from '../lib/removed-conversations.ts'
 import { toast } from '../lib/toast.ts'
 import { AsyncState } from './AsyncState.tsx'
@@ -189,6 +195,8 @@ export function WelcomeHome({
   const [key, setKey] = useState('')
   const [saving, setSaving] = useState(false)
   const [keyError, setKeyError] = useState<string | undefined>(undefined)
+  /** 免 key 的协议（本地 Ollama）：它压根没有 key 可填，硬要一个就是死胡同。 */
+  const keyless = pickedPreset !== undefined && isKeylessProtocol(pickedPreset.protocol)
   /** 首屏草稿：任务卡填词、用户改词都在这里，发送后才清空。 */
   const [draft, setDraft] = useState('')
   /** 去向：默认只跟 Ryen 聊——用户没选「小队」之前，不替他把消息群发。 */
@@ -376,6 +384,7 @@ export function WelcomeHome({
                         >
                           <ProviderIcon id={preset.id} name={preset.displayName} size={36} />
                           <span className="provider-preset-name">{preset.displayName}</span>
+                          <span className="provider-preset-sub">{presetSummary(preset)}</span>
                         </button>
                       )
                     })}
@@ -384,50 +393,79 @@ export function WelcomeHome({
               ) : (
                 <>
                   <p className="apikey-title">
-                    {pickedPreset === undefined ? '先填一个 API Key' : `填 ${pickedPreset.displayName} 的 key`}
+                    {pickedPreset === undefined
+                      ? '先填一个 API Key'
+                      : keyless
+                        ? `${pickedPreset.displayName} 不用 key`
+                        : `填 ${pickedPreset.displayName} 的 key`}
                   </p>
                   {pickedPreset !== undefined || unconfigured !== undefined ? (
                     <>
                       <p className="apikey-hint">
-                        {pickedPreset === undefined
-                          ? `还没有配置 ${unconfigured?.displayName ?? ''} 的凭据，聊天会用不了。`
-                          : '存在本机的密钥库里，不写进任何配置文件。'}
+                        {keyless
+                          ? '本地模型服务不用 key：先把 Ollama 跑起来（ollama serve），这里检测到就直接能聊。'
+                          : pickedPreset === undefined
+                            ? `还没有配置 ${unconfigured?.displayName ?? ''} 的凭据，聊天会用不了。`
+                            : '存在本机的密钥库里，不写进任何配置文件。'}
                       </p>
-                      <div className="apikey-row">
-                        <input
-                          type="password"
-                          value={key}
-                          placeholder={`${pickedPreset?.displayName ?? unconfigured?.displayName ?? ''} API Key`}
-                          autoComplete="off"
-                          aria-label={`${pickedPreset?.displayName ?? unconfigured?.displayName ?? ''} API Key`}
-                          onChange={(e) => {
-                            setKey(e.target.value)
-                          }}
-                        />
+                      {keyless ? (
                         <button
                           type="button"
                           className="btn btn-primary"
-                          disabled={saving || key.trim().length === 0}
+                          disabled={saving}
                           onClick={() => {
-                            if (pickedPreset === undefined && unconfigured === undefined) return
+                            if (pickedPreset === undefined) return
                             setSaving(true)
                             setKeyError(undefined)
-                            const task =
-                              pickedPreset !== undefined && onSaveProviderKey !== undefined
-                                ? onSaveProviderKey(pickedPreset, key.trim())
-                                : onSaveApiKey((pickedPreset ?? unconfigured)?.id ?? '', key.trim())
-                            task
-                              .catch((error: unknown) => {
-                                setKeyError(humanError(error, '这条 Key 没存下来，再点一次保存。'))
+                            const task = onSaveProviderKey?.(pickedPreset, '')
+                            void task
+                              ?.catch((error: unknown) => {
+                                setKeyError(humanError(error, '这一家没加上，再点一次。'))
                               })
                               .finally(() => {
                                 setSaving(false)
                               })
                           }}
                         >
-                          {saving ? '保存中' : '保存'}
+                          {saving ? '正在检测…' : '我已启动 Ollama，接上它'}
                         </button>
-                      </div>
+                      ) : (
+                        <div className="apikey-row">
+                          <input
+                            type="password"
+                            value={key}
+                            placeholder={`${pickedPreset?.displayName ?? unconfigured?.displayName ?? ''} API Key`}
+                            autoComplete="off"
+                            aria-label={`${pickedPreset?.displayName ?? unconfigured?.displayName ?? ''} API Key`}
+                            onChange={(e) => {
+                              setKey(e.target.value)
+                            }}
+                          />
+                          <button
+                            type="button"
+                            className="btn btn-primary"
+                            disabled={saving || key.trim().length === 0}
+                            onClick={() => {
+                              if (pickedPreset === undefined && unconfigured === undefined) return
+                              setSaving(true)
+                              setKeyError(undefined)
+                              const task =
+                                pickedPreset !== undefined && onSaveProviderKey !== undefined
+                                  ? onSaveProviderKey(pickedPreset, key.trim())
+                                  : onSaveApiKey((pickedPreset ?? unconfigured)?.id ?? '', key.trim())
+                              task
+                                .catch((error: unknown) => {
+                                  setKeyError(humanError(error, '这条 Key 没存下来，再点一次保存。'))
+                                })
+                                .finally(() => {
+                                  setSaving(false)
+                                })
+                            }}
+                          >
+                            {saving ? '保存中' : '保存'}
+                          </button>
+                        </div>
+                      )}
                       {keyError !== undefined && <p className="apikey-error">{keyError}</p>}
                       {pickedPreset !== undefined && (
                         <button

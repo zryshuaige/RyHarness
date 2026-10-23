@@ -24,6 +24,12 @@ export interface StoredAgent {
    */
   persona: AgentPersona
   isBuiltin: boolean
+  /**
+   * 路由是否被用户手动锁住：true = 用户自己挑的这条 provider/model，服务器
+   * 不再自动改（内置助理的供应商默认跟着用户刚配好的那家走，见 apps/server 的
+   * provider-routing.ts）。没锁过时为 false。
+   */
+  routeLocked?: boolean
   createdAt: number
   updatedAt: number
 }
