@@ -20,7 +20,7 @@ import { ApiClient } from '../renderer/src/api.ts'
 import { ChatView } from '../renderer/src/components/ChatView.tsx'
 import { ContactsPage, CreateAgentModal } from '../renderer/src/components/ContactsPage.tsx'
 import { RightPanel } from '../renderer/src/components/RightPanel.tsx'
-import { composePersonaPrompt, normalizePersona, personaSummary } from '../renderer/src/lib/persona.ts'
+import { composePersonaPrompt, normalizePersona } from '../renderer/src/lib/persona.ts'
 import { resetVoiceCatalogCache, type VoiceCatalog, VoicePlayer } from '../renderer/src/lib/voice.ts'
 import { bucketOf, ChatStore } from '../renderer/src/store.ts'
 import {
@@ -704,9 +704,12 @@ describe('通讯录卡片', () => {
     />,
   )
 
-  it('摘要显示人格分档 + 亲密度档位，而不是原始 system prompt 的前 48 字', () => {
-    expect(html).toContain(personaSummary(vividPersona))
-    expect(html).toContain('自来熟 · 一丝不苟 · 贫嘴 · 很主动 · 挚友')
+  it('卡片上给性格档位 + 亲密度档位，而不是原始 system prompt 的前 48 字', () => {
+    // 性格做成四条小条：每条带自己的档位名——「自来熟」比「外向 92」好懂。
+    expect(html).toContain('contact-traits')
+    for (const label of ['自来熟', '一丝不苟', '贫嘴', '很主动']) {
+      expect(html).toContain(label)
+    }
     expect(html).toContain('亲密度 92/100 · 挚友')
     // 旧写法把 systemPrompt.slice(0, 48) 直接摆上卡片。
     expect(html).not.toContain('你是住在通讯录里的助理。')
@@ -718,7 +721,7 @@ describe('通讯录卡片', () => {
     expect(html).not.toContain('siliconflow / ')
   })
 
-  it('存量 agent（没有 persona）也有摘要，不留空白', () => {
+  it('存量 agent（没有 persona）也有性格条，不留空白', () => {
     const legacy = renderToStaticMarkup(
       <ContactsPage
         agents={[{ ...vividAgent, persona: undefined }]}
@@ -730,7 +733,9 @@ describe('通讯录卡片', () => {
         onCreateGroup={() => {}}
       />,
     )
-    expect(legacy).toContain(personaSummary(normalizePersona(undefined)))
+    expect(legacy).toContain('contact-traits')
+    // 默认人格的档位名（外向 50 → 适中）。
+    expect(legacy).toContain('适中')
   })
 })
 

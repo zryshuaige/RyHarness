@@ -62,7 +62,7 @@ import {
   rememberProviderHealth,
   removedModelIds,
 } from '../lib/provider-health.ts'
-import { PROVIDER_LETTER_BG, providerLogo } from '../lib/provider-logos.ts'
+import { providerLetterBg, providerLogo } from '../lib/provider-logos.ts'
 import { toast } from '../lib/toast.ts'
 import { ConfirmDialog } from './ConfirmDialog.tsx'
 import { Icon } from './Icon.tsx'
@@ -179,7 +179,7 @@ export function ProviderIcon({ id, name, size = 36 }: { id?: string; name: strin
     <span className="provider-logo" style={{ width: size, height: size }} aria-hidden="true">
       {/* biome-ignore lint/a11y/noSvgWithoutTitle: 纯装饰字母标，外层 span 已 aria-hidden */}
       <svg viewBox="0 0 36 36" width={size} height={size}>
-        <rect width="36" height="36" rx="10" fill={PROVIDER_LETTER_BG} />
+        <rect width="36" height="36" rx="10" fill={providerLetterBg(id)} />
         <text x="18" y="24" textAnchor="middle" fontSize="16" fontWeight="600" fill="#FFFDF8">
           {letter}
         </text>

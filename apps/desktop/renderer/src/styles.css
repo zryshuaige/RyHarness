@@ -1405,6 +1405,25 @@ button.tool-row:disabled { cursor: default; }
 .contact-card h3 { margin: 0; font-size: var(--fs-md); }
 .contact-model { color: var(--text-secondary); font-size: var(--fs-xs); margin: 0; }
 .contact-prompt { color: var(--text-secondary); font-size: var(--fs-xs); margin: 0; min-height: 34px; line-height: 1.5; }
+
+/* 性格四条：这位助理什么脾气，一眼看完。
+   给「档位名」而不只给数字——「自来熟」比「外向 72」好懂，数字只是那根条的宽度。 */
+.contact-traits { margin: var(--space-2) 0 0; display: grid; gap: 4px; width: 100%; }
+.contact-trait { display: grid; grid-template-columns: 30px 1fr; align-items: center; gap: var(--space-2); }
+.contact-trait dt { color: var(--text-tertiary); font-size: var(--fs-xs); text-align: left; }
+.contact-trait dd { margin: 0; display: flex; align-items: center; gap: 6px; min-width: 0; }
+.contact-trait-bar {
+  flex: 1; min-width: 0; height: 4px; border-radius: 999px;
+  background: var(--hover-bg); overflow: hidden;
+}
+.contact-trait-bar > span { display: block; height: 100%; border-radius: 999px; background: var(--amber-primary); }
+.contact-trait-value { flex: none; color: var(--text-secondary); font-size: var(--fs-xs); }
+
+/* 口头禅：他常挂在嘴边的那句话——比系统提示更能让人记住这位是谁。 */
+.contact-catchphrase {
+  margin: var(--space-2) 0 0; color: var(--text-secondary);
+  font-size: var(--fs-xs); font-style: italic; line-height: 1.5;
+}
 .contact-card .btn { margin-top: var(--space-2); }
 /* 空位卡：常态不抬升（--bg-subtle 上那层发丝环只是把这一格标成「还没建」），
    hover 才真的升到卡片档。虚线已经退场——虚线与实线描边在这套语言里表达的是同一件事，

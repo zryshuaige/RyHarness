@@ -21,20 +21,6 @@ RyHarness 还年轻，改动很快。**会有破坏兼容性的变更。** 升�
 
 ## 跑起来
 
-### 直接下载（Windows）
-
-发布页给三种版本。便携版 exe 什么都不用装：
-
-| 文件 | 大小 | 你要做的 |
-|---|---|---|
-| `RyHarness-portable.exe` | 117 MB | 双击就行。不安装、不解压。 |
-| `RyHarness-win-x64.zip` | 149 MB | 解压一次，以后双击里面的 `RyHarness.exe`，启动更快。 |
-| `RyHarness Setup 0.1.0.exe` | 118 MB | 常规安装包，想要就装。 |
-
-三个都不写注册表、不装服务。数据放在 `%APPDATA%\RyHarness\ryharness-data\`。
-
-### 从源码跑
-
 需要 Node `^22.19` 或 `>=24`（持久化用的是内置的 `node:sqlite`）、pnpm 11。
 
 ```sh
@@ -113,10 +99,6 @@ pnpm verify                                 # 五道发布门禁
 - [docs/plugins.md](docs/plugins.md) —— 插件怎么写
 - [docs/performance.md](docs/performance.md) —— 时间花在哪
 - [CHANGELOG.md](CHANGELOG.md) —— 改了什么，为什么改
-
-## 参与贡献
-
-见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 许可证
 

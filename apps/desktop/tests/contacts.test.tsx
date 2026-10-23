@@ -92,6 +92,63 @@ const agents: AgentDef[] = [
 ]
 
 describe('通讯录', () => {
+  it('卡片上看得见这位的脾气与声音：四条性格、口头禅、试听键', () => {
+    const vivid: AgentDef = {
+      id: 'mine',
+      name: '小译',
+      avatar: 'db:dylan:seed1',
+      systemPrompt: '你是翻译官，专精中英互译。',
+      provider: 'siliconflow',
+      model: 'deepseek-ai/DeepSeek-V3',
+      tools: ['fs_read'],
+      isBuiltin: false,
+      persona: {
+        extroversion: 88,
+        rigor: 60,
+        humor: 30,
+        initiative: 55,
+        catchphrase: '这事我来安排。',
+        affinity: 30,
+        voiceId: 'sf-cosyvoice2-claire',
+        appearance: '',
+      },
+    }
+    const html = renderToStaticMarkup(
+      <ContactsPage
+        agents={[vivid]}
+        templates={templates}
+        onChat={() => {}}
+        onCreateAgent={() => {}}
+        onEditAgent={() => {}}
+        onDeleteAgent={() => {}}
+        onCreateGroup={() => {}}
+      />,
+    )
+    // 性格四条都在，档位名比数字好懂
+    expect(html).toContain('contact-traits')
+    expect(html).toContain('自来熟')
+    // 口头禅：他常挂在嘴边的那句话
+    expect(html).toContain('这事我来安排。')
+    // 声音：卡片上就能试听，不用先去编辑弹窗
+    expect(html).toContain('contact-voice')
+    expect(html).toContain('听听')
+  })
+
+  it('没有音色的助理：试听键禁用并说明去哪儿选', () => {
+    const html = renderToStaticMarkup(
+      <ContactsPage
+        agents={agents}
+        templates={templates}
+        onChat={() => {}}
+        onCreateAgent={() => {}}
+        onEditAgent={() => {}}
+        onDeleteAgent={() => {}}
+        onCreateGroup={() => {}}
+      />,
+    )
+    expect(html).toContain('这位还没选音色')
+  })
+
   it('模板轨把 templateKey 传给新建回调（此前点"翻译"也开通用助理表单）', () => {
     const onCreateAgent = vi.fn()
     const html = renderToStaticMarkup(

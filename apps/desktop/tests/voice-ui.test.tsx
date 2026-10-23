@@ -167,7 +167,7 @@ describe('气泡朗读键', () => {
       />,
     )
     expect(agentHtml).toContain('aria-label="朗读这条消息"')
-    expect(agentHtml).toContain('speaker')
+    expect(agentHtml).toContain('volume-2')
 
     const userHtml = renderToStaticMarkup(
       <MessageBubble

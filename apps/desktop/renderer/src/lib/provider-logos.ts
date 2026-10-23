@@ -67,6 +67,23 @@ export function providerLogo(id: string | undefined): string | undefined {
 export const PROVIDER_LETTER_BG = '#8A7F72'
 
 /**
+ * 个别供应商的兜底底色：按它自己的品牌色垫。
+ *
+ * OpenAI 的标识因商标原因不能随包分发（Simple Icons 已下架、官网也拒绝跨站引用），
+ * 所以那一格只能首字母。但用中性灰会变成一排彩色标识里最突兀的一块，改用它自己的
+ * 品牌绿之后，一眼能对上是谁——底色是它家的绿，字是它家的 O。
+ */
+const LETTER_BG_BY_ID: Readonly<Record<string, string>> = Object.freeze({
+  openai: '#10A37F',
+})
+
+/** 首字母兜底的底色：这家有品牌色就用品牌色，否则用中性灰。 */
+export function providerLetterBg(id: string | undefined): string {
+  if (id === undefined) return PROVIDER_LETTER_BG
+  return LETTER_BG_BY_ID[id] ?? PROVIDER_LETTER_BG
+}
+
+/**
  * 怎么加一家新供应商的 logo
  *
  * 1. 从 Simple Icons 取图形（`https://cdn.simpleicons.org/<slug>`，CC0）；

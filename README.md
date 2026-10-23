@@ -28,23 +28,7 @@ directory before you upgrade.
 
 ## Run it
 
-### Grab a build (Windows)
-
-Releases ship three ways. The portable `.exe` needs no install at all:
-
-| File | Size | What you do |
-|---|---|---|
-| `RyHarness-portable.exe` | 117 MB | Double-click it. Nothing to install, nothing to unpack. |
-| `RyHarness-win-x64.zip` | 149 MB | Unzip once, then double-click `RyHarness.exe`. Starts faster. |
-| `RyHarness Setup 0.1.0.exe` | 118 MB | A normal installer, if you want one. |
-
-None of them write to the registry or install a service. Your data goes to
-`%APPDATA%\RyHarness\ryharness-data\`.
-
-### From source
-
-Needs Node `^22.19` or `>=24` (persistence uses the built-in `node:sqlite`) and
-pnpm 11.
+Needs Node `^22.19` or `>=24` (persistence uses the built-in `node:sqlite`) and pnpm 11.
 
 ```sh
 git clone https://github.com/zryshuaige/RyHarness.git
@@ -130,10 +114,6 @@ all checked against the repository, and a mismatch fails the build.
 - [docs/plugins.md](docs/plugins.md) — writing a plugin
 - [docs/performance.md](docs/performance.md) — where the time goes
 - [CHANGELOG.md](CHANGELOG.md) — what changed, and why
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

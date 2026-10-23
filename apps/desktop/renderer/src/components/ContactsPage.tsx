@@ -549,6 +549,26 @@ export function ContactsPage({
     if (b.id === 'ryen') return 1
     return a.name.localeCompare(b.name)
   })
+  /**
+   * 试听用的播放器：按 API 地址共享的单例（队列与「正在播哪一个」必须是全局状态，
+   * 卡片各自 new 一个会同时开口）。
+   *
+   * 它创建时要读 window 里的 API 地址，所以无 DOM 的环境（单测的静态渲染）拿不到
+   * ——就地跳过，卡片上的试听随之不可用，而不是让整页在渲染期就炸。
+   */
+  const voicePlayer = useMemo(() => {
+    try {
+      return voicePlayerFor()
+    } catch {
+      return undefined
+    }
+  }, [])
+  const voicePlayback = useVoicePlayback(voicePlayer)
+  /** 正在出声的那张卡片（key 形如 agent-voice-<id>）。 */
+  const speakingAgentId =
+    voicePlayback.status === 'speaking' && voicePlayback.key?.startsWith('agent-voice-') === true
+      ? voicePlayback.key.slice('agent-voice-'.length)
+      : undefined
   return (
     <section className="page">
       <header className="page-header">
@@ -608,6 +628,8 @@ export function ContactsPage({
                   // 存量 agent 没有 persona 字段，读出来按默认人格渲染，卡片才不会空白。
                   const persona = normalizePersona(agent.persona)
                   const badge = builtinBadge(agent)
+                  const speaking = speakingAgentId === agent.id
+                  const hasVoice = persona.voiceId !== NO_VOICE_ID
                   return (
                     <article key={agent.id} className="contact-card" style={stagger(index + 1)}>
                       <Avatar3D avatarKey={agent.avatar} name={agent.name} seed={agent.id} size={56} tilt />
@@ -618,8 +640,28 @@ export function ContactsPage({
                       {/* 模型标识是开发者单位：直接上屏是「siliconflow / deepseek-ai/DeepSeek-V3」，
                           走 humanize 的统一口径。 */}
                       <p className="contact-model">{modelPair(agent.provider, agent.model)}</p>
-                      {/* 卡片摘要给性格而不是原始人设：第一眼要看的是"这位助理什么脾气"。 */}
-                      <p className="contact-prompt">{personaSummary(persona)}</p>
+                      {/* 性格四条：这位助理什么脾气，一眼看完，比一句话省事。
+                          每条给「档位名」而不只是数字——「自来熟」比「外向 72」好懂。 */}
+                      <dl className="contact-traits">
+                        {TRAIT_META.map((meta) => {
+                          const score = clampTrait(persona[meta.key])
+                          return (
+                            <div key={meta.key} className="contact-trait">
+                              <dt>{meta.label}</dt>
+                              <dd>
+                                <span className="contact-trait-bar" aria-hidden="true">
+                                  <span style={{ width: `${score}%` }} />
+                                </span>
+                                <span className="contact-trait-value">{traitBand(meta, score).label}</span>
+                              </dd>
+                            </div>
+                          )
+                        })}
+                      </dl>
+                      {/* 口头禅：他常挂在嘴边的那句话，比系统提示更能让人记住这位是谁。 */}
+                      {persona.catchphrase.length > 0 && (
+                        <p className="contact-catchphrase">「{persona.catchphrase}」</p>
+                      )}
                       <p className="provider-note">
                         亲密度 {persona.affinity}/100 · {affinityTier(persona.affinity).label}
                       </p>
@@ -632,6 +674,30 @@ export function ContactsPage({
                           }}
                         >
                           发消息
+                        </button>
+                        {/* 听听他：每位助理都有自己的音色，念一句他自己的口头禅。
+                            音色是这位的「声音」，放在卡片上才看得见、也才用得上。 */}
+                        <button
+                          type="button"
+                          className="btn contact-voice"
+                          disabled={!hasVoice}
+                          title={hasVoice ? `听听 ${agent.name} 的声音` : '这位还没选音色（编辑里能选）'}
+                          onClick={() => {
+                            if (voicePlayer === undefined) return
+                            if (speaking) {
+                              voicePlayer.stop()
+                              return
+                            }
+                            const text = persona.catchphrase.length > 0 ? persona.catchphrase : `我是${agent.name}。`
+                            void voicePlayer.speak({
+                              text,
+                              profileId: persona.voiceId,
+                              key: `agent-voice-${agent.id}`,
+                            })
+                          }}
+                        >
+                          <Icon name={speaking ? 'square' : 'volume-2'} size={14} />
+                          {speaking ? '停止' : '听听'}
                         </button>
                         {/* 内置 agent 只锁删除（服务端本来就 409），不锁编辑：
                             Ryen 是这个家里唯一一位一直在用的助理，把它钉死在出厂模型上
@@ -1062,7 +1128,7 @@ function PersonaEditor({
               title={selectedVoice === undefined ? '先选一个可以朗读的音色' : undefined}
               onClick={onPreviewVoice}
             >
-              <Icon name={voicePreviewSpeaking ? 'square' : 'speaker'} size={16} />
+              <Icon name={voicePreviewSpeaking ? 'square' : 'volume-2'} size={16} />
               {voicePreviewSpeaking ? '停止' : '试听'}
             </button>
           </span>

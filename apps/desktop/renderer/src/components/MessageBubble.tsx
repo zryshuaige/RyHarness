@@ -633,7 +633,7 @@ function MessageBubbleInner({
                   onVoiceToggle?.(message)
                 }}
               >
-                <Icon name={voiceSpeaking ? 'square' : 'speaker'} size={16} />
+                <Icon name={voiceSpeaking ? 'square' : 'volume-2'} size={16} />
               </button>
             </>
           )}

@@ -52,6 +52,7 @@ import rawThumbsDown from '../assets/lucide/thumbs-down.svg?raw'
 import rawThumbsUp from '../assets/lucide/thumbs-up.svg?raw'
 import rawUser from '../assets/lucide/user.svg?raw'
 import rawUsers from '../assets/lucide/users.svg?raw'
+import rawVolume2 from '../assets/lucide/volume-2.svg?raw'
 import rawX from '../assets/lucide/x.svg?raw'
 
 /**
@@ -107,8 +108,10 @@ export const ICONS = {
   'arrow-up': bodyOf(rawArrowUp),
   'arrow-up-right': bodyOf(rawArrowUpRight),
   crown: bodyOf(rawCrown),
-  // 朗读：speaker = 开始朗读，square = 播放中的停止键。
+  // 朗读：volume-2 = 开始朗读（喇叭 + 声波），square = 播放中的停止键。
+  // 另有一个 speaker（硬件音箱的图形）留给语音插件——它是「一台音箱」，不是「发声」。
   speaker: bodyOf(rawSpeaker),
+  'volume-2': bodyOf(rawVolume2),
   square: bodyOf(rawSquare),
   // 独立「插件」页签：能力由一块块插件拼起来，图形比插头/齿轮更贴切。
   blocks: bodyOf(rawBlocks),

@@ -37,11 +37,11 @@ Electron 自带的 Chromium / V8 / Node.js 属于第四类：**我方没有选�
 
 | 资产 | 来源 | License | 用途 |
 |---|---|---|---|
-| Lucide 图标（<!-- notice:icons.count -->35<!-- /notice --> 个） | [lucide-static](https://lucide.dev) v<!-- notice:icons.version -->1.55.0<!-- /notice --> | <!-- notice:license.lucideStatic -->**ISC**<!-- /notice --> | UI chrome 全部图标（`renderer/src/assets/lucide/`，经 `scripts/gen-lucide-icons.mjs` 从 npm 包拷入并入库） |
+| Lucide 图标（<!-- notice:icons.count -->36<!-- /notice --> 个） | [lucide-static](https://lucide.dev) v<!-- notice:icons.version -->1.55.0<!-- /notice --> | <!-- notice:license.lucideStatic -->**ISC**<!-- /notice --> | UI chrome 全部图标（`renderer/src/assets/lucide/`，经 `scripts/gen-lucide-icons.mjs` 从 npm 包拷入并入库） |
 | DiceBear 头像（<!-- notice:avatars.styles -->2<!-- /notice --> 个家族） | [@dicebear/core + @dicebear/collection](https://dicebear.com) v9 | 框架 **MIT**；风格许可见下 | agent 头像（本地 SVG 生成，无网络请求） |
 
 入库图标（`renderer/src/assets/lucide/` 目录下逐个扫描，缺一个就说明登记表与目录脱节）：
-<!-- notice:icons.list -->alert、arrow-up、arrow-up-right、at-sign、blocks、brain、calendar-days、chat-bubble、check、chevron-left、chevron-right、clipboard-list、copy、crown、dices、ellipsis、file、gear、group、mail、moon、panel-right、pencil、plus、search、send、sparkles、speaker、square、sun、thumbs-down、thumbs-up、user、users、x<!-- /notice -->
+<!-- notice:icons.list -->alert、arrow-up、arrow-up-right、at-sign、blocks、brain、calendar-days、chat-bubble、check、chevron-left、chevron-right、clipboard-list、copy、crown、dices、ellipsis、file、gear、group、mail、moon、panel-right、pencil、plus、search、send、sparkles、speaker、square、sun、thumbs-down、thumbs-up、user、users、volume-2、x<!-- /notice -->
 
 全站只有 Lucide 这一套线性图标库（24 网格、线宽 2、圆角线帽、`currentColor`，
 尺寸只有 16 / 20 / 24 三档），登记表在 `renderer/src/components/Icon.tsx`，资产与
@@ -143,7 +143,7 @@ electron-builder 按依赖图收集的也算。
 |---|---|---|---|
 | sharp | <!-- notice:build.sharp -->0.35.5<!-- /notice --> | <!-- notice:license.sharp -->**Apache-2.0**<!-- /notice --> | `gen:icon.mjs` 的栅格化（缩放、圆角遮罩、PNG 编码） |
 | png-to-ico | <!-- notice:build.pngToIco -->3.0.2<!-- /notice --> | <!-- notice:license.pngToIco -->**MIT**<!-- /notice --> | `gen-icon.mjs` 合成 Windows 多尺寸 `icon.ico` |
-| lucide-static | <!-- notice:icons.version -->1.55.0<!-- /notice --> | <!-- notice:license.lucideStatic -->**ISC**<!-- /notice --> | 拷出 <!-- notice:icons.count -->35<!-- /notice --> 个 SVG 入库（产物进分发物，署名见「第三方图形资源」） |
+| lucide-static | <!-- notice:icons.version -->1.55.0<!-- /notice --> | <!-- notice:license.lucideStatic -->**ISC**<!-- /notice --> | 拷出 <!-- notice:icons.count -->36<!-- /notice --> 个 SVG 入库（产物进分发物，署名见「第三方图形资源」） |
 | vite · @vitejs/plugin-react | <!-- notice:build.vite -->6.4.4<!-- /notice --> / <!-- notice:build.pluginReact -->5.2.0<!-- /notice --> | MIT | 渲染层构建 |
 | tsdown · typescript | <!-- notice:build.tsdown -->0.22.14<!-- /notice --> / <!-- notice:build.typescript -->6.0.3<!-- /notice --> | MIT / <!-- notice:license.typescript -->**Apache-2.0**<!-- /notice --> | 主进程与工作区包构建 |
 | electron-builder | <!-- notice:build.electronBuilder -->26.17.0<!-- /notice --> | <!-- notice:license.electronBuilder -->**MIT**<!-- /notice --> | 打包 |
