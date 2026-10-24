@@ -17,6 +17,7 @@
 
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import type { Conversation, SessionStore, StoredMessage } from '@ryharness/session'
+import { normalizePersona } from '@ryharness/session'
 import { QuestionError, type QuestionStore } from '../plugins/ask-user-store.ts'
 import { GRILL_ME_SKILL_ID } from '../plugins/skills.ts'
 import type { TodoItem, TodoStore } from '../plugins/todo-store.ts'
@@ -74,8 +75,8 @@ export interface VibeSessionView {
   conversationId: string
   requirement: string
   skillId: string
-  /** 小队成员（id + 名字）。 */
-  squad: { id: string; name: string }[]
+  /** 小队成员（id + 名字 + 形象 + 性格）。 */
+  squad: VibeSquadMemberView[]
   createdAt: number
   /** 现在到哪一步了。 */
   status: VibeStatus
@@ -91,6 +92,23 @@ export interface VibeSessionView {
   error?: string
   /** 落盘的项目骨架；没有就是还没落盘。 */
   project?: VibeProjectView
+}
+
+/**
+ * 小队里的一位成员。
+ *
+ * 除了 id 与名字，还带上**形象**与**性格**：
+ * - 形象：页面上要把"谁在问 / 谁在说"画出来，光有名字就只能写一行文字；
+ * - 性格：头像动效的幅度与节奏由性格四维决定（见渲染层的 lib/avatar-motion.ts），
+ *   同一个助理动起来什么样，得由服务端把这份事实送过去。
+ */
+export interface VibeSquadMemberView {
+  id: string
+  name: string
+  /** 形象字段（立绘 / 立体动物 / 品牌猫）。 */
+  avatar?: string
+  /** 性格三维：决定头像动效的幅度与节奏。 */
+  temperament?: { extroversion: number; rigor: number; humor: number }
 }
 
 /** 页面上的一道盘问题。 */
@@ -280,7 +298,18 @@ export function registerVibeRoutes(router: Router, deps: VibeRoutesDeps): void {
   const viewOf = (session: VibeSession, pending: number): VibeSessionView => {
     const squad = session.memberAgentIds.map((id) => {
       const agent = store.getAgent(id)
-      return { id, name: agent?.name ?? id }
+      if (agent === undefined) return { id, name: id }
+      const persona = normalizePersona(agent.persona)
+      return {
+        id,
+        name: agent.name,
+        ...(agent.avatar === undefined ? {} : { avatar: agent.avatar }),
+        temperament: {
+          extroversion: persona.extroversion,
+          rigor: persona.rigor,
+          humor: persona.humor,
+        },
+      }
     })
     const busy = deps.isTurnActive(session.conversationId)
     // 状态是**存出来的**，不是现算的：现算的话一轮失败会落到「没有待答题、没有在跑

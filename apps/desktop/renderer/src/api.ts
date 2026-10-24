@@ -25,6 +25,7 @@ import type {
   VibeProjectView,
   VibeQuestionView,
   VibeSessionView,
+  VibeSquadMemberView,
   WsEvent,
 } from '@ryharness/server'
 /**
@@ -84,6 +85,7 @@ export type {
   VibeProjectView,
   VibeQuestionView,
   VibeSessionView,
+  VibeSquadMemberView,
   WsEvent,
 }
 

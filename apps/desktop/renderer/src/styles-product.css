@@ -2097,6 +2097,10 @@
   gap: var(--space-3);
 }
 
+/* 页头右侧的动作组：停一下 / 再来一次 / 换一个。 */
+.vibe-header-actions { display: flex; align-items: center; gap: var(--space-2); margin-left: auto; }
+.vibe-stop { color: var(--text-secondary); }
+
 .vibe-header .vibe-title { margin: 0; font-size: var(--fs-title); }
 
 .vibe-status {
@@ -2123,22 +2127,67 @@
   line-height: 1.7;
 }
 
-.vibe-squad { margin: 0 0 var(--space-2); color: var(--text-tertiary); font-size: var(--fs-xs); }
+/* 小队工作台：这一轮谁在、谁在忙。
+   此前小队只是一行文字，等的那一两分钟里屏幕上没有任何东西在动——这一页看着像一张
+   空表单，而不是一支队伍在干活。现在每人一行：头像 + 名字 + 此刻在做什么，
+   正在说的那一位头像会动（说话律动），正在想的那一位视线左右游走。 */
+.vibe-squad-panel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  margin: 0 0 var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+}
 
-/* 小队里的每个人都能点开单独聊：链接的样子，但仍然是按钮（键盘可达）。 */
-.vibe-squad-member {
+.vibe-squad-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* 正在说的那一位：名字提亮，并给一枚琥珀竖条当锚点（与左栏选中态同一套语言）。 */
+.vibe-squad-row.is-speaking .vibe-squad-name { color: var(--text-primary); font-weight: 600; }
+.vibe-squad-row.is-speaking .vibe-squad-state { color: var(--amber-text); }
+
+.vibe-squad-name {
   padding: 0;
   border: none;
   background: none;
-  color: var(--amber-text);
+  color: var(--text-secondary);
   font: inherit;
+  font-size: var(--fs-sm);
   text-decoration: underline;
   text-decoration-color: color-mix(in srgb, var(--amber-text) 40%, transparent);
   text-underline-offset: 2px;
   cursor: pointer;
 }
+.vibe-squad-name:disabled { cursor: default; text-decoration: none; }
+.vibe-squad-name:hover:not(:disabled) { color: var(--amber-text); text-decoration-color: var(--amber-text); }
 
-.vibe-squad-member:hover { text-decoration-color: var(--amber-text); }
+.vibe-squad-state { color: var(--text-tertiary); font-size: var(--fs-xs); }
+
+/* 「正在说」的状态点：静态的一枚琥珀点（动效归输出区的署名头像，同屏只许一个在动）。 */
+.vibe-squad-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--amber-primary);
+  flex-shrink: 0;
+}
+
+/* 首屏的"这一轮谁来做"：用户点「开始」之前就该知道不是一个人在自言自语。 */
+.vibe-crew { margin-top: var(--space-5); }
+.vibe-crew-label { color: var(--text-tertiary); font-size: var(--fs-xs); }
+.vibe-crew-row { display: flex; flex-wrap: wrap; gap: var(--space-4); margin-top: var(--space-3); }
+.vibe-crew-member { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 56px; }
+.vibe-crew-name {
+  color: var(--text-secondary); font-size: var(--fs-xs);
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 
 .vibe-section { margin-top: var(--space-6); }
 
@@ -2176,24 +2225,70 @@
 
 .vibe-card-hint { color: var(--text-tertiary); font-size: var(--fs-xs); font-weight: 400; }
 
-/* 一道题：题目 + 几个选项胶囊。 */
+/* 一道题：题目 + 几个选项。
+   题目左边挂着问的人的头像——盘问是"某个人替小队问你"，不是一张匿名的表单。 */
 .vibe-question + .vibe-question { margin-top: var(--space-4); }
 
-.vibe-question-text { margin: 0 0 var(--space-3); font-size: var(--fs-base); line-height: 1.6; }
+.vibe-question-head { display: flex; align-items: flex-start; gap: var(--space-2); margin-bottom: var(--space-3); }
 
-.vibe-options { display: flex; flex-wrap: wrap; gap: var(--space-2); }
-
-.vibe-option {
-  padding: 6px 14px;
-  border: 1px solid var(--edge);
-  border-radius: var(--radius-pill);
+/* 「我自己说」那一行。
+   此前这个输入框**根本没有样式**：浏览器默认的裸 input，宽度按 size 属性算（约二十个
+   字符），在一张一千像素宽的卡里缩成一小块——而它恰恰是"选项之外的话唯一的出口"。
+   现在占满整行，与上面的选项卡片同一套边框与底色。 */
+.vibe-own-answer {
+  display: block;
+  width: 100%;
+  margin-top: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border: 1px dashed var(--edge);
+  border-radius: var(--radius-md);
   background: var(--bg-elevated);
   color: var(--text-primary);
   font-family: inherit;
-  font-size: var(--fs-sm);
+  font-size: var(--fs-base);
+}
+
+.vibe-own-answer::placeholder { color: var(--text-tertiary); }
+.vibe-own-answer:focus {
+  outline: none;
+  border-style: solid;
+  border-color: var(--amber-primary);
+  background: var(--bg-surface);
+  box-shadow: 0 0 0 3px var(--amber-primary-soft);
+}
+
+.vibe-question-text { margin: 0; font-size: var(--fs-base); line-height: 1.6; }
+
+/* 选项：一行一个，而不是挤在一排胶囊里。
+   挤在一排时，选中哪个要靠"颜色深浅"去分辨；一行一个时，选中态可以画成一张卡片，
+   眼睛扫过去就能看出"我选了第二个"。
+   两列：整行铺满的话右侧空出一大片，选中那张卡反而不好找。 */
+.vibe-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-2); }
+
+.vibe-option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--fs-base);
+  text-align: left;
   cursor: pointer;
   transition: border-color var(--dur-hover) var(--ease-out), background var(--dur-hover) var(--ease-out),
     color var(--dur-hover) var(--ease-out), transform var(--dur-press) var(--ease-spring);
+}
+
+/* 选中的那一项：左边一道琥珀竖条 + 琥珀底——两处信号，不只靠颜色深浅。 */
+.vibe-option.is-chosen {
+  border-color: var(--amber-primary);
+  background: var(--amber-primary-soft);
+  color: var(--amber-text);
+  font-weight: 600;
+  box-shadow: inset 3px 0 0 var(--amber-primary);
 }
 
 .vibe-option:hover:not(:disabled) {
@@ -2205,11 +2300,9 @@
 .vibe-option:disabled { opacity: .55; cursor: not-allowed; }
 
 /* 预选中的那一个：默认就选中，用户不改也能直接提交。 */
-.vibe-option.is-chosen {
+.vibe-option.is-chosen:hover:not(:disabled) {
   border-color: var(--amber-primary);
   background: var(--amber-primary-soft);
-  color: var(--amber-text);
-  font-weight: 600;
 }
 
 .vibe-card-edit {
@@ -2248,10 +2341,12 @@
 .vibe-answered-q { color: var(--text-tertiary); }
 .vibe-answered-a { color: var(--text-primary); font-weight: 600; }
 
-/* 问答记录：问过什么、答了什么，一直留在页面上。 */
+/* 问答记录：问过什么、答了什么，一直留在页面上。
+   左边挂上问的人的头像——「小队问过我什么」要能看出是谁问的。 */
 .vibe-record { list-style: none; margin: 0; padding: 0; }
 .vibe-record-item {
   display: flex;
+  align-items: center;
   gap: var(--space-3);
   padding: var(--space-2) var(--space-3);
   border-left: 3px solid var(--amber-primary);
@@ -2305,14 +2400,21 @@
 .vibe-failed-actions { display: flex; gap: var(--space-2); margin-top: var(--space-2); }
 .vibe-retry { color: var(--amber-text); }
 
-/* 小队产出：谁写的 + 正文。 */
+/* 小队产出：谁写的 + 正文。
+   头像在左、名字与正文在右：此前只有一行小字，看不出这段出自谁——而这页讲的就是
+   "一支队伍在接力干活"，谁在说是关键信息。 */
 .vibe-output {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
   margin-top: var(--space-3);
   padding: var(--space-4);
   border: 1px solid var(--edge);
   border-radius: var(--radius-lg);
   background: var(--bg-surface);
 }
+
+.vibe-output-main { flex: 1; min-width: 0; }
 
 .vibe-output-name { margin-bottom: var(--space-2); color: var(--text-secondary); font-size: var(--fs-xs); }
 

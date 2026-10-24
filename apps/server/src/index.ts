@@ -118,7 +118,13 @@ export type {
   ProviderUsageRow,
   UsageReport,
 } from './routes/usage.ts'
-export type { VibeOutputView, VibeProjectView, VibeQuestionView, VibeSessionView } from './routes/vibe.ts'
+export type {
+  VibeOutputView,
+  VibeProjectView,
+  VibeQuestionView,
+  VibeSessionView,
+  VibeSquadMemberView,
+} from './routes/vibe.ts'
 export { MAX_SQUAD_SIZE, pickSquad, registerVibeRoutes } from './routes/vibe.ts'
 export type { AgentTemplate } from './seed.ts'
 export { AGENT_TEMPLATES, ensureSeedAgents, instantiateTemplate } from './seed.ts'

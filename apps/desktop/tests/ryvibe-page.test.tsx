@@ -64,6 +64,8 @@ interface StubOptions {
   todos?: TodoItem[]
   /** 项目骨架里的文件内容（点文件名时读回来）。 */
   files?: Record<string, string>
+  /** 中止这一轮（复用聊天页同一条端点）。 */
+  cancelTurn?: (conversationId: string) => Promise<{ cancelled: boolean }>
 }
 
 /** 取不到就当场报错：断言之前静默拿到 undefined 只会把错报歪。 */
@@ -142,6 +144,13 @@ function stub(overrides: StubOptions = {}): {
     vibeProjectFile: vi.fn(async (_id: string, name: string) => {
       return { name, size: 10, content: files[name] ?? '' }
     }),
+    ...(overrides.cancelTurn === undefined
+      ? {}
+      : {
+          cancelTurn: vi.fn(
+            async (conversationId: string) => overrides.cancelTurn?.(conversationId) ?? { cancelled: true },
+          ),
+        }),
   }
 }
 
@@ -400,7 +409,7 @@ describe('RyVibe 页面', () => {
     expect(container.textContent).toContain('读需求')
   })
 
-  it('小队里每个人都能点开单独聊：多 agent 的可见性靠这个', async () => {
+  it('小队工作台：每人一行、带头像、说清此刻在做什么', async () => {
     const opened: string[] = []
     const withProject: VibeSessionView = { ...session, status: 'done', project }
     const api = stub({ session: withProject, sessions: [withProject] })
@@ -409,12 +418,80 @@ describe('RyVibe 页面', () => {
       root.render(<RyVibePage api={api} onOpenAgent={(agentId) => opened.push(agentId)} />)
     })
     await settle()
-    const members = [...container.querySelectorAll<HTMLButtonElement>('.vibe-squad-member')]
+    // 一行一个成员（此前是"小队：Ryen、CodeBot"一行文字，看不出谁在谁不在）。
+    const rows = [...container.querySelectorAll('.vibe-squad-row')]
+    expect(rows).toHaveLength(2)
+    // 每行都有头像：这一页讲的是"一支队伍在接力干活"，谁在说是关键信息。
+    expect(rows[0]?.querySelector('.avatar')).not.toBeNull()
+    // 每行都写清此刻在做什么。
+    expect(rows[0]?.querySelector('.vibe-squad-state')?.textContent).toBe('在听')
+    // 每个人都能点开单独聊：多 agent 的可见性靠这个。
+    const members = [...container.querySelectorAll<HTMLButtonElement>('.vibe-squad-name')]
     expect(members.map((button) => button.textContent)).toEqual(['Ryen', '工程师'])
     await act(async () => {
       must(members[1], '工程师按钮').click()
     })
     expect(opened).toEqual(['eng'])
+  })
+
+  it('正在说话的那一位：动的是输出区那个署名头像，全页只许一个在动', async () => {
+    // 等的那一两分钟里，屏幕上要有一个"在动的东西"告诉用户小队还活着。
+    const output: VibeOutputView[] = [{ senderId: 'eng', text: '正在写方案…', createdAt: 1, seq: 9 }]
+    const talking: VibeSessionView = {
+      ...session,
+      status: 'building',
+      busy: true,
+    }
+    const api = stub({ session: talking, sessions: [talking], output })
+    render(api)
+    await settle()
+    // 工作台写清此刻谁在做什么（"正在说"）。
+    const speaking = container.querySelector('.vibe-squad-row.is-speaking')
+    expect(speaking).not.toBeNull()
+    expect(speaking?.querySelector('.vibe-squad-state')?.textContent).toBe('正在说')
+    // 动的是输出区那个署名头像——动效要落在正在长出来的内容旁边。
+    expect(container.querySelector('.vibe-output .avatar.is-speaking')).not.toBeNull()
+    // 同屏只许有一个在动：工作台里的头像不跟着动（周边运动会抢注意力）。
+    expect(container.querySelectorAll('.avatar.is-speaking')).toHaveLength(1)
+  })
+
+  it('还在等首 token、正文一个字都还没出来时：动的是工作台里「正在想」的那一位', async () => {
+    // 这段是屏幕上最空的时候——气泡还没出现，三点之外什么都没有。
+    const thinking: VibeSessionView = { ...session, status: 'building', busy: true }
+    const api = stub({ session: thinking, sessions: [thinking], output: [] })
+    render(api)
+    await settle()
+    const row = container.querySelector('.vibe-squad-row')
+    expect(row?.querySelector('.vibe-squad-state')?.textContent).toBe('正在想')
+    expect(row?.querySelector('.avatar.is-pondering')).not.toBeNull()
+    expect(container.querySelectorAll('.avatar.is-speaking')).toHaveLength(0)
+  })
+
+  it('等的时候能喊停：不用干等上一两分钟', async () => {
+    // 这一页此前从头到尾没有"停"——用户发了一句话就只能盯着屏幕等。
+    const cancelled: string[] = []
+    const output: VibeOutputView[] = [{ senderId: 'eng', text: '正在写方案…', createdAt: 1, seq: 9 }]
+    const talking: VibeSessionView = { ...session, status: 'building', busy: true }
+    const api = stub({
+      session: talking,
+      sessions: [talking],
+      output,
+      cancelTurn: (conversationId: string) => {
+        cancelled.push(conversationId)
+        return Promise.resolve({ cancelled: true })
+      },
+    })
+    render(api)
+    await settle()
+    const stop = container.querySelector<HTMLButtonElement>('.vibe-stop')
+    expect(stop).not.toBeNull()
+    await act(async () => {
+      must(stop, '停一下按钮').click()
+    })
+    await settle()
+    // 中止走的是这一轮背后那个群会话（复用聊天页同一条端点）。
+    expect(cancelled).toEqual(['c1'])
+    expect(container.textContent).toContain('已停下')
   })
 
   it('方案落成了项目：目录、文件清单、预览都在', async () => {

@@ -18,18 +18,21 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type {
+  AgentDef,
   ProviderInfo,
   TodoItem,
   VibeOutputView,
   VibeProjectView,
   VibeQuestionView,
   VibeSessionView,
+  VibeSquadMemberView,
 } from '../api.ts'
 import { openInFileManager } from '../lib/desktop.ts'
 import { humanError } from '../lib/error-text.ts'
 import { hasUsableProvider, missingProviderHint } from '../lib/provider-health.ts'
 import { toast } from '../lib/toast.ts'
 import { explainTurnError, type TurnErrorTarget } from '../lib/turn-errors.ts'
+import { Avatar } from './avatars/Avatar.tsx'
 import { Icon } from './Icon.tsx'
 import { Markdown } from './Markdown.tsx'
 import { VibeArtifactPreview } from './VibeArtifactPreview.tsx'
@@ -82,6 +85,19 @@ export interface RyVibeApi {
   setTodoDone?: (conversationId: string, id: string, done: boolean) => Promise<unknown>
   /** 读项目骨架里的一个文件（预览用）。 */
   vibeProjectFile?: (id: string, name: string) => Promise<{ name: string; size: number; content: string }>
+  /**
+   * 通讯录里的助理清单：首屏要告诉用户"谁会来帮你"。
+   *
+   * 可选：拿不到就不画那一行——这一行是锦上添花，不该因为接口缺了就让首屏空着。
+   */
+  agents?(): Promise<{ agents: AgentDef[] }>
+  /**
+   * 中止这一轮。
+   *
+   * 复用聊天页那条端点：RyVibe 背后就是一个群会话（session.conversationId），
+   * 所以中止那一轮不必另开一条路。可选：没有它就少一枚按钮，不影响别的。
+   */
+  cancelTurn?(conversationId: string): Promise<{ cancelled: boolean }>
 }
 
 export interface RyVibePageProps {
@@ -111,6 +127,74 @@ export interface RyVibePageProps {
 }
 
 /**
+ * 小队工作台：这一轮谁在、谁在忙。
+ *
+ * 此前小队只是一行文字链接（「小队：Ryen、CodeBot」），于是这一页看上去是**一个
+ * 表单**，而不是一支队伍在干活：等的那 30 秒到 2 分钟里，屏幕上没有任何东西在动，
+ * 用户不知道发生了什么。
+ *
+ * 现在每位成员一行：头像 + 名字 + 此刻在做什么。**正在说的那一位头像会动**（说话
+ * 律动），正在想的那一位视线左右游走（思考动效）——动效的幅度与节奏按性格四维走，
+ * 所以同一个助理在不同人设下动起来不一样。
+ *
+ * 同屏只许有一个在动（周边运动会抢注意力），所以这里的状态是互斥的。
+ */
+function SquadPanel({
+  squad,
+  speakingId,
+  ponderingId,
+  onOpenAgent,
+}: {
+  squad: readonly VibeSquadMemberView[]
+  /** 此刻正在说话的那位（正在写最后一段输出的人）。 */
+  speakingId: string | undefined
+  /** 此刻正在想的那位（还在等首 token）。 */
+  ponderingId: string | undefined
+  onOpenAgent?: (agentId: string) => void
+}) {
+  if (squad.length === 0) return null
+  return (
+    <div className="vibe-squad-panel">
+      {squad.map((member) => {
+        const speaking = member.id === speakingId
+        const pondering = !speaking && member.id === ponderingId
+        const state = speaking ? '正在说' : pondering ? '正在想' : '在听'
+        return (
+          <div key={member.id} className={`vibe-squad-row${speaking ? ' is-speaking' : ''}`}>
+            {/* 头像只在**还在等首 token**（一段输出都还没有）时动：那时屏幕上没有
+                正在长出来的正文，动效没处可挂，就落在"正在想"的那一位身上。
+                一旦开始输出，动效就交给正文旁边那个署名头像（见输出区），同一时刻
+                全页只有一个在动——周边运动多了会抢注意力。 */}
+            <Avatar
+              avatarKey={member.avatar}
+              name={member.name}
+              seed={member.id}
+              size={40}
+              pondering={pondering}
+              {...(member.temperament === undefined ? {} : { temperament: member.temperament })}
+            />
+            <button
+              type="button"
+              className="vibe-squad-name"
+              title={`跟 ${member.name} 单聊`}
+              disabled={onOpenAgent === undefined}
+              onClick={() => {
+                onOpenAgent?.(member.id)
+              }}
+            >
+              {member.name}
+            </button>
+            <span className="vibe-squad-state">{state}</span>
+            {/* 「正在说」的信号点：输出区的署名头像在动，这里再动就同屏两个了。 */}
+            {speaking && <span className="vibe-squad-dot" aria-hidden="true" />}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+/**
  * 一张盘问卡：所有问题放在一张卡上，一次提交。
  *
  * 抄的是 Lovable 的提问卡片，不是 Cursor 的逐题弹窗：
@@ -132,6 +216,7 @@ function QuestionCard({
   drafts,
   submitted,
   busy,
+  squad,
   onPick,
   onDraft,
   onSubmit,
@@ -146,6 +231,8 @@ function QuestionCard({
   /** 已提交的答案；undefined = 卡片还开着。 */
   submitted: Record<string, string> | undefined
   busy: boolean
+  /** 小队成员：谁问的题，头像就挂在题旁边。 */
+  squad: readonly VibeSquadMemberView[]
   onPick: (questionId: string, option: string) => void
   onDraft: (questionId: string, text: string) => void
   onSubmit: () => void
@@ -184,9 +271,24 @@ function QuestionCard({
       {questions.map((question) => {
         const current = picks[question.id] ?? question.options[0] ?? ''
         const draft = drafts[question.id] ?? ''
+        // 谁问的：盘问是"某个人替小队问你"，不是一张匿名的表单。
+        const asker = squad.find((member) => {
+          return member.id === question.agentId
+        })
         return (
           <div key={question.id} className="vibe-question">
-            <p className="vibe-question-text">{question.question}</p>
+            <div className="vibe-question-head">
+              {asker !== undefined && (
+                <Avatar
+                  avatarKey={asker.avatar}
+                  name={asker.name}
+                  seed={asker.id}
+                  size={32}
+                  {...(asker.temperament === undefined ? {} : { temperament: asker.temperament })}
+                />
+              )}
+              <p className="vibe-question-text">{question.question}</p>
+            </div>
             <div className="vibe-options">
               {question.options.map((option) => {
                 const chosen = current === option && draft.trim().length === 0
@@ -423,6 +525,8 @@ export function RyVibePage({
   const [session, setSession] = useState<VibeSessionView | undefined>(undefined)
   const [questions, setQuestions] = useState<VibeQuestionView[]>([])
   const [output, setOutput] = useState<VibeOutputView[]>([])
+  /** 通讯录里的助理（首屏给用户看"谁会来帮你"）。拿不到就不画那一行。 */
+  const [crew, setCrew] = useState<AgentDef[]>([])
   /** 用户在卡片上点过的选择（questionId → 选项）；没点过的用预选项（第一个）。 */
   const [picks, setPicks] = useState<Record<string, string>>({})
   /** 用户自己写的答案（questionId → 他写的那句话）。 */
@@ -443,6 +547,10 @@ export function RyVibePage({
   const [todos, setTodos] = useState<TodoItem[]>([])
   /** 正在提交的那一条待办：勾选期间禁用它，连点会并发提交。 */
   const [todoBusy, setTodoBusy] = useState<string | undefined>(undefined)
+  /** 中止请求在途。 */
+  const [stopping, setStopping] = useState(false)
+  /** 用户按了「停一下」：这一轮到此为止，但已做出来的东西还在。 */
+  const [stopped, setStopped] = useState(false)
   /** 正在预览的项目文件。 */
   const [preview, setPreview] = useState<ProjectPreview | undefined>(undefined)
   /** 已经从服务端找过一轮没有（避免重复找）。 */
@@ -519,6 +627,28 @@ export function RyVibePage({
       cancelled = true
     }
   }, [api, refresh])
+
+  /**
+   * 首屏的"谁会来帮你"：拉一次通讯录，把这一轮会参与的人摆出来。
+   *
+   * 拿不到就算了——这一行是锦上添花，不该因为接口缺了就让首屏空着或报错。
+   */
+  useEffect(() => {
+    if (api.agents === undefined) return
+    let cancelled = false
+    void api
+      .agents()
+      .then((result) => {
+        if (cancelled) return
+        setCrew(result.agents.slice(0, 4))
+      })
+      .catch(() => {
+        // 拉不到就不画。
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [api])
 
   /**
    * 轮询：只要这一轮还没结束就定期拉一次。
@@ -792,6 +922,23 @@ export function RyVibePage({
               )
             })}
           </div>
+          {/* 谁会来帮你：首屏原本只有一个输入框，像一张空表单。把这一轮会参与的人
+              摆出来，用户点下「开始」之前就知道不是一个人在自言自语。 */}
+          {crew.length > 0 && (
+            <div className="vibe-crew">
+              <span className="vibe-crew-label">这一轮谁来做</span>
+              <div className="vibe-crew-row">
+                {crew.map((agent) => {
+                  return (
+                    <span key={agent.id} className="vibe-crew-member" title={`${agent.name} 会参与`}>
+                      <Avatar avatarKey={agent.avatar} name={agent.name} seed={agent.id} size={44} />
+                      <span className="vibe-crew-name">{agent.name}</span>
+                    </span>
+                  )
+                })}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     )
@@ -802,6 +949,30 @@ export function RyVibePage({
       return item.id === agentId
     })
     return member?.name ?? '小队'
+  }
+
+  /**
+   * 停一下：中止这一轮。
+   *
+   * 此前这一页从头到尾没有"停"——用户发了一句话，就只能盯着屏幕等上一两分钟，
+   * 连"算了不要了"都说不出口。这一轮背后就是那个群会话，中止走的是聊天页同一条
+   * 端点（session.conversationId）。
+   */
+  const stop = (): void => {
+    if (api.cancelTurn === undefined || session === undefined) return
+    setStopping(true)
+    void api
+      .cancelTurn(session.conversationId)
+      .then(() => {
+        setStopped(true)
+        void refresh(session.id)
+      })
+      .catch((error: unknown) => {
+        toast.error(humanError(error, '没能停下来，再点一次'))
+      })
+      .finally(() => {
+        setStopping(false)
+      })
   }
 
   /**
@@ -822,6 +993,28 @@ export function RyVibePage({
   /** 卡片该不该画：待答的题在，或者刚提交完还没点「改一下」。 */
   const showCard = pending.length > 0 || submitted !== undefined
 
+  /**
+   * 此刻正在说的是谁。
+   *
+   * 判据：**最后一段输出**的作者。流式写入时最后一条一直在长，那就是正在写的那位；
+   * 这一轮停下来（done）之后不再有人说话。
+   */
+  const speakingId = ((): string | undefined => {
+    if (session.status !== 'building') return undefined
+    const last = output.at(-1)
+    return last?.senderId
+  })()
+  /**
+   * 此刻正在想的是谁：还在等首 token，一段输出都还没有。
+   *
+   * 这种时刻屏幕上最没东西可看——气泡还没出现，三点指示器之外什么都没有。
+   */
+  const ponderingId = ((): string | undefined => {
+    if (session.status !== 'building') return undefined
+    if (output.length > 0) return undefined
+    return session.squad[0]?.id
+  })()
+
   return (
     <div className="vibe-page">
       <header className="vibe-header">
@@ -830,14 +1023,34 @@ export function RyVibePage({
           <span className="vibe-badge">Beta</span>
         </h1>
         <span className="vibe-status">
-          {statusLine(session)}
-          {session.status !== 'done' && session.status !== 'failed' && (
+          {stopped ? '已停下' : statusLine(session)}
+          {!stopped && session.status !== 'done' && session.status !== 'failed' && (
             <span className="queue-pulse vibe-spinner" aria-hidden="true" />
           )}
         </span>
-        <button type="button" className="btn btn-mini vibe-reset" onClick={reset}>
-          换一个
-        </button>
+        <div className="vibe-header-actions">
+          {/* 停一下：这一轮还在跑的时候，用户不该只能干等。 */}
+          {!stopped && session.status === 'building' && api.cancelTurn !== undefined && (
+            <button type="button" className="btn btn-mini vibe-stop" disabled={stopping} onClick={stop}>
+              {stopping ? '停下中…' : '停一下'}
+            </button>
+          )}
+          {stopped && (
+            <button
+              type="button"
+              className="btn btn-mini vibe-retry"
+              onClick={() => {
+                setStopped(false)
+                retry()
+              }}
+            >
+              再来一次
+            </button>
+          )}
+          <button type="button" className="btn btn-mini vibe-reset" onClick={reset}>
+            换一个
+          </button>
+        </div>
       </header>
 
       {session.status !== 'failed' && session.status !== 'done' && (
@@ -845,32 +1058,16 @@ export function RyVibePage({
       )}
 
       <blockquote className="vibe-requirement">{session.requirement}</blockquote>
-      {/* 小队名单：每个人都能点开单独聊。多 agent 的可见性靠这个——用户能一眼看清
-          刚才是谁写的，点一下就能接着单独问他。 */}
-      <p className="vibe-squad">
-        小队：
-        {session.squad.map((member, index) => {
-          return (
-            <span key={member.id}>
-              {index > 0 ? '、' : null}
-              {onOpenAgent === undefined ? (
-                member.name
-              ) : (
-                <button
-                  type="button"
-                  className="vibe-squad-member"
-                  title={`跟 ${member.name} 单聊`}
-                  onClick={() => {
-                    onOpenAgent(member.id)
-                  }}
-                >
-                  {member.name}
-                </button>
-              )}
-            </span>
-          )
-        })}
-      </p>
+      {/* 小队工作台：这一轮谁在、谁在忙。
+          此前这里只有一行「小队：Ryen、CodeBot」的文字链接，等的那一两分钟里屏幕上
+          没有任何东西在动——用户不知道是谁在写、写到哪了。现在每人一行：头像 + 名字 +
+          此刻在做什么，正在说的那一位头像会动。 */}
+      <SquadPanel
+        squad={session.squad}
+        speakingId={speakingId}
+        ponderingId={ponderingId}
+        {...(onOpenAgent === undefined ? {} : { onOpenAgent })}
+      />
 
       {session.status === 'failed' && (
         <div className="vibe-failed" role="alert">
@@ -923,8 +1120,21 @@ export function RyVibePage({
           <h2 className="vibe-section-title">你们问过这些</h2>
           <ul className="vibe-record">
             {answered.map((question) => {
+              const asker = session.squad.find((member) => {
+                return member.id === question.agentId
+              })
               return (
                 <li key={question.id} className="vibe-record-item">
+                  {/* 谁问的：盘问记录带上问的人，这一列才读得出"小队问过我什么"。 */}
+                  {asker !== undefined && (
+                    <Avatar
+                      avatarKey={asker.avatar}
+                      name={asker.name}
+                      seed={asker.id}
+                      size={28}
+                      {...(asker.temperament === undefined ? {} : { temperament: asker.temperament })}
+                    />
+                  )}
                   <span className="vibe-record-q">{question.question}</span>
                   <span className="vibe-record-a">
                     {question.selected !== undefined && question.selected.length > 0
@@ -946,6 +1156,7 @@ export function RyVibePage({
             drafts={drafts}
             submitted={editing ? undefined : submitted}
             busy={answering}
+            squad={session.squad}
             onPick={(questionId, option) => {
               setPicks((prev) => {
                 return { ...prev, [questionId]: option }
@@ -978,11 +1189,27 @@ export function RyVibePage({
         <section className="vibe-section">
           <h2 className="vibe-section-title">{session.status === 'done' ? '做好的东西' : '小队正在做的'}</h2>
           {output.map((item, index) => {
+            const member = session.squad.find((row) => {
+              return row.id === item.senderId
+            })
+            // 最后一段就是正在写的那一段（流式写入时它在长）。头像跟着动。
+            const speaking = item.senderId === speakingId
             return (
               <article key={`${item.seq}`} className="vibe-output">
-                <div className="vibe-output-name">{nameOf(item.senderId)}</div>
-                <div className="vibe-output-body">
-                  <Markdown text={item.text} />
+                {/* 谁写的：头像 + 名字。此前只有一行小字，看不出这段出自谁。 */}
+                <Avatar
+                  avatarKey={member?.avatar}
+                  name={nameOf(item.senderId)}
+                  seed={item.senderId}
+                  size={36}
+                  speaking={speaking}
+                  {...(member?.temperament === undefined ? {} : { temperament: member.temperament })}
+                />
+                <div className="vibe-output-main">
+                  <div className="vibe-output-name">{nameOf(item.senderId)}</div>
+                  <div className="vibe-output-body">
+                    <Markdown text={item.text} />
+                  </div>
                 </div>
                 {index === output.length - 1 ? null : null}
               </article>
