@@ -82,8 +82,16 @@ const EARLIER_PAGE = Array.from({ length: 50 }, (_, index) => {
   return row(index - 49)
 })
 
-/** jsdom 没有布局：一个 turn 块按固定高度算（只看块数，不看真实像素）。 */
-const TURN_BLOCK_PX = 200
+/**
+ * jsdom 没有布局：一个 turn 块按固定高度算（只看块数，不看真实像素）。
+ *
+ * 这个高度**刻意远大于**组件里的每轮估算（约 88px）：真实气泡有长有短，一条十行的
+ * 方案就够把一轮顶到几百像素。估算偏低时，「滚动位置 ÷ 每轮高度」换算出的轮号会虚高，
+ * 窗口一路塌到最后一条——内容骤缩，浏览器把越界的 scrollTop 夹回底部，用户刚往上滚
+ * 就被拽回最下面（真机症状）。组件现在改用量出来的真实高度，窗口始终盖得住视口，
+ * 于是这里用多大的行高都该滚得动。
+ */
+const TURN_BLOCK_PX = 400
 /** 可视高度固定，滚动距离全靠内容高度变化。 */
 const VIEWPORT_PX = 480
 
@@ -359,6 +367,17 @@ describe('滚动仲裁', () => {
     expect(scroller.top).toBe(up)
   })
 
+  it('真实高度远超估算：窗口不会塌到最后一条（塌了内容骤缩，视口就被夹回底部）', async () => {
+    await render()
+    const up = Math.round(scroller.max() / 2)
+    await userScrollTo(up)
+    // 塌了的标志：窗口只剩最后一条，页面看着像空了。
+    expect(container.querySelectorAll('.turn-block').length).toBeGreaterThan(1)
+    // 位置还在用户放的地方：没被夹回底部。
+    expect(scroller.top).toBe(up)
+    expect(scroller.top).toBeLessThan(scroller.max())
+  })
+
   it('浏览器夹取 scrollTop 造成的滚动不改贴底状态（真机上就是这一步把人锁死在底部）', async () => {
     await render()
     const up = Math.round(scroller.max() / 2)
@@ -480,9 +499,11 @@ describe('滚动仲裁', () => {
     expect(earlierCalls).toEqual([1])
 
     // 视口只允许被「内容上方长高」这一次性推下去，且推的量正好等于高度差。
+    // 用近似比较而不是精确相等：每轮高度现在是**量出来的**（不是估的整数），高度差
+    // 带着浮点尾数，精确相等会让这条用例被 1e-11 的误差顶红。
     const growth = scroller.height() - heightBeforePrepend
     expect(growth).toBeGreaterThan(0)
-    expect(scroller.top).toBe(100 + growth)
+    expect(scroller.top).toBeCloseTo(100 + growth, 5)
 
     // 继续上滚仍然是用户说了算：不被回拽。
     await userScrollTo(300)

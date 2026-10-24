@@ -76,6 +76,10 @@ export function visibleRange(options: WindowOptions): WindowRange {
 /** 窗口切片：渲染项 + 上下哨兵高度。 */
 export interface WindowedSlice<T> {
   visible: T[]
+  /** 窗口的起点（渲染区第一项在整表里的下标）。 */
+  start: number
+  /** 窗口的终点（不含）。 */
+  end: number
   /** 上哨兵高度（px）：被截掉的上方内容。 */
   padTop: number
   /** 下哨兵高度（px）。 */
@@ -88,6 +92,8 @@ export function windowSlice<T>(items: readonly T[], range: WindowRange, estimate
   const end = Math.min(Math.max(start, range.end), items.length)
   return {
     visible: items.slice(start, end),
+    start,
+    end,
     padTop: start * Math.max(0, estimateHeight),
     padBottom: (items.length - end) * Math.max(0, estimateHeight),
   }

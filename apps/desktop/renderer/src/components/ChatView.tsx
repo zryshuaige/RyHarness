@@ -1026,21 +1026,71 @@ export function ChatView({
   }, [snapshot.relays])
 
   /**
-   * 一个 turn 块的估算高度（纯计算见 lib/message-window 的 turnEstimateOf）：
-   * 密度只按**已加载的历史**算，不含正在流式的那一轮——流式每个 token 都会让
-   * allMessages 换一次身份，把它算进去等于让估算一像素一像素地爬：窗口起点在
-   * 100 时，估算动 1px 就是视口跳 100px。历史真正变长（翻页前插）才重算，那
-   * 一次的位移由翻页的视口还原兜住。
+   * 一个 turn 块的**真实**高度（px）。
+   *
+   * 先按「几条消息 × 76px」猜一个（纯计算见 lib/message-window 的 turnEstimateOf），
+   * 猜不准就用量出来的：消息有长有短，一条十行的方案就够把一轮从 150px 顶到 260px。
+   *
+   * 猜偏了会怎样（真机症状）：滚动位置是**真实像素**，而哨兵撑起来的高度是**猜的**，
+   * 于是「滚动位置 ÷ 每轮高度」换算出来的轮号会虚高，窗口一路塌到最后一条——内容骤缩，
+   * 浏览器把越界的 scrollTop 夹回底部，用户刚往上滚就被拽回最下面。猜大了则是另一个
+   * 毛病：窗口跟不上视口，滚轮像没反应。
+   *
+   * 量法：已渲染轮次的真实总高 ÷ 轮数。量到之后，哨兵与窗口用同一个高度，映射就自洽
+   * 了（可见轮号 = 滚动位置 ÷ 每轮高度），窗口始终盖得住视口，滚轮自然滚得动。
    */
+  const [measuredTurnPx, setMeasuredTurnPx] = useState<number | undefined>(undefined)
+  /** 上一次量过的窗口区间：窗口没挪就不重量（见下面的量测 effect）。 */
+  const measuredRangeRef = useRef('')
+  /** 容器上下内边距（px）：量内容总高时要扣掉。量一次就够，它不会变。 */
+  const paddingCache = useRef<number | undefined>(undefined)
+
   const turnEstimate = useMemo(() => {
-    return turnEstimateOf(history)
-  }, [history])
+    // 量到的优先；还没量到（首帧 / 没有窗口化）就用猜的。
+    return measuredTurnPx ?? turnEstimateOf(history)
+  }, [history, measuredTurnPx])
 
   /** 只渲染可视区 + 上下哨兵（纯计算见 lib/message-window 的 chatWindowOf）。 */
   const windowed = turns.length > WINDOW_MIN_TURNS
   const chatWindow = useMemo(() => {
     return chatWindowOf({ turns, windowed, atBottom, viewTop, viewHeight, turnEstimate })
   }, [atBottom, turnEstimate, turns, viewHeight, viewTop, windowed])
+
+  /**
+   * 量一次已渲染轮次的真实高度。
+   *
+   * 量法：容器里的内容总高（去掉内边距）÷ 轮数 —— 那是「每轮真实高度」。用
+   * scrollHeight 而不是逐块量 offsetHeight：前者是一次布局读，后者是 N 次。
+   *
+   * 用 layout effect：React 会在**首次绘制之前**同步重渲，修正后的版面对用户是看不见的
+   * （否则一开对话就整体跳一下）。5% 的死区是防抖：窗口挪动时渲染的那几轮换了，平均
+   * 高度跟着抖一点很正常，不该每次都重算。
+   *
+   * 窗口没挪就不重量：流式时每个 token 都会重渲一次，重量 = 逐 token 强制布局。
+   */
+  useLayoutEffect(() => {
+    const node = scrollRef.current
+    if (node === null) return
+    const key = `${chatWindow.start}:${chatWindow.end}`
+    if (key === measuredRangeRef.current) return
+    measuredRangeRef.current = key
+    const count = turns.length
+    if (count === 0) return
+    let padding = paddingCache.current
+    if (padding === undefined) {
+      const style = getComputedStyle(node)
+      const top = Number.parseFloat(style.paddingTop)
+      const bottom = Number.parseFloat(style.paddingBottom)
+      padding = (Number.isFinite(top) ? top : 0) + (Number.isFinite(bottom) ? bottom : 0)
+      paddingCache.current = padding
+    }
+    const perTurn = (node.scrollHeight - padding) / count
+    if (!Number.isFinite(perTurn) || perTurn <= 0) return
+    setMeasuredTurnPx((prev) => {
+      if (prev !== undefined && Math.abs(perTurn - prev) <= prev * 0.05) return prev
+      return perTurn
+    })
+  })
 
   /**
    * 断口续接：补齐断线期间漏掉的那几条，而不是把整个会话重置重拉。
