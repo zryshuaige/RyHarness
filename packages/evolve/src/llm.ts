@@ -48,8 +48,15 @@ export interface EvolveLlm {
   reflect(input: { agentName: string; trajectory: TurnTrajectory; reason: string }): Promise<string>
 }
 
-/** 用户负反馈信号词（触发即时反思）。 */
-export const NEGATIVE_FEEDBACK_RE = /不对|错了|重来|搞错|不是这个|你胡说|重新来|答错|wrong|incorrect|that'?s not/i
+/**
+ * 用户负反馈信号词（触发即时反思）。
+ *
+ * 约束：否定疑问句不算负反馈——「这样不对吗？」是在确认理解，不是在批评。
+ * 词面命中后若同一句剩余部分（到下一个句末标点为止）出现「吗 / ? / ？」，
+ * 一律不判负反馈：误把疑问当差评会给归因条目记假 harmful，宁可少判。
+ */
+export const NEGATIVE_FEEDBACK_RE =
+  /(不对|错了|重来|搞错|不是这个|你胡说|重新来|答错|wrong|incorrect|that'?s not)(?![^。！？!?.…]*[吗?？])/i
 
 /** Curator 可见的既有条目条数上限（prompt 预算）。 */
 export const CURATOR_ENTRY_LIMIT = 20

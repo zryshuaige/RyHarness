@@ -944,6 +944,13 @@ const FIRST_LAUNCH_MARKER = 'first-launch-seeded'
  * 各自打包、不共享模块，所以这里只靠名字对齐——改一边必须改另一边。
  */
 const NEW_CHAT_EVENT = 'ryharness:new-chat'
+/**
+ * 通知点击「落到那条会话」派发给渲染层的事件名。
+ *
+ * 与 renderer/src/App.tsx 里的 OPEN_CONVERSATION_EVENT 是同一个字符串：主进程与
+ * 渲染层各自打包、不共享模块，只靠名字对齐——改一边必须改另一边（同 NEW_CHAT_EVENT）。
+ */
+const OPEN_CONVERSATION_EVENT = 'ryharness:open-conversation'
 /** 新回复的通知正文长度上限（超了通知面板会自己截断，这里先截干净）。 */
 const NOTIFY_BODY_LIMIT = 160
 
@@ -958,8 +965,35 @@ function showMainWindow(): void {
   mainWindow.focus()
 }
 
-/** 系统通知；点通知即回到主窗口。 */
-function notify(title: string, body: string): void {
+/**
+ * 在渲染层里执行一段脚本：窗口还在加载时排队到加载完成再跑。
+ *
+ * 冷启动点通知（showMainWindow 刚重建窗口、页面还没加载完）时直接 executeJavaScript
+ * 会落在旧的 about:blank 文档上，页面一导航、脚本连同它的重试定时器一起被丢掉。
+ * 与 pushApiBase 同一套「did-finish-load + 超时兜底」的排队。
+ */
+function runInRenderer(win: BrowserWindow, script: string): void {
+  const send = (): void => {
+    if (win.isDestroyed() || win.webContents.isDestroyed()) return
+    void win.webContents.executeJavaScript(script).catch((error: unknown) => {
+      console.error('[renderer] failed to run script:', error)
+    })
+  }
+  if (win.webContents.isLoadingMainFrame()) {
+    win.webContents.once('did-finish-load', send)
+    setTimeout(send, 3000)
+    return
+  }
+  send()
+}
+
+/**
+ * 系统通知；点通知回到主窗口，并落到那条会话（有 id 才驱动渲染层）。
+ *
+ * IM 的肌肉记忆是「点通知 → 落到那条聊天」：只把窗口弹起来，用户还得自己在
+ * 列表里找是谁回了话，「助理主动找我」这条回访回路就断在最后一厘米。
+ */
+function notify(title: string, body: string, options: { conversationId?: string } = {}): void {
   if (!Notification.isSupported()) return
   const notification = new Notification({
     title,
@@ -967,6 +1001,13 @@ function notify(title: string, body: string): void {
   })
   notification.on('click', () => {
     showMainWindow()
+    const conversationId = options.conversationId
+    // 会话 id 缺席（托盘提示这类）时只回窗口；有 id 才让渲染层选中那条会话。
+    if (conversationId === undefined || conversationId.length === 0) return
+    // showMainWindow 可能重建了窗口，句柄要在这之后取。
+    const win = mainWindow
+    if (win === undefined || win.isDestroyed()) return
+    runInRenderer(win, openConversationScript(conversationId))
   })
   notification.show()
 }
@@ -1297,7 +1338,7 @@ export class PresenceMonitor {
       /** API token：常驻监听自己也要过同一道闸，否则 401 后托盘/通知全线哑掉。 */
       token?: string
       onState: (state: PresenceState) => void
-      onReply: (reply: { agentName: string; text: string }) => void
+      onReply: (reply: { agentName: string; text: string; conversationId: string }) => void
       isFocused: () => boolean
       /**
        * 全局免打扰：开着时任何会话都不弹通知。
@@ -1559,11 +1600,15 @@ export class PresenceMonitor {
         if (event.code === 'ABORTED' || !this.shouldNotify(conversationId)) break
         this.unread += 1
         this.emit()
-        this.options.onReply({ agentName: 'RyHarness', text: event.message })
+        this.options.onReply({ agentName: 'RyHarness', text: event.message, conversationId })
         break
       }
       case 'queued':
         // 用户消息在排队：真正在跑的那一轮已经把托盘点亮了，排队本身不是「有人在忙」。
+        break
+      case 'approval-request':
+      case 'approval-resolved':
+        // 工具审批卡由渲染层处理：这一轮仍在跑（等用户点头），托盘灯不灭也不叠未读。
         break
       default: {
         const unhandled: never = event
@@ -1606,7 +1651,11 @@ export class PresenceMonitor {
       .map((each) => each.text.trim())
       .filter((text) => text.length > 0)
       .join('\n')
-    this.options.onReply({ agentName: names.join('、'), text: body.length > 0 ? body : '这一轮没有文字' })
+    this.options.onReply({
+      agentName: names.join('、'),
+      text: body.length > 0 ? body : '这一轮没有文字',
+      conversationId,
+    })
   }
 }
 
@@ -1649,6 +1698,33 @@ export const NEW_CHAT_SCRIPT = `(() => {
     }, 150);
   });
 })()`
+
+/**
+ * 通知点击后在渲染层执行的「落到这条会话」脚本：反复派发事件直到渲染层真的选中它。
+ *
+ * 与 NEW_CHAT_SCRIPT 同一套重试（React 可能还没挂上监听：冷启动时通知点击先于
+ * 渲染层加载完）。落地判据不能是「目标行高亮」——列表是虚拟化的，目标行可能
+ * 不在窗口里；也不能是 .chat-view（欢迎页包在同一个类里）。渲染层处理完事件
+ * 会把 data-ryharness-open-conversation 盖成目标 id（见 App.tsx），拿它对账。
+ */
+export function openConversationScript(conversationId: string): string {
+  const event = JSON.stringify(OPEN_CONVERSATION_EVENT)
+  const id = JSON.stringify(conversationId)
+  return `(() => {
+    let tries = 0;
+    return new Promise((resolve) => {
+      const timer = setInterval(() => {
+        tries += 1;
+        window.dispatchEvent(new CustomEvent(${event}, { detail: ${id} }));
+        const landed = document.documentElement.getAttribute('data-ryharness-open-conversation') === ${id};
+        if (landed || tries >= 20) {
+          clearInterval(timer);
+          resolve(landed);
+        }
+      }, 150);
+    });
+  })()`
+}
 
 /** 演示会话需要的存储能力（SessionStore 的一个子集，测试可换替身）。 */
 export interface DemoSeedStore {
@@ -1812,7 +1888,7 @@ function startResidency(baseUrl: string, token: string | undefined): void {
       updateTray(state)
     },
     onReply: (reply) => {
-      notify(`${reply.agentName} 回复了`, reply.text)
+      notify(`${reply.agentName} 回复了`, reply.text, { conversationId: reply.conversationId })
     },
   })
   presence.start()

@@ -1,0 +1,96 @@
+/* 头像动效：让每位助理看起来是活的，而且每位不一样。
+ *
+ * 此前预制的几位助理（Ryen 橘猫、工程师柴犬、文案灰狐）用的是静态立绘——一张图，
+ * 不动。会动的只有用户自选的"立体动物"通道，于是恰恰是用户第一眼看到的那几位
+ * 最没有生气。
+ *
+ * 立绘只有一张图，做不了"换表情/转头"，能做的是整体运动。三条：
+ *
+ * - **呼吸**（闲置）：极轻微的缩放起伏，幅度压在 2% 以内——再大整个界面像在喘气。
+ *   只给**单独出现**的头像（资料页、身份卡）；列表里的头像一律静态：同屏几十个一起
+ *   呼吸，界面就在微微发颤，用户读不出"这位在说话"，只读得出"这里有点乱"。
+ * - **说话**（agent 正在输出）：幅度更大、频率更快。这一条才是"活着"的主要来源：
+ *   用户看到的不是一张静止的图，是**这位正在回话**。全局同时只有这一位在动。
+ * - **思考**（已发请求、等首 token）：视线左右游走。气泡还没出现，头像挂在
+ *   "正在输入"那一行上。
+ *
+ * 每位助理一副脾性：节奏与幅度按性格四维走（见 lib/avatar-motion.ts），跟形象
+ * 无关——同一个"柴犬"，严谨的和外向的动起来不一样。
+ *
+ * 性能：只动 transform（合成层），不触发布局与重绘，不加 will-change（滥用它反而
+ * 更慢）。系统开了「减少动态效果」时全部关掉——不是"动得慢一点"，那仍然是动。
+ */
+
+@keyframes avatar-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(var(--motion-breathe-scale, 1.014));
+  }
+}
+
+@keyframes avatar-speak {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0deg) scale(1);
+  }
+  50% {
+    transform: translateY(var(--motion-lift, -1.2px)) rotate(var(--motion-sway, 1deg))
+      scale(var(--motion-scale, 1.015));
+  }
+}
+
+@keyframes avatar-ponder {
+  0%,
+  100% {
+    transform: translateX(calc(var(--motion-ponder, 2px) * -1)) rotate(-1deg);
+  }
+  50% {
+    transform: translateX(var(--motion-ponder, 2px)) rotate(1deg);
+  }
+}
+
+/* 打招呼：指针停在助理的卡片上时，他抬头应一声。
+   静态立绘只有一张图，换不了表情——就用一次轻轻的"点头"代替，
+   总比指针压上去毫无反应强。幅度同样走性格变量。 */
+@keyframes avatar-greet {
+  0% {
+    transform: translateY(0) rotate(0deg) scale(1);
+  }
+  40% {
+    transform: translateY(var(--motion-lift, -1.2px)) rotate(var(--motion-sway, 1deg))
+      scale(var(--motion-scale, 1.015));
+  }
+  100% {
+    transform: translateY(0) rotate(0deg) scale(1);
+  }
+}
+
+/* 呼吸：默认没有——它由 JS 侧显式开（只有单独出现的头像才给）。 */
+.avatar.is-breathing {
+  animation: avatar-breathe var(--motion-breathe-ms, 3600ms) var(--ease-out) infinite;
+  transform-origin: center bottom;
+}
+
+/* 说话：盖掉呼吸（两个动画抢同一个 transform 会互相打断，看起来是抽搐）。 */
+.avatar.is-breathing.is-speaking {
+  animation: avatar-speak var(--motion-speak-ms, 1200ms) var(--ease-out) infinite;
+}
+
+/* 思考：等首 token 时的视线游走。 */
+.avatar.is-pondering {
+  animation: avatar-ponder var(--motion-ponder-ms, 2000ms) var(--ease-out) infinite;
+}
+
+/* 减少动态效果：一条也不留。用户明确说过不要动，那就真的不要动。 */
+@media (prefers-reduced-motion: reduce) {
+  .avatar.is-breathing,
+  .avatar.is-breathing.is-speaking,
+  .avatar.is-pondering,
+  .contact-card:hover .avatar {
+    animation: none !important;
+    transform: none !important;
+  }
+}

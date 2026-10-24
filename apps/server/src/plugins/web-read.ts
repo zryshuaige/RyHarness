@@ -6,18 +6,20 @@
  * - 协议只允许 http/https（file:/ftp: 等一律拒绝）；
  * - 字面地址与 DNS 结果都必须落在公网：localhost、127/8、::1、10/8、
  *   172.16/12、192.168/16、169.254/16 全部挡掉，避免变成访问本机服务的跳板；
- * - 每一跳重定向都重新校验，不能靠「先放行首跳、再看最终 URL」；
+ * - 校验通过的那次解析结果就是连接目标（钉 IP）：默认取回器把已校验 IP 写进
+ *   请求参数，连接层不再做第二次 DNS——否则短 TTL 记录可以在「校验通过」与
+ *   「真正建连」之间换成 127.0.0.1（DNS rebinding），把内网正文送进模型上下文；
+ * - 每一跳重定向都重新校验并重新钉 IP，不能靠「先放行首跳、再看最终 URL」；
  * - 15s 总超时、2MB 响应体、20000 字文本，超出就截断并说明。
- *
- * 已知残余风险：DNS 校验与 fetch 的连接是两次独立解析，恶意域名仍可在这两次
- * 之间把记录换成内网地址（DNS rebinding）。要彻底封死得把连接钉在已校验的 IP
- * 上，那需要自定义 dispatcher 或 TLS 证书处理；本插件选择「拒绝明显的本地/私网
- * 目标」，不假装自己是完整的 SSRF 防护层。
  * @module @ryharness/server/plugins/web-read
  */
 
 import { lookup } from 'node:dns/promises'
+import { request as httpRequest } from 'node:http'
+import type { RequestOptions } from 'node:https'
+import { request as httpsRequest } from 'node:https'
 import { isIP } from 'node:net'
+import { Readable } from 'node:stream'
 import type { Tool, ToolContext, ToolResult } from '@ryharness/agent'
 import type { Context } from '@ryharness/cordis'
 import type { PluginEntry } from './host.ts'
@@ -30,8 +32,24 @@ export const READ_URL_MAX_CHARS = 20_000
 const MAX_REDIRECTS = 5
 const REDIRECT_STATUS = new Set([301, 302, 303, 307, 308])
 
-/** 出站请求的最小接口形状：测试用它注入假响应，生产直接走全局 fetch。 */
-export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>
+/** 出站请求的最小接口形状：测试用它注入假响应，生产用钉 IP 的默认取回器。 */
+export type FetchLike = (url: string, init?: RequestInit, pin?: UrlPin) => Promise<Response>
+
+/**
+ * 本次连接的钉子：`ip` 是校验阶段解析并放行的那个地址。
+ *
+ * 缺了它就等于回到「fetch 自己再解析一次」的老路——第二次解析正是 rebinding
+ * 攻击的落脚点，所以默认取回器收到没有钉子的请求直接拒绝。
+ */
+export interface UrlPin {
+  ip: string
+}
+
+/** 连接层的解析入口：生产走 node:dns（只为确定 v4/v6），测试注入「rebinding」脚本。 */
+export type ConnectLookup = (
+  hostname: string,
+  options: { family?: number | 'IPv4' | 'IPv6' },
+) => Promise<{ address: string; family: number }>
 
 /** 解析主机名到地址列表；测试注入固定结果，生产走 node:dns。 */
 export type ResolveHost = (hostname: string) => Promise<readonly string[]>
@@ -48,13 +66,11 @@ export interface ReadUrlResult {
 export interface ReadUrlOptions {
   fetchImpl?: FetchLike
   resolveHost?: ResolveHost
+  /** 连接层解析（默认取回器用它确定 v4/v6）；测试注入「第二次返回 127.0.0.1」的脚本。 */
+  connectLookup?: ConnectLookup
   timeoutMs?: number
   maxBytes?: number
   maxChars?: number
-}
-
-const defaultFetch: FetchLike = (url, init) => {
-  return fetch(url, init)
 }
 
 const defaultResolveHost: ResolveHost = async (hostname) => {
@@ -62,6 +78,88 @@ const defaultResolveHost: ResolveHost = async (hostname) => {
   return records.map((record) => {
     return record.address
   })
+}
+
+const defaultConnectLookup: ConnectLookup = async (hostname, options) => {
+  const family = options.family === 'IPv4' ? 4 : options.family === 'IPv6' ? 6 : (options.family ?? 0)
+  return lookup(hostname, { family, verbatim: true })
+}
+
+/**
+ * 构造一跳「钉在已校验 IP 上」的请求参数。
+ *
+ * - `host` 直接用字面 IP：net 层对字面地址不做 DNS，连接目标没有第二次解析；
+ * - TLS 的 `servername` 与 Host 头仍是原域名：SNI 与证书校验按域名走，服务器
+ *   看到的请求与普通浏览器请求一致（否则虚拟主机与 CDN 会认不出这个请求）；
+ * - `lookup` 再钉一道保险：万一有哪一层（代理、重试、未来的重构）又拿域名去
+ *   解析，交给连接的地址也仍然只有已校验的那个。DNS 在这里只被允许回答
+ *   v4/v6（family），它的地址回答一律丢弃。
+ */
+export function pinnedRequestOptions(url: URL, ip: string, connectLookup: ConnectLookup): RequestOptions {
+  return {
+    protocol: url.protocol,
+    host: ip,
+    ...(url.port === '' ? {} : { port: Number(url.port) }),
+    method: 'GET',
+    path: `${url.pathname}${url.search}`,
+    servername: normalizeHost(url.hostname),
+    headers: { host: url.host },
+    lookup: (hostname, options, callback) => {
+      connectLookup(hostname, { family: options.family })
+        .then((record) => {
+          callback(null, ip, record.family)
+        })
+        .catch((error: unknown) => {
+          // 错误分支按 net 的 lookup 回调约定补齐占位参数（err 优先，net 不看后面两个）。
+          callback(error instanceof Error ? error : new Error(String(error)), '', 0)
+        })
+    },
+  }
+}
+
+/**
+ * 默认取回器：node:http/https + 钉 IP。
+ *
+ * 不用全局 fetch 的原因只有一个——它无法把连接固定在某次解析的结果上，校验与
+ * 建连必然是两次独立解析（DNS rebinding 的 TOCTOU）。这里把 fetch 的语义换成
+ * 「按 pin 建连、按原域发 Host/SNI、流式拼回标准 Response」，loadPage 的重定向
+ * 与限额逻辑不用改。
+ */
+export function createPinnedFetch(connectLookup: ConnectLookup = defaultConnectLookup): FetchLike {
+  return (url, init, pin) => {
+    if (pin === undefined) {
+      return Promise.reject(new Error('pinned fetch: missing validated IP (pin)'))
+    }
+    const parsed = new URL(url)
+    const options = pinnedRequestOptions(parsed, pin.ip, connectLookup)
+    const headers: Record<string, string> = { host: parsed.host }
+    // loadPage 传入的 accept/user-agent 等照常带上；host 已钉原域，不被覆盖。
+    for (const [name, value] of new Headers(init?.headers)) {
+      if (name.toLowerCase() !== 'host') headers[name] = value
+    }
+    options.headers = headers
+    options.signal = init?.signal ?? undefined
+    return new Promise<Response>((resolve, reject) => {
+      const request = (parsed.protocol === 'https:' ? httpsRequest : httpRequest)(options, (incoming) => {
+        const headersOut = new Headers()
+        for (const [name, value] of Object.entries(incoming.headers)) {
+          if (value === undefined) continue
+          if (Array.isArray(value)) {
+            for (const item of value) headersOut.append(name, item)
+          } else {
+            headersOut.set(name, value)
+          }
+        }
+        const status = incoming.statusCode ?? 200
+        // 204/304 按 fetch 语义不允许有响应体；流留着会让 Response 构造直接抛错。
+        const bodyless = status === 204 || status === 205 || status === 304
+        const stream = bodyless ? null : (Readable.toWeb(incoming) as ReadableStream)
+        resolve(new Response(stream, { status, headers: headersOut }))
+      })
+      request.on('error', reject)
+      request.end()
+    })
+  }
 }
 
 /** 去掉 IPv6 字面量的方括号与末尾的点，统一成小写再判断。 */
@@ -135,12 +233,14 @@ function isForbiddenHost(hostname: string): boolean {
 }
 
 /**
- * 校验一个 URL 是否可以抓取；不通过时抛出带原因的错误。
+ * 校验一个 URL 是否可以抓取，并带回本次连接要钉住的 IP；不通过时抛出带原因的错误。
  *
  * 对域名会先解析再检查每一个地址：只查字面量的话，`http://internal.example`
- * 这种指向 192.168 的域名会直接放行。
+ * 这种指向 192.168 的域名会直接放行。放行的同时把解析结果交回去——校验用一次
+ * 解析、建连用另一次解析，中间就是 DNS rebinding 的窗口；返回 IP 让调用方把
+ * 连接钉在上面，窗口不复存在。
  */
-async function assertAllowedUrl(raw: string, resolveHost: ResolveHost): Promise<URL> {
+async function assertAllowedUrl(raw: string, resolveHost: ResolveHost): Promise<{ url: URL; ip: string }> {
   let url: URL
   try {
     url = new URL(raw)
@@ -154,6 +254,7 @@ async function assertAllowedUrl(raw: string, resolveHost: ResolveHost): Promise<
   if (isForbiddenHost(host)) {
     throw new Error(`拒绝访问本机或内网地址：${host}`)
   }
+  let ip = host
   if (isIP(host) === 0) {
     let addresses: readonly string[]
     try {
@@ -167,8 +268,9 @@ async function assertAllowedUrl(raw: string, resolveHost: ResolveHost): Promise<
         throw new Error(`拒绝访问本机或内网地址：${host}`)
       }
     }
+    ip = addresses[0] as string
   }
-  return url
+  return { url, ip }
 }
 
 /** 常用命名实体；不追求完整 HTML5 实体表，覆盖正文里最常见的那些。 */
@@ -304,17 +406,23 @@ async function loadPage(
   try {
     let current = rawUrl
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-      await assertAllowedUrl(current, options.resolveHost)
+      // 每一跳先校验再建连，校验放行的那个 IP 就是这一跳连接的钉子——
+      // 重定向到新域名时对新域名的校验与钉 IP 都重来，顺序不能松。
+      const allowed = await assertAllowedUrl(current, options.resolveHost)
       let response: Response
       try {
-        response = await options.fetchImpl(current, {
-          redirect: 'manual',
-          signal: controller.signal,
-          headers: {
-            accept: 'text/html,application/xhtml+xml,text/plain,application/json;q=0.9,*/*;q=0.8',
-            'user-agent': 'RyHarness/0.1 (+https://github.com/ryharness/ryharness)',
+        response = await options.fetchImpl(
+          current,
+          {
+            redirect: 'manual',
+            signal: controller.signal,
+            headers: {
+              accept: 'text/html,application/xhtml+xml,text/plain,application/json;q=0.9,*/*;q=0.8',
+              'user-agent': 'RyHarness/0.1 (+https://github.com/ryharness/ryharness)',
+            },
           },
-        })
+          { ip: allowed.ip },
+        )
       } catch (error) {
         if (timedOut) throw new Error(`读取超时（${options.timeoutMs} 毫秒）`)
         if (controller.signal.aborted) throw new Error('读取已取消')
@@ -382,7 +490,8 @@ function argsOf(args: unknown): Record<string, unknown> {
 
 /** 造出 `read_url` 工具；限额可注入，生产用默认值。 */
 export function createReadUrlTool(options: ReadUrlOptions = {}): Tool {
-  const fetchImpl = options.fetchImpl ?? defaultFetch
+  // 默认取回器钉 IP：fetchImpl 与 connectLookup 都留给测试注入。
+  const fetchImpl = options.fetchImpl ?? createPinnedFetch(options.connectLookup ?? defaultConnectLookup)
   const resolveHost = options.resolveHost ?? defaultResolveHost
   const timeoutMs = options.timeoutMs ?? READ_URL_TIMEOUT_MS
   const maxBytes = options.maxBytes ?? READ_URL_MAX_BYTES

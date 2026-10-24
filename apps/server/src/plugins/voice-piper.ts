@@ -8,6 +8,8 @@
  * 两件事刻意分开：
  * - **安装**是异步的（约 85 MB），状态机对外只有 `absent / downloading / ready /
  *   error / unsupported` 五个值；POST 只启动，GET 轮询，重复启动幂等。
+ *   二进制解压执行前必须先通过 GitHub 官方 digest 校验；拿不到官方摘要时只允许
+ *   官方直连，第三方代理一律禁用——不可校验的可执行文件等于把 RCE 交给代理运营者。
  * - **合成**是串行的：同一时刻只允许一个 `piper.exe`，否则几段流式文本同时开口会
  *   把 CPU 抢成复读机。进程 30 秒没结束就杀掉，并随客户端断开一起中止。
  *
@@ -21,7 +23,7 @@
  */
 
 import { execFile, spawn } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs'
 import { open, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
@@ -41,16 +43,32 @@ const PIPER_EXE = 'piper.exe'
 const MODEL_FILE = 'zh_CN-huayan-medium.onnx'
 const MODEL_CONFIG_FILE = `${MODEL_FILE}.json`
 
-/** 下载源：镜像优先、直连兜底（本网络实测直连 GitHub / HF 不可用）。 */
-const GITHUB_RELEASE = 'https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_windows_amd64.zip'
-const HF_MODEL_ROOT = 'https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/medium'
-const HF_MIRROR_ROOT = 'https://hf-mirror.com/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/medium'
+/** Piper 官方发布的三要素：下载 URL 与 Releases API 都从这里推导，升版本只改这一处。 */
+const PIPER_RELEASE_REPO = 'rhasspy/piper'
+const PIPER_RELEASE_TAG = '2023.11.14-2'
+const PIPER_BINARY_ASSET_NAME = 'piper_windows_amd64.zip'
+const GITHUB_RELEASE_BASE = `https://github.com/${PIPER_RELEASE_REPO}/releases/download`
+const GITHUB_RELEASE = `${GITHUB_RELEASE_BASE}/${PIPER_RELEASE_TAG}/${PIPER_BINARY_ASSET_NAME}`
+/** Releases API：asset 的 `digest`（`sha256:…`）是「这个 zip 就是官方发布的」的唯一凭据。 */
+const GITHUB_API_RELEASE = `https://api.github.com/repos/${PIPER_RELEASE_REPO}/releases/tags/${PIPER_RELEASE_TAG}`
 
+/**
+ * 二进制镜像表：官方直连第一，公共代理只作官方失败后的 fallback。
+ *
+ * 顺序就是信任顺序：zip 解出来是要直接执行的 piper.exe，把匿名代理排在官方前面
+ * 等于把「往用户机器上放什么可执行文件」的决定权交给代理运营者。代理保留在列表里，
+ * 因为下载后会做官方 digest 校验，校验不过的文件到不了解压那一步；拿不到 digest
+ * 时代理会整个被禁用（见 downloadBinary）。
+ */
 export const PIPER_BINARY_MIRRORS: readonly string[] = [
+  GITHUB_RELEASE,
   `https://ghproxy.net/${GITHUB_RELEASE}`,
   `https://gh-proxy.com/${GITHUB_RELEASE}`,
-  GITHUB_RELEASE,
 ]
+
+/** 模型与配置是数据不是可执行文件，沿用镜像优先、直连兜底（本网络实测直连 HF 不可用）。 */
+const HF_MODEL_ROOT = 'https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/medium'
+const HF_MIRROR_ROOT = 'https://hf-mirror.com/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/medium'
 
 export const PIPER_MODEL_MIRRORS: readonly string[] = [
   `${HF_MIRROR_ROOT}/${MODEL_FILE}`,
@@ -129,6 +147,16 @@ export interface PiperInstallerOptions {
   parallelMinBytes?: number
 }
 
+/**
+ * piper 的安装状态在通用字段之外多带一条警示（如「未校验哈希」）。
+ *
+ * 放在子类型而不是改 routes/voice.ts 的公共接口：警示是 piper 供应链策略特有的
+ * 概念，其他引擎的安装卡不该被迫解释这个字段。
+ */
+export interface PiperInstallStatus extends VoiceInstallStatus {
+  warning?: string
+}
+
 /** 一个下载镜像失败后换下一个；任何一次 HTTP/大小校验失败都算失败。 */
 interface DownloadResult {
   received: number
@@ -191,6 +219,38 @@ function atLeast(path: string, bytes: number): boolean {
   }
 }
 
+/** Releases API 的 asset JSON（只取校验真正关心的两个字段）。 */
+interface GithubAsset {
+  name?: unknown
+  digest?: unknown
+}
+
+/**
+ * 从 release JSON 里取出二进制 asset 的官方 sha256（十六进制，剥掉 `sha256:` 前缀）。
+ *
+ * 只认 sha256：别的摘要算法、或老版本 API 没有的 `digest` 字段，一律按「拿不到」
+ * 返回 undefined，让调用方退到只允许官方直连的保守路径——宁可少一条下载腿，
+ * 不可少一道校验。
+ */
+function parseBinaryDigest(body: unknown): string | undefined {
+  if (typeof body !== 'object' || body === null) return undefined
+  const assets = (body as { assets?: unknown }).assets
+  if (!Array.isArray(assets)) return undefined
+  for (const asset of assets) {
+    if (typeof asset !== 'object' || asset === null) continue
+    const { name, digest } = asset as GithubAsset
+    if (name !== PIPER_BINARY_ASSET_NAME || typeof digest !== 'string') continue
+    const hex = digest.startsWith('sha256:') ? digest.slice('sha256:'.length) : ''
+    return /^[0-9a-f]{64}$/.test(hex) ? hex : undefined
+  }
+  return undefined
+}
+
+/** 整文件 SHA-256：安装包只有几十 MB，一次读入比流式简单且足够快。 */
+function sha256File(path: string): string {
+  return createHash('sha256').update(readFileSync(path)).digest('hex')
+}
+
 /**
  * Piper 安装器：状态机 + 镜像下载 + 原子换入。
  *
@@ -214,6 +274,7 @@ export class PiperInstaller {
   private completedBytes = 0
   private totalBytes = 0
   private error: string | undefined
+  private warning: string | undefined
   private task: Promise<void> | undefined
 
   constructor(options: PiperInstallerOptions) {
@@ -244,6 +305,7 @@ export class PiperInstaller {
     }
     this.state = 'downloading'
     this.error = undefined
+    this.warning = undefined
     this.receivedBytes = 0
     this.completedBytes = 0
     this.totalBytes = this.totalBytesEstimate
@@ -265,13 +327,14 @@ export class PiperInstaller {
   }
 
   /** 当前状态；进程重启后文件齐全也能直接认成 ready。 */
-  installStatus(): VoiceInstallStatus {
+  installStatus(): PiperInstallStatus {
     if (this.state === 'absent' && this.filesReady()) this.state = 'ready'
     return {
       state: this.state,
       ...(this.receivedBytes > 0 ? { receivedBytes: this.receivedBytes } : {}),
       ...(this.totalBytes > 0 ? { totalBytes: this.totalBytes } : {}),
       ...(this.error === undefined ? {} : { error: this.error }),
+      ...(this.warning === undefined ? {} : { warning: this.warning }),
     }
   }
 
@@ -300,8 +363,8 @@ export class PiperInstaller {
     const stage = join(this.voiceRoot, `.piper-install-${process.pid}-${randomUUID().slice(0, 8)}`)
     mkdirSync(stage, { recursive: true })
     try {
+      await this.downloadBinary(stage)
       const zipPath = join(stage, 'piper.zip')
-      await this.downloadWithMirrors(PIPER_BINARY_MIRRORS, zipPath, this.limits.binary, 'Piper 二进制')
       const extracted = join(stage, 'extracted')
       mkdirSync(extracted, { recursive: true })
       await this.extractZip(zipPath, extracted)
@@ -346,6 +409,59 @@ export class PiperInstaller {
       if (entry.isDirectory() && entry.name.startsWith('.piper-install-')) {
         rmSync(join(this.voiceRoot, entry.name), { recursive: true, force: true })
       }
+    }
+  }
+
+  /**
+   * 二进制下载：先锁完整性，再谈从哪里下。
+   *
+   * 1. 先问 Releases API 要官方 digest；任何一步拿不到（API 不可达、资产无摘要）都
+   *    退到「只允许官方直连」——不可校验的可执行文件不能从匿名代理拿，且把
+   *    「未校验哈希」挂到状态上明示，而不是默默放行；
+   * 2. 拿到 digest 后官方与代理都可以试（下载后逐字节 SHA-256 比对兜底），比对不过
+   *    就删文件、拒绝安装——此时最合理的解释是镜像投毒，必须让用户看见。
+   */
+  private async downloadBinary(stage: string): Promise<void> {
+    const zipPath = join(stage, 'piper.zip')
+    const digest = await this.fetchOfficialDigest()
+    if (digest === undefined) {
+      this.warning = '未校验哈希：GitHub 官方 API 不可用或未返回摘要，二进制仅从 GitHub 官方直连下载。'
+    } else {
+      this.warning = undefined
+    }
+    const mirrors = digest === undefined ? [GITHUB_RELEASE] : PIPER_BINARY_MIRRORS
+    try {
+      await this.downloadWithMirrors(mirrors, zipPath, this.limits.binary, 'Piper 二进制')
+    } catch (error) {
+      if (digest !== undefined || this.abort.signal.aborted) throw error
+      throw new Error(`${messageOf(error)}；拿不到官方哈希，已禁用第三方代理，只允许官方直连下载。`)
+    }
+    if (digest === undefined) return
+    const actual = sha256File(zipPath)
+    if (actual !== digest) {
+      rmSync(zipPath, { force: true })
+      const detail = `期望 ${digest.slice(0, 12)}…，实际 ${actual.slice(0, 12)}…`
+      throw new Error(`Piper 二进制 SHA-256 与官方发布不符（${detail}），可能被镜像篡改；已删除下载文件并拒绝安装。`)
+    }
+  }
+
+  /**
+   * 问 Releases API 要二进制 asset 的官方 sha256。
+   *
+   * 一次安装只调一次，未认证调用的速率限制足够用；API 失败不算安装失败——退到
+   * 只允许官方直连的保守路径即可，不能因为 GitHub API 抖动把安装整个堵死。
+   */
+  private async fetchOfficialDigest(): Promise<string | undefined> {
+    const signal = AbortSignal.any([this.abort.signal, AbortSignal.timeout(Math.min(this.requestTimeoutMs, 30_000))])
+    try {
+      const response = await this.fetchImpl(GITHUB_API_RELEASE, {
+        signal,
+        headers: { accept: 'application/vnd.github+json', 'user-agent': 'RyHarness/piper-installer' },
+      })
+      if (!response.ok) return undefined
+      return parseBinaryDigest(await response.json())
+    } catch {
+      return undefined
     }
   }
 

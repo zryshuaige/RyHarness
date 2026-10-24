@@ -1124,6 +1124,13 @@ button.tool-row:disabled { cursor: default; }
   display: flex; align-items: center; gap: var(--space-2);
   color: var(--text-secondary); font-size: var(--fs-sm); padding: var(--space-2) 0 0 48px;
   animation: msg-in var(--dur-in) var(--ease-out);
+  position: relative;
+}
+/* 正在想的那位助理的头像：挂在气泡的头像列位置（绝对定位，不占正文那一列），
+   视线左右游走。正文仍然从 48px 起，与气泡里的正文对齐。 */
+.typing-thinking-avatars {
+  position: absolute; left: 0; top: var(--space-2);
+  display: inline-flex; gap: 4px;
 }
 .typing-dots { display: inline-flex; gap: 4px; }
 .typing-dots i {
@@ -1200,6 +1207,34 @@ button.tool-row:disabled { cursor: default; }
 .send-btn:active:not(:disabled) { transform: scale(var(--press-scale)); }
 .queue-hint { margin: 0 0 6px; font-size: var(--fs-sm); color: var(--amber-text); display: flex; align-items: center; gap: 6px; }
 .queue-pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--amber-primary); animation: pulse 1.6s var(--ease-out) infinite; }
+
+/* 工具执行审批卡：等用户点头的 shell 命令。琥珀边框沿用「需要你注意」的语言
+   （与 queue-hint 同族），命令原文用等宽块展示——用户批准的是这段字节，不是一句摘要。 */
+.approval-stack { display: flex; flex-direction: column; gap: 8px; margin: 0 0 8px; }
+.approval-card {
+  padding: 10px 12px; background: var(--bg-elevated); border: 1px solid var(--amber-primary);
+  border-left-width: 3px; border-radius: var(--radius-md); box-shadow: var(--shadow-1);
+}
+.approval-title {
+  margin: 0 0 6px; font-size: var(--fs-sm); color: var(--amber-text);
+  display: flex; align-items: center; gap: 6px; font-weight: 600;
+}
+.approval-command {
+  margin: 0 0 8px; padding: 8px 10px; max-height: 120px; overflow: auto;
+  background: var(--bg-subtle); border-radius: var(--radius-sm);
+  font-family: var(--font-mono); font-size: var(--fs-sm); white-space: pre-wrap;
+  word-break: break-all;
+}
+.approval-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.approval-remember { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-xs); color: var(--text-secondary); }
+.approval-buttons { display: inline-flex; gap: 8px; }
+.approval-deny, .approval-allow {
+  padding: 5px 16px; border-radius: var(--radius-pill); border: 1px solid var(--edge);
+  font-size: var(--fs-sm); font-weight: 600; cursor: pointer; background: var(--bg-subtle);
+}
+.approval-allow { background: var(--amber-primary); border-color: var(--amber-primary); color: var(--amber-on-primary); }
+.approval-deny:hover:not(:disabled), .approval-allow:hover:not(:disabled) { filter: brightness(1.05); }
+.approval-deny:disabled, .approval-allow:disabled { opacity: 0.55; cursor: not-allowed; }
 
 .mention-menu {
   position: absolute; bottom: calc(100% + 6px); left: 0; list-style: none; margin: 0;
@@ -1426,6 +1461,10 @@ button.tool-row:disabled { cursor: default; }
   animation-delay: calc(min(var(--i, 0), 8) * 30ms);
 }
 .contact-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-2); }
+/* 指针停在某位助理的卡片上，他抬头应一声。
+   静态立绘只有一张图、换不了表情，就用一次轻轻的"点头"代替——指针压上去毫无反应
+   的话，这张卡看着就只是一张图。幅度走性格变量（见 lib/avatar-motion.ts）。 */
+.contact-card:hover .avatar { animation: avatar-greet 720ms var(--ease-out) 1; }
 .contact-card h3 { margin: 0; font-size: var(--fs-md); }
 .contact-model { color: var(--text-secondary); font-size: var(--fs-xs); margin: 0; }
 .contact-prompt { color: var(--text-secondary); font-size: var(--fs-xs); margin: 0; min-height: 34px; line-height: 1.5; }

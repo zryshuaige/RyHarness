@@ -78,6 +78,13 @@ export interface Tool {
   parameters: Record<string, unknown>
   /** 覆盖本轮默认执行模式；缺省即并发。 */
   executionMode?: ToolExecutionMode
+  /**
+   * 执行前需要用户逐条批准（shell 这类「模型可驱动任意宿主行为」的工具）。
+   * 循环在配额记账之后、真正执行之前询问审批方；拒绝转化为**错误结果**回给
+   * 模型（与配额越限同一条路径），不炸轮次。审批方缺省时视为放行——审批是
+   * 装配层的安全闸，不是内核的前置条件。
+   */
+  requiresApproval?: boolean
   execute(args: unknown, ctx: ToolContext): Promise<ToolResult>
 }
 

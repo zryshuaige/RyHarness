@@ -8,6 +8,7 @@ import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentDef, AgentTemplate, ProviderInfo } from '../renderer/src/api.ts'
 import { CreateAgentModal } from '../renderer/src/components/ContactsPage.tsx'
+import { TEST_PERSONA } from './fixtures.ts'
 import { currentValue, listedValues, openSelect, optionRows, pickOption, triggerLabel } from './select-dom.tsx'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -46,6 +47,7 @@ const templateWithShell: AgentTemplate = {
   description: '写代码',
   suggestedSystemPrompt: '你是编程搭档。',
   defaultModel: 'deepseek-chat',
+  persona: TEST_PERSONA,
   defaultTools: ['fs_read', 'fs_write', 'shell_exec'],
 }
 

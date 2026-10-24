@@ -1,5 +1,6 @@
 import { type CSSProperties, memo, type ReactNode, useRef, useState } from 'react'
 import type { AgentDef } from '../api.ts'
+import type { AvatarTemperament } from '../lib/avatar-motion.ts'
 import { humanError } from '../lib/error-text.ts'
 import { formatSize } from '../lib/format.ts'
 import { humanMime } from '../lib/humanize.ts'
@@ -364,12 +365,34 @@ export interface BubbleAgent {
   id: string
   name: string
   avatar?: string
+  /**
+   * 性格三维（外向 / 严谨 / 幽默）：决定头像动效的幅度与节奏。
+   *
+   * 刻意只取这三个数而不接整个 persona：**亲密度每轮都在涨**，把整个 persona 塞进
+   * 气泡的 props，memo 就每轮失效一次——几十条气泡为了一次用不上的分数全部重渲染。
+   * 这三维是用户在编辑里定的，一轮之内不动。
+   */
+  temperament?: AvatarTemperament
 }
 
-/** agent 侧头像：这条消息对应的 agent 定义还没到时留空（列还在，气泡不跳）。 */
-function agentAvatar(agent: BubbleAgent | undefined): ReactNode {
+/**
+ * agent 侧头像：这条消息对应的 agent 定义还没到时留空（列还在，气泡不跳）。
+ *
+ * `speaking` = 这条消息还在流式写入，也就是**这位此刻正在回话**——头像跟着动，
+ * 用户看到的不再是一张静止的图，而是"这位正在说"。
+ */
+function agentAvatar(agent: BubbleAgent | undefined, speaking: boolean): ReactNode {
   if (agent === undefined) return null
-  return <Avatar avatarKey={agent.avatar} name={agent.name} seed={agent.id} size={40} />
+  return (
+    <Avatar
+      avatarKey={agent.avatar}
+      name={agent.name}
+      seed={agent.id}
+      size={40}
+      speaking={speaking}
+      {...(agent.temperament === undefined ? {} : { temperament: agent.temperament })}
+    />
+  )
 }
 
 /** 聊天气泡：用户居右（琥珀渐变、右下直角），agent 居左（白底、左下直角）；
@@ -432,6 +455,13 @@ function MessageBubbleInner({
   const [pending, setPending] = useState(false)
   const isUser = message.senderType === 'user'
   const hue = agentHue(message.senderId)
+  /**
+   * 这位此刻正在回话：这条消息还在流式写入（done=false）。
+   *
+   * 判据就是消息本身，不另接一份状态：服务端把这条消息标成 done 的那一刻，头像自然
+   * 停下来——不需要谁去同步两个信号源。
+   */
+  const speaking = !isUser && message.done === false
   /**
    * 只给「真的有话可念」的 agent 消息挂朗读键：工具行、空占位与用户消息都不该出现
    * 一个点下去没声音的按钮（群聊与单聊同一口径）。
@@ -528,7 +558,7 @@ function MessageBubbleInner({
           跳。没有 viewer 时整列不渲染，老服务端下不多出一个空占位。 */}
       {(!isUser || viewer !== undefined) && (
         <span className="bubble-avatar-gutter">
-          {firstOfGroup && (isUser ? userAvatar(viewer) : agentAvatar(agent))}
+          {firstOfGroup && (isUser ? userAvatar(viewer) : agentAvatar(agent, speaking))}
         </span>
       )}
       <div className="bubble">

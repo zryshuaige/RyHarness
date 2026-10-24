@@ -8,6 +8,7 @@ import {
   animalHueFilter,
   parseAnimalAvatar,
 } from '../../lib/animal-3d.ts'
+import type { AvatarTemperament } from '../../lib/avatar-motion.ts'
 import { Avatar } from './Avatar.tsx'
 
 /**
@@ -245,6 +246,9 @@ export function Avatar3D({
   size = 40,
   tilt = false,
   className = '',
+  breathing = false,
+  speaking = false,
+  temperament,
 }: {
   avatarKey?: string
   name: string
@@ -252,6 +256,12 @@ export function Avatar3D({
   size?: number
   tilt?: boolean
   className?: string
+  /** 闲置呼吸：只给**单独出现**的大头像（身份卡、形象预览）。列表里的头像一律静态。 */
+  breathing?: boolean
+  /** 这位此刻正在回话。 */
+  speaking?: boolean
+  /** 性格三维：决定动效的幅度与节奏（见 lib/avatar-motion.ts）。 */
+  temperament?: AvatarTemperament
 }) {
   // hook 必须无条件调用一次（头像字段会变，条件 hook 会让 React 拆掉这棵树）
   const ref = useTilt(tilt)
@@ -279,7 +289,17 @@ export function Avatar3D({
       aria-label={name}
     >
       <span className="avatar-3d-stage">
-        <Avatar avatarKey={avatarKey} name={name} seed={seed} size={size} />
+        {/* 动效挂在内层这张图上：立体动物那支（上面的 AnimalFaces）是三视图叠放，
+            换脸与倾斜已经占满了 transform，外层再动会打架。 */}
+        <Avatar
+          avatarKey={avatarKey}
+          name={name}
+          seed={seed}
+          size={size}
+          breathing={breathing}
+          speaking={speaking}
+          {...(temperament === undefined ? {} : { temperament })}
+        />
       </span>
       <span className="avatar-3d-light" aria-hidden="true" />
       <span className="avatar-3d-rim" aria-hidden="true" />

@@ -23,14 +23,23 @@ function store(): MemoryStore {
   return new MemoryStore(storePath())
 }
 
+/** 测试用：拿到底层连接（模拟旧版本脏状态 / 捕获发往连接的 SQL）。 */
+function rawDb(s: MemoryStore): DatabaseSync {
+  return (s as unknown as { db: DatabaseSync }).db
+}
+
 /** 测试用：绕过存储层直接操作底层连接（模拟旧版本留下的脏状态）。 */
 function raw(s: MemoryStore, sql: string, ...args: unknown[]): void {
-  ;(s as unknown as { db: DatabaseSync }).db.prepare(sql).run(...(args as never[]))
+  rawDb(s)
+    .prepare(sql)
+    .run(...(args as never[]))
 }
 
 /** 测试用：绕过存储层直接查底层连接（含故意写错的 FTS 查询）。 */
 function rawQuery(s: MemoryStore, sql: string, ...args: unknown[]): unknown[] {
-  return (s as unknown as { db: DatabaseSync }).db.prepare(sql).all(...(args as never[])) as unknown[]
+  return rawDb(s)
+    .prepare(sql)
+    .all(...(args as never[])) as unknown[]
 }
 
 afterEach(() => {
@@ -47,7 +56,7 @@ describe('MemoryStore', () => {
   it('schema 迁移幂等，memory_meta 记录版本', () => {
     const s = store()
     migrateMemory(s['db' as keyof MemoryStore] as never) // 二次迁移不抛错
-    expect(MEMORY_SCHEMA_VERSION).toBe(5)
+    expect(MEMORY_SCHEMA_VERSION).toBe(7)
     s.close()
   })
 
@@ -121,6 +130,51 @@ describe('MemoryStore', () => {
     expect(() => {
       rawQuery(s, 'SELECT rowid FROM memories_fts WHERE memories_fts MATCH ?', 'or OR')
     }).toThrow(/syntax error/)
+    s.close()
+  })
+
+  it('FTS 查询臂上界：长输入的 MATCH 不超过 32 个 OR 臂，词表挑「库里真存在」的词项（针在文中最深处也能命中）', () => {
+    const s = store()
+    s.insert({ agentId: 'a1', kind: 'fact', content: '用户的女儿乳名叫小雨点点' })
+    // 2000 字多样化噪声 + 中段藏一句与记忆呼应的关键词；去重 bigram 数百个，
+    // 远超 32 上限（实测无上界时这个量级的 MATCH 在 2000 条记忆的库上要秒级）。
+    let noise = ''
+    for (let i = 0; i < 2000; i++) noise += String.fromCharCode(0x4e00 + ((i * 7919) % 9000))
+    const longInput = `${noise.slice(0, 1000)}对了想起来小雨点点的事${noise.slice(1000)}`
+
+    // 捕获真正发给 FTS5 的 MATCH 参数：臂数是结构不变量，不看墙钟。
+    const db = rawDb(s)
+    const original = db.prepare.bind(db)
+    const matchQueries: string[] = []
+    db.prepare = (sql: string) => {
+      const stmt = original(sql)
+      if (sql.includes('MATCH')) {
+        const rawAll = stmt.all.bind(stmt)
+        stmt.all = (...args: unknown[]) => {
+          matchQueries.push(String(args[0] ?? ''))
+          return rawAll(...(args as never[]))
+        }
+      }
+      return stmt
+    }
+
+    const hits = s.searchFts('a1', longInput)
+    db.prepare = original
+    expect(
+      hits.map((row) => {
+        return row.content
+      }),
+    ).toContain('用户的女儿乳名叫小雨点点')
+    expect(matchQueries).toHaveLength(1)
+    const matchQuery = matchQueries[0] ?? ''
+    const arms = matchQuery.split(' OR ')
+    expect(arms.length).toBeLessThanOrEqual(32)
+    // 词表选词：库里不存在的噪声 bigram（df=0）不该占臂，命中靠「小雨点点」族
+    expect(matchQuery).toContain('"小雨"')
+
+    // 纯函数路径（词表不可用时的头部截断兜底）同样受上界约束
+    expect(ftsMatchQuery(longInput).split(' OR ').length).toBeLessThanOrEqual(32)
+    expect(ftsMatchQuery('a"b')).toBe('"a""" OR """b"')
     s.close()
   })
 
@@ -214,6 +268,32 @@ describe('MemoryStore', () => {
     // 归档记忆仍在库里（可审计、可恢复），只是不进检索面
     expect(s.stats().total).toBe(5)
     expect(s.searchFts('a1', '住在北京')).toHaveLength(0)
+    s.close()
+  })
+
+  it('休眠归档豁免关键事实与被 👍 记忆：低频关键事实不因「90 天没被恰好召回」失忆', () => {
+    const s = store()
+    // 关键事实（importance=3）：「女儿叫小雨」可能半年都想不起来一次
+    const key = s.insert({ agentId: 'a1', kind: 'profile', content: '用户的女儿乳名叫小雨点点', importance: 3 })
+    s.backdate(key.id, Date.now() - 365 * 86_400_000)
+    // 被用户 👍 过的一般记忆：显式价值信号，同样不许用访问彩票裁决
+    const liked = s.insert({ agentId: 'a1', kind: 'preference', content: '用户喜欢简洁的回复' })
+    raw(s, 'UPDATE memories SET helpful_count = 1 WHERE id = ?', liked.id)
+    s.backdate(liked.id, Date.now() - 365 * 86_400_000)
+    // 普通过期记忆：照常归档
+    const plain = s.insert({ agentId: 'a1', kind: 'event', content: '很普通的一次闲聊' })
+    s.backdate(plain.id, Date.now() - 365 * 86_400_000)
+
+    expect(s.archiveDormant(90 * 86_400_000)).toBe(1)
+    expect(s.get(key.id)?.status).toBe('active')
+    expect(s.get(liked.id)?.status).toBe('active')
+    expect(s.get(plain.id)?.status).toBe('inactive')
+    // 豁免不是嘴上说说：关键事实仍可被词法通道召回
+    expect(
+      s.searchFts('a1', '小雨点点').map((row) => {
+        return row.id
+      }),
+    ).toContain(key.id)
     s.close()
   })
 
@@ -505,6 +585,51 @@ describe('MemoryStore', () => {
         return entry.id
       }),
     ).not.toContain(current.id)
+    s.close()
+  })
+
+  it('updateContent：就地改内容，FTS 行同步换行（新内容可搜、旧内容搜不到），updated_at 前进', () => {
+    const s = store()
+    const row = s.insert({ agentId: 'a1', kind: 'fact', content: '用户住在北京' })
+    expect(s.ftsIndexSize()).toBe(1)
+
+    const updated = s.updateContent(row.id, '用户搬到了上海')
+    expect(updated?.content).toBe('用户搬到了上海')
+    expect(updated?.status).toBe('active')
+    expect(updated?.updatedAt).toBeGreaterThan(row.updatedAt)
+    // 索引是换行不是加行：FTS5 rowid 唯一，旧行不清掉新行就插不进去。
+    expect(s.ftsIndexSize()).toBe(1)
+    expect(s.searchFts('a1', '上海').map((entry) => entry.id)).toEqual([row.id])
+    expect(s.searchFts('a1', '北京')).toEqual([])
+    s.close()
+  })
+
+  it('updateContent 只动 active 行：归档/软删/不存在一律拒绝，内容原样保留', () => {
+    const s = store()
+    const archived = s.insert({ agentId: 'a1', kind: 'event', content: '很久以前的事件' })
+    s.backdate(archived.id, Date.now() - 300 * 86_400_000)
+    expect(s.archiveDormant(90 * 86_400_000)).toBe(1)
+    const softDeleted = s.insert({ agentId: 'a1', kind: 'fact', content: '软删掉的' })
+    s.supersede(softDeleted.id, 'deleted')
+
+    // 归档行走 restore、软删行走软删链语义，编辑它们等于绕过状态机改写历史。
+    expect(s.updateContent(archived.id, '改归档')).toBeUndefined()
+    expect(s.updateContent(softDeleted.id, '改软删')).toBeUndefined()
+    expect(s.updateContent('no-such-id', '改不存在')).toBeUndefined()
+    expect(s.get(archived.id)?.content).toBe('很久以前的事件')
+    expect(s.get(softDeleted.id)?.content).toBe('软删掉的')
+    s.close()
+  })
+
+  it('updateContent 行与索引行同事务：索引写失败时内容一起回滚（不留词法还在学旧话的半条记忆）', () => {
+    const s = store()
+    const row = s.insert({ agentId: 'a1', kind: 'fact', content: '写对了的事实' })
+    raw(s, 'DROP TABLE memories_fts')
+    expect(() => {
+      s.updateContent(row.id, '改了一半')
+    }).toThrow()
+    // 只改了内容没换索引 = BM25 永远展示旧内容，比不编辑更迷惑，必须一起回滚。
+    expect(s.get(row.id)?.content).toBe('写对了的事实')
     s.close()
   })
 

@@ -156,10 +156,22 @@ export interface ChatSnapshot {
   typing: Record<string, number>
   /** 有消息在排队等待上一 turn 结束。 */
   queueing: boolean
+  /** 等用户批准的工具调用（shell_exec 等）；决议/超时/取消后由 approval-resolved 撤掉。 */
+  approvals: PendingApproval[]
   error?: { message: string; code: string }
 }
 
-const EMPTY: ChatSnapshot = { messages: [], relays: [], typing: {}, queueing: false }
+/** 一张挂起的审批卡（approval-request 事件的折叠形态）。 */
+export interface PendingApproval {
+  approvalId: string
+  /** 发起这次工具调用的 agent id。 */
+  senderId: string
+  toolName: string
+  /** 原始 JSON 参数（命令在这里，渲染时再解析展示）。 */
+  args: string
+}
+
+const EMPTY: ChatSnapshot = { messages: [], relays: [], typing: {}, queueing: false, approvals: [] }
 
 /**
  * 基础重绘节流窗口：连续流式事件在窗口内合并成一次重绘（≈25fps）。
@@ -364,6 +376,7 @@ interface SnapshotPatch {
   relays?: RelayItem[]
   typing?: Record<string, number>
   queueing?: boolean
+  approvals?: PendingApproval[]
   error?: { message: string; code: string } | undefined
   /** 仅当为 true 时才允许把 error 清成 undefined。 */
   clearError?: boolean
@@ -544,6 +557,7 @@ export class ChatStore {
       relays: patch.relays ?? prev.relays,
       typing: patch.typing ?? prev.typing,
       queueing: patch.queueing ?? prev.queueing,
+      approvals: patch.approvals ?? prev.approvals,
       ...(error === undefined ? {} : { error }),
     }
     this.snapshot = next
@@ -838,6 +852,30 @@ export class ChatStore {
       }
       case 'queued': {
         this.emit({ queueing: true })
+        return
+      }
+      case 'approval-request': {
+        // 不去重：同一条命令多次发起就是多张卡（approvalId 每次不同），各自等各自的决议。
+        this.emit({
+          approvals: [
+            ...this.snapshot.approvals,
+            {
+              approvalId: event.approvalId,
+              senderId: event.senderId,
+              toolName: event.toolName,
+              args: event.arguments,
+            },
+          ],
+        })
+        return
+      }
+      case 'approval-resolved': {
+        // 超时/取消/别处窗口已决议都走这里撤卡；本地乐观移除后收到同 id 是幂等的。
+        this.emit({
+          approvals: this.snapshot.approvals.filter((approval) => {
+            return approval.approvalId !== event.approvalId
+          }),
+        })
         return
       }
       case 'error': {

@@ -68,6 +68,9 @@ function makeApi(overrides: Partial<ApiClient> = {}) {
     restoreMemory: vi.fn(() => {
       return Promise.resolve({ restored: 'm2' })
     }),
+    updateMemory: vi.fn(() => {
+      return Promise.resolve({ memory: memoryRow({ content: '改好了的内容' }) })
+    }),
     reembedMemories: vi.fn(() => {
       return Promise.resolve({ reembedded: 2 })
     }),
@@ -190,5 +193,76 @@ describe('重建向量索引', () => {
     })!
     click(cancel)
     expect(api.reembedMemories).not.toHaveBeenCalled()
+  })
+})
+
+describe('行内编辑', () => {
+  /** 打开某行的编辑器（归档分区默认折叠，活跃行里文本为「编辑」的按钮就是入口）。 */
+  function openEditor(): void {
+    const edit = [...container.querySelectorAll<HTMLButtonElement>('.memory-row button')].find((node) => {
+      return node.textContent === '编辑'
+    })
+    if (edit === undefined) throw new Error('编辑按钮不在 DOM 里')
+    click(edit)
+  }
+
+  /** 往编辑中的 textarea 输入（React 受控组件走原生 value setter + input 事件）。 */
+  function typeDraft(value: string): void {
+    act(() => {
+      const textarea = container.querySelector<HTMLTextAreaElement>('.bubble-edit-input')
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
+      if (textarea === null || setter === undefined) throw new Error('编辑输入框不在 DOM 里')
+      setter.call(textarea, value)
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+  }
+
+  function saveButton(): HTMLButtonElement {
+    const button = container.querySelector<HTMLButtonElement>('.bubble-edit-save')
+    if (button === null) throw new Error('保存按钮不在 DOM 里')
+    return button
+  }
+
+  it('点「编辑」摊开预填原内容的输入框，保存调 updateMemory 并刷新列表', async () => {
+    const api = makeApi()
+    await renderPanel(api)
+    openEditor()
+    const textarea = container.querySelector<HTMLTextAreaElement>('.bubble-edit-input')
+    expect(textarea?.value).toBe('用户喜欢简洁的回复')
+
+    typeDraft('用户喜欢带例子的回复')
+    await act(async () => {
+      saveButton().click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(api.updateMemory).toHaveBeenCalledWith('m1', '用户喜欢带例子的回复')
+    // 保存成功后收起编辑器并重新拉列表（看到的就是改过的）。
+    expect(container.querySelector('.bubble-edit-input')).toBeNull()
+    expect(api.listAgentMemories).toHaveBeenCalledTimes(2)
+  })
+
+  it('取消编辑不动数据：不发起请求，行内容保持原文', async () => {
+    const api = makeApi()
+    await renderPanel(api)
+    openEditor()
+    typeDraft('改了一半又后悔')
+    const cancel = container.querySelector<HTMLButtonElement>('.bubble-edit-cancel')
+    if (cancel === null) throw new Error('取消按钮不在 DOM 里')
+    click(cancel)
+    expect(api.updateMemory).not.toHaveBeenCalled()
+    expect(container.querySelector('.bubble-edit-input')).toBeNull()
+    expect(container.textContent).toContain('用户喜欢简洁的回复')
+  })
+
+  it('清空内容后保存禁用（空内容没有资格发出请求）', async () => {
+    const api = makeApi()
+    await renderPanel(api)
+    openEditor()
+    typeDraft('   ')
+    const save = saveButton()
+    expect(save.disabled).toBe(true)
+    click(save)
+    expect(api.updateMemory).not.toHaveBeenCalled()
   })
 })

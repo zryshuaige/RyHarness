@@ -16,6 +16,7 @@ export {
   DEFAULT_HISTORY_BUDGET_TOKENS,
   dispatcherRoutingSuffix,
   GroupDispatcher,
+  groupTranscriptBlock,
   handoffText,
   memberHandoffSuffix,
 } from './dispatcher.ts'

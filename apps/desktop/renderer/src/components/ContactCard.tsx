@@ -63,7 +63,14 @@ function ContactCardImpl({
   const hasVoice = persona.voiceId !== NO_VOICE_ID
   return (
     <article className="contact-card" style={stagger(index + 1)}>
-      <Avatar3D avatarKey={agent.avatar} name={agent.name} seed={agent.id} size={56} tilt />
+      <Avatar3D
+        avatarKey={agent.avatar}
+        name={agent.name}
+        seed={agent.id}
+        size={56}
+        tilt
+        temperament={{ extroversion: persona.extroversion, rigor: persona.rigor, humor: persona.humor }}
+      />
       <h3>
         {agent.name}
         {badge !== undefined && <span className="badge">{badge}</span>}

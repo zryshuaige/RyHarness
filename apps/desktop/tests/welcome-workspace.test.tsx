@@ -102,6 +102,7 @@ afterEach(() => {
 function renderWelcome(overrides: {
   agents?: AgentDef[]
   conversations?: Conversation[]
+  providers?: ProviderInfo[]
   onSend?: (text: string, target: WelcomeTarget) => void
   onOpenConversation?: (id: string) => void
 }): void {
@@ -112,7 +113,7 @@ function renderWelcome(overrides: {
         ryen={ryen}
         agents={overrides.agents ?? [ryen, coder, writer]}
         conversations={overrides.conversations ?? []}
-        providers={providers}
+        providers={overrides.providers ?? providers}
         onSaveApiKey={() => {
           return Promise.resolve()
         }}
@@ -301,6 +302,32 @@ describe('欢迎页：起步建议', () => {
       '发往小队 3 人',
       '发往Ryen',
     ])
+  })
+
+  it('没有可用供应商时：点建议不往禁用的输入框里填字，焦点与播报都引向配 Key 卡', () => {
+    renderWelcome({
+      providers: [{ id: 'siliconflow', displayName: 'SiliconFlow', apiKeyConfigured: false, models: [] }],
+    })
+    const textarea = container.querySelector<HTMLTextAreaElement>('.welcome-compose textarea')
+    if (textarea === null) throw new Error('首屏没有输入框')
+    // 未就绪时输入框是禁用的（此时 usable=false 且清单已读完）。
+    expect(textarea.disabled).toBe(true)
+    const task = container.querySelector<HTMLButtonElement>(
+      '.welcome-task[data-prompt="帮我做一份行业分析 PPT，小队一起上"]',
+    )
+    if (task === null) throw new Error('找不到行业分析建议')
+    act(() => {
+      task.click()
+    })
+    // 字没有进灰掉的输入框（进去了也改不了、发不出），去向也没被拨动。
+    expect(textarea.value).toBe('')
+    expect(container.querySelector('.welcome-squad')?.getAttribute('aria-pressed')).toBe('false')
+    // 焦点落在配置卡上，播报换成引导配 Key 的文案，而不是「你可以改完再发」。
+    const prereq = container.querySelector('.welcome-prereq')
+    expect(prereq).not.toBeNull()
+    expect(document.activeElement).toBe(prereq)
+    expect(container.querySelector('.welcome-live')?.textContent).toContain('先在上面配一家')
+    expect(container.querySelector('.welcome-live')?.textContent).not.toContain('你可以改完再发')
   })
 })
 

@@ -85,12 +85,21 @@ export {
   VOICE_PIPER_PLUGIN_ID,
   voicePiperPlugin,
 } from './plugins/voice-piper.ts'
-export type { FetchLike, ReadUrlOptions, ReadUrlResult, ResolveHost } from './plugins/web-read.ts'
+export type {
+  ConnectLookup,
+  FetchLike,
+  ReadUrlOptions,
+  ReadUrlResult,
+  ResolveHost,
+  UrlPin,
+} from './plugins/web-read.ts'
 export {
+  createPinnedFetch,
   createReadUrlTool,
   decodeHtmlEntities,
   htmlToText,
   isPrivateAddress,
+  pinnedRequestOptions,
   READ_URL_MAX_BYTES,
   READ_URL_MAX_CHARS,
   READ_URL_TIMEOUT_MS,
@@ -99,7 +108,9 @@ export {
 } from './plugins/web-read.ts'
 export type { ProactiveRun, ProactiveSettings, ProactiveSnapshot } from './proactive.ts'
 export { composeProactiveMessage, localDayKey, PROACTIVE_AGENT_ID, PROACTIVE_BLOCK_TYPE } from './proactive.ts'
+export type { ConversationState } from './routes/conversations.ts'
 export type { MemoryHealthReport, MemoryRecall } from './routes/memory.ts'
+export type { UserProfile } from './routes/profile.ts'
 export type { ProviderUsage } from './routes/providers.ts'
 export type {
   ConversationUsageRow,
@@ -111,6 +122,7 @@ export type { VibeOutputView, VibeProjectView, VibeQuestionView, VibeSessionView
 export { MAX_SQUAD_SIZE, pickSquad, registerVibeRoutes } from './routes/vibe.ts'
 export type { AgentTemplate } from './seed.ts'
 export { AGENT_TEMPLATES, ensureSeedAgents, instantiateTemplate } from './seed.ts'
+export type { TelemetrySnapshot, TurnTiming } from './telemetry.ts'
 export type { VibeProject, VibeProjectFile } from './vibe/project.ts'
 export { DELIVERABLE_KINDS, type DeliverableKind } from './vibe/project.ts'
 export type { VibeSession, VibeStatus } from './vibe/store.ts'

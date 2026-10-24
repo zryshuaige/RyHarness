@@ -23,7 +23,7 @@ function formatDate(ts: number): string {
 
 /**
  * 记忆面板（弹层）：某 agent 的私有记忆 + 共享画像列表。
- * kind 徽章 + 内容 + 时间 + 来源会话 + 软删按钮。
+ * kind 徽章 + 内容 + 时间 + 来源会话 + 行内编辑 + 软删按钮。
  * 底部：已归档分区（可折叠、可恢复）与「重建向量索引」（embedding 模型变更后的回填）。
  */
 export function MemoryPanel({
@@ -47,6 +47,11 @@ export function MemoryPanel({
   const [archivedOpen, setArchivedOpen] = useState(false)
   const [restoringId, setRestoringId] = useState<string | undefined>(undefined)
   const [deletingId, setDeletingId] = useState<string | undefined>(undefined)
+  /** 正在编辑的记忆 id（同一时刻至多一行摊开输入框）。 */
+  const [editingId, setEditingId] = useState<string | undefined>(undefined)
+  /** 编辑中的草稿（预填原内容；空内容禁用保存）。 */
+  const [draft, setDraft] = useState('')
+  const [savingEditId, setSavingEditId] = useState<string | undefined>(undefined)
   const [confirmingReembed, setConfirmingReembed] = useState(false)
   const [reembedding, setReembedding] = useState(false)
 
@@ -133,34 +138,119 @@ export function MemoryPanel({
     }
   }
 
-  const renderRow = (memory: MemoryRow, isShared: boolean) => (
-    <li key={memory.id} className="memory-row">
-      <span className={`memory-kind kind-${memory.kind}`}>
-        {KIND_LABELS[memory.kind]}
-        {isShared ? ' · 共享' : ''}
-      </span>
-      <span className="memory-content">{memory.content}</span>
-      <span className="memory-meta">
-        {formatDate(memory.updatedAt)}
-        {memory.sourceConversationId !== undefined
-          ? ` · ${conversationTitles.get(memory.sourceConversationId) ?? '会话'}`
-          : ''}
-      </span>
-      <button
-        type="button"
-        className="btn btn-mini memory-delete"
-        style={{ width: 'auto', height: 'auto', padding: '2px 8px', whiteSpace: 'nowrap' }}
-        title="移入归档（可以撤销）"
-        aria-label={`移入归档：${memory.content.slice(0, 20)}`}
-        disabled={deletingId === memory.id}
-        onClick={() => {
-          void remove(memory.id)
-        }}
-      >
-        {deletingId === memory.id ? '归档中…' : '移入归档'}
-      </button>
-    </li>
-  )
+  const startEdit = (memory: MemoryRow): void => {
+    setEditingId(memory.id)
+    setDraft(memory.content)
+  }
+
+  const cancelEdit = (): void => {
+    setEditingId(undefined)
+    setDraft('')
+  }
+
+  const saveEdit = async (id: string): Promise<void> => {
+    const content = draft.trim()
+    if (content.length === 0) return
+    setSavingEditId(id)
+    try {
+      await api.updateMemory(id, content)
+      toast.success('已保存修改')
+      cancelEdit()
+      reload()
+    } catch (error) {
+      toast.error(humanError(error, '这条记忆没能保存，再试一次'))
+    } finally {
+      setSavingEditId(undefined)
+    }
+  }
+
+  const renderRow = (memory: MemoryRow, isShared: boolean) => {
+    if (editingId === memory.id) {
+      return (
+        <li key={memory.id} className="memory-row">
+          <span className={`memory-kind kind-${memory.kind}`}>
+            {KIND_LABELS[memory.kind]}
+            {isShared ? ' · 共享' : ''}
+          </span>
+          {/* 复用消息气泡的就地编辑样式（bubble-edit*）：同一个「原地摊开输入框」
+              的交互，不该为记忆面板再造一套视觉。 */}
+          <div className="bubble-edit" style={{ flex: 1, minWidth: 0 }}>
+            <textarea
+              className="bubble-edit-input"
+              value={draft}
+              rows={2}
+              aria-label="编辑这条记忆"
+              onChange={(event) => {
+                setDraft(event.target.value)
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== 'Escape') return
+                event.preventDefault()
+                cancelEdit()
+              }}
+            />
+            <div className="bubble-edit-actions">
+              <button
+                type="button"
+                className="bubble-edit-save"
+                aria-label="保存修改"
+                disabled={draft.trim().length === 0 || savingEditId !== undefined}
+                onClick={() => {
+                  void saveEdit(memory.id)
+                }}
+              >
+                {savingEditId === memory.id ? '保存中…' : '保存'}
+              </button>
+              <button type="button" className="bubble-edit-cancel" aria-label="取消编辑" onClick={cancelEdit}>
+                取消
+              </button>
+            </div>
+          </div>
+        </li>
+      )
+    }
+    return (
+      <li key={memory.id} className="memory-row">
+        <span className={`memory-kind kind-${memory.kind}`}>
+          {KIND_LABELS[memory.kind]}
+          {isShared ? ' · 共享' : ''}
+        </span>
+        <span className="memory-content">{memory.content}</span>
+        <span className="memory-meta">
+          {formatDate(memory.updatedAt)}
+          {memory.sourceConversationId !== undefined
+            ? ` · ${conversationTitles.get(memory.sourceConversationId) ?? '会话'}`
+            : ''}
+        </span>
+        <button
+          type="button"
+          className="btn btn-mini"
+          style={{ width: 'auto', height: 'auto', padding: '2px 8px', whiteSpace: 'nowrap' }}
+          title="编辑这条记忆的内容"
+          aria-label={`编辑：${memory.content.slice(0, 20)}`}
+          disabled={deletingId === memory.id}
+          onClick={() => {
+            startEdit(memory)
+          }}
+        >
+          编辑
+        </button>
+        <button
+          type="button"
+          className="btn btn-mini memory-delete"
+          style={{ width: 'auto', height: 'auto', padding: '2px 8px', whiteSpace: 'nowrap' }}
+          title="移入归档（可以撤销）"
+          aria-label={`移入归档：${memory.content.slice(0, 20)}`}
+          disabled={deletingId === memory.id}
+          onClick={() => {
+            void remove(memory.id)
+          }}
+        >
+          {deletingId === memory.id ? '归档中…' : '移入归档'}
+        </button>
+      </li>
+    )
+  }
 
   return (
     <Modal title={`${agentName} 的记忆`} onClose={onClose}>

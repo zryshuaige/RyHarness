@@ -3,21 +3,45 @@
  * API 地址从窗口 URL query（?api=...，主进程注入）读取。
  */
 
+import type { PlaybookEntry, ReflectionRow } from '@ryharness/evolve'
+import type { PublicMemoryRow } from '@ryharness/memory'
 import type {
+  AgentTemplate,
+  ConversationState,
   ConversationUsageRow,
+  MemoryRecall,
   PluginView,
   ProviderAgentUsage,
+  ProviderPreset,
   ProviderUsageRow,
   StampedWsEvent,
+  TelemetrySnapshot,
   TodoGroup,
   TodoItem,
+  TurnTiming,
   UsageReport,
+  UserProfile,
   VibeOutputView,
   VibeProjectView,
   VibeQuestionView,
   VibeSessionView,
   WsEvent,
 } from '@ryharness/server'
+/**
+ * 其余真源包：会话/人格/消息行在 @ryharness/session，经验手册在 @ryharness/evolve，
+ * 记忆的对外投影在 @ryharness/memory——同样是纯类型导入，转译期整条擦除，不会把
+ * node:sqlite 之类的服务端依赖拖进渲染层 bundle（lib/persona.ts 对**值**导入的顾虑
+ * 不适用于 `import type`）。
+ */
+/** 局部别名绑定：MessageUsageRow 要用 TurnUsage 这个名字；纯 re-export 不进局部作用域。 */
+import type {
+  AgentPersona,
+  Conversation as ServerConversation,
+  StoredAgent,
+  StoredMessage,
+  StoredUsage as TurnUsage,
+  UsageTotals,
+} from '@ryharness/session'
 /**
  * discover 的回执类型借 lib/provider-health.ts 那一份，而不是在这里另抄：同一个
  * 契约两处各写一遍，服务端加字段时渲染层就会出现「两处形状不同」的静默分叉。
@@ -43,13 +67,18 @@ const REST_HINT = '这次操作没能完成，再试一次。'
  * 被打进渲染层 bundle（renderer/vite.config.ts 无需加 alias）。
  */
 export type {
+  AgentTemplate,
   ConversationUsageRow,
+  MemoryRecall,
   PluginView,
   ProviderAgentUsage,
+  ProviderPreset,
   ProviderUsageRow,
   StampedWsEvent,
+  TelemetrySnapshot,
   TodoGroup,
   TodoItem,
+  TurnTiming,
   UsageReport,
   VibeOutputView,
   VibeProjectView,
@@ -59,29 +88,46 @@ export type {
 }
 
 // ---- 服务端形状 ----
+//
+// 本节的规则：服务端（或其包）已把形状定义成**导出类型**的，一律改为纯类型导入并
+// 在此换名重导出（对外导出名不变）；形状只写在路由处理函数里的（内联返回体 /
+// 模块私有接口），保留手抄并在各类型头上注明出处与原因。
 
-/** 人格四维 + 生日/口头禅/形象/音色/亲密度（服务端 @ryharness/session 的 AgentPersona）。 */
-export interface AgentPersona {
-  /** 外向 0-100。 */
-  extroversion: number
-  /** 严谨 0-100。 */
-  rigor: number
-  /** 幽默 0-100。 */
-  humor: number
-  /** 主动 0-100。 */
-  initiative: number
-  /** 生日（MM-DD 或 YYYY-MM-DD，纯展示）。 */
-  birthday?: string
-  catchphrase: string
-  /** 亲密度 0-100：随互动增长，影响称呼与主动性。 */
-  affinity: number
-  /** 音色 id（GET /api/voice/catalog 的 profiles 之一；`none` = 不朗读）。 */
-  voiceId: string
-  /** 一句话形象描述。 */
-  appearance: string
+/** 单轮 token 用量。真源：@ryharness/session 的 StoredUsage（消息行 usage 列的归一形态）。 */
+export type { StoredUsage as TurnUsage } from '@ryharness/session'
+/** 人格四维 + 生日/口头禅/形象/音色/亲密度。真源：@ryharness/session 的 persona.ts。 */
+/** 会话级累计用量。真源：@ryharness/session 的 UsageTotals（store.conversationUsage 的返回）。 */
+export type { AgentPersona, UsageTotals }
+
+/** 长期记忆行。真源：@ryharness/memory 的 PublicMemoryRow（路由出包一律过 toPublicMemories 投影）。 */
+export type MemoryRow = PublicMemoryRow
+
+/** 经验手册条目。真源：@ryharness/evolve 的 PlaybookEntry（GET /api/agents/:id/playbook 原样下发）。 */
+export type PlaybookEntryRow = PlaybookEntry
+
+/**
+ * 待验证的反思教训。真源：@ryharness/evolve 的 ReflectionRow——渲染层此前只抄了
+ * 五个字段，真源还有 contextDigest / status / updatedAt（多余字段按需再读，不影响）。
+ */
+export type { ReflectionRow }
+
+/**
+ * Agent 定义的读模型，真源：@ryharness/session 的 StoredAgent（GET /api/agents 的
+ * 返回形状）。真源里 persona 读出来必带（存储层对旧行按默认值补齐）、createdAt /
+ * updatedAt 恒在；渲染层仍把 persona 按可缺省处理（旧服务端与测试替身不全带），
+ * 时间戳不在读模型里（RightPanel 要用时另走 `as` 局部收窄），故这三项不透传。
+ */
+export type AgentDef = Omit<StoredAgent, 'persona' | 'createdAt' | 'updatedAt'> & {
+  /** 人格；缺省（旧服务端/测试替身）时按默认人格渲染。 */
+  persona?: AgentPersona
 }
 
-/** 产物预览的元数据（GET /api/files/:name/info）。 */
+/**
+ * 产物预览的元数据（GET /api/files/:name/info）。
+ *
+ * 手抄原因：形状是 apps/server/src/routes/conversations.ts 的 statArtifact 返回的
+ * 模块私有接口 PreviewFile（未导出），没有可 import 的真源；字段以那条路由为准。
+ */
 export interface ArtifactInfo {
   name: string
   /** 工作区内的绝对路径：「用系统程序打开 / 复制路径」两个动作的唯一原料。 */
@@ -90,46 +136,22 @@ export interface ArtifactInfo {
   mime: string
 }
 
-export interface AgentDef {
-  id: string
-  name: string
-  avatar?: string
-  systemPrompt: string
-  provider: string
-  model: string
-  temperature?: number
-  /** 思考强度档位（low / medium / high / off）；缺省 = 模型自己的默认。 */
-  reasoningEffort?: string
-  tools: string[]
-  /** 人格；缺省（旧服务端）时按默认人格渲染。 */
-  persona?: AgentPersona
-  isBuiltin: boolean
-}
-
-export interface AgentTemplate {
-  key: string
-  name: string
-  description: string
-  suggestedSystemPrompt: string
-  defaultTools: string[]
-  defaultModel: string
-  avatar?: string
-  /** 模板自带的性格。 */
-  persona?: AgentPersona
-}
-
+/**
+ * GET /api/providers 的行。
+ *
+ * 手抄原因：形状是 apps/server/src/routes/providers.ts 的 providerInfo 的**内联返回
+ * 类型**（未命名、未导出），且它声明的返回类型漏列了 reasoningEfforts（运行时按
+ * 路由的 reasoningControl 条件带上）——没有可 import 的完整真源。渲染层按「有才
+ * 展示」的容错读模型声明可选字段；服务端实际恒回 protocol/baseUrl/custom/usedBy。
+ */
 export interface ProviderInfo {
   id: string
   displayName: string
   apiKeyConfigured: boolean
   models: { id: string; name?: string; contextWindow?: number }[]
-  /**
-   * 以下几项在服务端补齐前是可选的（apps/server 的 GET /api/providers 只回
-   * 上面四个字段），渲染层按「有才展示」处理，不猜协议、不猜归属。
-   */
   /** 用户手动添加的供应商（可删除）；缺省视为内置。 */
   custom?: boolean
-  /** 接入协议（openai / anthropic / ollama …），徽标展示用。 */
+  /** 接入协议（openai / ollama），徽标展示用。 */
   protocol?: string
   baseUrl?: string
   /**
@@ -143,7 +165,13 @@ export interface ProviderInfo {
   usedBy?: { agentId: string; agentName: string }[]
 }
 
-/** 测连接的结果（POST /api/providers/:id/verify）。 */
+/**
+ * 测连接的结果（POST /api/providers/:id/verify）。
+ *
+ * 手抄原因：服务端的探测结论 VerifyOutcome 是 routes/providers.ts 的模块私有接口，
+ * 回包实际还带 code（机器可读分类）与 discovered（顺带发现的模型目录）——渲染层
+ * 只读 ok/message/latencyMs 三项，按子集声明；要读 code/discovered 时再补。
+ */
 export interface ProviderVerifyResult {
   ok: boolean
   /** ok=false 时的原因；服务端给什么就显示什么（渲染层另有中文归类）。 */
@@ -151,13 +179,23 @@ export interface ProviderVerifyResult {
   latencyMs: number
 }
 
-/** DELETE /api/settings/api-key/:id 的响应体（见 ApiClient.deleteApiKey）。 */
+/**
+ * DELETE /api/settings/api-key/:id 的响应体（见 ApiClient.deleteApiKey）。
+ *
+ * 手抄原因：形状是 routes/settings.ts 那条路由的内联字面量 `{providerId, configured:
+ * false}`，没有命名真源。
+ */
 export interface DeletedApiKeyResult {
   providerId: string
   configured: boolean
 }
 
-/** 全文搜索命中的一行（GET /api/search）。 */
+/**
+ * 全文搜索命中的一行（GET /api/search）。
+ *
+ * 手抄原因：真源是 routes/conversations.ts 的 SearchResult 接口（未导出），字段与其
+ * 逐一对齐；服务端加字段时以那边为准。
+ */
 export interface SearchResultRow {
   conversationId: string
   conversationTitle: string
@@ -168,33 +206,23 @@ export interface SearchResultRow {
   createdAt: number
 }
 
-/** 会话可改的元信息（PATCH /api/conversations/:id）。 */
-export interface ConversationPatch {
-  title?: string
-  pinned?: boolean
-  muted?: boolean
-  /** 群成员名单（换人）。服务端要求非空、且每个 agent 都存在；单聊改多成员会被 400。 */
-  memberAgentIds?: string[]
-  /**
-   * 群调度员。**服务端当前不落这个字段**（PATCH 的 patchable 只有
-   * title/pinned/muted/memberAgentIds，见 apps/server/src/routes/conversations.ts），
-   * 发过去会被原样忽略。调用方要按服务端回包里的 conversation.dispatcherAgentId
-   * 判真值，别把「发出去了」当成「改成了」。
-   */
-  dispatcherAgentId?: string
-}
+/**
+ * 会话可改的元信息（PATCH /api/conversations/:id 的入参）。
+ *
+ * 真源：@ryharness/server 的 ConversationState——服务端 PATCH 的 patchable 白名单就
+ * 是 title/pinned/muted/memberAgentIds（见 routes/conversations.ts），白名单外的键
+ * 一律被忽略；群调度员**不在其中**（新建群时可指定，改群时不落），要改调度员的
+ * 调用方见 {@link ApiClient.patchGroup} 的说明。
+ */
+export type { ConversationState as ConversationPatch }
 
-/** 供应商预设（/api/provider-presets）：添加供应商向导的可选项。 */
-export interface ProviderPreset {
-  id: string
-  displayName: string
-  protocol: string
-  baseUrl: string
-  models: string[]
-  docsUrl?: string
-}
-
-/** 新增自定义供应商（POST /api/providers）。 */
+/**
+ * 新增自定义供应商（POST /api/providers）。
+ *
+ * 手抄原因：服务端校验后的入参类型 NewProviderInput 是 routes/providers.ts 的模块
+ * 私有接口（models 是 `ProviderModelInput[]`，即裸 id 或带 contextWindow 的对象）；
+ * 渲染层表单实际按 ProviderSettings 的 Form 类型放宽流转，这里保持表单侧的宽模型。
+ */
 export interface CreateProviderInput {
   displayName: string
   protocol: string
@@ -207,9 +235,13 @@ export interface CreateProviderInput {
 /**
  * 改供应商（PATCH /api/providers/:id）。
  *
- * 字段与 POST 的入参一致，但凭据与 custom/presetId **不在白名单里**：前两个是归属
- * 标记（改了就等于伪造一条新的），凭据另有 settings 路由管。服务端对同名 baseUrl
- * 与「删掉仍被 agent 引用的模型」回 409。
+ * 手抄原因：真源是 routes/providers.ts 的 ProviderPatchInput（字段全部**可选**、
+ * models 为 ProviderModelInput[]）；渲染层编辑表单恒发全量四字段且 protocol 以宽
+ * string 流转，收敛到真源要连带动表单状态类型，此处保持现状并注明差异。
+ *
+ * 凭据与 custom/presetId **不在白名单里**：前两个是归属标记（改了就等于伪造一条
+ * 新的），凭据另有 settings 路由管。服务端对同名 baseUrl 与「删掉仍被 agent 引用
+ * 的模型」回 409。
  */
 export interface UpdateProviderInput {
   displayName: string
@@ -218,15 +250,14 @@ export interface UpdateProviderInput {
   models: string[]
 }
 
-export interface Conversation {
-  id: string
-  kind: 'direct' | 'group'
-  title: string
-  memberAgentIds: string[]
-  dispatcherAgentId?: string
-  lastReadSeq: number
-  createdAt: number
-  updatedAt: number
+/**
+ * 一个会话。基底真源：@ryharness/session 的 Conversation（存储行）；列表接口在基底
+ * 上再叠 lastMessagePreview/unreadCount，界面态视图恒补 pinned/muted，而 POST 建会
+ * 话的回包是裸存储行——所以这三组都按可缺省声明。proactive 标记由组件层的
+ * ConversationRow 叠加（见 ConversationList/WelcomeHome），不进这份类型。
+ */
+export type Conversation = ServerConversation & {
+  /** 最近一条消息的预览（GET /api/conversations 的列表行才有）。 */
   lastMessagePreview?: string
   unreadCount?: number
   /** 置顶：会话列表里排在最前；缺省 = 没置顶。 */
@@ -235,39 +266,24 @@ export interface Conversation {
   muted?: boolean
 }
 
-export interface MessageRow {
-  id: string
-  seq: number
-  conversationId: string
-  senderType: 'user' | 'agent' | 'system'
-  senderId?: string
+/**
+ * 一条历史消息。基底真源：@ryharness/session 的 StoredMessage（GET messages 原样
+ * 下发，自带 usage?/artifacts?）。唯一的偏差是 contentBlocks：存储层按 unknown[]
+ * 存（不假设块形状），这里声明的是渲染层实际读的 `type`/`text` 读模型——其余块
+ * 字段（如 tool-call 的 id/arguments）由读取点就地收窄（见 ChatView 的
+ * toolArgumentsOf）。
+ */
+export type MessageRow = Omit<StoredMessage, 'contentBlocks'> & {
   contentBlocks: { type: string; text?: string }[]
-  mentions: string[]
-  toolCallId?: string
-  turnIndex: number
-  createdAt: number
 }
 
-/** 单轮（或单条发言）的 token 用量，供应商回报后由服务端原样落库/下发。 */
-export interface TurnUsage {
-  inputTokens: number
-  outputTokens: number
-  totalTokens?: number
-  cacheReadTokens?: number
-  cacheWriteTokens?: number
-  reasoningTokens?: number
-}
-
-/** 会话级累计用量（服务端对各条消息求和）。 */
-export interface UsageTotals {
-  inputTokens: number
-  outputTokens: number
-  totalTokens: number
-  /** 计入用量的消息条数。 */
-  messages: number
-}
-
-/** 记忆系统统计（/api/memory/stats）。 */
+/**
+ * 记忆系统统计（/api/memory/stats）。
+ *
+ * 手抄原因：回包是路由把「enabled 分支 + memory store.stats()（内联返回类型）」
+ * 就地拼出来的复合体，服务端没有为它定义过导出类型；字段按 routes/memory.ts 的
+ * 两条 json() 分支核对（关闭时只有 enabled/recentLearned/consolidation）。
+ */
 export interface MemoryStats {
   enabled: boolean
   embeddings?: { label: string }
@@ -284,48 +300,10 @@ export interface MemoryStats {
 /**
  * 本机用户的资料。`avatar` 是头像风格 key，空串表示还没挑过。
  *
- * 它同时被界面与内核读（服务端把它拼成系统提示里的身份句），所以真源在服务端：
- * 渲染层拿一份副本是为了显示，不允许自己存第二份。
+ * 真源：@ryharness/server 的 routes/profile.ts——它同时被界面与内核读（服务端把它
+ * 拼成系统提示里的身份句），渲染层拿一份是为了显示，不允许自己存第二份。
  */
-export interface UserProfile {
-  name: string
-  avatar: string
-}
-
-/** 长期记忆行。 */
-export interface MemoryRow {
-  id: string
-  agentId: string
-  kind: 'profile' | 'fact' | 'preference' | 'event'
-  content: string
-  createdAt: number
-  updatedAt: number
-  accessCount: number
-  sourceConversationId?: string
-}
-
-/** 经验手册条目。 */
-export interface PlaybookEntryRow {
-  id: string
-  agentId: string
-  section: 'strategy' | 'pitfall' | 'preference' | 'tooling'
-  content: string
-  helpful: number
-  harmful: number
-  status: 'active' | 'deprecated'
-  createdAt: number
-  updatedAt: number
-  source: 'curator' | 'reflection' | 'seed' | 'manual'
-}
-
-/** 待验证的反思教训。 */
-export interface ReflectionRow {
-  id: string
-  agentId: string
-  lesson: string
-  hitCount: number
-  createdAt: number
-}
+export type { UserProfile }
 
 /** WS 连接状态（断线重连提示用）。 */
 export type WsConnectionStatus = 'open' | 'reconnecting'
@@ -529,6 +507,22 @@ export class ApiClient {
     return this.request(`/api/conversations/${conversationId}/cancel`, { method: 'POST' })
   }
 
+  /**
+   * 工具执行审批的决议（shell_exec 这类命令等的就是它）。
+   * 404 = 这张卡已被超时/取消收口，渲染层按 approval-resolved 事件撤卡即可。
+   */
+  decideApproval(
+    conversationId: string,
+    approvalId: string,
+    decision: 'allow' | 'deny',
+    remember = false,
+  ): Promise<{ approvalId: string; decision: 'allow' | 'deny' }> {
+    return this.request(`/api/conversations/${conversationId}/approvals/${approvalId}`, {
+      method: 'POST',
+      body: JSON.stringify({ decision, remember }),
+    })
+  }
+
   /** 应用内保存 API key（后端写 0600 文件，不回显明文）。 */
   setApiKey(providerId: string, apiKey: string): Promise<{ providerId: string; configured: boolean }> {
     return this.request('/api/settings/api-key', {
@@ -724,7 +718,7 @@ export class ApiClient {
   }
 
   /** 改会话元信息（重命名 / 置顶 / 静音）。 */
-  patchConversation(conversationId: string, patch: ConversationPatch): Promise<{ conversation: Conversation }> {
+  patchConversation(conversationId: string, patch: ConversationState): Promise<{ conversation: Conversation }> {
     return this.request(`/api/conversations/${conversationId}`, { method: 'PATCH', body: JSON.stringify(patch) })
   }
 
@@ -861,6 +855,11 @@ export class ApiClient {
     return this.request(`/api/memories/${id}`, { method: 'DELETE' })
   }
 
+  /** 就地编辑一条记忆的内容（过时事实改字，而不是整条删掉重学）。 */
+  updateMemory(id: string, content: string): Promise<{ memory: MemoryRow }> {
+    return this.request(`/api/memories/${id}`, { method: 'PATCH', body: JSON.stringify({ content }) })
+  }
+
   /** 已归档的记忆（全量返回，调用方按 agent 过滤）。 */
   listArchivedMemories(): Promise<{ items: MemoryRow[] }> {
     return this.request('/api/memory/archived')
@@ -953,6 +952,16 @@ export class ApiClient {
   /** 工作区目录（agent 读写文件的默认位置；由服务端解析，渲染层不猜路径）。 */
   workspace(): Promise<{ path: string }> {
     return this.request('/api/workspace')
+  }
+
+  /**
+   * 一键备份整库（会话+记忆+进化，同一个 SQLite 文件）。
+   *
+   * 备份路径由服务端定死在 dataDir/backups 内：渲染层不给路径参数，也就没有
+   * 「让服务端往任意位置写文件」的面。回包只带真实落盘的 path。
+   */
+  backup(): Promise<{ path: string }> {
+    return this.request('/api/backup', { method: 'POST', body: '{}' })
   }
 
   /**
@@ -1081,32 +1090,8 @@ export class ApiClient {
 const USAGE_PAGE_LIMIT = 200
 
 // ---- 记忆健康度 / 用量账单 / 经验溯源：这三块面板要读的服务端形状 ----
-
-/** 一轮 turn 的耗时画像（GET /api/telemetry 的 turns 元素）。 */
-export interface TurnTiming {
-  conversationId: string
-  kind: 'direct' | 'group'
-  turnIndex: number
-  /** 首 token 延迟；全程无文本时缺省。 */
-  firstTokenMs?: number
-  totalMs: number
-  /** 本轮记忆召回累计耗时（毫秒）。 */
-  memoryRecallMs: number
-  /** 注入本轮的记忆条数。 */
-  memoryItems: number
-  status: 'ok' | 'error' | 'aborted'
-  finishedAt: number
-}
-
-/** GET /api/telemetry 的返回体。 */
-export interface TelemetrySnapshot {
-  /** 最近的轮次，按结束时间倒序。 */
-  turns: TurnTiming[]
-  /** 最近的请求，按完成时间倒序。 */
-  requests: { method: string; path: string; status: number; durationMs: number; at: number }[]
-  /** 环形缓冲容量（两类各一份）。 */
-  capacity: number
-}
+// （TurnTiming / TelemetrySnapshot / MemoryRecall 已改为对 @ryharness/server 的
+// 纯类型导入，见顶部 re-export 区。）
 
 /** 带 usage 的消息行：服务端在消息行上带 usage，MessageRow 未声明这一维。 */
 export interface MessageUsageRow extends MessageRow {
@@ -1147,17 +1132,6 @@ export function messageText(row: MessageRow): string {
 // /api/evolve/stats）三块面板的真实数据面。形状与 apps/server 对应路由的返回体
 // 一一对齐；服务端关闭某子系统时回 {enabled:false} 而不是报错，面板据此说明原因。
 // 用量账单那组 DTO 已随顶部一起改为对 @ryharness/server 的纯类型导入。 ----
-
-/** 最近一次召回（GET /api/memory/health 的 lastRecall）。 */
-export interface MemoryRecall {
-  conversationId: string
-  /** 注入那一轮的记忆条数。 */
-  items: number
-  /** 那一轮的召回耗时（毫秒）。 */
-  ms: number
-  /** 该轮结束时刻（Unix 毫秒）。 */
-  at: number
-}
 
 /** GET /api/memory/health：记忆系统关闭时只有 enabled:false。 */
 export type MemoryHealthReport =

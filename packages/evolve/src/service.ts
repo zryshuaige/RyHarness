@@ -385,24 +385,24 @@ export class EvolveService implements AgentEvolutionHooks {
   /** Reflector 归因计数 + 教训验证（确定性，不烧 LLM，不重试）。返回处理条数。 */
   private attributeTurn(task: TurnTask): number {
     const { agentId, turn, relevantEntryIds } = task
-    const failed = turnFailure(turn).failed
+    const failure = turnFailure(turn)
+    // 纯基础设施故障轮（llmError 且无质量信号）对注入条目两个方向都不计数：
+    // harmful 无因果（供应商挂了不证明条目有害），helpful 也无证据（本轮结果
+    // 未知）。供应商连续故障若干轮由此不再累计出「假差评」。
+    const harmfulTurn = failure.failed && !failure.infraFailure
     let processed = 0
 
     for (const entryId of relevantEntryIds) {
-      this.store.addCounts(entryId, failed ? { harmful: 1 } : { helpful: 1 })
-      processed += 1
-      const entry = this.store.getEntry(entryId)
-      if (
-        entry !== undefined &&
-        entry.status === 'active' &&
-        entry.harmful + (failed ? 1 : 0) >= AUTO_DEPRECATE_HARMFUL
-      ) {
-        this.store.setEntryStatus(entryId, 'deprecated')
-        this.log(`@ryharness/evolve: entry ${entryId} auto-deprecated (harmful>=${AUTO_DEPRECATE_HARMFUL})`)
+      if (harmfulTurn || !failure.failed) {
+        this.store.addCounts(entryId, failure.failed ? { harmful: 1 } : { helpful: 1 })
+        processed += 1
+        if (harmfulTurn) this.maybeAutoDeprecate(entryId)
       }
     }
 
-    if (!failed) {
+    // 基础设施故障轮同样不给教训记验证 hit：本轮没有「成功」可言，教训转正
+    // （Voyager 式入库须过执行验证）不能建立在供应商故障轮上。
+    if (!failure.failed) {
       for (const reflectionId of turn.injectedReflectionIds) {
         const reflection = this.store.getReflection(reflectionId)
         if (reflection === undefined || reflection.status !== 'pending') continue
@@ -431,6 +431,31 @@ export class EvolveService implements AgentEvolutionHooks {
       }
     }
     return processed
+  }
+
+  /**
+   * harmful 触顶后的自动废弃（带保守护栏）。
+   *
+   * 为什么护栏选「净证据仍非负（helpful ≥ harmful）就不自动废弃，留给 Curator」
+   * 而不是废弃前再发一次 LLM 复核：本方法是确定性阶段（不烧 LLM、不重试），
+   * 塞进 LLM 调用会破坏这一分层；而 Curator 本来每轮都看得到条目与得分，可
+   * 显式 deprecate——「复核」由它承担。护栏针对的噪声源：归因是近似（👎 落在
+   * 「最近一次注入集合」上，工具连错也未必是条目内容所致），纯计数触顶但净分
+   * 非负说明证据相持，不该一票处决。llmError 轮在上游已不计 harmful，基础设施
+   * 故障凑不满阈值；这道闸是给其余误归因留的。净分为负仍立即废弃（原有路径）。
+   */
+  private maybeAutoDeprecate(entryId: string): void {
+    const entry = this.store.getEntry(entryId)
+    if (entry === undefined || entry.status !== 'active') return
+    if (entry.harmful < AUTO_DEPRECATE_HARMFUL) return
+    if (entry.helpful >= entry.harmful) {
+      this.log(
+        `@ryharness/evolve: entry ${entryId} harmful>=${AUTO_DEPRECATE_HARMFUL} but net evidence non-negative (helpful=${entry.helpful}), deprecate deferred to Curator`,
+      )
+      return
+    }
+    this.store.setEntryStatus(entryId, 'deprecated')
+    this.log(`@ryharness/evolve: entry ${entryId} auto-deprecated (harmful>=${AUTO_DEPRECATE_HARMFUL})`)
   }
 
   /** Reflexion + Curator：阶段级隔离，一个阶段失败不带走另一个。 */
@@ -618,10 +643,8 @@ export class EvolveService implements AgentEvolutionHooks {
     for (const entryId of injected.playbookEntryIds) {
       this.store.addCounts(entryId, { harmful: 1 })
       this.store.recordOrigins(entryId, origin())
-      const entry = this.store.getEntry(entryId)
-      if (entry !== undefined && entry.status === 'active' && entry.harmful + 1 >= AUTO_DEPRECATE_HARMFUL) {
-        this.store.setEntryStatus(entryId, 'deprecated')
-      }
+      // 与轮次归因同一道护栏：纯计数触顶但净证据非负时不自动废弃。
+      this.maybeAutoDeprecate(entryId)
     }
     if (this.llm !== undefined) {
       const trajectory: TurnTrajectory = {
@@ -754,19 +777,27 @@ function turnContextTexts(turn: EvolutionTurn): string[] {
   })
 }
 
-/** 本轮是否失败，以及给 Reflexion 看的失败原因。 */
-function turnFailure(turn: EvolutionTurn): { failed: boolean; reason: string } {
+/**
+ * 本轮是否失败，以及给 Reflexion 看的失败原因。
+ *
+ * `infraFailure`：失败**纯**由 llmError 构成（供应商 429/超时/断网一类基础设施
+ * 故障，且无负反馈、无工具连错）。基础设施错误与条目内容有害是正交维度，归因
+ * 计数要据此分流（见 {@link EvolveService.attributeTurn}）；负反馈/工具连错是
+ * 真实质量信号，即使与 llmError 同轮出现也不算纯基础设施故障。
+ */
+function turnFailure(turn: EvolutionTurn): { failed: boolean; reason: string; infraFailure: boolean } {
   const toolErrors = turn.toolResults.filter((t) => {
     return t.isError
   }).length
   const negativeFeedback = NEGATIVE_FEEDBACK_RE.test(turn.userText)
   const failed = turn.llmError || toolErrors >= 2 || negativeFeedback
+  const infraFailure = turn.llmError && !negativeFeedback && toolErrors < 2
   const reason = turn.llmError
     ? 'LLM 流以错误收尾'
     : negativeFeedback
       ? '用户表达负反馈'
       : `工具连续失败（${toolErrors} 次）`
-  return { failed, reason }
+  return { failed, reason, infraFailure }
 }
 
 function describe(error: unknown): string {

@@ -27,6 +27,8 @@
   "devDependencies": {
     "@dicebear/collection": "^9.4.2",
     "@dicebear/core": "^9.4.3",
+    "@ryharness/evolve": "workspace:*",
+    "@ryharness/memory": "workspace:*",
     "@ryharness/session": "workspace:*",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
@@ -81,6 +83,13 @@
         "zip"
       ],
       "icon": "assets/icon.ico"
+    },
+    "electronFuses": {
+      "runAsNode": false,
+      "enableNodeCliInspectArguments": false,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableCookieEncryption": true,
+      "grantFileProtocolExtraPrivileges": false
     },
     "nsis": {
       "oneClick": false,

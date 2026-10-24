@@ -27,6 +27,15 @@ export function bigrams(text: string): string {
 }
 
 /**
+ * FTS5 MATCH 查询串的 OR 臂上限（去重后）。
+ *
+ * OR 查询在 FTS5 里按「臂数 × 词项文档频率」付费且无内生上界：往搜索框里
+ * 粘贴一段长文（数百上千个 bigram）时，同步 MATCH 会把事件循环冻住秒级。
+ * 正常手打的搜索词远低于此上限，查询串一个字符都不变。
+ */
+const MAX_FTS_QUERY_TERMS = 32
+
+/**
  * FTS5 MATCH 查询串：bigram token 逐个加引号，token 内的 `"` 双写。
  *
  * 不转义时 bigram 会把原文标点带进查询语法，整条词法通道直接抛错：`e:` 被当成
@@ -34,13 +43,18 @@ export function bigrams(text: string): string {
  * 发一条带 `- . / @ # : "` 的输入，全文搜索就整条静默失效。
  *
  * OR 语义：候选词常比消息长，全 AND 会零命中；BM25 按命中比例排序。
+ * 重复 bigram（「哈哈哈哈」）去重后不再重复计费。
  */
 export function ftsMatchQuery(text: string): string {
-  return bigrams(text)
-    .split(' ')
-    .filter((token) => {
-      return token.length > 0
-    })
+  const seen = new Set<string>()
+  const tokens: string[] = []
+  for (const token of bigrams(text).split(' ')) {
+    if (token.length === 0 || seen.has(token)) continue
+    seen.add(token)
+    tokens.push(token)
+  }
+  const bounded = tokens.length <= MAX_FTS_QUERY_TERMS ? tokens : tokens.slice(0, MAX_FTS_QUERY_TERMS)
+  return bounded
     .map((token) => {
       return `"${token.replace(/"/g, '""')}"`
     })

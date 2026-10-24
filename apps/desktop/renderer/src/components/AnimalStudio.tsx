@@ -105,7 +105,7 @@ export function AnimalStudio({
       <div className="animal-studio-preview">
         {/* 预览用同一套光照与壳：用户在这里看到的就是聊天气泡与右栏里的样子。 */}
         <span className="animal-studio-preview-face">
-          <Avatar3D avatarKey={avatar} name="你" seed="you" size={128} tilt />
+          <Avatar3D avatarKey={avatar} name="你" seed="you" size={128} tilt breathing />
           <span className="animal-studio-current">{currentName}</span>
         </span>
         <div className="animal-studio-preview-side">

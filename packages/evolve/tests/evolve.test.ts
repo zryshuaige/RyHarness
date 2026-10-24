@@ -50,6 +50,24 @@ function mockLlm(
   }
 }
 
+/**
+ * 免 ! 断言的读取器：noNonNullAssertion 的冻结基线只减不增，新增用例一律
+ * 从这里取数（条目缺失时给 -1/'missing'，断言自然红）。
+ */
+function entryOf(service: EvolveService, id: string) {
+  const entry = service.store.getEntry(id)
+  return {
+    helpful: entry?.helpful ?? -1,
+    harmful: entry?.harmful ?? -1,
+    status: entry?.status ?? 'missing',
+  }
+}
+
+/** 同上：教训的验证 hit 数。 */
+function hitOf(service: EvolveService, id: string): number {
+  return service.store.getReflection(id)?.hitCount ?? -1
+}
+
 describe('注入编译（compile）', () => {
   it('按 helpful-harmful 排序 top-N、按 section 分组、格式 [经验手册]/[上次教训]', async () => {
     const s = service()
@@ -243,6 +261,132 @@ describe('Reflector 归因计数', () => {
     }
     expect(s.store.getEntry(entry.id)!.status).toBe('deprecated')
   })
+
+  it('基础设施故障（llmError）轮：注入条目不加 harmful 也不加 helpful', async () => {
+    const s = service()
+    const entry = s.store.insertEntry({
+      agentId: 'a1',
+      section: 'strategy',
+      content: '写文件前先确认目录存在',
+      source: 'seed',
+    })
+    s.enqueueTurn(
+      'a1',
+      'A',
+      'c1',
+      turn({ injectedPlaybookEntryIds: [entry.id], userText: '写文件前先确认目录存在', llmError: true }),
+    )
+    await s.flush()
+    // 供应商 429/超时/断网与条目内容无因果：两个方向都不计数。
+    expect(entryOf(s, entry.id).harmful).toBe(0)
+    expect(entryOf(s, entry.id).helpful).toBe(0)
+  })
+
+  it('供应商连续故障凑不满 harmful：条目不被纯 llmError 轮自动 deprecate', async () => {
+    const s = service()
+    const entry = s.store.insertEntry({
+      agentId: 'a1',
+      section: 'strategy',
+      content: '写文件前先确认目录存在',
+      source: 'seed',
+    })
+    for (let i = 0; i < AUTO_DEPRECATE_HARMFUL + 2; i++) {
+      s.enqueueTurn(
+        'a1',
+        'A',
+        'c1',
+        turn({ injectedPlaybookEntryIds: [entry.id], userText: '写文件前先确认目录存在', llmError: true }),
+      )
+      await s.flush()
+    }
+    expect(entryOf(s, entry.id).harmful).toBe(0)
+    expect(entryOf(s, entry.id).status).toBe('active')
+  })
+
+  it('llmError 轮不给注入教训记验证 hit（转正不能建立在故障轮上）', async () => {
+    const s = service()
+    const reflection = s.store.insertReflection({ agentId: 'a1', lesson: '写文件前先确认目录存在' })
+    s.enqueueTurn(
+      'a1',
+      'A',
+      'c1',
+      turn({ injectedReflectionIds: [reflection.id], userText: '写文件前先确认目录存在', llmError: true }),
+    )
+    await s.flush()
+    expect(hitOf(s, reflection.id)).toBe(0)
+  })
+
+  it('llmError 与真实负反馈同轮出现：质量信号照常归因（护栏只挡纯故障轮）', async () => {
+    const s = service()
+    const entry = s.store.insertEntry({
+      agentId: 'a1',
+      section: 'strategy',
+      content: '翻译前先确认目标语言',
+      source: 'seed',
+    })
+    s.enqueueTurn(
+      'a1',
+      'A',
+      'c1',
+      turn({ injectedPlaybookEntryIds: [entry.id], userText: '翻译错了重来', llmError: true }),
+    )
+    await s.flush()
+    expect(entryOf(s, entry.id).harmful).toBe(1)
+  })
+})
+
+describe('自动废弃护栏（净证据相持不处决）', () => {
+  it('真实负反馈凑满 harmful 且净分为负：仍自动 deprecate（原路径不回归）', async () => {
+    const s = service()
+    const entry = s.store.insertEntry({
+      agentId: 'a1',
+      section: 'strategy',
+      content: '部署脚本要带版本号标签',
+      source: 'seed',
+    })
+    for (let i = 0; i < AUTO_DEPRECATE_HARMFUL; i++) {
+      s.enqueueTurn('a1', 'A', 'c1', turn({ injectedPlaybookEntryIds: [entry.id], userText: '部署脚本错了' }))
+      await s.flush()
+    }
+    expect(entryOf(s, entry.id).status).toBe('deprecated')
+  })
+
+  it('helpful ≥ harmful（净证据非负）时不自动废弃，留给 Curator 复核', async () => {
+    const s = service()
+    const entry = s.store.insertEntry({
+      agentId: 'a1',
+      section: 'strategy',
+      content: '部署脚本要带版本号标签',
+      source: 'seed',
+    })
+    s.store.addCounts(entry.id, { helpful: AUTO_DEPRECATE_HARMFUL + 2 })
+    for (let i = 0; i < AUTO_DEPRECATE_HARMFUL; i++) {
+      s.enqueueTurn('a1', 'A', 'c1', turn({ injectedPlaybookEntryIds: [entry.id], userText: '部署脚本错了' }))
+      await s.flush()
+    }
+    expect(entryOf(s, entry.id).harmful).toBe(AUTO_DEPRECATE_HARMFUL)
+    expect(entryOf(s, entry.id).status).toBe('active')
+  })
+
+  it('👎 反馈路径同护栏：净证据非负时不自动废弃', async () => {
+    const llm = mockLlm({ reflectLesson: '差评教训' })
+    const s = service(llm)
+    const entry = s.store.insertEntry({
+      agentId: 'a1',
+      section: 'strategy',
+      content: '翻译前先确认目标语言',
+      source: 'seed',
+    })
+    s.store.addCounts(entry.id, { helpful: AUTO_DEPRECATE_HARMFUL + 1 })
+    s.enqueueTurn('a1', 'A', 'c1', turn({ injectedPlaybookEntryIds: [entry.id], userText: '帮我翻译' }))
+    await s.flush()
+    for (let i = 0; i < AUTO_DEPRECATE_HARMFUL; i++) {
+      s.recordFeedback({ agentId: 'a1', conversationId: 'c1', signal: 'thumb_down' })
+    }
+    await s.flush()
+    expect(entryOf(s, entry.id).harmful).toBe(AUTO_DEPRECATE_HARMFUL)
+    expect(entryOf(s, entry.id).status).toBe('active')
+  })
 })
 
 describe('Reflexion 反思（三类触发）', () => {
@@ -274,6 +418,33 @@ describe('Reflexion 反思（三类触发）', () => {
   it('成功轮不触发反思；负反馈词表生效', () => {
     expect(NEGATIVE_FEEDBACK_RE.test('这个不对')).toBe(true)
     expect(NEGATIVE_FEEDBACK_RE.test('做得很好')).toBe(false)
+  })
+
+  it('否定疑问句不算负反馈（「不对吗？」是在确认理解，不是批评）', () => {
+    expect(NEGATIVE_FEEDBACK_RE.test('这样不对吗？')).toBe(false)
+    expect(NEGATIVE_FEEDBACK_RE.test('这样不对?')).toBe(false)
+    expect(NEGATIVE_FEEDBACK_RE.test('我做得不对吗')).toBe(false)
+    expect(NEGATIVE_FEEDBACK_RE.test('是不是错了？重来吗？')).toBe(false)
+    expect(NEGATIVE_FEEDBACK_RE.test('Is that wrong?')).toBe(false)
+    // 问句之外的否定陈述仍是负反馈（宁可少判，但不能漏判真差评）。
+    expect(NEGATIVE_FEEDBACK_RE.test('这样不对')).toBe(true)
+    expect(NEGATIVE_FEEDBACK_RE.test('这样不对，重来！')).toBe(true)
+    expect(NEGATIVE_FEEDBACK_RE.test('这样不对。下一句是问句也不影响本句')).toBe(true)
+    expect(NEGATIVE_FEEDBACK_RE.test("That's not right.")).toBe(true)
+  })
+
+  it('否定疑问句整轮不判失败：注入条目按成功记 helpful', async () => {
+    const s = service()
+    const entry = s.store.insertEntry({
+      agentId: 'a1',
+      section: 'strategy',
+      content: '翻译前先确认目标语言',
+      source: 'seed',
+    })
+    s.enqueueTurn('a1', 'A', 'c1', turn({ injectedPlaybookEntryIds: [entry.id], userText: '翻译得不对吗' }))
+    await s.flush()
+    expect(entryOf(s, entry.id).harmful).toBe(0)
+    expect(entryOf(s, entry.id).helpful).toBe(1)
   })
 
   it('无 LLM 时反思静默跳过（确定性部分照常）', async () => {

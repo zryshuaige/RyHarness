@@ -1,16 +1,21 @@
 /**
- * Piper 离线语音：安装状态机、镜像回退、并发幂等、串行合成与插件生命周期。
+ * Piper 离线语音：安装状态机、镜像回退、供应链完整性（官方 digest 锁定）、并发幂等、
+ * 串行合成与插件生命周期。
  *
  * 下载与进程都用假实现：这里量的是状态机与队列的行为，不是网络或 CPU。真实下载
  * 与真 spawn 在单独的真机验证里跑，避免单测依赖外网。
  */
+
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   createPiperProvider,
+  PIPER_BINARY_MIRRORS,
   PIPER_STATUS_PATH,
   type PiperChild,
+  type PiperFetch,
   PiperInstaller,
   type PiperInstallerOptions,
   PiperRunner,
@@ -67,10 +72,46 @@ function installerWith(
     extractZip: fakeExtract,
     limits: { binary: 4, model: 4, config: 4 },
     totalBytesEstimate: 100,
-    // 单测默认走单连接，保持「三次下载 = 三次 fetch」的断言简单；分段另有专门用例。
+    // 单测默认走单连接，保持「每个文件一次下载」的断言简单；分段另有专门用例。
     parallelChunks: 1,
     ...overrides,
   })
+}
+
+/** 假 zip 字节：digest 用例里「API 声明的摘要」与「实际下载的内容」都从它派生。 */
+const ZIP_BYTES = new Uint8Array(64).fill(7)
+
+/** 与被测代码同一套算法生成摘要，用例里两边（声明/实际）共用，比对才可复现。 */
+function sha256Hex(bytes: Uint8Array): string {
+  return createHash('sha256').update(bytes).digest('hex')
+}
+
+/** Releases API 的假响应：digest 缺省时模拟「资产没有 digest 字段」（2024 前的 API）。 */
+function apiResponse(digest?: string): Response {
+  const asset = { name: 'piper_windows_amd64.zip', ...(digest === undefined ? {} : { digest: `sha256:${digest}` }) }
+  return new Response(JSON.stringify({ assets: [asset] }), { headers: { 'content-type': 'application/json' } })
+}
+
+/**
+ * 按 URL 前缀路由的假源：把 Releases API、官方直连、两个公共代理与 HF 模型源拆开，
+ * 用例只登记关心的腿，没登记的一律 404。urls 原样记录，用来断言「代理有没有被碰过」。
+ */
+function routedFetch(sources: {
+  api?: () => Response
+  official?: () => Response
+  proxy?: () => Response
+  model?: () => Response
+}): { fetch: PiperFetch; urls: string[] } {
+  const urls: string[] = []
+  const notFound = (): Response => new Response('not found', { status: 404 })
+  const impl: PiperFetch = async (url) => {
+    urls.push(url)
+    if (url.includes('api.github.com')) return (sources.api ?? notFound)()
+    if (url.startsWith('https://github.com/')) return (sources.official ?? notFound)()
+    if (url.includes('ghproxy.net') || url.includes('gh-proxy.com')) return (sources.proxy ?? notFound)()
+    return (sources.model ?? (() => bytesResponse(4)))()
+  }
+  return { fetch: impl, urls }
 }
 
 /** 一段最小合法 WAV 头（readWav 只校验 RIFF/WAVE）。 */
@@ -143,10 +184,13 @@ function spawnHarness(respond: (call: { args: readonly string[] }, mount: Mount)
 }
 
 describe('PiperInstaller 状态机', () => {
-  it('下载成功：镜像优先、进度可观测、文件摊平到 voice/piper 并可直接认成 ready', async () => {
+  it('下载成功：官方直连优先、digest 校验通过、文件摊平到 voice/piper 并可直接认成 ready', async () => {
     const urls: string[] = []
     const installer = installerWith(dataDir(), async (url) => {
       urls.push(url)
+      // API 声明的摘要与 zip 字节一致 → 校验通过 → 官方直连放行。
+      if (url.includes('api.github.com')) return apiResponse(sha256Hex(ZIP_BYTES))
+      if (url.endsWith('.zip')) return new Response(ZIP_BYTES)
       return bytesResponse(4)
     })
     const started = installer.startInstall()
@@ -156,13 +200,15 @@ describe('PiperInstaller 状态机', () => {
 
     const status = installer.installStatus()
     expect(status.state).toBe('ready')
-    expect(status.receivedBytes).toBe(12)
-    expect(status.totalBytes).toBeGreaterThanOrEqual(12)
-    // 二进制先走 ghproxy；两个模型文件先走 HF 镜像。
-    expect(urls).toHaveLength(3)
-    expect(urls[0]).toContain('ghproxy.net')
-    expect(urls[1]).toContain('hf-mirror.com')
+    expect(status.warning).toBeUndefined()
+    expect(status.receivedBytes).toBe(72)
+    expect(status.totalBytes).toBeGreaterThanOrEqual(72)
+    // 先问官方 API 要摘要，再从 GitHub 官方直连拿 zip；模型文件仍先走 HF 镜像。
+    expect(urls).toHaveLength(4)
+    expect(urls[0]).toContain('api.github.com/repos/rhasspy/piper/releases/tags/2023.11.14-2')
+    expect(urls[1]).toContain('https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_windows_amd64.zip')
     expect(urls[2]).toContain('hf-mirror.com')
+    expect(urls[3]).toContain('hf-mirror.com')
     for (const file of [
       'piper.exe',
       'espeak-ng-data.txt',
@@ -176,7 +222,7 @@ describe('PiperInstaller 状态机', () => {
 
     // 第二次启动是幂等的：不再发任何下载请求。
     expect(installer.startInstall().state).toBe('ready')
-    expect(urls).toHaveLength(3)
+    expect(urls).toHaveLength(4)
   })
 
   it('镜像失败继续下一个；全部失败进入 error、清理暂存，重试成功', async () => {
@@ -186,6 +232,8 @@ describe('PiperInstaller 状态机', () => {
     const installer = installerWith(root, async (url) => {
       urls.push(url)
       if (fail) return new Response('not found', { status: 404 })
+      if (url.includes('api.github.com')) return apiResponse(sha256Hex(ZIP_BYTES))
+      if (url.endsWith('.zip')) return new Response(ZIP_BYTES)
       return bytesResponse(4)
     })
     installer.startInstall()
@@ -193,7 +241,9 @@ describe('PiperInstaller 状态机', () => {
     const failed = installer.installStatus()
     expect(failed.state).toBe('error')
     expect(failed.error).toContain('下载失败')
-    expect(failed.error).toContain('已尝试 3 个镜像')
+    // API 也拿不到摘要时代理被禁：二进制只剩官方直连一条腿可试。
+    expect(failed.error).toContain('已尝试 1 个镜像')
+    expect(failed.error).toContain('只允许官方直连')
     // 失败后不留半成品（正式目录与暂存目录都没有）。
     expect(existsSync(join(root, 'voice', 'piper'))).toBe(false)
     expect(readdirSync(join(root, 'voice')).filter((name) => name.startsWith('.piper-install-'))).toEqual([])
@@ -224,7 +274,8 @@ describe('PiperInstaller 状态机', () => {
     expect(fetchCalls).toBe(1)
     release()
     await installer.settled()
-    expect(fetchCalls).toBe(3)
+    // API 摘要查询 + 二进制 + 模型 + 配置。
+    expect(fetchCalls).toBe(4)
     expect(installer.installStatus().state).toBe('ready')
   })
 
@@ -256,8 +307,8 @@ describe('PiperInstaller 状态机', () => {
     installer.startInstall()
     await installer.settled()
     expect(installer.installStatus()).toMatchObject({ state: 'ready', receivedBytes: 12 })
-    // 每个文件：1 次探测 + 2 段 = 3 次请求。
-    expect(fetchCalls).toBe(9)
+    // API 摘要 1 次 + 每个文件（1 次探测 + 2 段）= 10 次请求。
+    expect(fetchCalls).toBe(10)
     expect(readFileSync(join(installer.dir, 'zh_CN-huayan-medium.onnx')).length).toBe(4)
   })
 
@@ -291,6 +342,104 @@ describe('PiperInstaller 状态机', () => {
     await installer.settled()
     expect(installer.installStatus().state).toBe('error')
     expect(readdirSync(join(root, 'voice')).filter((name) => name.startsWith('.piper-install-'))).toEqual([])
+  })
+})
+
+describe('PiperInstaller 供应链完整性', () => {
+  it('digest 匹配：下载后过 SHA-256 再解压，安装成功且状态无「未校验」警示', async () => {
+    const { fetch, urls } = routedFetch({
+      api: () => apiResponse(sha256Hex(ZIP_BYTES)),
+      official: () => new Response(ZIP_BYTES),
+    })
+    const installer = installerWith(dataDir(), fetch)
+    installer.startInstall()
+    await installer.settled()
+    const status = installer.installStatus()
+    expect(status.state).toBe('ready')
+    expect(status.warning).toBeUndefined()
+    expect(urls[0]).toContain('api.github.com/repos/rhasspy/piper/releases/tags/')
+    expect(urls[1]).toContain('https://github.com/rhasspy/piper/releases/download/')
+    expect(existsSync(join(installer.dir, 'piper.exe'))).toBe(true)
+  })
+
+  it('官方直连失败时允许代理兜底，但字节必须对上官方 digest 才放行', async () => {
+    const { fetch, urls } = routedFetch({
+      api: () => apiResponse(sha256Hex(ZIP_BYTES)),
+      official: () => new Response('boom', { status: 502 }),
+      proxy: () => new Response(ZIP_BYTES),
+    })
+    const installer = installerWith(dataDir(), fetch)
+    installer.startInstall()
+    await installer.settled()
+    expect(installer.installStatus().state).toBe('ready')
+    expect(urls.some((url) => url.includes('ghproxy.net'))).toBe(true)
+  })
+
+  it('digest 不匹配：拒绝安装、删光下载残留、根本不会走到解压那一步', async () => {
+    const root = dataDir()
+    let extracts = 0
+    const { fetch } = routedFetch({
+      // API 声明的是另一份字节的摘要：无论文件从哪来，比对都必然失败。
+      api: () => apiResponse(sha256Hex(new Uint8Array(64).fill(9))),
+      official: () => new Response(ZIP_BYTES),
+    })
+    const installer = installerWith(root, fetch, {
+      extractZip: async (zipPath, destination) => {
+        extracts += 1
+        await fakeExtract(zipPath, destination)
+      },
+    })
+    installer.startInstall()
+    await installer.settled()
+    const status = installer.installStatus()
+    expect(status.state).toBe('error')
+    expect(status.error).toContain('SHA-256')
+    expect(status.error).toContain('篡改')
+    expect(extracts).toBe(0)
+    expect(existsSync(join(root, 'voice', 'piper'))).toBe(false)
+    expect(readdirSync(join(root, 'voice')).filter((name) => name.startsWith('.piper-install-'))).toEqual([])
+  })
+
+  it('拿不到 digest：代理一概不碰（哪怕代理上有能下的文件），官方也失败则安装失败', async () => {
+    const root = dataDir()
+    const { fetch, urls } = routedFetch({
+      // 代理上摆着「能下」的 zip——拿不到官方摘要时它根本不该被请求。
+      proxy: () => new Response(ZIP_BYTES),
+    })
+    const installer = installerWith(root, fetch)
+    installer.startInstall()
+    await installer.settled()
+    const status = installer.installStatus()
+    expect(status.state).toBe('error')
+    expect(status.error).toContain('只允许官方直连')
+    expect(urls.some((url) => url.includes('ghproxy.net') || url.includes('gh-proxy.com'))).toBe(false)
+    expect(existsSync(join(root, 'voice', 'piper'))).toBe(false)
+  })
+
+  it('拿不到 digest：官方直连可用则放行安装，状态明示「未校验哈希」', async () => {
+    const { fetch } = routedFetch({
+      // API 可达但资产没有 digest 字段（2024 前的 API 就是如此）：与「API 不可达」
+      // 走同一条保守路径，只是原因不同。
+      api: () => apiResponse(),
+      official: () => new Response(ZIP_BYTES),
+    })
+    const installer = installerWith(dataDir(), fetch)
+    installer.startInstall()
+    await installer.settled()
+    const status = installer.installStatus()
+    expect(status.state).toBe('ready')
+    expect(status.warning).toContain('未校验哈希')
+    expect(existsSync(join(installer.dir, 'piper.exe'))).toBe(true)
+  })
+
+  it('二进制镜像表：GitHub 官方直连排第一，两个公共代理只作 fallback', () => {
+    expect(PIPER_BINARY_MIRRORS[0]).toContain('https://github.com/rhasspy/piper/releases/download/')
+    expect(PIPER_BINARY_MIRRORS[0]).not.toContain('ghproxy')
+    expect(
+      PIPER_BINARY_MIRRORS.filter((url) => {
+        return url.includes('ghproxy.net') || url.includes('gh-proxy.com')
+      }),
+    ).toHaveLength(2)
   })
 })
 

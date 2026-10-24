@@ -4,7 +4,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AgentDef, Conversation, ProviderInfo } from '../renderer/src/api.ts'
+import type { AgentDef, Conversation, ProviderInfo, ProviderPreset } from '../renderer/src/api.ts'
 import { setApiToken } from '../renderer/src/api.ts'
 import { RelayChain } from '../renderer/src/components/MessageBubble.tsx'
 import { greetingForHour, WelcomeHome } from '../renderer/src/components/WelcomeHome.tsx'
@@ -233,7 +233,7 @@ describe('欢迎主页', () => {
 })
 
 describe('首屏挑供应商', () => {
-  const presets = [
+  const presets: ProviderPreset[] = [
     {
       id: 'siliconflow',
       displayName: 'SiliconFlow',

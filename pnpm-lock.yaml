@@ -45,6 +45,12 @@ importers:
       '@dicebear/core':
         specifier: ^9.4.3
         version: 9.4.3
+      '@ryharness/evolve':
+        specifier: workspace:*
+        version: link:../../packages/evolve
+      '@ryharness/memory':
+        specifier: workspace:*
+        version: link:../../packages/memory
       '@ryharness/session':
         specifier: workspace:*
         version: link:../../packages/session

@@ -166,6 +166,106 @@ describe('recall 的 SQL 次数不随数据规模增长', () => {
   })
 })
 
+describe('语义通道打分：空间桶的堆叠矩阵', () => {
+  /** 单空间向量桶（模型 'hash:test'）。 */
+  function vectorStore(rows: number, dim = 16): { store: MemoryStore; vectors: HashEmbeddings } {
+    const vectors = new HashEmbeddings(dim)
+    const store = new MemoryStore(dbPath())
+    for (let index = 0; index < rows; index++) {
+      store.insert({
+        agentId: 'a1',
+        kind: 'fact',
+        content: `记忆 ${index}`,
+        embedding: vectors.vectorOf(`记忆 ${index}`),
+        embeddingModel: vectors.model,
+      })
+    }
+    return { store, vectors }
+  }
+
+  it('矩阵与桶同生命周期：一次堆叠重复复用，访问记账不重堆，写入后重堆', () => {
+    const { store, vectors } = vectorStore(30)
+    const first = store.spaceEmbeddingMatrix('a1', vectors.model)
+    expect(first.dims[0]).toBe(16)
+    // 同一写代内重复打分复用桶内同一份堆叠字节（打分次数不放大堆叠次数）。
+    expect(store.spaceEmbeddingMatrix('a1', vectors.model).data).toBe(first.data)
+    // 访问记账就地改行对象、不碰向量字节：矩阵不因此重堆。
+    store.touchAccess([first.rows[0].id])
+    expect(store.spaceEmbeddingMatrix('a1', vectors.model).data).toBe(first.data)
+    // 新记忆落库（insert 的失效路径）：桶重建，矩阵随之重堆。
+    store.insert({
+      agentId: 'a1',
+      kind: 'fact',
+      content: '新记忆',
+      embedding: vectors.vectorOf('新记忆'),
+      embeddingModel: vectors.model,
+    })
+    const second = store.spaceEmbeddingMatrix('a1', vectors.model)
+    expect(second.data).not.toBe(first.data)
+    // 向量回写（setEmbedding 的失效路径，编辑/重建都走它）：同样让矩阵重堆。
+    store.setEmbedding(second.rows[0].id, vectors.vectorOf('改写向量'), vectors.model)
+    expect(store.spaceEmbeddingMatrix('a1', vectors.model).data).not.toBe(second.data)
+    store.close()
+  })
+
+  it('同一段输入的多成员同步召回：共享空间只扫一次（总耗时远低于逐成员重扫口径）', () => {
+    const dim = 1024
+    const vectors = new HashEmbeddings(dim)
+    const svc = new MemoryService({ dbPath: dbPath(), embeddings: vectors })
+    const topics = ['川菜', '地铁', '吉他', '体检', '露营', '基金', '咖啡', '羽毛球', '博物馆', '日语', '园艺', '摄影']
+    for (let index = 0; index < 4000; index++) {
+      svc.store.insert({
+        agentId: SHARED_SPACE,
+        kind: 'fact',
+        content: `共享记忆 ${index}：用户聊过${topics[index % topics.length]}的细节`,
+        embedding: vectors.vectorOf(`共享 ${index}`),
+        embeddingModel: vectors.model,
+      })
+    }
+    // 私有空间刻意留空：被测的是共享空间的扫描量，别让私有扫描稀释比值。
+    const queries: string[] = []
+    for (let index = 0; index < 16; index++) {
+      const query = `多维查询 ${index}`
+      queries.push(query)
+      svc.store.cacheEmbedding(query, vectors.vectorOf(query), svc.embeddingModel)
+    }
+    const singleOf = (query: string): number => {
+      const start = performance.now()
+      const block = svc.recallSync('a1', query)
+      const elapsed = performance.now() - start
+      expect(block).toContain('相关记忆')
+      return elapsed
+    }
+    const fanoutOf = (query: string): number => {
+      const start = performance.now()
+      svc.recallSync('a1', query)
+      svc.recallSync('b1', query)
+      svc.recallSync('c1', query)
+      return performance.now() - start
+    }
+    // 预热（JIT 与桶/矩阵首次堆叠不进对比）；预热文本与被测文本互不重叠——
+    // 共享打分按「文本+写代」复用，同一句重复测到的是缓存命中而不是打分。
+    for (let index = 0; index < 4; index++) {
+      const query = `预热 ${index}`
+      svc.store.cacheEmbedding(query, vectors.vectorOf(query), svc.embeddingModel)
+      fanoutOf(query)
+    }
+    let singleTotal = 0
+    for (const query of queries.slice(0, 8)) {
+      singleTotal += singleOf(query)
+    }
+    let fanoutTotal = 0
+    for (const query of queries.slice(8)) {
+      fanoutTotal += fanoutOf(query)
+    }
+    svc.close()
+    // 逐成员重扫口径（优化前）3 个成员 ≈ 3 倍单成员耗时；共享打分收敛成一次后
+    // 比值回落到 1 出头。2.5 倍是分界线：回到逐成员重扫就会顶穿它。
+    // （两侧都是 8 轮总和，等价于比较单轮均值的 2.5 倍。）
+    expect(fanoutTotal).toBeLessThan(singleTotal * 2.5)
+  })
+})
+
 describe('recall 不在首 token 上等网络', () => {
   it('同步召回比异步召回快一个量级以上（异步路径里有 120ms 人工网络往返）', async () => {
     const embeddings = slowEmbeddings(new HashEmbeddings(), 120)

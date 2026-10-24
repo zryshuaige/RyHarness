@@ -32,6 +32,7 @@ import {
   providerModelPayload,
 } from '../renderer/src/lib/model-catalog.ts'
 import { ConversationCache } from '../renderer/src/store.ts'
+import { TEST_PERSONA } from './fixtures.ts'
 import { groupLabels, openSelect, optionLabels, optionRows } from './select-dom.tsx'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -97,6 +98,7 @@ const template: AgentTemplate = {
   description: '什么都能干一点',
   suggestedSystemPrompt: '你是通用助理。',
   defaultModel: 'deepseek-ai/DeepSeek-V3',
+  persona: TEST_PERSONA,
   defaultTools: ['fs_read'],
 }
 

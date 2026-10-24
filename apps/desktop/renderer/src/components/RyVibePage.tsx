@@ -17,10 +17,19 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { TodoItem, VibeOutputView, VibeProjectView, VibeQuestionView, VibeSessionView } from '../api.ts'
+import type {
+  ProviderInfo,
+  TodoItem,
+  VibeOutputView,
+  VibeProjectView,
+  VibeQuestionView,
+  VibeSessionView,
+} from '../api.ts'
 import { openInFileManager } from '../lib/desktop.ts'
 import { humanError } from '../lib/error-text.ts'
+import { hasUsableProvider, missingProviderHint } from '../lib/provider-health.ts'
 import { toast } from '../lib/toast.ts'
+import { explainTurnError, type TurnErrorTarget } from '../lib/turn-errors.ts'
 import { Icon } from './Icon.tsx'
 import { Markdown } from './Markdown.tsx'
 import { VibeArtifactPreview } from './VibeArtifactPreview.tsx'
@@ -77,6 +86,13 @@ export interface RyVibeApi {
 
 export interface RyVibePageProps {
   api: RyVibeApi
+  /**
+   * 模型供应商清单：开工前的可用性闸门（与欢迎页同一份判定，lib/provider-health.ts）。
+   * 不传（旧宿主/测试）就不拦——这页不该比宿主还急着下结论。
+   */
+  providers?: ProviderInfo[]
+  /** 清单还在加载时 `usable=false` 只代表「还不知道」，不能据此拦人。 */
+  providersLoading?: boolean
   /** 点「在聊天里继续」时把用户带进那个会话。 */
   onOpenConversation?: (conversationId: string) => void
   /**
@@ -87,6 +103,11 @@ export interface RyVibePageProps {
    * 多 agent 的可见性靠这个撑起来：知道谁在、点一下就能单独问他。
    */
   onOpenAgent?: (agentId: string) => void
+  /**
+   * 失败横幅上「去配 Key / 改 agent」等动作的跳转（与 ChatView 的同名 prop 同一套
+   * 接线；重试这类就地动作不经过它）。
+   */
+  onNavigate?: (target: TurnErrorTarget) => void
 }
 
 /**
@@ -390,7 +411,14 @@ function stepOf(session: VibeSessionView, outputCount: number): number {
   return outputCount > 0 ? 2 : 1
 }
 
-export function RyVibePage({ api, onOpenConversation, onOpenAgent }: RyVibePageProps) {
+export function RyVibePage({
+  api,
+  providers,
+  providersLoading,
+  onOpenConversation,
+  onOpenAgent,
+  onNavigate,
+}: RyVibePageProps) {
   const [requirement, setRequirement] = useState('')
   const [session, setSession] = useState<VibeSessionView | undefined>(undefined)
   const [questions, setQuestions] = useState<VibeQuestionView[]>([])
@@ -534,9 +562,26 @@ export function RyVibePage({ api, onOpenConversation, onOpenAgent }: RyVibePageP
     }
   }, [session, refresh])
 
+  /**
+   * 「一个能用的模型来源都没有」的前置闸门：与欢迎页同一份判定（hasUsableProvider）。
+   *
+   * 没有 key 的用户第一次「动手做东西」若直接放行，要空等 30 秒才等来一条英文
+   * 横幅——Beta 页与主应用判若两产品。清单没给/还在加载时（usable=false 只代表
+   * 「还不知道」）不拦，等真失败再由翻译层接住。
+   */
+  const noSourceHint =
+    providers !== undefined && providersLoading !== true && !hasUsableProvider(providers)
+      ? (missingProviderHint(providers) ?? '还没有能用的模型来源，先去「我的 → 模型供应商」配一个。')
+      : undefined
+
   const start = async (): Promise<void> => {
     const text = requirement.trim()
     if (text.length === 0) return
+    // 前置闸门：必败的一轮不发请求，把人先引去配 Key。
+    if (noSourceHint !== undefined) {
+      setError(noSourceHint)
+      return
+    }
     setStarting(true)
     setError(undefined)
     try {
@@ -614,6 +659,15 @@ export function RyVibePage({ api, onOpenConversation, onOpenAgent }: RyVibePageP
         toast.error(humanError(err, '这次没重起来，再点一次'))
       }
     })()
+  }
+
+  /** 失败横幅上的「下一步」：重试就地做；跳面板交给宿主（与 ChatView 的 runErrorAction 同一口径）。 */
+  const runFailureAction = (target: TurnErrorTarget): void => {
+    if (target === 'retry') {
+      retry()
+      return
+    }
+    onNavigate?.(target)
   }
 
   const reset = (): void => {
@@ -719,7 +773,8 @@ export function RyVibePage({ api, onOpenConversation, onOpenAgent }: RyVibePageP
             </button>
             <span className="vibe-hint">Enter 也可以直接开始</span>
           </div>
-          {error !== undefined && <p className="vibe-error">{error}</p>}
+          {/* 引导前置摆出来：没有可用模型来源时，不必先点一次「开始」才知道路怎么走。 */}
+          {(error ?? noSourceHint) !== undefined && <p className="vibe-error">{error ?? noSourceHint}</p>}
           <div className="vibe-examples">
             <span className="vibe-examples-label">或者试试</span>
             {EXAMPLES.map((example) => {
@@ -748,6 +803,13 @@ export function RyVibePage({ api, onOpenConversation, onOpenAgent }: RyVibePageP
     })
     return member?.name ?? '小队'
   }
+
+  /**
+   * 失败横幅的人话：session.error 是服务端那轮失败的原话（多为英文），与聊天页
+   * 红条走同一张翻译表（lib/turn-errors.ts）——认得出的失败说清「出了什么事、
+   * 下一步去哪」，认不出才把原文折进「详情」。
+   */
+  const failure = session.status === 'failed' ? explainTurnError(undefined, session.error ?? '') : undefined
 
   const pending = questions.filter((question) => {
     return question.answered !== true
@@ -813,7 +875,38 @@ export function RyVibePage({ api, onOpenConversation, onOpenAgent }: RyVibePageP
       {session.status === 'failed' && (
         <div className="vibe-failed" role="alert">
           <strong>小队没能给出方案</strong>
-          <span>{session.error ?? '这一轮出错了'}</span>
+          <span>
+            {failure?.title}。{failure?.hint}
+          </span>
+          {/* 与聊天页红条同一套「下一步」：可点的动作（去配 Key / 改 agent），重试走旁边那枚。 */}
+          {failure?.action !== undefined && (
+            <button
+              type="button"
+              className="btn vibe-failed-action"
+              onClick={() => {
+                runFailureAction(failure?.action?.target ?? 'retry')
+              }}
+            >
+              {failure.action.label}
+            </button>
+          )}
+          {failure?.detail !== undefined && (
+            <details style={{ flexBasis: '100%' }}>
+              <summary style={{ cursor: 'pointer', fontSize: 'var(--fs-xs)' }}>详情</summary>
+              <code
+                style={{
+                  display: 'block',
+                  marginTop: 4,
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 'var(--fs-xs)',
+                }}
+              >
+                {failure.detail}
+              </code>
+            </details>
+          )}
           <div className="vibe-failed-actions">
             <button type="button" className="btn vibe-retry" onClick={retry}>
               再试一次

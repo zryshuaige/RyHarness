@@ -26,6 +26,7 @@ import type {
   AgentDefinition,
   AgentEvolutionHooks,
   AgentLoopEvent,
+  AgentLoopOptions,
   AgentMemoryHooks,
   SessionQuota,
   SessionQuotaLimits,
@@ -108,6 +109,11 @@ export interface CoordinatorOptions {
    * 自己认存储。返回 undefined / 空串 = 不注入。
    */
   identity?: () => string | undefined
+  /**
+   * 工具执行审批（可选）：requiresApproval 的工具（shell_exec）执行前询问，
+   * 单聊与群聊成员走同一条闸。见 AgentLoopOptions.approver。
+   */
+  approver?: AgentLoopOptions['approver']
 }
 
 /** 一次性上下文注入：文本 + 送达确认。 */
@@ -224,7 +230,13 @@ function rebuildMessage(row: StoredMessage, agent: AgentDefinition): Message | u
   return undefined
 }
 
-/** 把 store 的消息行格式化为群历史条目（跳过工具结果与 system）。 */
+/**
+ * 把 store 的消息行格式化为群历史条目。
+ *
+ * 只负责**发言行**（用户/成员正文）：system 与工具结果行不直接进群历史——工具
+ * 结论改由 {@link buildGroupHistory} 聚合成「本轮调用了工具」摘要行附在发言后，
+ * 不再无痕消失。
+ */
 function toGroupEntry(row: StoredMessage, agentNames: Map<string, string>): GroupHistoryEntry | undefined {
   if (row.senderType === 'system' || row.toolCallId !== undefined) return undefined
   const text = (row.contentBlocks as ContentBlock[])
@@ -243,6 +255,66 @@ function toGroupEntry(row: StoredMessage, agentNames: Map<string, string>): Grou
         ? (agentNames.get(row.senderId) ?? row.senderId)
         : 'agent'
   return { speaker, text }
+}
+
+/** 工具结果行里解析工具名（落库正文形如 `〔tool〕name: content`，见 toolResultBlocks）。 */
+function toolNameOf(row: StoredMessage): string {
+  for (const block of row.contentBlocks as ContentBlock[]) {
+    if (block.type !== 'text') continue
+    const text = block.type === 'text' ? block.text : ''
+    if (!text.startsWith(TOOL_RESULT_PREFIX)) continue
+    const rest = text.slice(TOOL_RESULT_PREFIX.length)
+    const colon = rest.indexOf(':')
+    return colon === -1 ? rest.trim() : rest.slice(0, colon).trim()
+  }
+  return 'unknown'
+}
+
+/**
+ * 把窗口内的消息行拼成群历史条目：发言行 + 工具摘要行。
+ *
+ * 为什么工具结论要有摘要行：上一跳成员跑 N 次工具得出的结论只活在它自己的
+ * 正文里；历史里连「跑过工具」都不留的话，接力成员会把同样的工具原样再跑一
+ * 遍（工具结果正文本身不进群历史——那是单聊历史的契约，群历史按发言组织）。
+ * 摘要挂在**同一轮次、同一发言者**的下一条发言正文后：工具结果行总是先于该
+ * 成员的最终发言落库（工具事件流式到达，发言在收尾提交）。
+ */
+export function buildGroupHistory(
+  rows: readonly StoredMessage[],
+  agentNames: Map<string, string>,
+): GroupHistoryEntry[] {
+  /** `${turnIndex}:${senderId}` → 工具名 → 次数（攒到该成员本轮发言时收口）。 */
+  const pendingTools = new Map<string, Map<string, number>>()
+  const entries: GroupHistoryEntry[] = []
+  for (const row of rows) {
+    if (row.senderType === 'agent' && row.toolCallId !== undefined) {
+      const key = `${row.turnIndex}:${row.senderId ?? ''}`
+      const counts = pendingTools.get(key) ?? new Map<string, number>()
+      const name = toolNameOf(row)
+      counts.set(name, (counts.get(name) ?? 0) + 1)
+      pendingTools.set(key, counts)
+      continue
+    }
+    const entry = toGroupEntry(row, agentNames)
+    if (entry === undefined) continue
+    if (row.senderType !== 'agent') {
+      entries.push(entry)
+      continue
+    }
+    const key = `${row.turnIndex}:${row.senderId ?? ''}`
+    const counts = pendingTools.get(key)
+    pendingTools.delete(key)
+    entries.push(counts === undefined ? entry : { ...entry, text: `${entry.text}\n${toolSummaryLine(counts)}` })
+  }
+  return entries
+}
+
+/** 一条发言的工具摘要行（次数>1 才带 ×N；结论指的是发言正文）。 */
+function toolSummaryLine(counts: Map<string, number>): string {
+  const parts = [...counts.entries()].map(([name, count]) => {
+    return count > 1 ? `${name}×${count}` : name
+  })
+  return `（本轮调用了工具：${parts.join('、')}；结论已含在正文）`
 }
 
 /**
@@ -283,9 +355,14 @@ export function historyRowWeight(row: StoredMessage): number | undefined {
  * 外加 1 个 token 的行分隔换行（与 toGroupEntry 拼出的行逐条对应）。
  *
  * 与单聊同理走真 token 而不是字符数：中文一字一 token，字符口径下同一份预算
- * 实际多送 4 倍。system、tool 结果与纯空白行不属于群历史（toGroupEntry 会丢弃它们）。
+ * 实际多送 4 倍。system 与纯空白行不属于群历史（toGroupEntry 会丢弃它们）。
+ * 工具结果行按 **0 权重**进窗口：它的正文不进群历史（不占预算），但
+ * {@link buildGroupHistory} 要靠它聚合出「本轮调用了工具」摘要行——摘要行的
+ * token 开销由调度器侧 buildGroupContext 按最终行（含摘要）统一收口。
  */
 export function groupHistoryRowWeight(row: StoredMessage, agentNames: Map<string, string>): number | undefined {
+  if (row.senderType === 'system') return undefined
+  if (row.toolCallId !== undefined) return 0
   const entry = toGroupEntry(row, agentNames)
   if (entry === undefined) return undefined
   return estimateTokens(`${entry.speaker}: ${entry.text}`) + 1
@@ -590,6 +667,7 @@ export class SessionCoordinator {
       ...(this.options.identity === undefined ? {} : { identity: this.options.identity }),
       ...(memory === undefined ? {} : { memory }),
       ...(evolution === undefined ? {} : { evolution }),
+      ...(this.options.approver === undefined ? {} : { approver: this.options.approver }),
     })
 
     let failed: { message: string; code: string } | undefined
@@ -724,7 +802,8 @@ export class SessionCoordinator {
     // 1000 行）。keepNewest=false：群历史允许裁空；beforeTurnIndex 排除本轮已落库的
     // 行。窗口内行数受预算约束，二次格式化开销可忽略。
     //
-    // 口径必须是 token：行权重走 {@link groupHistoryRowWeight}，调度器侧的再裁
+    // 口径必须是 token：行权重走 {@link groupHistoryRowWeight}（工具结果行 0 权重
+    // 进窗，供 {@link buildGroupHistory} 聚合工具摘要），调度器侧的再裁
     // （@ryharness/group 的 buildGroupContext）也是同一个 token 预算与同样的逐行
     // 权重，因此这里取出的窗口在它那里是 no-op——字符口径曾经让它在 ASCII 群聊
     // 上再收一刀（30k 字符 ≈ 7.5k token），中文群聊则整个窗口放行。
@@ -735,11 +814,7 @@ export class SessionCoordinator {
       keepNewest: false,
       beforeTurnIndex: historyBeforeTurn,
     })
-    const history: GroupHistoryEntry[] = []
-    for (const row of historyRows) {
-      const entry = toGroupEntry(row, agentNames)
-      if (entry !== undefined) history.push(entry)
-    }
+    const history = buildGroupHistory(historyRows, agentNames)
 
     const usage = new TurnUsage()
     let lastAssistant: StoredMessage | undefined
@@ -757,6 +832,7 @@ export class SessionCoordinator {
       ...(this.options.identity === undefined ? {} : { identity: this.options.identity }),
       // 调度器把同一个闸分给本轮所有成员：接力链变长不会放大工具预算。
       quota: this.quotas.take(conversationId),
+      ...(this.options.approver === undefined ? {} : { approver: this.options.approver }),
     })
     try {
       for await (const event of dispatcher.runTurn({

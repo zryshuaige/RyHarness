@@ -283,6 +283,9 @@ export const shellExec: Tool = {
   // 命令会改工作区（rm / npm install / 构建脚本都可能动同一批路径），并发执行
   // 互相踩踏且输出交错；声明 sequential 让 AgentLoop 把整批工具调用退回串行。
   executionMode: 'sequential',
+  // 黑名单挡不住拼接过载与外发（curl|bash、读数据目录整库外发都过得了词面
+  // 检查），shell 对宿主没有真实边界——每条命令必须经用户批准后才能执行。
+  requiresApproval: true,
   parameters: {
     type: 'object',
     properties: {

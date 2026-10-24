@@ -104,6 +104,9 @@ export class EvolveStore {
   constructor(dbPath: string) {
     this.db = new DatabaseSync(dbPath)
     this.db.exec('PRAGMA journal_mode = WAL')
+    // 与 session/memory 同一数据目录的三连接纪律：busy_timeout 兜住双进程撞
+    // 写锁时默认立刻抛的 SQLITE_BUSY。
+    this.db.exec('PRAGMA busy_timeout = 5000')
     migrateEvolve(this.db)
   }
 

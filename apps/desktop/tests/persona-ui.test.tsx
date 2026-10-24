@@ -679,6 +679,61 @@ describe('建 agent 表单的人格编辑区', () => {
     expect(container.querySelector('.agent-card-catch')?.textContent).toBe('「交给我吧」')
   })
 
+  it('口头禅/形象输入期的空格不丢：trim 收口在保存时，不在每一次按键上', async () => {
+    const onSubmit = vi.fn((_input: Record<string, unknown>) => {
+      return Promise.resolve()
+    })
+    await renderModal({ onSubmit })
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+    if (setter === undefined) throw new Error('拿不到 input.value 的原生 setter')
+    const catchphrase = textField('口头禅')
+    await act(async () => {
+      // 敲到空格那一下：值必须原样进状态（此前当场被 trim，"Trust me" 敲成 "Trustme"）。
+      setter.call(catchphrase, 'Trust ')
+      catchphrase.dispatchEvent(new Event('input', { bubbles: true }))
+      await Promise.resolve()
+    })
+    expect(catchphrase.value).toBe('Trust ')
+    const appearance = textField('形象')
+    await act(async () => {
+      setter.call(appearance, '橘色围巾 狸花猫 ')
+      appearance.dispatchEvent(new Event('input', { bubbles: true }))
+      await Promise.resolve()
+    })
+    expect(appearance.value).toBe('橘色围巾 狸花猫 ')
+    await act(async () => {
+      saveButton().click()
+      await Promise.resolve()
+    })
+    const submitted = onSubmit.mock.calls
+    expect(submitted.length).toBe(1)
+    const input = submitted[0]?.[0] as { persona: AgentPersona }
+    // 保存时才收口：两端空白去掉，中间的空格保留。
+    expect(input.persona.catchphrase).toBe('Trust')
+    expect(input.persona.appearance).toBe('橘色围巾 狸花猫')
+  })
+
+  it('只敲了空白的口头禅保存成空串（按「没填」处理）', async () => {
+    const onSubmit = vi.fn((_input: Record<string, unknown>) => {
+      return Promise.resolve()
+    })
+    await renderModal({ onSubmit })
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+    if (setter === undefined) throw new Error('拿不到 input.value 的原生 setter')
+    const catchphrase = textField('口头禅')
+    await act(async () => {
+      setter.call(catchphrase, '   ')
+      catchphrase.dispatchEvent(new Event('input', { bubbles: true }))
+      await Promise.resolve()
+    })
+    await act(async () => {
+      saveButton().click()
+      await Promise.resolve()
+    })
+    const input = onSubmit.mock.calls[0]?.[0] as { persona: AgentPersona }
+    expect(input.persona.catchphrase).toBe('')
+  })
+
   it('两段文字的关系写在界面上（否则用户不知道哪段生效）', async () => {
     await renderModal()
     const labels = [...container.querySelectorAll('label.field > span')].map((node) => {

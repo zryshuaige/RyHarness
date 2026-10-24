@@ -13,6 +13,7 @@ import { ConversationList } from '../renderer/src/components/ConversationList.ts
 import { MessageBubble } from '../renderer/src/components/MessageBubble.tsx'
 import { ConversationSkeleton } from '../renderer/src/components/Skeleton.tsx'
 import type { UiMessage } from '../renderer/src/store.ts'
+import { TEST_PERSONA } from './fixtures.ts'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -154,6 +155,7 @@ describe('列表 stagger 接线', () => {
             description: '什么都能聊',
             suggestedSystemPrompt: '你是通用助理。',
             defaultModel: 'deepseek-ai/DeepSeek-V3',
+            persona: TEST_PERSONA,
             defaultTools: [],
           },
         ]}

@@ -17,12 +17,14 @@
  * deadline 是真的（recallBudgetMs 覆盖 embedding 等待，而不只是画像查询）。
  *
  * 检索配方（调研 §3.4）：输入 → embedding 余弦 top-10 + FTS5 BM25 top-10 →
- * RRF(k=60) 融合 → 时间衰减 score *= exp(-Δdays/30) → top-5 注入；
- * 共享画像（'*shared*' 的 profile 类）全量注入。
+ * RRF(k=60) 融合 → 时间衰减 exp(-Δdays/30)（下限 DECAY_FLOOR，见 rankRecall）
+ * → top-5 注入；共享画像（'*shared*' 的 profile 类）全量注入。
  *
  * 抽取管线（调研 §1.2 mem0 式）：本轮 user+assistant 消息 → LLM 抽候选事实
- * （scope 路由：用户事实 → *shared*；互动经验 → agent 空间）→ 每条候选查
- * top-10 相似 → LLM 四操作 → UPDATE/DELETE 走 superseded 软删链。
+ * （scope 路由：用户事实 → *shared*；互动经验 → agent 空间；每条带重要性
+ * 档位，关键档不参与休眠归档）→ 每条候选按**纯相似度**查 top-10（不混衰减
+ * 与增益，见 {@link MemoryService.similarForDecide}）→ LLM 四操作 →
+ * UPDATE/DELETE 走 superseded 软删链。
  * 单 writer 异步队列，失败重试一次后记日志不炸主流程。
  * @module @ryharness/memory/service
  */
@@ -55,8 +57,22 @@ const CARRIED_SEMANTIC_TOP_N = 3
  * 触顶时按插入顺序淘汰最旧的。
  */
 const CARRIED_SEMANTIC_SPACES = 64
+/**
+ * 同步召回共享打分短窗缓存的条目上限（按输入文本计）。
+ *
+ * 一次群聊扇出只占一条（同一段输入），上限只防长驻进程里换着文本追问时
+ * 无界堆积：条目随写代失效重算，触顶按插入序淘汰最旧的。
+ */
+const SYNC_SHARED_SPACES = 16
 /** 衰减时间常数（天）。 */
 const DECAY_DAYS = 30
+/**
+ * 衰减下限。无下限时早期关键事实的排序分随 e^(-Δdays/30) 趋零（100 天 ≈
+ * 0.036），任何新近噪音都能压过它——而 RRF 的通道名次之间本就只差百分之
+ * 十几。取 0.15（≈54 天后持平）：老记忆从此靠通道名次与召回增益竞争，而不是
+ * 被时间清零。关键事实另有 importance≥3 的归档豁免（见 store 的 archiveDormant）。
+ */
+const DECAY_FLOOR = 0.15
 /** 默认 embedding 请求超时（毫秒）。 */
 const DEFAULT_EMBED_TIMEOUT_MS = 800
 /** 默认 recall 整体预算（毫秒）——保障首 token 延迟。 */
@@ -211,6 +227,16 @@ export class MemoryService implements AgentMemory, MemoryRecallMany {
    */
   private readonly carriedSemantic = new Map<string, ScoredMemory[]>()
   /**
+   * 同步召回的共享空间打分短窗缓存（键 = 输入文本）。
+   *
+   * 群聊扇出里 N 个成员各调一次 {@link MemoryService.recallSync}，而它们拿到
+   * 的是**同一段输入**：同一个查询向量、同一份共享空间数据，打分结果必然
+   * 相同——共享空间的矩阵扫描一轮只该做一次。条目按「文本 + 写代」判定
+   * 复用：写代一变（抽取落库、编辑、跨连接提交）立即重算，复用窗口与数据
+   * 一致性不冲突。各成员的**私有空间**不进这里，仍各扫各的。
+   */
+  private readonly syncSharedScored = new Map<string, { stamp: string; scored: ScoredMemory[] }>()
+  /**
    * 每个 agent 空间「最近一次注入的记忆 id」。
    *
    * 用户点 👎 时要回答的问题是「刚才那一轮我看到了什么」，而召回钩子的契约只有
@@ -301,7 +327,7 @@ export class MemoryService implements AgentMemory, MemoryRecallMany {
           vector,
           profile,
           budgetExceeded: false,
-          sharedSemantic: vector === null ? [] : this.scoreSemantic(SHARED_SPACE, vector),
+          sharedSemantic: this.sharedSemanticSync(text, vector),
           ftsHits: this.searchFtsChannel(text),
           carried: this.takeCarriedSemantic(agentId),
           pendingTouch: profile.map((m) => {
@@ -318,6 +344,29 @@ export class MemoryService implements AgentMemory, MemoryRecallMany {
       )
       return undefined
     }
+  }
+
+  /**
+   * 共享空间的同步打分（带短窗缓存）：同一段输入在写代未变时直接复用上一份。
+   *
+   * stamp 顺手透传给 scoreSemantic——同一同步链上桶校验与缓存键共用一次
+   * PRAGMA 读取，扇出的 N 个成员没有谁为共享打分多付 SQL。
+   */
+  private sharedSemanticSync(text: string, vector: Float32Array | null): ScoredMemory[] {
+    if (vector === null) return []
+    const stamp = this.store.embeddingStamp()
+    const cached = this.syncSharedScored.get(text)
+    if (cached !== undefined && cached.stamp === stamp) return cached.scored
+    const scored = this.scoreSemantic(SHARED_SPACE, vector, stamp)
+    // 先删后插：同一段输入连续召回靠它刷新插入序，淘汰的仍是"最久没召回"。
+    this.syncSharedScored.delete(text)
+    this.syncSharedScored.set(text, { stamp, scored })
+    while (this.syncSharedScored.size > SYNC_SHARED_SPACES) {
+      const oldest = this.syncSharedScored.keys().next()
+      if (oldest.done === true) break
+      this.syncSharedScored.delete(oldest.value)
+    }
+    return scored
   }
 
   /**
@@ -507,6 +556,36 @@ export class MemoryService implements AgentMemory, MemoryRecallMany {
     return [...(this.lastInjected.get(agentId) ?? [])]
   }
 
+  /**
+   * 就地编辑一条 active 记忆的内容（用户在记忆面板上改过时事实）。
+   *
+   * 存储层换内容与 FTS 索引行（updateContent），这里补上语义通道：旧向量对应
+   * 旧内容，不重算的话这条记忆在余弦检索里永远"说旧话"——词法改对了、语义
+   * 还在学错的。向量身份与 {@link reembedAll} 同一套（带 this.embeddingModel），
+   * 换过模型也不会把编辑写成混库向量。
+   *
+   * 嵌入失败不阻塞编辑：catch 后记日志返回已保存的行，这条记忆暂时只剩
+   * BM25 通道可按新内容召回（与超时降级纯 FTS5 是同款语义，且下一次 reembed
+   * 或本方法再次编辑时自愈）。
+   * @returns 更新后的行；不存在或非 active 返回 undefined（由调用方决定 404）。
+   */
+  async updateMemory(id: string, content: string): Promise<MemoryRow | undefined> {
+    const row = this.store.updateContent(id, content)
+    if (row === undefined) return undefined
+    if (this.embeddings.available) {
+      try {
+        const vector = await this.embedCached(row.content)
+        if (vector !== null) this.store.setEmbedding(row.id, vector, this.embeddingModel)
+      } catch (error) {
+        this.log(
+          `@ryharness/memory: memory edited but embedding refresh failed (FTS-only until next reembed): ` +
+            `${error instanceof Error ? error.message : String(error)}`,
+        )
+      }
+    }
+    return this.store.get(row.id) ?? row
+  }
+
   /** 两通道融合 + 衰减 + top-N（RRF(k=60) 与访问基准衰减，配方见调研 §3.4）。 */
   private rankRecall(context: RecallContext, agentId: string, limit = this.topN): MemoryRow[] {
     const candidates = new Map<string, { memory: MemoryRow; rrf: number }>()
@@ -566,7 +645,11 @@ export class MemoryService implements AgentMemory, MemoryRecallMany {
           const lastSeen = entry.memory.lastAccessedAt > 0 ? entry.memory.lastAccessedAt : entry.memory.updatedAt
           const ageDays = Math.max(0, now - lastSeen) / 86_400_000
           const reinforced = recallGain(entry.memory)
-          return { memory: entry.memory, score: entry.rrf * Math.exp(-ageDays / DECAY_DAYS) * reinforced }
+          // 衰减带上限下限（见 DECAY_FLOOR）：时间只把老记忆压到「与通道名次
+          // 同量级」，不负责把它清零——清零是 👎 增益（recallGain 下界 0）的
+          // 职责，两个维度不该互相越权。
+          const decay = Math.max(Math.exp(-ageDays / DECAY_DAYS), DECAY_FLOOR)
+          return { memory: entry.memory, score: entry.rrf * decay * reinforced }
         })
         // 增益归零（👎 净额压过命中与基线）的候选直接退出竞争：排序分恒乘出 0，
         // 占一个 top-N 名额只会挤出还有正分的记忆——「排不进去」是 recallGain
@@ -588,28 +671,40 @@ export class MemoryService implements AgentMemory, MemoryRecallMany {
   /**
    * 某空间的语义通道打分（余弦降序）。
    *
+   * 打分在空间桶的堆叠矩阵上单趟完成：逐行 cosine 的热路径上每行都要一次
+   * 函数调用、一次 `embedding` 属性访问与两次长度检查，而这些全都跑在与流式
+   * 输出共享的事件循环上；矩阵把向量字节连续排布后，内层只剩局部变量上的
+   * 乘加。乘法对 IEEE 双精逐位可交换、加法按同一顺序累计，分数与逐行 cosine
+   * 完全一致，排序（稳定）与召回集合不因数据结构改变。
+   *
    * 只在同一向量空间内比较：模型不同或维度不符的向量一律排除，绝不让 cosine
    * 静默返回 -1 把检索质量拖垮（曾导致"换 embedding 模型即塌陷"）。
+   *
+   * `stamp` 供同步调用链复用写代：同一链上已读过一次就不为桶校验再付 PRAGMA。
    */
-  private scoreSemantic(spaceId: string, vector: Float32Array): ScoredMemory[] {
-    const dimMismatch = new Set<string>()
-    const scored = this.store
-      .listSpaceEmbeddings(spaceId, this.embeddingModel)
-      .filter((memory) => {
-        if (memory.embedding === null) return false
-        if (memory.embedding.length === vector.length) return true
-        dimMismatch.add(memory.id)
-        return false
-      })
-      .map((memory) => {
-        return { memory, score: cosine(vector, memory.embedding as Float32Array) }
-      })
-      .sort((a, b) => {
-        return b.score - a.score
-      })
-    if (dimMismatch.size > 0) {
+  private scoreSemantic(spaceId: string, vector: Float32Array, stamp?: string): ScoredMemory[] {
+    const dim = vector.length
+    const { rows, data, offsets, dims } = this.store.spaceEmbeddingMatrix(spaceId, this.embeddingModel, stamp)
+    const scored: ScoredMemory[] = []
+    let mismatched = 0
+    for (let index = 0; index < rows.length; index++) {
+      if (dims[index] !== dim) {
+        mismatched += 1
+        continue
+      }
+      let dot = 0
+      const base = offsets[index]
+      for (let axis = 0; axis < dim; axis++) {
+        dot += data[base + axis] * vector[axis]
+      }
+      scored.push({ memory: rows[index], score: dot })
+    }
+    scored.sort((a, b) => {
+      return b.score - a.score
+    })
+    if (mismatched > 0) {
       this.log(
-        `@ryharness/memory: skipped ${dimMismatch.size} memories in "${spaceId}" whose embedding dim ` +
+        `@ryharness/memory: skipped ${mismatched} memories in "${spaceId}" whose embedding dim ` +
           `differs from model "${this.embeddingModel}"`,
       )
     }
@@ -805,7 +900,7 @@ export class MemoryService implements AgentMemory, MemoryRecallMany {
     const candidates = await this.llm.extractFacts({ agentName, conversationText: turnText })
     for (const candidate of candidates) {
       const spaceId = candidate.scope === 'shared' ? SHARED_SPACE : agentId
-      const similarRows = await this.hybridRecall(spaceId, candidate.text, RECALL_PER_CHANNEL)
+      const similarRows = await this.similarForDecide(spaceId, candidate.text, RECALL_PER_CHANNEL)
       const similar = similarRows.map((memory) => {
         return { id: memory.id, content: memory.content }
       })
@@ -813,6 +908,45 @@ export class MemoryService implements AgentMemory, MemoryRecallMany {
       const operations = await this.applySimilarityGuard(candidate, similarRows, decided)
       await this.applyOperations(spaceId, candidate, operations, conversationId)
     }
+  }
+
+  /**
+   * DECIDE 阶段的相似旧记忆：按**纯相似度**取，不走注入路径的衰减与反馈增益。
+   *
+   * 衰减与增益回答的是「这一轮该想起什么」；DECIDE 要回答的是「这条候选该
+   * 改写/取代哪条旧记忆」。混入时间权重时，三个月前写入、零访问的旧事实
+   * （衰减 e⁻³）排不进 top-10，排进去的是新近但语义无关的行——模型拿到的
+   * memoryId 列表本身就是错靶：UPDATE 改写错误目标、真重复永久遗留。mem0 与
+   * Hy-Memory 的 update 路径都按与新事实的相似度检索，不混时间/访问权重。
+   *
+   * 候选集合沿用注入路径的口径（本空间 + 共享画像）；纯 FTS5 安装退到无衰减
+   * 的 BM25 候选窗口。
+   */
+  private async similarForDecide(spaceId: string, text: string, limit: number): Promise<MemoryRow[]> {
+    const vector = await this.embedCached(text)
+    if (vector !== null) {
+      const scored = [
+        ...this.scoreSemantic(spaceId, vector),
+        ...(spaceId === SHARED_SPACE ? [] : this.scoreSemantic(SHARED_SPACE, vector)),
+      ]
+        .sort((a, b) => {
+          return b.score - a.score
+        })
+        .slice(0, limit)
+        .map((hit) => {
+          return hit.memory
+        })
+      if (scored.length > 0) return scored
+    }
+    return this.store
+      .searchFtsHits(text, limit * 3)
+      .filter((hit) => {
+        return hit.memory.agentId === spaceId || hit.memory.agentId === SHARED_SPACE
+      })
+      .slice(0, limit)
+      .map((hit) => {
+        return hit.memory
+      })
   }
 
   /**
@@ -841,7 +975,13 @@ export class MemoryService implements AgentMemory, MemoryRecallMany {
       return hasWrite ? operations : [{ action: 'ADD', text: candidate.text }]
     }
     if (top > NOOP_ALLOW_THRESHOLD) {
-      // 与旧记忆几乎重复：抹掉写入意图（UPDATE/DELETE 会无谓地改写旧记忆）。
+      // 与旧记忆几乎重复：ADD 是重复写入，拦下。但 UPDATE/DELETE 恰恰以「词面
+      // 相近」为前提——矛盾事实（「不再吃辣」vs「喜欢吃辣」）的余弦普遍 >0.85，
+      // 一刀切 NOOP 等于把用户的每次纠错永远挡在库外。结构性改写原样放行。
+      const structural = operations.filter((op) => {
+        return op.action === 'UPDATE' || op.action === 'DELETE'
+      })
+      if (structural.length > 0) return structural
       return [{ action: 'NOOP' }]
     }
     return operations
@@ -887,7 +1027,12 @@ export class MemoryService implements AgentMemory, MemoryRecallMany {
     operations: readonly MemoryOperation[],
     conversationId: string,
   ): Promise<void> {
-    const write = async (kind: MemoryKind, content: string, supersedesId?: string): Promise<void> => {
+    const write = async (
+      kind: MemoryKind,
+      content: string,
+      importance: number,
+      supersedesId?: string,
+    ): Promise<void> => {
       const trimmed = content.trim()
       const embedding = await this.embedCached(trimmed)
       this.store.insert({
@@ -898,6 +1043,7 @@ export class MemoryService implements AgentMemory, MemoryRecallMany {
         ...(embedding === null ? {} : { embeddingModel: this.embeddingModel }),
         sourceConversationId: conversationId,
         ...(supersedesId === undefined ? {} : { supersedesId }),
+        importance,
       })
     }
 
@@ -909,14 +1055,16 @@ export class MemoryService implements AgentMemory, MemoryRecallMany {
           addConsumed = true
           const text = (op.text ?? candidate.text).trim()
           if (this.isTextNearDuplicate(spaceId, text)) break
-          await write(candidate.kind as MemoryKind, text)
+          await write(candidate.kind as MemoryKind, text, candidate.importance)
           break
         }
         case 'UPDATE': {
           const existing = this.store.get(op.memoryId)
           if (existing === undefined || existing.status !== 'active' || existing.agentId !== spaceId) break
           this.store.supersede(op.memoryId, 'superseded')
-          await write(existing.kind, op.newText, op.memoryId)
+          // UPDATE 是同一事实的演进，重要档取两侧最大：旧档不因改写而降级
+          // （legacy 行是 1，被细化成关键事实时允许升档）。
+          await write(existing.kind, op.newText, Math.max(existing.importance, candidate.importance), op.memoryId)
           break
         }
         case 'DELETE': {

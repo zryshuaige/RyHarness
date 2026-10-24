@@ -4,10 +4,10 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>RyHarness · 一群会跟你熟起来的 AI 助理</title>
-<meta name="description" content="RyHarness 是类微信的多 Agent 桌面应用：性格能调、亲密度会累积，助理在群聊里互相接力，RyVibe 一句话就能做出一个能打开的项目。Electron + React + SQLite，MIT 开源。" />
+<meta name="description" content="RyHarness 是类微信的多 Agent 桌面应用：每个助理有自己的性格、声音和样子，助理在群聊里互相接力，RyVibe 一句话就能做出一个能打开的项目。Electron + React + SQLite，MIT 开源。" />
 <meta property="og:type" content="website" />
 <meta property="og:title" content="RyHarness · 一群会跟你熟起来的 AI 助理" />
-<meta property="og:description" content="类微信的多 Agent 桌面应用。性格可编辑，助理会互相接力，一句话能落成一个项目。MIT 开源。" />
+<meta property="og:description" content="每个助理有自己的性格、声音和样子。类微信的多 Agent 桌面应用，MIT 开源。" />
 <meta property="og:image" content="assets/logo.png" />
 <link rel="icon" href="assets/favicon.png" />
 <style>
@@ -270,6 +270,12 @@ section{padding:clamp(72px,9vw,128px) 0}
 @media (max-width:900px){.bond-grid{grid-template-columns:1fr}}
 .trait{margin-bottom:20px}
 .trait:last-child{margin-bottom:0}
+.col-label{
+  display:flex;align-items:baseline;gap:10px;margin-bottom:18px;padding-bottom:12px;
+  border-bottom:1px solid var(--line-soft);
+}
+.col-label b{font-size:15.5px;font-weight:800;letter-spacing:-.01em}
+.col-label span{font-size:12.5px;color:var(--ink-3)}
 .trait .tname{display:flex;align-items:baseline;gap:10px;font-size:15.5px;font-weight:700}
 .trait .tname em{font-style:normal;font-size:11px;font-weight:600;color:var(--ink-3);letter-spacing:.1em;text-transform:uppercase}
 .trait .tbar{margin-top:9px;height:8px;border-radius:99px;background:var(--bg-subtle);border:1px solid var(--line-soft);overflow:hidden}
@@ -283,6 +289,35 @@ section{padding:clamp(72px,9vw,128px) 0}
 .prompt .pbar .hint{margin-left:auto;font-family:var(--font);letter-spacing:0}
 .prompt pre{padding:18px 20px;font-size:13px;line-height:2.05;color:var(--ink-2);white-space:pre-wrap;word-break:break-word}
 .prompt .k{color:var(--amber-700);font-weight:700}
+
+/* 角色卡：声音 / 形象 */
+.pcard{
+  padding:24px 26px;border:1px solid var(--line);border-radius:16px;
+  background:var(--bg-elev);box-shadow:var(--shadow-sm);
+  display:flex;flex-direction:column;
+}
+.bond-grid.equal{align-items:stretch}
+.pcard .pc-title{display:flex;align-items:baseline;gap:10px;font-size:15.5px;font-weight:800;letter-spacing:-.01em}
+.pcard .pc-title em{font-style:normal;font-size:11px;font-weight:600;color:var(--ink-3);letter-spacing:.1em;text-transform:uppercase}
+.pcard .pc-note{margin-top:6px;font-size:13px;color:var(--ink-3)}
+.pcard .pc-foot{margin-top:auto;padding-top:16px;font-size:13px;color:var(--ink-2);line-height:1.72}
+.voice-list{list-style:none;margin:16px 0 0;padding:0;display:grid;gap:6px}
+.voice-list li{
+  display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:10px;
+  background:var(--bg-subtle);border:1px solid var(--line-soft);
+}
+.voice-list .vname{font-size:13.5px;font-weight:600;white-space:nowrap}
+.voice-list .vmeta{font-size:11.5px;color:var(--ink-3);font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.voice-list .vplay{margin-left:auto;font-size:12px;font-weight:600;color:var(--amber-700);white-space:nowrap}
+.voice-list li.sys{background:var(--amber-wash);border-color:var(--amber-tint)}
+.pet-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+.pet{position:relative;width:62px;height:62px;display:block;cursor:pointer}
+.pet img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;transition:opacity .3s ease,transform .3s cubic-bezier(.2,.8,.3,1)}
+.pet .p-side{opacity:0;transform:translateX(-8px) scale(.9)}
+.pet:hover .p-front{opacity:0;transform:translateX(8px) scale(.9)}
+.pcard .hues{margin:14px 0 0;gap:7px}
+.pcard .hues i{width:20px;height:20px}
+.pet:hover .p-side{opacity:1;transform:none}
 
 .ladder{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:clamp(32px,4vw,56px)}
 @media (max-width:820px){.ladder{grid-template-columns:repeat(2,1fr)}}
@@ -355,16 +390,12 @@ section{padding:clamp(72px,9vw,128px) 0}
   transition:transform .25s cubic-bezier(.2,.8,.3,1),box-shadow .25s ease,border-color .25s ease;
 }
 .cap:hover{transform:translateY(-3px);box-shadow:var(--shadow-md);border-color:var(--line)}
-.cap-wide{grid-column:span 2;display:flex;gap:18px;align-items:flex-start;background:var(--amber-wash);border-color:var(--amber-tint)}
-.cap-wide .cap-ico{margin-bottom:0;flex:0 0 auto}
-.cap-wide h3{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .cap .beta{
   font-size:11px;font-weight:700;letter-spacing:.04em;padding:2px 8px;border-radius:6px;
   background:var(--amber);color:#3D2E12;
 }
 @media (max-width:700px){
   .caps{grid-template-columns:1fr}
-  .cap-wide{grid-column:auto;flex-direction:column}
 }
 .cap-ico{
   width:40px;height:40px;border-radius:11px;display:grid;place-items:center;
@@ -581,7 +612,7 @@ html.js-reveal .reveal.in{opacity:1;transform:none}
       <span class="ver">0.1.0</span>
     </a>
     <nav class="nav-links">
-      <a href="#bond">关系</a>
+      <a href="#who">角色</a>
       <a href="#why">区别</a>
       <a href="#caps">能力</a>
       <a href="#showcase">界面</a>
@@ -604,7 +635,7 @@ html.js-reveal .reveal.in{opacity:1;transform:none}
 </header>
 
 <div class="menu-panel" id="menuPanel">
-  <a href="#bond">关系</a>
+  <a href="#who">角色</a>
   <a href="#why">区别</a>
   <a href="#caps">能力</a>
   <a href="#showcase">界面</a>
@@ -631,8 +662,7 @@ html.js-reveal .reveal.in{opacity:1;transform:none}
         <h1>一群会跟你<span class="accent">熟起来</span>的<br />AI 助理</h1>
         <p class="lead">
           现在的 Agent 大多是一个助手、一个输入框。RyHarness 是一群助理：性格能调，
-          亲密度会累积，一起经历过的事会留下来。他们像微信里的联系人一样跟你相处，
-          也像同事一样把活干完交给你。
+          声音不一样，长得也不一样。聊得久了他们会认得你——像微信里的联系人，也像同事。
         </p>
         <div class="hero-cta">
           <a class="btn btn-primary btn-lg" href="#get">
@@ -648,8 +678,8 @@ html.js-reveal .reveal.in{opacity:1;transform:none}
         <div class="hero-meta">
           <span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>Windows / macOS</span>
           <span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>MIT 开源</span>
-          <span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 7h-9M20 12h-5M20 17h-9"/><circle cx="6" cy="7" r="2"/><circle cx="6" cy="17" r="2"/></svg>任意 OpenAI 兼容供应商</span>
-          <span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5M2 12l10 5 10-5"/></svg>默认 DeepSeek-V4-Flash</span>
+          <span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg>16 个音色，每个助理一把</span>
+          <span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18"/></svg>48 种形象</span>
           <span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>数据留在本机</span>
         </div>
       </div>
@@ -687,25 +717,26 @@ html.js-reveal .reveal.in{opacity:1;transform:none}
     <div class="wrap">
       <div class="stat-grid reveal">
         <div class="stat"><div class="n">4<small>维</small></div><div class="l">性格滑杆</div><div class="s">外向 / 严谨 / 幽默 / 主动</div></div>
-        <div class="stat"><div class="n">4<small>档</small></div><div class="l">亲密度</div><div class="s">初识 → 熟面孔 → 亲近 → 挚友</div></div>
+        <div class="stat"><div class="n">16</div><div class="l">个云端音色</div><div class="s">跨语种，粤语也行</div></div>
+        <div class="stat"><div class="n">48</div><div class="l">种形象组合</div><div class="s">6 只动物 × 8 种毛色</div></div>
         <div class="stat"><div class="n">198</div><div class="l">测试文件</div><div class="s">vitest 全量通过</div></div>
         <div class="stat"><div class="n">4.52<small>MB</small></div><div class="l">安装包 asar 体积</div><div class="s">较早期 16.37 MB 降 72.4%</div></div>
-        <div class="stat"><div class="n">0.25<small>ms</small></div><div class="l">会话列表单查询</div><div class="s">含预览与未读</div></div>
       </div>
     </div>
   </section>
 
-  <!-- ============ RELATIONSHIP ============ -->
-  <section id="bond">
+  <!-- ============ CHARACTERS ============ -->
+  <section id="who">
     <div class="wrap">
       <div class="sec-head center reveal">
-        <span class="eyebrow">Relationship</span>
-        <h2>他们会跟你熟起来</h2>
-        <p>四条性格滑杆（外向 / 严谨 / 幽默 / 主动）直接改写系统提示，拖一下就能在预览里看到提示词跟着变。亲密度靠聊天轮次和 👍 / 👎 慢慢累积，跨过档位的时候，称呼和主动性会一起变。</p>
+        <span class="eyebrow">Characters</span>
+        <h2>每个助理都有自己的<br />声音、性格和样子</h2>
+        <p>不是同一个助手换几个名字。性格、声音、形象、亲密度，都是能编辑、能被记住的东西。</p>
       </div>
 
       <div class="bond-grid">
         <div class="reveal">
+          <div class="col-label"><b>性格</b><span>四条滑杆直接改写系统提示</span></div>
           <div class="trait">
             <div class="tname">外向 <em>Extravert</em></div>
             <div class="tbar"><i style="--v:82%"></i></div>
@@ -732,10 +763,44 @@ html.js-reveal .reveal.in{opacity:1;transform:none}
           <div class="pbar"><i></i><i></i><i></i><span>system prompt</span><span class="hint">滑杆一动，这里立刻变</span></div>
 <pre><span class="k">你是</span>「阿狐」，住在 zry 的电脑里。
 <span class="k">性格</span>  外向 0.8 · 严谨 0.4 · 幽默 0.7 · 主动 0.7
+<span class="k">声音</span>  沉稳男声（CosyVoice2 alex）
 <span class="k">关系</span>  熟面孔（认识 42 天）
 <span class="k">当前</span>  群聊「产品三人组」· 3 位助理
 <span class="k">记得</span>  上次改需求，他会先问一版时间线
 <span class="k">语气</span>  口语、短句、不写套话</pre>
+        </div>
+      </div>
+
+      <div class="bond-grid equal" style="margin-top:clamp(18px,2vw,28px)">
+        <div class="pcard reveal">
+          <div class="pc-title">声音 <em>Voice</em></div>
+          <div class="pc-note">每个助理配一把音色，跟着人设走</div>
+          <ul class="voice-list">
+            <li><span class="vname">沉稳男声</span><span class="vmeta">CosyVoice2 · alex</span><span class="vplay">试听</span></li>
+            <li><span class="vname">温柔女声</span><span class="vmeta">CosyVoice2 · claire</span><span class="vplay">试听</span></li>
+            <li><span class="vname">欢快男声</span><span class="vmeta">MOSS · david</span><span class="vplay">试听</span></li>
+            <li class="sys"><span class="vname">慧慧（系统女声）</span><span class="vmeta">本机自带</span><span class="vplay">试听</span></li>
+          </ul>
+          <p class="pc-foot">16 个云端音色加 4 个系统音色，每一条都实测能出声。CosyVoice2 跨语种，粤语四川话也行；MOSS 能中英混读。开了自动朗读，流式写到句号就入队合成，不等整条消息出完。云端失败就落到系统语音，不弹报错。</p>
+        </div>
+
+        <div class="pcard reveal">
+          <div class="pc-title">形象 <em>Avatar</em></div>
+          <div class="pc-note">一只 3D 渲染的小动物，指针移上去会转头</div>
+          <div class="pet-row">
+            <span class="pet"><img class="p-front" src="assets/animal-bear.webp" alt="熊" /><img class="p-side" src="assets/animal-bear-right.webp" alt="" aria-hidden="true" /></span>
+            <span class="pet"><img class="p-front" src="assets/animal-dog.webp" alt="柴犬" /><img class="p-side" src="assets/animal-dog-right.webp" alt="" aria-hidden="true" /></span>
+            <span class="pet"><img class="p-front" src="assets/animal-fox.webp" alt="狐狸" /><img class="p-side" src="assets/animal-fox-right.webp" alt="" aria-hidden="true" /></span>
+            <span class="pet"><img class="p-front" src="assets/animal-mouse.webp" alt="老鼠" /><img class="p-side" src="assets/animal-mouse-right.webp" alt="" aria-hidden="true" /></span>
+            <span class="pet"><img class="p-front" src="assets/animal-panda.webp" alt="熊猫" /><img class="p-side" src="assets/animal-panda-right.webp" alt="" aria-hidden="true" /></span>
+            <span class="pet"><img class="p-front" src="assets/animal-rabbit.webp" alt="兔子" /><img class="p-side" src="assets/animal-rabbit-right.webp" alt="" aria-hidden="true" /></span>
+          </div>
+          <div class="hues">
+            <i style="background:#F59E0B"></i><i style="background:#EF4444"></i><i style="background:#EC4899"></i>
+            <i style="background:#A855F7"></i><i style="background:#3B82F6"></i><i style="background:#10B981"></i>
+            <i style="background:#F97316"></i><i style="background:#6B7280"></i>
+          </div>
+          <p class="pc-foot">6 种动物 × 8 种毛色 = 48 种组合。染色跑在 GPU 上，实时可切；闲置时偶尔眨一下眼或者笑一下，指针停上去会抬爪打招呼。</p>
         </div>
       </div>
 
@@ -746,7 +811,7 @@ html.js-reveal .reveal.in{opacity:1;transform:none}
         <div class="rung" style="--o:1"><div class="rstep">04</div><div class="rname">挚友</div><div class="rdesc">称呼换了，姿态也换了</div></div>
       </div>
       <p class="note reveal" style="text-align:center;margin-top:20px">
-        亲密度是聊天轮次和 👍 / 👎 攒出来的。我们没做「好感度 +5」那种数值游戏——档位靠你们之间真实发生的事跨过去。
+        亲密度是聊天轮次和 👍 / 👎 攒出来的。我们没做「好感度 +5」那种数值游戏——档位靠你们之间真实发生的事跨过去。生日和首次相遇也都记着。
       </p>
     </div>
   </section>
@@ -768,8 +833,8 @@ html.js-reveal .reveal.in{opacity:1;transform:none}
         </div>
         <div class="cmp-row">
           <div class="cmp-k">关系</div>
-          <div class="cmp-alt">一个助手，人格写在 system prompt 里</div>
-          <div class="cmp-us"><b>一群助理</b>，人格是结构化数据——四维性格 / 生日 / 口头禅 / 亲密度，可编辑、可 fork</div>
+          <div class="cmp-alt">一个助手，性格写在 system prompt 里</div>
+          <div class="cmp-us"><b>一群助理</b>，性格、声音、形象、亲密度都是结构化数据——能改、能试听、能换脸，可编辑、可 fork</div>
         </div>
         <div class="cmp-row">
           <div class="cmp-k">协作</div>
@@ -804,19 +869,10 @@ html.js-reveal .reveal.in{opacity:1;transform:none}
     <div class="wrap">
       <div class="sec-head reveal">
         <span class="eyebrow">Capabilities</span>
-        <h2>做了什么</h2>
-        <p>不是一个通用壳子套上模型。这些是自己写的，也互相咬合。</p>
+        <h2>他们能干什么</h2>
+        <p>性格之外的几件事：怎么互相接力、怎么记事、怎么把一句话变成一个项目。</p>
       </div>
       <div class="caps">
-        <article class="cap reveal">
-          <div class="cap-ico">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
-          </div>
-          <h3>性格能调</h3>
-          <p>四条滑杆（外向 / 严谨 / 幽默 / 主动）直接改写系统提示，拖动就能在预览里看到变化。生日、口头禅、亲密度都是能编辑的字段，不用去改提示词。</p>
-          <div class="tags"><span>四维性格</span><span>亲密度</span><span>可 fork</span></div>
-        </article>
-
         <article class="cap reveal">
           <div class="cap-ico">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13A4 4 0 0 1 16 11"/></svg>
@@ -844,15 +900,13 @@ html.js-reveal .reveal.in{opacity:1;transform:none}
           <div class="tags"><span>cordis</span><span>skill 也是插件</span><span>真实装卸</span></div>
         </article>
 
-        <article class="cap cap-wide reveal">
+        <article class="cap reveal">
           <div class="cap-ico">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 3 7.5l9 4.5 9-4.5L12 3z"/><path d="M3 12.5 12 17l9-4.5M3 17 12 21.5 21 17"/></svg>
           </div>
-          <div>
-            <h3>RyVibe：一句话进，一个能打开的项目出 <span class="beta">Beta</span></h3>
-            <p>说清你想要什么。小队挑几件事问你——是选项卡，不是表单——然后写出方案，落成工作区里的一个项目目录（README、完整方案、任务清单，还有一个能直接打开的首个页面），任务清单同时进你的待办。</p>
-            <div class="tags"><span>一轮最多四问</span><span>项目落盘</span><span>任务进待办</span></div>
-          </div>
+          <h3>RyVibe：一句话进，一个能打开的项目出 <span class="beta">Beta</span></h3>
+          <p>说清你想要什么。小队挑几件事问你——是选项卡，不是表单——然后写出方案，落成工作区里的一个项目目录（README、完整方案、任务清单，还有一个能直接打开的首个页面），任务清单同时进你的待办。</p>
+          <div class="tags"><span>一轮最多四问</span><span>项目落盘</span><span>任务进待办</span></div>
         </article>
       </div>
     </div>
@@ -1177,6 +1231,7 @@ html.js-reveal .reveal.in{opacity:1;transform:none}
       <p class="note reveal">
         提交前请跑 <code>pnpm verify</code>（五道门禁：跨包断言 / 没声明的依赖 / 重复代码 / lint 预算 / NOTICE 里的数字）与 <code>pnpm test</code>。
         全都拿仓库事实核对，对不上就红。裁剪与改名的逐项记录在 NOTICE.md。
+        模型这边不挑：任何 OpenAI 兼容的供应商都能接，改数据目录下的 <code>config/providers.json</code> 就行；向量模型是单独一条配置，换供应商不会偷偷沿用别人的向量。
         <br />这是开发者预览版，改动很快，会有破坏兼容性的变更——升级前先备份数据目录。
       </p>
     </div>

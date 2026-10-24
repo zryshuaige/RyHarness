@@ -9,7 +9,7 @@
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { App, NEW_CHAT_EVENT } from '../renderer/src/App.tsx'
+import { App, NEW_CHAT_EVENT, OPEN_CONVERSATION_EVENT } from '../renderer/src/App.tsx'
 import type { AgentDef, Conversation } from '../renderer/src/api.ts'
 import type { WelcomeTarget } from '../renderer/src/components/WelcomeHome.tsx'
 import { WelcomeHome } from '../renderer/src/components/WelcomeHome.tsx'
@@ -304,6 +304,12 @@ describe('壳：多 agent 场景真的落进群会话', () => {
         if (path.endsWith('/messages') && method === 'POST') return { accepted: true, streamSeq: 0 }
         if (path.endsWith('/read')) return { conversationId: 'x', lastReadSeq: 0 }
         if (path.endsWith('/dispatch')) return { events: [] }
+        // 「我的」页的用量账单：那个用例会切到「我的」页，账单那块会真的去读。
+        // 缺了这一条，替身回一个空对象，渲染层读不到 byConversation 就崩——这正是
+        // 这次要修的那处（形状对不上要降级，不能整页白掉）。
+        if (path.startsWith('/api/usage')) {
+          return { byConversation: [], byProvider: [], totals: { input: 0, output: 0, total: 0 } }
+        }
         return {}
       })()
       return {
@@ -450,5 +456,25 @@ describe('壳：多 agent 场景真的落进群会话', () => {
     // 收件人行在：托盘不再替用户点开与 Ryen 的单聊，头像排与小队胶囊都在。
     expect(container.querySelectorAll('.welcome-team-member').length).toBeGreaterThan(0)
     expect(container.querySelector('.welcome-squad')).not.toBeNull()
+  })
+
+  it('通知点击：事件带哪个会话 id 就切回聊天页并选中那条会话', async () => {
+    await renderApp()
+    // 先去别的页签：通知点下来时用户可能停在「我的」，不该只把窗口弹起来。
+    const meTab = [...container.querySelectorAll<HTMLButtonElement>('.rail-tab')].find((node) => {
+      return node.textContent?.includes('我的')
+    })
+    if (meTab === undefined) throw new Error('导航栏里没有「我的」页签')
+    await act(async () => {
+      meTab.click()
+      await Promise.resolve()
+    })
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent(OPEN_CONVERSATION_EVENT, { detail: 'c1' }))
+      await Promise.resolve()
+    })
+    expect(container.querySelector('.chat-header-info strong')?.textContent).toBe('Ryen')
+    // 主进程的重试脚本拿这个标记当落地判据（见 desktop-resident 的脚本测试）。
+    expect(document.documentElement.getAttribute('data-ryharness-open-conversation')).toBe('c1')
   })
 })

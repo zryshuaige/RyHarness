@@ -5,12 +5,14 @@
  * 「某个网站今天恰好长这样」来断言解析器。
  */
 import type { Tool } from '@ryharness/agent'
-import type { FetchLike, ReadUrlOptions } from '@ryharness/server'
+import type { ConnectLookup, FetchLike, ReadUrlOptions } from '@ryharness/server'
 import {
+  createPinnedFetch,
   createReadUrlTool,
   decodeHtmlEntities,
   htmlToText,
   isPrivateAddress,
+  pinnedRequestOptions,
   READ_URL_MAX_CHARS,
 } from '@ryharness/server'
 import { describe, expect, it } from 'vitest'
@@ -285,5 +287,98 @@ describe('isPrivateAddress', () => {
     for (const address of ['8.8.8.8', '93.184.216.34', '172.32.0.1', '2606:4700:4700::1111']) {
       expect(isPrivateAddress(address), address).toBe(false)
     }
+  })
+})
+
+describe('DNS rebinding：连接钉在已校验的 IP 上', () => {
+  it('钉 IP 的请求参数：host=已校验 IP，servername/Host=原域，路径端口原样', () => {
+    const options = pinnedRequestOptions(new URL('https://example.test:8443/a/b?c=1'), PUBLIC_IP, async () => ({
+      address: '1.2.3.4',
+      family: 4,
+    }))
+    expect(options.host).toBe(PUBLIC_IP)
+    expect(options.servername).toBe('example.test')
+    expect(options.headers).toMatchObject({ host: 'example.test:8443' })
+    expect(options.port).toBe(8443)
+    expect(options.path).toBe('/a/b?c=1')
+    expect(options.method).toBe('GET')
+    // 缺省端口不硬编码：https 无显式端口时交给协议默认（443）。
+    const plain = pinnedRequestOptions(new URL('https://example.test/x'), PUBLIC_IP, async () => {
+      return { address: '1.2.3.4', family: 4 }
+    })
+    expect(plain.port).toBeUndefined()
+    expect(plain.headers).toMatchObject({ host: 'example.test' })
+  })
+
+  it('rebinding 模拟：连接层解析「第二次」返回 127.0.0.1，连接仍走第一次校验过的 IP', async () => {
+    let asked = 0
+    const rebind: ConnectLookup = async () => {
+      // 攻击脚本：校验之后 DNS 记录被换成 127.0.0.1（短 TTL rebinding）。
+      asked += 1
+      return { address: '127.0.0.1', family: 4 }
+    }
+    const options = pinnedRequestOptions(new URL('http://rebind.test/x'), PUBLIC_IP, rebind)
+    // 连接目标是字面 IP：net 层对字面地址根本不做 DNS。
+    expect(options.host).toBe(PUBLIC_IP)
+    // 就算哪一层仍试图解析域名，交给连接的地址也只有已校验的那个——
+    // DNS 的 127.0.0.1 回答被丢弃（family 保留）。
+    await new Promise<void>((resolve, reject) => {
+      options.lookup?.('rebind.test', { family: 0 }, (error, address, family) => {
+        if (error !== null && error !== undefined) {
+          reject(error)
+          return
+        }
+        expect(address).toBe(PUBLIC_IP)
+        expect(family).toBe(4)
+        resolve()
+      })
+    })
+    expect(asked).toBe(1)
+  })
+
+  it('默认取回器没有钉子直接拒绝（不落回「再解析一次」的老路）', async () => {
+    const fetcher = createPinnedFetch(async () => {
+      return { address: '127.0.0.1', family: 4 }
+    })
+    await expect(fetcher('http://example.test/')).rejects.toThrow(/pin/)
+  })
+
+  it('工具把校验放行的 IP 递给取回器；重定向跨域时逐跳重新校验、重新钉', async () => {
+    const resolvedHosts: string[] = []
+    const pins: (string | undefined)[] = []
+    const tool = createReadUrlTool({
+      resolveHost: async (hostname) => {
+        resolvedHosts.push(hostname)
+        return [hostname === 'other.test' ? '203.0.113.9' : PUBLIC_IP]
+      },
+      fetchImpl: async (url, _init, pin) => {
+        pins.push(pin?.ip)
+        if (url === 'http://example.test/start') {
+          return response('', 302, { location: 'http://other.test/next' })
+        }
+        return response('正文', 200, { 'content-type': 'text/plain' })
+      },
+    })
+    const result = await tool.execute({ url: 'http://example.test/start' }, context())
+    expect(result.isError).not.toBe(true)
+    // 两个域名各解析校验一次，两个钉子各自来自当次校验。
+    expect(resolvedHosts).toEqual(['example.test', 'other.test'])
+    expect(pins).toEqual([PUBLIC_IP, '203.0.113.9'])
+  })
+
+  it('字面 IP 的 URL 不解析，钉子就是该字面地址', async () => {
+    const pins: (string | undefined)[] = []
+    const tool = createReadUrlTool({
+      resolveHost: async () => {
+        throw new Error('不该走到 DNS')
+      },
+      fetchImpl: async (_url, _init, pin) => {
+        pins.push(pin?.ip)
+        return response('ok', 200, { 'content-type': 'text/plain' })
+      },
+    })
+    const result = await tool.execute({ url: `http://${PUBLIC_IP}/x` }, context())
+    expect(result.isError).not.toBe(true)
+    expect(pins).toEqual([PUBLIC_IP])
   })
 })

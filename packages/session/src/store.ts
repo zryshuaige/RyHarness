@@ -7,6 +7,8 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { readdirSync, rmSync } from 'node:fs'
+import { basename, dirname, join } from 'node:path'
 import { DatabaseSync, type StatementSync } from 'node:sqlite'
 import { bigrams, ftsMatchQuery, messageSearchText } from './fts.ts'
 import type { AffinityEvent, AgentPersona } from './persona.ts'
@@ -195,6 +197,47 @@ function artifactsColumn(artifacts: readonly MessageArtifact[] | undefined): str
 /** 预编译语句缓存上界（SQL 文本种类固定，留两倍余量足够）。 */
 const MAX_PREPARED = 64
 
+/** 迁移前快照的保留份数：升级多次后只留最近几份，快照是保险不是升级日志。 */
+const PRE_MIGRATE_SNAPSHOT_KEEP = 3
+
+/**
+ * 清掉多出来的旧迁移快照（按版本号升序删最旧，保留最近 {@link PRE_MIGRATE_SNAPSHOT_KEEP} 份）。
+ *
+ * 删除失败（Windows 句柄滞后等）只吞掉：多留一份旧快照不是故障，删失败阻塞
+ * 迁移才是。
+ */
+function prunePreMigrateSnapshots(dbPath: string): void {
+  const dir = dirname(dbPath)
+  const prefix = `${basename(dbPath)}.pre-migrate-v`
+  let names: string[]
+  try {
+    names = readdirSync(dir).filter((name) => {
+      return name.startsWith(prefix) && name.endsWith('.db')
+    })
+  } catch {
+    return
+  }
+  const versionOf = (name: string): number => {
+    const match = /^v(\d+)\.db$/.exec(name.slice(prefix.length))
+    return match === null ? -1 : Number(match[1])
+  }
+  const sorted = names
+    .map((name) => {
+      return { name, version: versionOf(name) }
+    })
+    .sort((a, b) => {
+      return a.version - b.version
+    })
+  const excess = sorted.length - PRE_MIGRATE_SNAPSHOT_KEEP
+  for (const item of sorted.slice(0, Math.max(0, excess))) {
+    try {
+      rmSync(join(dir, item.name))
+    } catch {
+      // 留着：见函数注释。
+    }
+  }
+}
+
 /** RyHarness 会话存储。构造时打开（必要时创建）数据库并应用缺失迁移。 */
 export class SessionStore {
   private readonly db: DatabaseSync
@@ -217,7 +260,50 @@ export class SessionStore {
     // 都多停一次事件循环等 fsync，写密集的落库路径（每条消息一个 commit）代价明显。
     this.db.exec('PRAGMA synchronous = NORMAL')
     this.db.exec('PRAGMA foreign_keys = ON')
+    // 独立 server 与桌面版双进程共用同一数据目录时，WAL 写锁互撞默认立刻抛
+    // SQLITE_BUSY（busy_timeout=0）。5 秒退避让另一进程的写事务先走完，
+    // 而不是启动即炸且报错指向不明。
+    this.db.exec('PRAGMA busy_timeout = 5000')
+    this.snapshotBeforeMigrate(path)
     migrate(this.db)
+  }
+
+  /**
+   * 迁移前快照：真要升级（0 < 现版本 < 目标版本）时，先把整个库 VACUUM INTO 一份
+   * `<dbPath>.pre-migrate-v<旧版本>.db` 再迁移。
+   *
+   * 迁移是就地单事务，全部会话与记忆都在这一个文件里——升级写坏即全量丢失，而
+   * README 只说「升级前请备份」却不给工具。快照即数据库同目录、按版本命名，留最近
+   * 3 份（记忆/进化表与共享库同文件，VACUUM INTO 快照的是整个文件，一份即全部）。
+   *
+   * 快照失败**不阻塞迁移**：把「打不开」变成新故障比少一份快照更糟——记日志后照走。
+   */
+  private snapshotBeforeMigrate(dbPath: string): void {
+    if (dbPath === ':memory:') return
+    const row = this.db.prepare('PRAGMA user_version').get() as { user_version: number }
+    const current = Number(row.user_version)
+    if (current <= 0 || current >= SCHEMA_VERSION) return
+    const snapshot = `${dbPath}.pre-migrate-v${current}.db`
+    try {
+      this.db.prepare('VACUUM INTO ?').run(snapshot)
+    } catch (error) {
+      console.warn(
+        `@ryharness/session: 迁移前快照失败（${error instanceof Error ? error.message : String(error)}），迁移继续`,
+      )
+      return
+    }
+    prunePreMigrateSnapshots(dbPath)
+  }
+
+  /**
+   * 整库备份：VACUUM INTO 一份独立、紧凑的单文件库，返回写入的目标路径。
+   *
+   * 会话、长期记忆与进化表共享同一个数据库文件，一份备份即含全部数据。目标文件
+   * 已存在时 SQLite 会拒绝覆盖——调用方负责用不重名的路径（如带时间戳）。
+   */
+  backupTo(target: string): string {
+    this.db.prepare('VACUUM INTO ?').run(target)
+    return target
   }
 
   /** 取预编译语句（首次解析后缓存）。 */

@@ -318,6 +318,76 @@ describe('RyVibe 页面', () => {
     expect(api.retryVibe).toHaveBeenCalledWith('v1')
   })
 
+  it('失败横幅走聊天页同一张翻译表：英文原话不许顶在正文里', async () => {
+    const failed: VibeSessionView = {
+      ...session,
+      status: 'failed',
+      // 服务端那轮失败的原话（apps/server 落库的 event.message），用户读不懂。
+      error: 'no adapter registered for provider "siliconflow"',
+    }
+    const navigated: string[] = []
+    act(() => {
+      root = createRoot(container)
+      root.render(
+        <RyVibePage api={stub({ session: failed, sessions: [failed] })} onNavigate={(t) => navigated.push(t)} />,
+      )
+    })
+    await settle()
+    const banner = must(container.querySelector('.vibe-failed'), '.vibe-failed')
+    // 正文是翻译后的「出了什么事 + 下一步」（lib/turn-errors.ts 的 NO_ADAPTER 条目）。
+    const line = must(banner.querySelector('span'), '横幅正文')
+    expect(line.textContent).toContain('这个模型服务没接进来')
+    expect(line.textContent).toContain('去「我的 → 模型供应商」确认它还在')
+    expect(line.textContent).not.toContain('no adapter registered')
+    // 「下一步」点得动：去配 Key 与聊天页红条走同一条跳转接线。
+    const action = must(banner.querySelector<HTMLButtonElement>('.vibe-failed-action'), '下一步动作')
+    expect(action.textContent).toContain('去我的 → 模型供应商')
+    await act(async () => {
+      action.click()
+    })
+    expect(navigated).toEqual(['me'])
+  })
+
+  it('没有可用供应商时不发请求，先把人引去配 Key——别让人白等 30 秒', async () => {
+    const api = stub()
+    act(() => {
+      root = createRoot(container)
+      root.render(
+        <RyVibePage
+          api={api}
+          providers={[{ id: 'siliconflow', displayName: 'SiliconFlow', apiKeyConfigured: false, models: [] }]}
+        />,
+      )
+    })
+    // 引导是前置摆出来的：不用先点一次「开始」才知道路怎么走。
+    expect(container.textContent).toContain('还没有能用的模型来源')
+    typeInto(must(container.querySelector<HTMLTextAreaElement>('.vibe-input'), '.vibe-input'), '做个记账工具')
+    await act(async () => {
+      must(container.querySelector<HTMLButtonElement>('.vibe-start'), '.vibe-start').click()
+    })
+    expect(api.startVibe).not.toHaveBeenCalled()
+  })
+
+  it('供应商清单还在加载时不拦：usable=false 只代表「还不知道」', async () => {
+    const api = stub()
+    act(() => {
+      root = createRoot(container)
+      root.render(
+        <RyVibePage
+          api={api}
+          providersLoading
+          providers={[{ id: 'siliconflow', displayName: 'SiliconFlow', apiKeyConfigured: false, models: [] }]}
+        />,
+      )
+    })
+    expect(container.textContent).not.toContain('还没有能用的模型来源')
+    typeInto(must(container.querySelector<HTMLTextAreaElement>('.vibe-input'), '.vibe-input'), '做个记账工具')
+    await act(async () => {
+      must(container.querySelector<HTMLButtonElement>('.vibe-start'), '.vibe-start').click()
+    })
+    expect(api.startVibe).toHaveBeenCalledWith('做个记账工具')
+  })
+
   it('等答案的时候有进度可看，不是一个空转圈', async () => {
     const api = stub({ questions })
     render(api)

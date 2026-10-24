@@ -30,6 +30,7 @@ import { getToasts } from '../renderer/src/lib/toast.ts'
 import { ALL_TOOLS, routeLabel, toolLabel } from '../renderer/src/lib/tool-labels.ts'
 import { LEAVE_MS } from '../renderer/src/lib/useLeaving.ts'
 import { bucketOf, ChatStore, type ConversationBucket } from '../renderer/src/store.ts'
+import { TEST_PERSONA } from './fixtures.ts'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -71,6 +72,7 @@ const templates: AgentTemplate[] = [
     name: '通用助理',
     description: '什么都能聊',
     suggestedSystemPrompt: '你是通用助理。',
+    persona: TEST_PERSONA,
     defaultTools: ['fs_read'],
     defaultModel: 'deepseek-ai/DeepSeek-V3',
   },

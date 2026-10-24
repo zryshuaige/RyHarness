@@ -27,6 +27,16 @@ export const EXECUTABLE_EXTENSIONS: ReadonlySet<string> = new Set([
   '.vbs',
   '.jar',
   '.hta',
+  // Windows 脚本宿主的其余载体：.jse/.vbe 只是编码混淆过的 .js/.vbs，.wsf 能拼装
+  // 多段脚本——双击与 .vbs 一样直接执行代码，拦 .vbs 不拦它们等于漏了大半族。
+  '.jse',
+  '.vbe',
+  '.wsf',
+  // 快捷方式族：.url/.scf 指向任意目标（可带参数），.cpl 由 rundll32 加载——双击
+  // 不是「打开内容」而是「跳去执行别处的东西」，与 .lnk 同一风险。
+  '.url',
+  '.scf',
+  '.cpl',
 ])
 
 /**

@@ -56,6 +56,16 @@ describe('能交给系统打开的路径', () => {
     expect(canOpenPath(ROOT, join(ROOT, 'artifacts', 'A.EXE'))).toBe(false)
   })
 
+  it('Windows 脚本宿主与快捷方式族同样拦下（双击即执行/指向任意目标）', () => {
+    // .jse/.vbe/.wsf 是 .vbs 的近亲（.jse/.vbe 还是编码混淆版），拦 .vbs 不拦它们
+    // 等于漏了大半族；.url/.scf/.cpl 双击是跳向任意目标，与 .lnk 同一风险。
+    for (const name of ['a.jse', 'a.vbe', 'a.wsf', 'a.url', 'a.scf', 'a.cpl']) {
+      expect(canOpenPath(ROOT, join(ROOT, 'artifacts', name))).toBe(false)
+    }
+    // 大写同样拦下：黑名单按 extname().toLowerCase() 比对。
+    expect(canOpenPath(ROOT, join(ROOT, 'artifacts', 'B.URL'))).toBe(false)
+  })
+
   it('相对路径与非字符串都拦下', () => {
     expect(canOpenPath(ROOT, 'artifacts/周报.md')).toBe(false)
     expect(canOpenPath(ROOT, '')).toBe(false)

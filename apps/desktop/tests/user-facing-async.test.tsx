@@ -43,6 +43,7 @@ import {
 } from '../renderer/src/lib/humanize.ts'
 import { getToasts, toast } from '../renderer/src/lib/toast.ts'
 import { bucketOf, ChatStore } from '../renderer/src/store.ts'
+import { TEST_PERSONA } from './fixtures.ts'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -130,6 +131,7 @@ const templates: AgentTemplate[] = [
     description: '什么都能聊',
     suggestedSystemPrompt: '你是通用助理。',
     defaultModel: 'deepseek-ai/DeepSeek-V3',
+    persona: TEST_PERSONA,
     defaultTools: [],
   },
 ]

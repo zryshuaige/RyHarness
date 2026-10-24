@@ -26,6 +26,11 @@ export interface MemoryRow {
   helpfulCount: number
   /** 用户 👎 次数（反向信号；排序时从增益里扣，见 service 的 recallGain）。 */
   harmfulCount: number
+  /**
+   * 重要性档位（1=一般 / 2=重要 / 3=关键）。3 档的记忆不参与自动归档：
+   * 「女儿叫小雨」式的低频关键事实不该因为 90 天没被恰好召回就失忆。
+   */
+  importance: number
   sourceConversationId?: string
   status: MemoryStatus
   supersedesId?: string
@@ -40,6 +45,8 @@ export interface InsertMemoryInput {
   embeddingModel?: string
   sourceConversationId?: string
   supersedesId?: string
+  /** 重要性档位（缺省 1；关键事实由抽取管线判 3）。 */
+  importance?: number
 }
 
 function rowToMemory(row: Record<string, unknown>): MemoryRow {
@@ -61,6 +68,7 @@ function rowToMemory(row: Record<string, unknown>): MemoryRow {
     accessCount: Number(row.access_count),
     helpfulCount: Number(row.helpful_count ?? 0),
     harmfulCount: Number(row.harmful_count ?? 0),
+    importance: Number(row.importance ?? 1),
     ...(row.source_conversation_id === null || row.source_conversation_id === undefined
       ? {}
       : { sourceConversationId: String(row.source_conversation_id) }),
@@ -95,8 +103,80 @@ export function bigrams(text: string): string {
   return parts.join(' ')
 }
 
+/** 一个空间桶的堆叠向量：行 i 的向量 = data[offsets[i] .. offsets[i]+dims[i])。 */
+export interface StackedEmbeddings {
+  /** 全部行向量连续堆叠的字节（一次分配，打分循环顺序读）。 */
+  data: Float32Array
+  /** 每行向量在 data 里的起点。 */
+  offsets: Uint32Array
+  /** 每行向量维度（与查询维度不符的行由调用侧剔除并记账）。 */
+  dims: Uint32Array
+}
+
+/** 常驻空间桶：行 + id 索引 + 惰性堆叠的向量矩阵（stamp 变即整体重建）。 */
+interface SpaceBucket {
+  stamp: string
+  rows: MemoryRow[]
+  byId: Map<string, MemoryRow>
+  /**
+   * 首次打分时惰性堆叠。只存向量字节：touchAccess/applyFeedback 就地改的是
+   * 行对象上的计数，不碰矩阵——矩阵不需要因访问记账而重堆。
+   */
+  matrix?: StackedEmbeddings
+}
+
+/** 把一桶行向量堆进一个连续 Float32Array（行序与 rows 一致）。 */
+function stackEmbeddings(rows: readonly MemoryRow[]): StackedEmbeddings {
+  const offsets = new Uint32Array(rows.length)
+  const dims = new Uint32Array(rows.length)
+  let total = 0
+  for (let index = 0; index < rows.length; index++) {
+    const embedding = rows[index].embedding
+    offsets[index] = total
+    dims[index] = embedding === null ? 0 : embedding.length
+    total += dims[index]
+  }
+  const data = new Float32Array(total)
+  for (let index = 0; index < rows.length; index++) {
+    const embedding = rows[index].embedding
+    if (embedding !== null) data.set(embedding, offsets[index])
+  }
+  return { data, offsets, dims }
+}
+
 /** 按 rowid 批量改写时的参数上限分片（SQLite 绑定变量有上限）。 */
 const ROWID_CHUNK = 500
+
+/**
+ * FTS5 MATCH 查询串的 OR 臂上限（去重后）。
+ *
+ * OR 查询在 FTS5 里按「臂数 × 词项文档频率」付费且无内生上界：实测 2000 条
+ * 记忆的库上，1000 字输入（≈999 个 bigram）的 MATCH 要 6.4 秒、3000 字 59 秒，
+ * 全部同步跑在事件循环上。上限只约束**超长输入**——正常聊天的去重 bigram
+ * 远低于此，查询串一个字符都不变。
+ */
+export const MAX_FTS_QUERY_TERMS = 32
+
+/** 去重后的 bigram 词项（保持首现顺序）。重复段（「哈哈哈哈」）不重复计费。 */
+function uniqueBigrams(text: string): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const token of bigrams(text).split(' ')) {
+    if (token.length === 0 || seen.has(token)) continue
+    seen.add(token)
+    out.push(token)
+  }
+  return out
+}
+
+/** 词项逐个加引号（token 内的 `"` 双写）后 OR 连接。 */
+function quoteTerms(tokens: readonly string[]): string {
+  return tokens
+    .map((token) => {
+      return `"${token.replace(/"/g, '""')}"`
+    })
+    .join(' OR ')
+}
 
 /**
  * FTS5 MATCH 查询串：bigram token 逐个加引号，token 内的 `"` 双写。
@@ -105,13 +185,14 @@ const ROWID_CHUNK = 500
  * `e:` 被当成列过滤器（no such column: e）、`a"b` 的引号当成字符串定界
  * （unterminated string）、`PORT` 的 `OR` 段成了布尔关键字。用户发一条带
  * `- . / @ # : "` 的输入，长期记忆检索就整条静默失效。
+ *
+ * 超过 {@link MAX_FTS_QUERY_TERMS} 的长输入在纯函数里退化为头部截断；
+ * 存储层 {@link MemoryStore.searchFtsHits} 会先用词表挑区分度高的词项再
+ * 走到这里（见 buildMatchQuery）。
  */
 export function ftsMatchQuery(text: string): string {
-  return bigrams(text)
-    .split(' ')
-    .filter((token) => token.length > 0)
-    .map((token) => `"${token.replace(/"/g, '""')}"`)
-    .join(' OR ')
+  const tokens = uniqueBigrams(text)
+  return quoteTerms(tokens.length <= MAX_FTS_QUERY_TERMS ? tokens : tokens.slice(0, MAX_FTS_QUERY_TERMS))
 }
 
 /** 记忆存储。 */
@@ -128,16 +209,21 @@ export class MemoryStore {
    * 桶内另存一份 id → 行 的索引：{@link touchAccess} 每轮都要修补缓存里的
    * 计数，全量扫描是 O(全库)——1000 条记忆的库里每轮召回白扫一遍，与 SSE
    * 推流同线程。
+   *
+   * 桶内还惰性挂一份堆叠向量矩阵（{@link spaceEmbeddingMatrix}）：打分循环
+   * 在连续字节上单趟跑，替代逐行 cosine 的每行函数调用与属性访问；它与桶
+   * 同生命周期，任何失效路径（写入/跨连接提交）整体重建，无需单独记账。
    */
-  private readonly embeddingIndex = new Map<
-    string,
-    { stamp: string; rows: MemoryRow[]; byId: Map<string, MemoryRow> }
-  >()
+  private readonly embeddingIndex = new Map<string, SpaceBucket>()
   private embeddingEpoch = 0
 
   constructor(dbPath: string) {
     this.db = new DatabaseSync(dbPath)
     this.db.exec('PRAGMA journal_mode = WAL')
+    // 独立 server 与桌面版双进程共用同一数据目录时，WAL 写锁互撞默认立刻抛
+    // SQLITE_BUSY（busy_timeout=0）。5 秒退避让另一进程的写事务先走完——
+    // 启动即炸的硬错指向不明，这行 PRAGMA 是那道便宜的保险。
+    this.db.exec('PRAGMA busy_timeout = 5000')
     migrateMemory(this.db)
   }
 
@@ -165,8 +251,8 @@ export class MemoryStore {
       this.db
         .prepare(`
         INSERT INTO memories (id, agent_id, kind, content, embedding, dim, embedding_model, created_at,
-                              updated_at, source_conversation_id, status, supersedes_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
+                              updated_at, source_conversation_id, status, supersedes_id, importance)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
       `)
         .run(
           id,
@@ -180,6 +266,7 @@ export class MemoryStore {
           now,
           input.sourceConversationId ?? null,
           input.supersedesId ?? null,
+          input.importance ?? 1,
         )
       this.db
         .prepare('INSERT INTO memories_fts (rowid, content) VALUES (?, ?)')
@@ -240,7 +327,7 @@ export class MemoryStore {
    */
   searchFtsHits(query: string, window = 30): { memory: MemoryRow; score: number }[] {
     // OR 语义：候选事实常比记忆长，全 AND 会零命中；BM25 按命中比例排序。
-    const matchQuery = ftsMatchQuery(query)
+    const matchQuery = this.buildMatchQuery(query)
     if (matchQuery.length === 0) return []
     const rows = this.db
       .prepare(
@@ -254,6 +341,55 @@ export class MemoryStore {
     return rows.map((row) => {
       return { memory: rowToMemory(row), score: Number(row.bm25_score) }
     })
+  }
+
+  /**
+   * 带 OR 臂上限的 MATCH 查询串构造。
+   *
+   * 词项不超过 {@link MAX_FTS_QUERY_TERMS} 时零额外开销（不碰词表）。超限的
+   * 长输入先查 fts5vocab 拿每个 bigram 的文档频率，只保留**库里真实存在
+   * （df≥1）**的词项、按 df 升序取最稀有的一批：高频词项在 BM25 里本就不
+   * 提供区分度，却贡献了 OR 查询的大部分成本；库里不存在的词项一个都命中
+   * 不了，选它们等于白付查询费。词表缺失或查询失败退化为头部截断——上界
+   * 仍然成立，只是命中质量回退，绝不会把整条通道抛出去。
+   */
+  private buildMatchQuery(query: string): string {
+    const tokens = uniqueBigrams(query)
+    if (tokens.length <= MAX_FTS_QUERY_TERMS) return quoteTerms(tokens)
+    try {
+      const df = this.termDocFreqs(tokens)
+      const present = tokens
+        .filter((token) => {
+          return df.get(token) !== undefined
+        })
+        .sort((a, b) => {
+          return (df.get(a) ?? 0) - (df.get(b) ?? 0)
+        })
+        .slice(0, MAX_FTS_QUERY_TERMS)
+      // 词表里一个词项都对应不上：任何子集都是零命中，头部截断保持查询形状稳定。
+      if (present.length > 0) return quoteTerms(present)
+    } catch {
+      // 词表查询本身失败（极端：手工删过虚拟表）——头部截断兜底。
+    }
+    return quoteTerms(tokens.slice(0, MAX_FTS_QUERY_TERMS))
+  }
+
+  /** 一批 bigram 的文档频率（fts5vocab 按绑定参数精确查找；分片防 IN 超上限）。 */
+  private termDocFreqs(tokens: readonly string[]): Map<string, number> {
+    const out = new Map<string, number>()
+    for (let start = 0; start < tokens.length; start += ROWID_CHUNK) {
+      const chunk = tokens.slice(start, start + ROWID_CHUNK)
+      const placeholders = chunk
+        .map(() => {
+          return '?'
+        })
+        .join(',')
+      const rows = this.db
+        .prepare(`SELECT term, doc FROM memories_fts_vocab WHERE term IN (${placeholders})`)
+        .all(...chunk) as { term: string; doc: number }[]
+      for (const row of rows) out.set(row.term, Number(row.doc))
+    }
+    return out
   }
 
   /** FTS5 BM25 top-N（active 记忆，限定空间：agent 私有 + 共享）。 */
@@ -275,10 +411,39 @@ export class MemoryStore {
    * 反序列化）。返回的是缓存内的行，调用方按只读用。
    */
   listSpaceEmbeddings(spaceId: string, embeddingModel?: string): MemoryRow[] {
+    return this.spaceBucket(spaceId, embeddingModel, this.embeddingStamp()).rows
+  }
+
+  /**
+   * 某空间桶 + 堆叠向量矩阵（打分单趟遍历的底座，行序与 rows 一致）。
+   *
+   * 逐行 cosine 时每行都要一次函数调用与一跳属性访问（recall 跑在首 token
+   * 路径上，与 SSE 推流共享事件循环）；矩阵把向量字节连续排布后，热循环只剩
+   * 局部变量上的乘加。矩阵挂在桶对象上、与桶同生命周期：stamp 变（本连接写
+   * 或跨连接提交）→ 桶整体重建 → 矩阵随之重堆，setEmbedding/supersede 等
+   * 已有的失效路径天然覆盖它。
+   *
+   * `stamp` 可由调用方给出：同一条同步调用链里已经读过写代就透传进来，
+   * 不为桶校验多付一次 PRAGMA。
+   */
+  spaceEmbeddingMatrix(
+    spaceId: string,
+    embeddingModel?: string,
+    stamp = this.embeddingStamp(),
+  ): { rows: MemoryRow[] } & StackedEmbeddings {
+    const bucket = this.spaceBucket(spaceId, embeddingModel, stamp)
+    const existing = bucket.matrix
+    if (existing !== undefined) return { rows: bucket.rows, ...existing }
+    const matrix = stackEmbeddings(bucket.rows)
+    bucket.matrix = matrix
+    return { rows: bucket.rows, ...matrix }
+  }
+
+  /** 取（或按当前 stamp 重建）空间桶。 */
+  private spaceBucket(spaceId: string, embeddingModel: string | undefined, stamp: string): SpaceBucket {
     const key = `${spaceId}|${embeddingModel ?? ''}`
-    const stamp = this.embeddingStamp()
     const cached = this.embeddingIndex.get(key)
-    if (cached !== undefined && cached.stamp === stamp) return cached.rows
+    if (cached !== undefined && cached.stamp === stamp) return cached
     const rows = (
       embeddingModel === undefined
         ? this.db
@@ -291,7 +456,7 @@ export class MemoryStore {
             .all(embeddingModel, spaceId)
     ) as Record<string, unknown>[]
     const out = rows.map(rowToMemory)
-    this.embeddingIndex.set(key, {
+    const bucket: SpaceBucket = {
       stamp,
       rows: out,
       byId: new Map(
@@ -299,8 +464,9 @@ export class MemoryStore {
           return [row.id, row]
         }),
       ),
-    })
-    return out
+    }
+    this.embeddingIndex.set(key, bucket)
+    return bucket
   }
 
   /**
@@ -318,8 +484,11 @@ export class MemoryStore {
    * 缓存有效期：本连接写代数 + PRAGMA data_version。
    * data_version 只在**其他连接**提交时变化（agent 删除等跨连接写入），
    * 本连接的写由 embeddingEpoch 负责，两边都变了才算失效。
+   *
+   * 公开给 service 做短窗缓存的键：同一段输入的扇出召回按「写代没变」判定
+   * 已算好的共享空间打分仍然有效，不为复用多读一次数据。
    */
-  private embeddingStamp(): string {
+  embeddingStamp(): string {
     const row = this.db.prepare('PRAGMA data_version').get() as { data_version: number }
     return `${this.embeddingEpoch}:${Number(row.data_version)}`
   }
@@ -466,6 +635,38 @@ export class MemoryStore {
   }
 
   /**
+   * 就地编辑一条 active 记忆的 content（FTS 索引行同步换内容）。
+   *
+   * 只允许 active 行：归档/软删行是历史（恢复入口在 restore，复活语义在软删链），
+   * 编辑它们等于绕过这两套状态机改写历史。
+   *
+   * FTS 行与 {@link restore} 同款先删后插：FTS5 的 rowid 唯一，旧内容行还在时
+   * 直接插入会撞唯一约束；而只改 memories 表不改索引的话，这条记忆对 BM25
+   * 通道永远展示旧内容——用户改对了、检索还在学错的。
+   *
+   * 向量刻意不在存储层动：旧 embedding 对应旧内容，属"语义过期"，由调用方
+   * （service.updateMemory）按新内容重算，存储层不知道 embedding 模型身份。
+   * @returns 更新后的行；不存在或非 active 返回 undefined。
+   */
+  updateContent(id: string, content: string): MemoryRow | undefined {
+    const row = this.db.prepare('SELECT status FROM memories WHERE id = ?').get(id) as { status: string } | undefined
+    if (row === undefined || row.status !== 'active') return undefined
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      this.db.prepare('UPDATE memories SET content = ?, updated_at = ? WHERE id = ?').run(content, Date.now(), id)
+      const rowid = this.rowidOf(id)
+      this.db.prepare('DELETE FROM memories_fts WHERE rowid = ?').run(rowid)
+      this.db.prepare('INSERT INTO memories_fts (rowid, content) VALUES (?, ?)').run(rowid, bigrams(content))
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+    this.invalidateEmbeddingIndex()
+    return this.get(id)
+  }
+
+  /**
    * 需要重建向量的记忆：还没有向量，或向量的来源模型不是当前模型。
    *
    * 归档（inactive）也算：用户随时能把它恢复，恢复后应当立刻可被语义检索。
@@ -572,9 +773,14 @@ export class MemoryStore {
    * @returns 本次（分片时为该片）归档条数。
    */
   archiveDormant(dormantAfterMs: number, now = Date.now(), limit?: number): number {
+    // importance≥3（关键事实）与被 👍 过的记忆不参与休眠归档：前者是抽取时
+    // 判定的「丢了会伤害关系」的事实，后者是用户显式表达过有用的行——两者
+    // 都不能用「90 天没被恰好召回」这种访问彩票来裁决生死。
     const predicate = `status = 'active'
          AND agent_id != ?
          AND access_count = 0
+         AND importance < 3
+         AND helpful_count = 0
          AND COALESCE(NULLIF(last_accessed_at, 0), updated_at) < ?`
     const args = [SHARED_SPACE, now - dormantAfterMs]
     if (limit !== undefined) return this.archiveBatch(predicate, args, now, limit)

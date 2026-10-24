@@ -12,6 +12,7 @@ import { createReadStream, existsSync, mkdirSync, statSync, writeFileSync } from
 import { extname, join } from 'node:path'
 import type { Conversation, SessionStore, StoredMessage } from '@ryharness/session'
 import { ARTIFACTS_DIR, guessMime, PathEscapeError, resolveTarget } from '@ryharness/tools'
+import type { ApprovalBroker } from '../approvals.ts'
 import type { WsEvent } from '../events.ts'
 import { PROACTIVE_BLOCK_TYPE } from '../proactive.ts'
 import { HttpRequestError, json, type Router, strField } from '../router.ts'
@@ -85,6 +86,10 @@ export interface ConversationRoutes {
    * 清掉的排队条数**（0 = 队列本来就是空的），调用方据此如实知道这次取消动了什么。
    */
   cancelTurn: (conversationId: string) => { cancelled: boolean; queueCleared: number }
+  /**
+   * 工具执行审批桥：决议路由按 id 收口挂起中的审批（shell_exec 的允许/拒绝）。
+   */
+  approvals: ApprovalBroker
 }
 
 /** 消息列表单页条数上限（?limit 的上限，也用作 ?since= 的翻页步长）。 */
@@ -703,6 +708,35 @@ export function registerConversationRoutes(router: Router, deps: ConversationRou
     }
     const lastReadSeq = store.markConversationRead(conversationId)
     json(res, 200, { conversationId, lastReadSeq })
+  })
+
+  /**
+   * 工具执行审批的决议：shell_exec 等价命令在执行前等的就是这一个回答。
+   *
+   * 404 的语义是「这张审批卡已经不在了」——超时与轮次取消都会走到这里，
+   * 渲染层按 approval-resolved 事件撤卡，这里只是把迟到的点击如实回掉。
+   */
+  router.post('/api/conversations/:id/approvals/:approvalId', async (req, res) => {
+    const conversationId = req.params.id as string
+    if (store.getConversation(conversationId) === undefined) {
+      json(res, 404, { error: 'conversation not found' })
+      return
+    }
+    const body = (await req.body()) as { decision?: unknown; remember?: unknown }
+    const decision = body.decision === 'allow' ? 'allow' : body.decision === 'deny' ? 'deny' : undefined
+    if (decision === undefined) {
+      json(res, 400, { error: 'body.decision must be "allow" or "deny"' })
+      return
+    }
+    const applied = deps.approvals.decide(conversationId, req.params.approvalId as string, {
+      decision,
+      remember: body.remember === true,
+    })
+    if (!applied) {
+      json(res, 404, { error: 'approval not pending (resolved, timed out, or cancelled)' })
+      return
+    }
+    json(res, 200, { approvalId: req.params.approvalId, decision })
   })
 
   /** 调度事件历史（右栏调度轨迹）。 */

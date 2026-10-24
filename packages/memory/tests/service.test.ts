@@ -68,8 +68,8 @@ describe('抽取管线：四操作', () => {
   it('ADD：无相似记忆 → 新写入（scope 路由 shared/agent）', async () => {
     const llm = mockLlm({
       facts: [
-        { text: '用户养了一只橘猫叫布丁', scope: 'shared', kind: 'profile' },
-        { text: '用户希望周报用简洁的条目式', scope: 'agent', kind: 'preference' },
+        { text: '用户养了一只橘猫叫布丁', scope: 'shared', kind: 'profile', importance: 3 },
+        { text: '用户希望周报用简洁的条目式', scope: 'agent', kind: 'preference', importance: 2 },
       ],
     })
     const service = new MemoryService({ dbPath: dbPath(), embeddings: new HashEmbeddings(), llm })
@@ -103,8 +103,8 @@ describe('抽取管线：四操作', () => {
     const llm: MemoryLlm = {
       async extractFacts() {
         return phase === 1
-          ? [{ text: '用户住在北京', scope: 'shared', kind: 'profile' }]
-          : [{ text: '用户住在北京海淀', scope: 'shared', kind: 'profile' }]
+          ? [{ text: '用户住在北京', scope: 'shared', kind: 'profile', importance: 2 }]
+          : [{ text: '用户住在北京海淀', scope: 'shared', kind: 'profile', importance: 2 }]
       },
       async decideOperations({ similar }) {
         if (phase === 1) return [{ action: 'ADD' }]
@@ -137,7 +137,7 @@ describe('抽取管线：四操作', () => {
     let victimId = ''
     const llm: MemoryLlm = {
       async extractFacts() {
-        return [{ text: 'agent-b 的新事实', scope: 'agent', kind: 'fact' }]
+        return [{ text: 'agent-b 的新事实', scope: 'agent', kind: 'fact', importance: 1 }]
       },
       async decideOperations() {
         return [
@@ -163,7 +163,7 @@ describe('抽取管线：四操作', () => {
   it('DELETE：矛盾事实 → 旧记忆 superseded', async () => {
     let existingId = ''
     const llm = mockLlm({
-      facts: [{ text: '用户不再养猫了', scope: 'shared', kind: 'event' }],
+      facts: [{ text: '用户不再养猫了', scope: 'shared', kind: 'event', importance: 2 }],
       decide: (_c, similar) => {
         existingId = similar[0]?.id ?? ''
         return similar.length > 0 ? [{ action: 'DELETE', memoryId: similar[0]!.id }] : [{ action: 'NOOP' }]
@@ -182,7 +182,7 @@ describe('抽取管线：四操作', () => {
 
   it('NOOP 兜底：与旧记忆几乎重复时才允许 NOOP，不写入', async () => {
     const llm = mockLlm({
-      facts: [{ text: '用户住在北京', scope: 'shared', kind: 'profile' }],
+      facts: [{ text: '用户住在北京', scope: 'shared', kind: 'profile', importance: 2 }],
       decide: () => {
         return [{ action: 'NOOP' }]
       },
@@ -199,7 +199,7 @@ describe('抽取管线：四操作', () => {
 
   it('NOOP 兜底：候选与旧记忆不像时强制 ADD（闲聊偏好不再被丢掉）', async () => {
     const llm = mockLlm({
-      facts: [{ text: '用户喜欢川菜，越辣越好', scope: 'shared', kind: 'preference' }],
+      facts: [{ text: '用户喜欢川菜，越辣越好', scope: 'shared', kind: 'preference', importance: 2 }],
       decide: () => {
         return [{ action: 'NOOP' }]
       },
@@ -213,6 +213,85 @@ describe('抽取管线：四操作', () => {
         return m.content
       }),
     ).toContain('用户喜欢川菜，越辣越好')
+    service.close()
+  })
+
+  it('DECIDE 的相似旧记忆按纯相似度取：老而准的改写目标不被时间衰减挤出候选', async () => {
+    let capturedSimilar: string[] = []
+    const llm = mockLlm({
+      facts: [{ text: '用户住在杭州西湖区', scope: 'shared', kind: 'profile', importance: 2 }],
+      decide: (_c, similar) => {
+        capturedSimilar = similar.map((m) => {
+          return m.id
+        })
+        return similar.length > 0 ? [{ action: 'NOOP' }] : []
+      },
+    })
+    // 候选与旧记忆余弦 ≈0.995（同一条住址事实的细化）；12 条新近记忆哈希向量
+    // 与候选余弦远低。走旧的衰减排序时，旧记忆（e^-4≈0.018）被 12 条新记忆
+    // 挤出 top-10，模型拿到的 memoryId 列表里根本没有该改写的那条。
+    const service = new MemoryService({
+      dbPath: dbPath(),
+      embeddings: scriptedVectors({ 用户住在杭州西湖区: [1, 0.05, 0, 0] }),
+      llm,
+    })
+    const base = new HashEmbeddings(4)
+    const old = service.store.insert({
+      agentId: SHARED_SPACE,
+      kind: 'profile',
+      content: '用户住在杭州',
+      embedding: Float32Array.from([1, 0, 0, 0]),
+      embeddingModel: 'scripted',
+    })
+    service.store.backdate(old.id, Date.now() - 120 * 86_400_000)
+    for (let i = 0; i < 12; i++) {
+      const content = `无关闲聊话题编号${i}号`
+      service.store.insert({
+        agentId: SHARED_SPACE,
+        kind: 'fact',
+        content,
+        embedding: base.vectorOf(content),
+        embeddingModel: 'scripted',
+      })
+    }
+    service.enqueueExtraction('ryen', 'Ryen', 'c1', '用户：我搬去西湖区了')
+    await service.flush()
+    expect(capturedSimilar).toContain(old.id)
+    service.close()
+  })
+
+  it('守卫不吞矛盾：top>0.85 时 UPDATE/DELETE 照常放行（「不再吃辣」必须能取代「喜欢吃辣」）', async () => {
+    // 矛盾事实的余弦天然 >0.85（词面几乎同构）：一刀切 NOOP 等于把用户的每次
+    // 纠错永久挡在库外。守卫只拦重复 ADD，不拦结构性改写。
+    const llm = mockLlm({
+      facts: [{ text: '用户不再喜欢吃辣', scope: 'shared', kind: 'preference', importance: 2 }],
+      decide: (_c, similar) => {
+        const target = similar[0]
+        return target !== undefined
+          ? [{ action: 'UPDATE', memoryId: target.id, newText: '用户不吃辣' }]
+          : [{ action: 'ADD' }]
+      },
+    })
+    const service = new MemoryService({
+      dbPath: dbPath(),
+      embeddings: scriptedVectors({ 用户不再喜欢吃辣: [1, 0.02, 0, 0] }),
+      llm,
+    })
+    const old = service.store.insert({
+      agentId: SHARED_SPACE,
+      kind: 'preference',
+      content: '用户喜欢吃辣',
+      embedding: Float32Array.from([1, 0, 0, 0]),
+      embeddingModel: 'scripted',
+    })
+    service.enqueueExtraction('ryen', 'Ryen', 'c1', '用户：我最近不吃辣了')
+    await service.flush()
+    expect(service.store.get(old.id)?.status).toBe('superseded')
+    expect(
+      service.store.listActiveForAgent(SHARED_SPACE).map((m) => {
+        return m.content
+      }),
+    ).toContain('用户不吃辣')
     service.close()
   })
 
@@ -306,6 +385,34 @@ describe('检索管线：混合召回', () => {
     const ranked = await service.hybridRecall('a1', '稳定偏好', 2)
     expect(ranked[0]!.id).toBe(stale.id)
     expect(ranked[0]!.id).not.toBe(fresh.id)
+    service.close()
+  })
+
+  it('衰减有下限：同处平坦区的两条老记忆按通道名次竞争，更相关但更老的不被时间清零', async () => {
+    const service = new MemoryService({
+      dbPath: dbPath(),
+      // 'zzz' 与两条内容都无词面重叠 → 纯语义通道，channel 名次完全由余弦决定
+      embeddings: scriptedVectors({ zzz: [1, 0, 0, 0] }),
+    })
+    const closer = service.store.insert({
+      agentId: 'a1',
+      kind: 'fact',
+      content: '非常久远但高度相关的事实',
+      embedding: Float32Array.from([1, 0.05, 0, 0]),
+      embeddingModel: 'scripted',
+    })
+    const farther = service.store.insert({
+      agentId: 'a1',
+      kind: 'fact',
+      content: '没那么久也没那么相关的事实',
+      embedding: Float32Array.from([1, 0.3, 0, 0]),
+      embeddingModel: 'scripted',
+    })
+    service.store.backdate(closer.id, Date.now() - 300 * 86_400_000)
+    service.store.backdate(farther.id, Date.now() - 100 * 86_400_000)
+    // 无下限时：e^-10 ≈ 4.5e-5 vs e^-3.33 ≈ 0.036，更相关的老事实输 800 倍
+    const ranked = await service.hybridRecall('a1', 'zzz', 2)
+    expect(ranked.map((m) => m.id)).toEqual([closer.id, farther.id])
     service.close()
   })
 
@@ -580,7 +687,7 @@ describe('扇出召回：一次召回多成员共享', () => {
 describe('记忆闭环集成', () => {
   it('第一轮写入的事实，第二轮 recall 能召回', async () => {
     const llm = mockLlm({
-      facts: [{ text: '用户的猫叫布丁', scope: 'shared', kind: 'profile' }],
+      facts: [{ text: '用户的猫叫布丁', scope: 'shared', kind: 'profile', importance: 3 }],
     })
     const service = new MemoryService({ dbPath: dbPath(), embeddings: new HashEmbeddings(), llm })
     // 第一轮：对话 → 抽取
@@ -606,7 +713,7 @@ describe('记忆闭环集成', () => {
     const llm: MemoryLlm = {
       async extractFacts() {
         const text = turns[cursor++] as string
-        return [{ text, scope: 'shared', kind: 'profile' }]
+        return [{ text, scope: 'shared', kind: 'profile', importance: 2 }]
       },
       // 模型每轮都说 ADD：判重不能依赖模型自觉，也不能依赖语义通道
       async decideOperations() {
@@ -634,7 +741,7 @@ describe('记忆闭环集成', () => {
     const llm: MemoryLlm = {
       async extractFacts() {
         const text = turns[cursor++] as string
-        return [{ text, scope: 'shared', kind: 'profile' }]
+        return [{ text, scope: 'shared', kind: 'profile', importance: 2 }]
       },
       async decideOperations() {
         return [{ action: 'ADD' }]

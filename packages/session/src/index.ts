@@ -17,6 +17,7 @@ export type {
   UsageReport,
 } from './coordinator.ts'
 export {
+  buildGroupHistory,
   groupHistoryRowWeight,
   HISTORY_BUDGET_TOKENS,
   historyRowWeight,

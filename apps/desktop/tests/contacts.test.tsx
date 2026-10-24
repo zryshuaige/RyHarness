@@ -7,6 +7,7 @@ import type { AgentDef, AgentTemplate, ProviderInfo } from '../renderer/src/api.
 import { BRAND_AVATAR } from '../renderer/src/components/avatars/avatars.tsx'
 import { ContactCard } from '../renderer/src/components/ContactCard.tsx'
 import { AvatarPicker, ContactsPage, CreateAgentModal } from '../renderer/src/components/ContactsPage.tsx'
+import { TEST_PERSONA } from './fixtures.ts'
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '../renderer/src')
 
@@ -48,6 +49,7 @@ const templates: AgentTemplate[] = [
     description: '什么都能聊',
     suggestedSystemPrompt: '你是通用助理。',
     defaultModel: 'deepseek-ai/DeepSeek-V3',
+    persona: TEST_PERSONA,
     defaultTools: ['fs_read'],
   },
   {
@@ -56,6 +58,7 @@ const templates: AgentTemplate[] = [
     description: '中英互译',
     suggestedSystemPrompt: '你是翻译官。',
     defaultModel: 'deepseek-ai/DeepSeek-V3',
+    persona: TEST_PERSONA,
     defaultTools: [],
   },
 ]

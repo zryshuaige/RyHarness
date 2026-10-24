@@ -8,6 +8,15 @@ import type { Command } from '../lib/commands.ts'
 import { errorDetail, humanError } from '../lib/error-text.ts'
 import { formatTime } from '../lib/format.ts'
 import { modelPair } from '../lib/humanize.ts'
+import {
+  chatWindowOf,
+  createUserScrollGate,
+  GAP_BRIDGE_PAGES,
+  PAGE_SIZE,
+  REVEAL_LEAD_TURNS,
+  turnEstimateOf,
+  WINDOW_MIN_TURNS,
+} from '../lib/message-window.ts'
 import { affinityTier, normalizePersona, TRAIT_META, traitBand } from '../lib/persona.ts'
 import { reconcileStreamed } from '../lib/stream-history.ts'
 import { toast } from '../lib/toast.ts'
@@ -21,8 +30,14 @@ import {
   type VoicePlayer,
   voicePlayerFor,
 } from '../lib/voice.ts'
-import { DEFAULT_OVERSCAN, FALLBACK_VIEWPORT_ROWS, visibleRange, windowSlice } from '../lib/windowed.ts'
-import type { ConversationBucket, MessageAttachment, MessagePart, RelayItem, UiMessage } from '../store.ts'
+import type {
+  ConversationBucket,
+  MessageAttachment,
+  MessagePart,
+  PendingApproval,
+  RelayItem,
+  UiMessage,
+} from '../store.ts'
 import {
   clipHistoryToolContent,
   composeMessageText,
@@ -33,6 +48,7 @@ import {
   useConversationView,
 } from '../store.ts'
 import { AsyncState } from './AsyncState.tsx'
+import { Avatar } from './avatars/Avatar.tsx'
 import { Cat } from './Cat.tsx'
 import { ChatInput } from './ChatInput.tsx'
 import { Icon } from './Icon.tsx'
@@ -278,33 +294,6 @@ const FOLLOW_THRESHOLD = 100
  * 两处必须同长——class 摘早了动画被截断，摘晚了会多留一段空档。
  */
 const CHAT_SWITCH_MS = 220
-
-/**
- * 用户输入（滚轮/触摸/拖滚动条）之后多久之内，scroll 事件还算「用户滚的」。
- *
- * scroll 事件本身分不清是谁动的：程序化写 scrollTop、浏览器把越界的 scrollTop 夹回
- * 合法范围，同样会派发 scroll。留一段窗口是因为「输入 → 滚动 → scroll 事件」不是同一
- * 步（流式占用主线程时这个间隔能到几十毫秒），但也不能太长——那段时间里我们自己写的
- * 滚动又会被当成用户滚动。300ms 足够覆盖一帧到几十帧的抖动。
- */
-const USER_SCROLL_MS = 300
-
-/** 每页历史消息数（向上翻页）。 */
-const PAGE_SIZE = 50
-
-/** 单条气泡的高度估算（px）：短文本一行 + 内边距。 */
-const BUBBLE_ESTIMATE_PX = 76
-/** 一个 turn（轮次块：时间分隔 + 至少一条气泡）的高度估算（px）。 */
-const TURN_ESTIMATE_PX = 88
-/**
- * 多少轮以上才启动窗口化：短会话一次性渲染完，滚动条长度、观感与此前完全一致，
- * 窗口化只对真正会长的流有意义。
- */
-const WINDOW_MIN_TURNS = 30
-/** 定位时把命中那一轮上方再留几轮余量，避免 scrollIntoView 顶在容器边缘。 */
-const REVEAL_LEAD_TURNS = 2
-/** 定位后补空洞最多翻几页（每页 PAGE_SIZE 条）。 */
-const GAP_BRIDGE_PAGES = 3
 
 /**
  * 已读打点的合并窗口（ms）。与 App 里清单刷新的 REFRESH_DEBOUNCE_MS 同一个节奏。
@@ -720,11 +709,12 @@ export function ChatView({
    * {@link handleScroll} 里——真机上正是「scroll 事件被当成用户滚动」造出了 scrollTop
    * 的死循环。
    */
-  const userDrivenUntil = useRef(0)
+  const userScrollGate = useRef<ReturnType<typeof createUserScrollGate> | undefined>(undefined)
+  if (userScrollGate.current === undefined) userScrollGate.current = createUserScrollGate()
   const restoreScroll = useRef<{ prevHeight: number; prevTop: number } | null>(null)
   /**
    * 上一次对齐时上哨兵多高：窗口上沿下移时据此把 scrollTop 一起搬走。
-   * 视口位置不再记在这里——「用户滚没滚」由 {@link userDrivenUntil} 说了算，不再靠
+   * 视口位置不再记在这里——「用户滚没滚」由 {@link userScrollGate} 说了算，不再靠
    * 两个 ref 互相推断（那正是把用户拽回原处的那次误判）。
    */
   const syncedPadTop = useRef(0)
@@ -787,14 +777,14 @@ export function ChatView({
     [bucket],
   )
 
-  /** 用户动过滚动：滚轮、触摸、按下（拖滚动条也走这里）。 */
+  /** 用户动过滚动：滚轮、触摸、按下（拖滚动条也走这里）。语义见 lib/message-window 的 USER_SCROLL_MS。 */
   const markUserScroll = useCallback((): void => {
-    userDrivenUntil.current = performance.now() + USER_SCROLL_MS
+    userScrollGate.current?.mark()
   }, [])
 
   /** 此刻的滚动是不是用户在驱动。 */
   const userDriven = useCallback((): boolean => {
-    return performance.now() < userDrivenUntil.current
+    return userScrollGate.current?.isUserDriven() ?? false
   }, [])
 
   /**
@@ -859,19 +849,34 @@ export function ChatView({
   )
   const bubbleAgentsRef = useRef(new Map<string, BubbleAgent>())
   /**
-   * 气泡要的那几项（id / 名字 / 头像），**按字段比**着复用旧对象。
+   * 气泡要的那几项（id / 名字 / 头像 / 性格三维），**按字段比**着复用旧对象。
    *
    * 亲密度每轮都在涨，agent 清单每轮都换一次身份。气泡只用到头像与名字，却因为
    * 拿着整个 AgentDef 而在每一轮之后全部重渲染——几十条气泡为了一次用不上的
-   * 亲密度分数白跑一遍。这三项没变就交回同一个对象，气泡的 memo 继续有效。
+   * 亲密度分数白跑一遍。这几项没变就交回同一个对象，气泡的 memo 继续有效。
+   *
+   * 性格三维（外向 / 严谨 / 幽默）是**动效参数**：同一个助理动起来的幅度与节奏由它
+   * 决定。这三维一��之内不动（用户改人设才会变），所以带上它们不会破坏 memo。
    */
   const bubbleAgents = useMemo(() => {
     const previous = bubbleAgentsRef.current
     const next = new Map<string, BubbleAgent>()
     for (const agent of agents) {
       const before = previous.get(agent.id)
+      const persona = normalizePersona(agent.persona)
+      const temperament = {
+        extroversion: persona.extroversion,
+        rigor: persona.rigor,
+        humor: persona.humor,
+      }
       const same =
-        before !== undefined && before.name === agent.name && before.avatar === agent.avatar && before.id === agent.id
+        before !== undefined &&
+        before.name === agent.name &&
+        before.avatar === agent.avatar &&
+        before.id === agent.id &&
+        before.temperament?.extroversion === temperament.extroversion &&
+        before.temperament?.rigor === temperament.rigor &&
+        before.temperament?.humor === temperament.humor
       next.set(
         agent.id,
         same
@@ -880,6 +885,7 @@ export function ChatView({
               id: agent.id,
               name: agent.name,
               ...(agent.avatar === undefined ? {} : { avatar: agent.avatar }),
+              temperament,
             },
       )
     }
@@ -1020,39 +1026,20 @@ export function ChatView({
   }, [snapshot.relays])
 
   /**
-   * 一个 turn 块的估算高度：按本会话实际的消息密度算（群聊一轮三五句、单聊常常
-   * 一来一回两条），估偏了只是哨兵略有出入，滚动条仍连续——与 lib/windowed.ts 里
-   * 那套"定高估算"的取舍一致。
-   *
-   * 密度只按**已加载的历史**算，不含正在流式的那一轮。原因在哨兵那一侧：上哨兵 =
-   * 窗口起点 × 估算，而流式每个 token 都会让 allMessages 换一次身份，把它算进去等于
-   * 让估算一像素一像素地爬——窗口起点在 100 时，估算动 1px 就是视口跳 100px。用户
-   * 正在读历史时看到的就是内容每隔几秒抽一下。历史真正变长（翻页前插）才重算，那一次
-   * 的位移由翻页的视口还原兜住。
+   * 一个 turn 块的估算高度（纯计算见 lib/message-window 的 turnEstimateOf）：
+   * 密度只按**已加载的历史**算，不含正在流式的那一轮——流式每个 token 都会让
+   * allMessages 换一次身份，把它算进去等于让估算一像素一像素地爬：窗口起点在
+   * 100 时，估算动 1px 就是视口跳 100px。历史真正变长（翻页前插）才重算，那
+   * 一次的位移由翻页的视口还原兜住。
    */
   const turnEstimate = useMemo(() => {
-    const pastTurns = new Set<number>()
-    for (const message of history) pastTurns.add(message.turnIndex)
-    const perTurn = pastTurns.size === 0 ? 1 : history.length / pastTurns.size
-    return Math.max(TURN_ESTIMATE_PX, Math.round(perTurn * BUBBLE_ESTIMATE_PX))
+    return turnEstimateOf(history)
   }, [history])
 
-  /** 只渲染可视区 + 上下哨兵（会话列表已是同一套能力，见 lib/windowed.ts）。 */
+  /** 只渲染可视区 + 上下哨兵（纯计算见 lib/message-window 的 chatWindowOf）。 */
   const windowed = turns.length > WINDOW_MIN_TURNS
   const chatWindow = useMemo(() => {
-    const viewportHeight = viewHeight > 0 ? viewHeight : turnEstimate * FALLBACK_VIEWPORT_ROWS
-    const range = visibleRange({
-      count: turns.length,
-      estimateHeight: turnEstimate,
-      /**
-       * 贴底时无视 scrollTop（那一帧可能还停在旧值），窗口直接钉在末尾：新消息
-       * 到达时窗口已经把它算进去了，否则"跟随底部"要等下一次滚动事件才补上。
-       */
-      scrollTop: windowed && atBottom ? Number.POSITIVE_INFINITY : viewTop,
-      viewportHeight,
-      overscan: DEFAULT_OVERSCAN,
-    })
-    return windowSlice(turns, windowed ? range : { start: 0, end: turns.length }, turnEstimate)
+    return chatWindowOf({ turns, windowed, atBottom, viewTop, viewHeight, turnEstimate })
   }, [atBottom, turnEstimate, turns, viewHeight, viewTop, windowed])
 
   /**
@@ -2131,6 +2118,29 @@ export function ChatView({
           )}
           {typingLine.shown !== undefined && (
             <p ref={typingLine.ref} className={typingLine.leaving ? 'typing-indicator is-leaving' : 'typing-indicator'}>
+              {/* 正在想的那一位：头像挂在头像列的位置（绝对定位，不占正文的位置），
+                  视线左右游走。气泡要等第一个字才出现——从"用户按下发送"到"第一个字
+                  出来"这段通常是好几秒，屏幕上没有任何东西在动，用户只能盯着空白的
+                  聊天区等。这里补上：这位在忙。 */}
+              {typingAgents.length > 0 && (
+                <span className="typing-thinking-avatars" aria-hidden="true">
+                  {typingAgents.map((agentId) => {
+                    const bubble = bubbleAgents.get(agentId)
+                    if (bubble === undefined) return null
+                    return (
+                      <Avatar
+                        key={agentId}
+                        avatarKey={bubble.avatar}
+                        name={bubble.name}
+                        seed={bubble.id}
+                        size={28}
+                        pondering
+                        {...(bubble.temperament === undefined ? {} : { temperament: bubble.temperament })}
+                      />
+                    )
+                  })}
+                </span>
+              )}
               {typingLine.shown.join('、')}
               <TypingDots />
             </p>
@@ -2177,6 +2187,7 @@ export function ChatView({
               上一条还在处理，你的消息已排队…
             </p>
           )}
+          <ApprovalCards api={api} conversationId={conversation.id} approvals={snapshot.approvals} />
           <div className="chat-input-row">
             {/* 单聊时传的是常量而不是每次新建的 []：memo 靠 props 身份判断，
                 一个每帧换身份的空数组等于让它永远重渲染。 */}
@@ -2202,6 +2213,92 @@ function maxTurn(messages: { turnIndex: number }[]): number {
   return messages.reduce((max, m) => {
     return Math.max(max, m.turnIndex)
   }, -1)
+}
+
+/** 从审批卡的原始 JSON 参数里取命令原文；非法 JSON 原样展示（用户看到的=模型给出的）。 */
+function approvalCommandOf(args: string): string {
+  try {
+    const parsed = JSON.parse(args) as { command?: unknown }
+    if (typeof parsed.command === 'string' && parsed.command.length > 0) return parsed.command
+  } catch {
+    // 非法 JSON：下面原样返回。
+  }
+  return args
+}
+
+/**
+ * 工具执行审批卡（shell_exec 等价命令在执行前等用户点头）。
+ *
+ * 卡片的去留由 WS 的 approval-resolved 驱动（超时/取消/别处窗口已决议都会撤卡），
+ * 点击只负责把决议送上去——404 说明卡已经不在了，等价于「迟到的点击」，无需提示。
+ */
+function ApprovalCards({
+  api,
+  conversationId,
+  approvals,
+}: {
+  api: ApiClient
+  conversationId: string
+  approvals: readonly PendingApproval[]
+}) {
+  const [remember, setRemember] = useState(false)
+  const [busyId, setBusyId] = useState<string>()
+  if (approvals.length === 0) return null
+  const decide = (approval: PendingApproval, decision: 'allow' | 'deny'): void => {
+    setBusyId(approval.approvalId)
+    api.decideApproval(conversationId, approval.approvalId, decision, remember).catch(() => {
+      // 网络失败才恢复按钮；404 已在 request 层面算成功路径之外，卡由 WS 事件撤。
+      setBusyId(undefined)
+    })
+  }
+  return (
+    <section className="approval-stack" aria-label="工具执行审批">
+      {approvals.map((approval) => {
+        return (
+          <div key={approval.approvalId} className="approval-card">
+            <p className="approval-title">
+              <Icon name="alert" size={16} /> {approval.toolName} 想执行命令，等你点头：
+            </p>
+            <pre className="approval-command">{approvalCommandOf(approval.args)}</pre>
+            <div className="approval-actions">
+              <label className="approval-remember">
+                <input
+                  type="checkbox"
+                  checked={remember}
+                  onChange={(event) => {
+                    setRemember(event.target.checked)
+                  }}
+                />
+                记住这条命令（本次运行内不再问）
+              </label>
+              <span className="approval-buttons">
+                <button
+                  type="button"
+                  className="approval-deny"
+                  disabled={busyId !== undefined}
+                  onClick={() => {
+                    decide(approval, 'deny')
+                  }}
+                >
+                  拒绝
+                </button>
+                <button
+                  type="button"
+                  className="approval-allow"
+                  disabled={busyId !== undefined}
+                  onClick={() => {
+                    decide(approval, 'allow')
+                  }}
+                >
+                  允许
+                </button>
+              </span>
+            </div>
+          </div>
+        )
+      })}
+    </section>
+  )
 }
 
 /** 下一个 turn 序号（传入历史 + 流式快照的合并列表，与服务端口径一致）。 */

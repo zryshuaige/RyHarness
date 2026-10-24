@@ -135,6 +135,13 @@ export interface AgentLoopOptions {
    * 之前一致）。
    */
   compaction?: CompactionOptions
+  /**
+   * 工具执行审批（可选）：`requiresApproval` 的工具在配额记账之后、执行之前
+   * 询问。返回 true 放行；false 转化为错误 tool 结果回给模型（模型会看到
+   * 「用户拒绝」的说明，不会原样重试）。缺省不审批——审批是装配层的安全闸
+   * （OWASP LLM06 过度代理的 human-in-the-loop），内核只提供挂点。
+   */
+  approver?: (input: { name: string; arguments: string }, ctx: ToolContext) => Promise<boolean>
 }
 
 /** 记忆系统对运行时的最小接口（由 @ryharness/memory 的 MemoryService 实现）。 */
@@ -950,6 +957,24 @@ ${definition.name}：${assistantText.trim()}`,
     const denial = this.quota.charge(call.name, args)
     if (denial !== undefined) {
       return { content: denial, isError: true }
+    }
+    if (tool.requiresApproval === true && this.options.approver !== undefined) {
+      let allowed = false
+      try {
+        allowed = await this.options.approver({ name: call.name, arguments: call.arguments }, context)
+      } catch {
+        // 审批通道自身故障按拒绝处理：宁可让模型收到「被拒」改道，也不放行
+        // 一条没人看过的 shell 命令。
+        allowed = false
+      }
+      if (!allowed) {
+        return {
+          content:
+            `用户拒绝执行工具 "${call.name}"。不要原样重试这个调用；` +
+            '向用户说明你想做什么、为什么需要它，或改用不需要执行命令的方式完成。',
+          isError: true,
+        }
+      }
     }
     try {
       return await tool.execute(args, context)

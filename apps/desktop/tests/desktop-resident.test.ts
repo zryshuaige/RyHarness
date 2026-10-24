@@ -15,6 +15,7 @@ import {
   DEMO_TITLE_PREFIX,
   isAutoLaunchEnabled,
   NEW_CHAT_SCRIPT,
+  openConversationScript,
   PresenceMonitor,
   seedFirstLaunchDemo,
   setAutoLaunch,
@@ -255,7 +256,7 @@ describe('开机自启开关', () => {
 describe('在场监听：托盘与通知的信号源', () => {
   const sockets: MinimalSocket[] = []
   let states: PresenceState[] = []
-  let replies: { agentName: string; text: string }[] = []
+  let replies: { agentName: string; text: string; conversationId: string }[] = []
   let focused = false
 
   function makeMonitor(): PresenceMonitor {
@@ -337,7 +338,8 @@ describe('在场监听：托盘与通知的信号源', () => {
     push({ type: 'text-delta', conversationId: 'c1', senderId: 'a1', text: '巷口那家' })
     push({ type: 'text-delta', conversationId: 'c1', senderId: 'a1', text: '可以少辣。' })
     push({ type: 'message-done', conversationId: 'c1', senderId: 'a1', turnIndex: 3 })
-    expect(replies).toEqual([{ agentName: '阿码', text: '巷口那家可以少辣。' }])
+    // 载荷带上会话 id：点通知要落到那条会话，靠的就是它一路穿透到 notify 的 click。
+    expect(replies).toEqual([{ agentName: '阿码', text: '巷口那家可以少辣。', conversationId: 'c1' }])
     expect(states.at(-1)?.unread).toBe(1)
     expect(states.at(-1)?.busy.size).toBe(0)
 
@@ -382,7 +384,9 @@ describe('在场监听：托盘与通知的信号源', () => {
     push({ type: 'text-delta', conversationId: 'c1', senderId: 'a3', text: '再加个汤。' })
     push({ type: 'message-done', conversationId: 'c1', senderId: 'a3', turnIndex: 7 })
 
-    expect(replies).toEqual([{ agentName: '阿码、小美、老张', text: '巷口那家\n可以少辣。\n再加个汤。' }])
+    expect(replies).toEqual([
+      { agentName: '阿码、小美、老张', text: '巷口那家\n可以少辣。\n再加个汤。', conversationId: 'c1' },
+    ])
     expect(states.at(-1)?.unread).toBe(1)
     expect(states.at(-1)?.busy.size).toBe(0)
     monitor.stop()
@@ -441,7 +445,7 @@ describe('在场监听：托盘与通知的信号源', () => {
     expect(states.at(-1)?.busy.get('c1')).toEqual(new Set(['小美']))
     push({ type: 'text-delta', conversationId: 'c1', senderId: 'a2', text: '这家 8 分。' })
     push({ type: 'message-done', conversationId: 'c1', senderId: 'a2', turnIndex: 7 })
-    expect(replies).toEqual([{ agentName: '小美', text: '这家 8 分。' }])
+    expect(replies).toEqual([{ agentName: '小美', text: '这家 8 分。', conversationId: 'c1' }])
     expect(states.at(-1)?.unread).toBe(1)
     expect(states.at(-1)?.busy.size).toBe(0)
     monitor.stop()
@@ -458,7 +462,7 @@ describe('在场监听：托盘与通知的信号源', () => {
     expect(states.at(-1)?.busy.get('c1')).toEqual(new Set(['a1']))
     // message-done 带的是真实 turnIndex，收口照样认（否则托盘永远亮着）。
     push({ type: 'message-done', conversationId: 'c1', senderId: 'a1', turnIndex: 12 })
-    expect(replies).toEqual([{ agentName: 'a1', text: '这条是中途接上的' }])
+    expect(replies).toEqual([{ agentName: 'a1', text: '这条是中途接上的', conversationId: 'c1' }])
     expect(states.at(-1)?.busy.size).toBe(0)
     monitor.stop()
   })
@@ -505,7 +509,7 @@ describe('在场监听：托盘与通知的信号源', () => {
     expect(states.at(-1)?.busy.get('c1')).toEqual(new Set(['小美']))
     push({ type: 'message-done', conversationId: 'c1', senderId: 'a2', turnIndex: 10 })
     expect(states.at(-1)?.busy.size).toBe(0)
-    expect(replies).toEqual([{ agentName: '小美', text: '这一轮没有文字' }])
+    expect(replies).toEqual([{ agentName: '小美', text: '这一轮没有文字', conversationId: 'c1' }])
     monitor.stop()
   })
 
@@ -536,7 +540,8 @@ describe('在场监听：托盘与通知的信号源', () => {
     expect(states.at(-1)?.busy.size).toBe(0)
 
     push({ type: 'error', conversationId: 'c1', message: '模型没有返回内容', code: 'INTERNAL' })
-    expect(replies).toEqual([{ agentName: 'RyHarness', text: '模型没有返回内容' }])
+    // 错误路径的通知同样要带会话 id：点它同样该落到那条会话。
+    expect(replies).toEqual([{ agentName: 'RyHarness', text: '模型没有返回内容', conversationId: 'c1' }])
     monitor.stop()
   })
 
@@ -604,6 +609,55 @@ describe('托盘「新对话」', () => {
     try {
       // biome-ignore lint/security/noGlobalEval: 同上
       const landed = eval(NEW_CHAT_SCRIPT) as Promise<boolean>
+      await vi.advanceTimersByTimeAsync(20 * 150)
+      expect(await landed).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('通知点击：落到那条会话', () => {
+  /**
+   * 通知点击不止把窗口带回前台：载荷里的会话 id 要一路穿透到渲染层选中的那条
+   * 会话。脚本与渲染层之间以 data-ryharness-open-conversation 标记对账——它
+   * 只有在 App 的事件监听器真的处理过这个 id 之后才会出现。
+   */
+  it('派发带会话 id 的事件，渲染层选中它才算落地', async () => {
+    document.body.innerHTML = ''
+    document.documentElement.removeAttribute('data-ryharness-open-conversation')
+    let received = 0
+    const listener = (event: Event): void => {
+      received += 1
+      // 渲染层收到事件后选中那条会话（App 的行为），并盖上有 id 的标记。
+      const id = event instanceof CustomEvent ? event.detail : undefined
+      if (typeof id !== 'string') return
+      document.documentElement.dataset.ryharnessOpenConversation = id
+    }
+    window.addEventListener('ryharness:open-conversation', listener)
+    try {
+      // biome-ignore lint/security/noGlobalEval: 脚本本身就是给渲染层 executeJavaScript 用的
+      const landed = eval(openConversationScript('c7')) as Promise<boolean>
+      expect(await landed).toBe(true)
+      expect(received).toBeGreaterThan(0)
+      expect(document.documentElement.getAttribute('data-ryharness-open-conversation')).toBe('c7')
+    } finally {
+      window.removeEventListener('ryharness:open-conversation', listener)
+      delete document.documentElement.dataset.ryharnessOpenConversation
+    }
+  })
+
+  it('会话 id 原样嵌进脚本：换一条通知不需要另一份脚本', () => {
+    const script = openConversationScript('abc-123')
+    expect(script).toContain('ryharness:open-conversation')
+    expect(script).toContain('"abc-123"')
+  })
+
+  it('渲染层没接上事件时如实回报失败，不假装已经落进会话', { timeout: 15000 }, async () => {
+    vi.useFakeTimers()
+    try {
+      // biome-ignore lint/security/noGlobalEval: 同上
+      const landed = eval(openConversationScript('c7')) as Promise<boolean>
       await vi.advanceTimersByTimeAsync(20 * 150)
       expect(await landed).toBe(false)
     } finally {

@@ -44,6 +44,11 @@ interface MeApi extends ProviderApi {
   memoryStats?(): Promise<MemoryStats>
   telemetry?(limit?: number): Promise<TelemetrySnapshot>
   listArchivedMemories?(): Promise<{ items: MemoryRow[] }>
+  /**
+   * 一键备份整库。可选：服务端版本落后时整行不渲染（与 usage/memoryHealth 同一
+   * 口径），而不是渲染一个点了必失败的按钮。
+   */
+  backup?(): Promise<{ path: string }>
 }
 
 /**
@@ -177,6 +182,29 @@ export function MePage({
     }
   }
 
+  // 一键备份的界面态：进行中 / 成功路径 / 失败原因。路径要留在页面上——toast 一闪
+  // 就没，而「备份在哪」恰恰是用户接下来要去找的东西。
+  const [backingUp, setBackingUp] = useState(false)
+  const [backupPath, setBackupPath] = useState<string | undefined>(undefined)
+  const [backupError, setBackupError] = useState<string | undefined>(undefined)
+
+  /** 立即备份整库（会话+记忆+进化都在一个库里，一份即全部）。 */
+  const runBackup = async (): Promise<void> => {
+    if (api.backup === undefined || backingUp) return
+    setBackingUp(true)
+    setBackupError(undefined)
+    try {
+      const { path } = await api.backup()
+      setBackupPath(path)
+      toast.success('备份完成')
+    } catch (error) {
+      setBackupError(humanError(error, '备份没能完成，再试一次'))
+      toast.error(`备份失败：${humanError(error, '再试一次')}`)
+    } finally {
+      setBackingUp(false)
+    }
+  }
+
   return (
     <section className="page">
       <header className="page-header">
@@ -303,6 +331,39 @@ export function MePage({
           <div className="me-section">
             <WorkspaceSection api={api} />
           </div>
+
+          {api.backup !== undefined && (
+            <div className="me-section">
+              <div className="me-row" style={{ alignItems: 'flex-start' }}>
+                <div className="me-row-body">
+                  <div className="me-row-title">数据备份</div>
+                  <div className="me-row-sub">
+                    把全部会话与记忆导出成一份独立文件（保留最近 10 份）；升级或清理前先备一份
+                  </div>
+                  {backupPath !== undefined && (
+                    <p className="me-note" data-testid="backup-path">
+                      上次备份：{backupPath}
+                    </p>
+                  )}
+                  {backupError !== undefined && (
+                    <p className="apikey-error" role="alert">
+                      备份失败：{backupError}
+                    </p>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-mini"
+                  disabled={backingUp}
+                  onClick={() => {
+                    void runBackup()
+                  }}
+                >
+                  {backingUp ? '备份中…' : '立即备份'}
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* id 给「配置云端音色」这类跨页跳转当锚点：切到本页后滚到供应商区块。 */}
           <div className="me-section" id="provider-settings">
@@ -574,6 +635,20 @@ function providerRow(row: UsageReport['byProvider'][number]): LedgerRow {
 }
 
 /**
+ * 用量账单的形状守卫：这份 JSON 真的是账单吗？
+ *
+ * 见 {@link UsageLedger} 里的用法——形状对不上时整页崩掉是最差的结果。
+ */
+function isUsageReport(value: unknown): value is UsageReport {
+  if (typeof value !== 'object' || value === null) return false
+  const report = value as Partial<UsageReport>
+  if (!Array.isArray(report.byConversation) || !Array.isArray(report.byProvider)) return false
+  const totals = report.totals
+  if (typeof totals !== 'object' || totals === null) return false
+  return typeof totals.total === 'number' && typeof totals.input === 'number' && typeof totals.output === 'number'
+}
+
+/**
  * 用量账单：跨会话、跨供应商的累计 token。此前只有右栏一行"本会话用了多少"，
  * 换个模型到底贵没贵、花在哪个会话，只能靠感觉。
  *
@@ -601,6 +676,17 @@ function UsageLedger({ api }: { api: MeApi }) {
       .usage(scope?.days === undefined ? undefined : Date.now() - scope.days * DAY_MS)
       .then((next) => {
         if (!alive) return
+        // 形状对不上就按「读不出来」处理。
+        //
+        // 服务端返回的东西不是只会在「请求失败」时不对——版本不匹配、代理吐了一份
+        // 错误 JSON、磁盘读失败，它照样回 200。此前渲染层直接 `report.byConversation.map`，
+        // 于是「我的」页整块白掉，用户只看到一句"这块页面没画出来"。这与这个文件里
+        // 其它几处降级（服务端没这个方法、读失败）同一口径：形状不对也是一种读不出来。
+        if (!isUsageReport(next)) {
+          setReport(undefined)
+          setProblem('用量账单格式对不上，这版服务端返回的不是账单。')
+          return
+        }
         setReport(next)
         setProblem(undefined)
       })

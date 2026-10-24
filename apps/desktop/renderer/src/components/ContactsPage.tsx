@@ -204,7 +204,7 @@ function IdentityCard({
   return (
     <aside className="agent-card" aria-label="助理卡">
       <span className="agent-card-face">
-        <Avatar3D avatarKey={avatarKey} name={displayName} size={88} tilt />
+        <Avatar3D avatarKey={avatarKey} name={displayName} size={88} tilt breathing />
       </span>
       <span className="agent-card-body">
         <span className={`agent-card-name${named ? '' : ' is-placeholder'}`}>{displayName}</span>
@@ -992,13 +992,15 @@ function PersonaEditor({
             }}
           />
         </label>
+        {/* 口头禅/形象输入期不 trim：当场裁会把英文短语中间的空格吞掉（"Trust me"
+            敲到空格就成了 "Trustme"）；空白的收口放到保存时做，名字字段同此口径。 */}
         <label className="field">
           <span>口头禅</span>
           <input
             value={persona.catchphrase}
             placeholder="例如：交给我吧"
             onChange={(e) => {
-              onChange({ ...persona, catchphrase: e.target.value.trim() })
+              onChange({ ...persona, catchphrase: e.target.value })
             }}
           />
         </label>
@@ -1008,7 +1010,7 @@ function PersonaEditor({
             value={persona.appearance}
             placeholder="一句话描述：长什么样、什么动物"
             onChange={(e) => {
-              onChange({ ...persona, appearance: e.target.value.trim() })
+              onChange({ ...persona, appearance: e.target.value })
             }}
           />
         </label>
@@ -1333,9 +1335,13 @@ export function CreateAgentModal({
         // 留空就是「用模型默认」，不发任何字段；发一个供应商不认的值会被运行时
         // 拒成 UNSUPPORTED_REASONING_EFFORT，整轮失败。
         ...(reasoningEffort.length === 0 ? {} : { reasoningEffort }),
-        // 原样交出去：内核的 normalizePersona 会在拼接前再兜一次，
-        // 这里不重复裁剪，免得 UI 与内核对同一份人格给出不同答案。
-        persona,
+        // 口头禅/形象在这里收口（输入期不 trim，见 PersonaEditor）：两端空白去掉，
+        // 全空按「没填」的既有逻辑走；性格四维与音色不在裁剪之列，交给内核兜底。
+        persona: {
+          ...persona,
+          catchphrase: persona.catchphrase.trim(),
+          appearance: persona.appearance.trim(),
+        },
       })
       toast.success(editing === undefined ? '助理已创建' : '修改已保存')
       onClose()

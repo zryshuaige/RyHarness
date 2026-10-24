@@ -509,6 +509,24 @@ describe('用量账单', () => {
     expect(alert?.textContent).not.toContain('HTTP 503')
   })
 
+  it('返回的不是账单时降级说清，不让整页崩掉', async () => {
+    // 服务端回的东西不是只会在「请求失败」时不对——版本不匹配、代理吐了一份错误
+    // JSON、磁盘读失败，它照样回 200。此前渲染层直接 report.byConversation.map，
+    // 于是「我的」页整块白掉，用户只看到一句"这块页面没画出来"。
+    await renderMePage(
+      meApi({
+        usage: () => {
+          return Promise.resolve({ enabled: false })
+        },
+      }),
+    )
+    const alert = container.querySelector('.usage-ledger, [role="alert"]')
+    expect(alert?.textContent).toContain('用量账单格式对不上')
+    // 崩掉的那块不见了，但整页还在：别的东西照常看得见。
+    expect(container.querySelector('.usage-ledger')).toBeNull()
+    expect(container.textContent).toContain('我的')
+  })
+
   it('「我的」页同时挂着记忆健康度区块', async () => {
     await renderMePage(
       meApi({

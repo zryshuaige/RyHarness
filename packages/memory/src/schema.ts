@@ -10,7 +10,7 @@
 import type { DatabaseSync } from 'node:sqlite'
 
 /** 本包 schema 版本（独立于 session 的 SCHEMA_VERSION）。 */
-export const MEMORY_SCHEMA_VERSION = 5
+export const MEMORY_SCHEMA_VERSION = 7
 
 /** 共享用户画像空间的 agent_id（写隔离、读共享，调研 §3.6）。 */
 export const SHARED_SPACE = '*shared*'
@@ -176,12 +176,52 @@ function migrateV5(db: DatabaseSync): void {
   if (adds.length > 0) db.exec(adds.join('\n'))
 }
 
+/**
+ * v6：FTS5 词表（fts5vocab），给查询侧提供每个 bigram 的文档频率。
+ *
+ * 长输入（用户往聊天框贴一段文章/日志）的 bigram 动辄上千个；无上界的
+ * `a OR b OR c OR …` 查询在 FTS5 里按「OR 臂数 × 词项文档频率」付费，实测
+ * 2000 条记忆的库上 1000 字输入要 6.4 秒、3000 字 59 秒——且全部同步跑在
+ * 事件循环上，等于把整个后端（所有会话的流式输出、WS、HTTP）冻住。词表让
+ * 查询侧能把 OR 臂数压到上限以内，还能优先挑「库里真的存在、且区分度高」的
+ * 词项（见 @ryharness/memory/store 的查询构造）。
+ */
+function migrateV6(db: DatabaseSync): void {
+  db.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts_vocab USING fts5vocab('memories_fts', 'row');
+  `)
+}
+
+/**
+ * v7：记忆有了**重要性**档位（1=一般 / 2=重要 / 3=关键）。
+ *
+ * 此前归档判据只看「90 天零访问」：一条「女儿叫小雨」式的低频关键事实，只要
+ * 90 天内没被恰好召回过一次，就会被巩固任务移出检索面，且界面上没有任何先兆
+ * ——用户某天提起时系统彻底失忆。时间衰减同样无下限（e^(-Δ/30)），早期关键
+ * 事实在排序里先被压到近零分。importance≥3 的记忆从此不参与自动归档，抽取
+ * 管线在写入时由 LLM 判档（旧数据一律回落为 1，不猜）。
+ */
+function migrateV7(db: DatabaseSync): void {
+  // 与 v5 同因：ALTER TABLE ADD COLUMN 不幂等，遇到「列已在、版本号没跟上」的
+  // 库不能把记忆库卡在打不开的状态。
+  const existing = new Set(
+    (db.prepare('PRAGMA table_info(memories)').all() as { name: string }[]).map((column) => {
+      return column.name
+    }),
+  )
+  if (!existing.has('importance')) {
+    db.exec('ALTER TABLE memories ADD COLUMN importance INTEGER NOT NULL DEFAULT 1;')
+  }
+}
+
 export const MIGRATIONS: Readonly<Record<number, (db: DatabaseSync) => void>> = {
   1: migrateV1,
   2: migrateV2,
   3: migrateV3,
   4: migrateV4,
   5: migrateV5,
+  6: migrateV6,
+  7: migrateV7,
 }
 
 function metaVersion(db: DatabaseSync): number {

@@ -86,6 +86,24 @@ export type WsEvent =
       /** 排队的用户消息。 */
       senderId: 'user'
     }
+  | {
+      /** 一条 requiresApproval 工具调用（如 shell_exec）等用户批准。 */
+      type: 'approval-request'
+      conversationId: string
+      /** 发起这次工具调用的 agent id。 */
+      senderId: string
+      approvalId: string
+      toolName: string
+      /** 原始 JSON 字符串参数（命令在这里）。 */
+      arguments: string
+    }
+  | {
+      /** 一次审批有了结果（用户决定 / 超时 / 轮次取消）：渲染层据此撤卡。 */
+      type: 'approval-resolved'
+      conversationId: string
+      approvalId: string
+      outcome: 'allow' | 'deny' | 'timeout' | 'cancelled'
+    }
 
 /**
  * 实际推上 WS 的事件：EventHub 发布时打上每会话单调递增的 `seq`（从 1 起）。

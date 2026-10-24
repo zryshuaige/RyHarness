@@ -5,7 +5,7 @@
 
 import { readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { type MemoryService, toPublicMemories } from '@ryharness/memory'
+import { type MemoryService, toPublicMemories, toPublicMemory } from '@ryharness/memory'
 import type { SessionStore } from '@ryharness/session'
 import { json, type Router, strField } from '../router.ts'
 import type { Telemetry } from '../telemetry.ts'
@@ -59,6 +59,12 @@ export interface MemoryHealthReport {
 
 /** 「最近学到 N 条」的统计窗口：近 24 小时内新增的长期记忆。 */
 const RECENT_LEARNED_WINDOW_MS = 86_400_000
+
+/**
+ * 记忆内容的长度上限：与抽取管线的候选事实截断（@ryharness/memory 的 llm.ts
+ * slice(0, 500)）对齐——记忆本来就是一句句事实，编辑入口不该放进来一篇文章。
+ */
+const MAX_MEMORY_CONTENT_LENGTH = 500
 
 /** 计数用的扫描上限：健康度要的是全量条数，列表接口的默认窗口不够看。 */
 const HEALTH_COUNT_LIMIT = 10_000
@@ -184,6 +190,39 @@ export function registerMemoryRoutes(router: Router, deps: MemoryRoutes): void {
     }
     service.store.supersede(existing.id, 'deleted')
     json(res, 200, { deleted: existing.id })
+  })
+
+  /**
+   * 就地编辑一条记忆的内容：用户看到过时事实时改字，而不是整条删掉让 agent
+   * 下一轮把错的学回来。FTS 与向量由服务层同步换新；不存在或非 active 的行
+   * 一律 404（归档行走 restore，软删行不该被 id 复活改写）。
+   */
+  router.patch('/api/memories/:id', async (req, res) => {
+    const service = memoryService()
+    if (service === undefined) {
+      json(res, 409, { error: 'memory system disabled' })
+      return
+    }
+    const content = strField(await req.body(), 'content')
+    if (content === undefined) {
+      json(res, 400, { error: 'content is required' })
+      return
+    }
+    const trimmed = content.trim()
+    if (trimmed.length === 0) {
+      json(res, 400, { error: 'content must not be empty' })
+      return
+    }
+    if (trimmed.length > MAX_MEMORY_CONTENT_LENGTH) {
+      json(res, 400, { error: `content is too long (max ${MAX_MEMORY_CONTENT_LENGTH} characters)` })
+      return
+    }
+    const updated = await service.updateMemory(req.params.id as string, trimmed)
+    if (updated === undefined) {
+      json(res, 404, { error: 'memory not found' })
+      return
+    }
+    json(res, 200, { memory: toPublicMemory(updated) })
   })
 
   /** 记忆统计。 */

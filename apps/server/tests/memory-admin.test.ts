@@ -51,6 +51,19 @@ async function postJson(
   return { status: response.status, body: (await response.json()) as Record<string, unknown> }
 }
 
+async function patchJson(
+  base: string,
+  path: string,
+  payload: unknown,
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  const response = await fetch(`${base}${path}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  return { status: response.status, body: (await response.json()) as Record<string, unknown> }
+}
+
 /** 带指定 embedding 实现起一个服务，并返回可预置数据的 MemoryService。 */
 async function startWithMemory(
   prefix: string,
@@ -268,6 +281,87 @@ describe('记忆出包不带 embedding', () => {
       for (const row of items) {
         expect(Object.keys(row).sort()).toEqual(PUBLIC_FIELDS)
       }
+    } finally {
+      await server.close()
+    }
+  })
+})
+
+describe('记忆就地编辑', () => {
+  it('PATCH /api/memories/:id 换内容：GET 返回新内容，FTS 搜新词命中、旧词搜不到，向量同步重算', async () => {
+    const { server, memory } = await startWithMemory('edit')
+    try {
+      const row = memory.store.insert({ agentId: 'ryen', kind: 'fact', content: '用户养了一只橘猫叫布丁' })
+      expect(memory.store.get(row.id)?.embedding).toBeNull()
+
+      const res = await patchJson(server.url, `/api/memories/${row.id}`, { content: '用户养了一只黑猫叫煤球' })
+      expect(res.status).toBe(200)
+      const edited = res.body.memory as Record<string, unknown>
+      expect(edited.content).toBe('用户养了一只黑猫叫煤球')
+      // 出包口径与列表一致：向量（Float32Array）不外泄。
+      expect(Object.keys(edited).sort()).toEqual(
+        ['accessCount', 'agentId', 'content', 'createdAt', 'id', 'kind', 'updatedAt'].sort(),
+      )
+
+      const after = (await getJson(server.url, '/api/agents/ryen/memories')).body as { agent: MemoryItem[] }
+      expect(
+        after.agent.map((item) => {
+          return item.content
+        }),
+      ).toEqual(['用户养了一只黑猫叫煤球'])
+      // FTS 行同步换：新内容可被词法通道召回，旧内容从此搜不到（只换表不换索引
+      // 的话 BM25 还在学旧话）。
+      expect(await memory.recall('ryen', '黑猫煤球')).toContain('用户养了一只黑猫叫煤球')
+      expect(memory.store.searchFts('ryen', '橘猫布丁')).toEqual([])
+      // 编辑触发了重新嵌入：插入时没向量，编辑后带当前模型的向量，语义通道不再说旧话。
+      const stored = memory.store.get(row.id)
+      expect(stored?.embedding).not.toBeNull()
+      expect(stored?.embeddingModel).toBe('hash:test')
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('纯 FTS5（无 embedding）下编辑照样成功：嵌入不可用不阻塞保存', async () => {
+    const { server, memory } = await startWithMemory('edit-fts-only', new NullEmbeddings())
+    try {
+      const row = memory.store.insert({ agentId: 'ryen', kind: 'fact', content: '旧的过时说法' })
+      const res = await patchJson(server.url, `/api/memories/${row.id}`, { content: '新的准确说法' })
+      expect(res.status).toBe(200)
+      expect((res.body.memory as MemoryItem).content).toBe('新的准确说法')
+      expect(memory.store.get(row.id)?.embedding).toBeNull()
+      expect(memory.store.searchFts('ryen', '新的准确说法').map((entry) => entry.id)).toEqual([row.id])
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('非 active 行 404：归档与软删的记忆不能被 id 改写（状态机入口各是各的）', async () => {
+    const { server, memory } = await startWithMemory('edit-inactive')
+    try {
+      const archived = archiveDormant(memory, 'ryen', '很久以前的旧约定', 90)
+      const softDeleted = memory.store.insert({ agentId: 'ryen', kind: 'fact', content: '软删掉的' })
+      memory.store.supersede(softDeleted.id, 'deleted')
+
+      expect((await patchJson(server.url, `/api/memories/${archived}`, { content: '改归档' })).status).toBe(404)
+      expect((await patchJson(server.url, `/api/memories/${softDeleted.id}`, { content: '改软删' })).status).toBe(404)
+      expect((await patchJson(server.url, '/api/memories/no-such-id', { content: '改不存在' })).status).toBe(404)
+      expect(memory.store.get(archived)?.content).toBe('很久以前的旧约定')
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('空内容 400：缺字段、空串、纯空白都拒；超长（>500 字符）也拒', async () => {
+    const { server, memory } = await startWithMemory('edit-empty')
+    try {
+      const row = memory.store.insert({ agentId: 'ryen', kind: 'fact', content: '还在活跃' })
+      expect((await patchJson(server.url, `/api/memories/${row.id}`, {})).status).toBe(400)
+      expect((await patchJson(server.url, `/api/memories/${row.id}`, { content: '' })).status).toBe(400)
+      expect((await patchJson(server.url, `/api/memories/${row.id}`, { content: '   ' })).status).toBe(400)
+      expect((await patchJson(server.url, `/api/memories/${row.id}`, { content: '长'.repeat(501) })).status).toBe(400)
+      // 拒绝的请求一条都不能写进去。
+      expect(memory.store.get(row.id)?.content).toBe('还在活跃')
     } finally {
       await server.close()
     }

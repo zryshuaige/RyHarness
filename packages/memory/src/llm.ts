@@ -14,6 +14,11 @@ export interface CandidateFact {
   text: string
   scope: 'shared' | 'agent'
   kind: 'profile' | 'fact' | 'preference' | 'event'
+  /**
+   * 重要性档位：3=关键（身份/至亲/健康/重大约定，丢了会伤害关系），
+   * 2=重要（稳定偏好、长期计划），1=一般。关键档不参与休眠归档。
+   */
+  importance: 1 | 2 | 3
 }
 
 /** 四操作之一（判定阶段输出，对应 mem0 manage_memory schema）。 */
@@ -47,16 +52,17 @@ const EXTRACT_PROMPT = `你是记忆抽取器。从下面的对话中抽出值�
 2. 关于「与该 agent 的互动经验」（用户对该 agent 的指令风格、委托习惯、约定）→ scope=agent。
 3. 闲聊寒暄、一次性任务细节、纯客套话 → 不抽。
 4. 用户在闲聊中顺口表达的喜好/习惯，**要抽**：不要因为"没有正式提出要求"就放弃。
+5. 给每条事实标 importance：3=关键（身份、家人、健康、重大约定——丢了会伤害与用户的关系）；2=重要（稳定偏好、长期计划、职业相关）；1=一般（普通事件与边际偏好）。
 
 示例（对话 → 抽取结果）：
-- 「我最喜欢吃川菜，越辣越好」→ {"text":"用户偏好川菜，喜欢辣","scope":"shared","kind":"preference"}
-- 「以后给我发周报都用要点式的，别写长段落」→ {"text":"用户要求周报用要点式，不用长段落","scope":"shared","kind":"preference"}
-- 「我养了一只橘猫叫布丁」→ {"text":"用户养了一只橘猫叫布丁","scope":"shared","kind":"profile"}
-- 「下周要搬家到杭州」→ {"text":"用户下周要搬到杭州","scope":"shared","kind":"event"}
+- 「我最喜欢吃川菜，越辣越好」→ {"text":"用户偏好川菜，喜欢辣","scope":"shared","kind":"preference","importance":2}
+- 「以后给我发周报都用要点式的，别写长段落」→ {"text":"用户要求周报用要点式，不用长段落","scope":"shared","kind":"preference","importance":2}
+- 「我养了一只橘猫叫布丁」→ {"text":"用户养了一只橘猫叫布丁","scope":"shared","kind":"profile","importance":3}
+- 「下周要搬家到杭州」→ {"text":"用户下周要搬到杭州","scope":"shared","kind":"event","importance":2}
 - 「把 src/a.ts 里的第 3 行改成 foo」→ 不抽（一次性任务细节）
 - 「好的，谢谢你！」→ 不抽（寒暄）
 
-只输出 JSON：{"facts": [{"text": "...", "scope": "shared|agent", "kind": "profile|preference|event|fact"}]}
+只输出 JSON：{"facts": [{"text": "...", "scope": "shared|agent", "kind": "profile|preference|event|fact", "importance": 1|2|3}]}
 
 对话：
 `
@@ -120,7 +126,10 @@ export class ChatMemoryLlm implements MemoryLlm {
       const kind = ['profile', 'preference', 'event', 'fact'].includes(String(item.kind))
         ? (String(item.kind) as CandidateFact['kind'])
         : 'fact'
-      out.push({ text: item.text.trim().slice(0, 500), scope, kind })
+      // 档位只认 1/2/3，其余（缺字段、乱值、旧模型输出）一律回落一般档：
+      // 宁可少保护，不可把噪音当关键事实锁死在检索面里。
+      const importance = item.importance === 3 ? 3 : item.importance === 2 ? 2 : 1
+      out.push({ text: item.text.trim().slice(0, 500), scope, kind, importance })
     }
     return out
   }

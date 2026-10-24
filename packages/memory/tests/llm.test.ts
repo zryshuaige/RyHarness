@@ -111,14 +111,36 @@ describe('ChatMemoryLlm（配置驱动）', () => {
       fetchImpl: fenced.fetchImpl,
     })
     const facts = await fencedLlm.extractFacts({ agentName: 'a', conversationText: 'x' })
-    expect(facts).toEqual([{ text: '用户喜欢川菜', scope: 'shared', kind: 'preference' }])
+    expect(facts).toEqual([{ text: '用户喜欢川菜', scope: 'shared', kind: 'preference', importance: 1 }])
+  })
+
+  it('importance 判档：只认 1/2/3，缺字段与乱值一律回落 1（宁可少保护不误锁）', async () => {
+    const { fetchImpl } = stubFetch(
+      contentReply(
+        JSON.stringify({
+          facts: [
+            { text: '用户养了一只橘猫叫布丁', scope: 'shared', kind: 'profile', importance: 3 },
+            { text: '用户下周要搬到杭州', scope: 'shared', kind: 'event', importance: 2 },
+            { text: '用户喜欢川菜', scope: 'shared', kind: 'preference' },
+            { text: '乱档位', scope: 'shared', kind: 'fact', importance: 'high' },
+          ],
+        }),
+      ),
+    )
+    const llm = new ChatMemoryLlm({ apiKey: 'k', baseURL: 'https://x/v1', model: 'm', fetchImpl })
+    const facts = await llm.extractFacts({ agentName: 'a', conversationText: 'x' })
+    expect(
+      facts.map((fact) => {
+        return fact.importance
+      }),
+    ).toEqual([3, 2, 1, 1])
   })
 
   it('分段数组形式的 content 也能拼回文本解析', async () => {
     const { fetchImpl } = stubFetch(contentReply([{ type: 'text', text: '{"operations":[{"action":"ADD"}]}' }]))
     const llm = new ChatMemoryLlm({ apiKey: 'k', baseURL: 'https://x/v1', model: 'm', fetchImpl })
     const ops = await llm.decideOperations({
-      candidate: { text: '用户喜欢川菜', scope: 'shared', kind: 'preference' },
+      candidate: { text: '用户喜欢川菜', scope: 'shared', kind: 'preference', importance: 2 },
       similar: [],
     })
     expect(ops).toEqual([{ action: 'ADD', text: undefined }])
@@ -128,7 +150,7 @@ describe('ChatMemoryLlm（配置驱动）', () => {
     const { fetchImpl, calls } = stubFetch(contentReply('{"operations":[{"action":"NOOP"}]}'))
     const llm = new ChatMemoryLlm({ apiKey: 'k', baseURL: 'https://x/v1', model: 'm', fetchImpl })
     await llm.decideOperations({
-      candidate: { text: '用户住在杭州', scope: 'shared', kind: 'profile' },
+      candidate: { text: '用户住在杭州', scope: 'shared', kind: 'profile', importance: 2 },
       similar: [{ id: 'mem-1', content: '用户住在北京' }],
     })
     const prompt = String((calls[0]!.body.messages as { content: string }[])[1]!.content)

@@ -580,7 +580,14 @@ const DirectProfile = memo(function DirectProfile({
   return (
     <>
       <div className="profile-head">
-        <Avatar avatarKey={agent.avatar} name={agent.name} seed={agent.id} size={80} className="avatar-lg-ring" />
+        <Avatar
+          avatarKey={agent.avatar}
+          name={agent.name}
+          seed={agent.id}
+          size={80}
+          className="avatar-lg-ring"
+          breathing
+        />
         <h3>
           {agent.name}
           {badge !== undefined && <span className="badge">{badge}</span>}

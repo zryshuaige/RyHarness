@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { EmbeddingProvider } from '@ryharness/memory'
-import { HashEmbeddings, MemoryService, SHARED_SPACE } from '@ryharness/memory'
+import { cosine, HashEmbeddings, MemoryService, SHARED_SPACE } from '@ryharness/memory'
 import { afterEach, describe, expect, it } from 'vitest'
 
 const dirs: string[] = []
@@ -97,6 +97,159 @@ describe('recallSync：首 token 路径上的同步召回', () => {
     await svc.recallRefine('a1', '周报')
     const after = svc.store.listSharedProfile()[0]?.accessCount ?? 0
     expect(after - before).toBe(1)
+  })
+})
+
+describe('群聊扇出的同步召回：共享空间只打分一次', () => {
+  /**
+   * 打分探针：包住 store.spaceEmbeddingMatrix 按空间计数（手法同 recall.perf.ts
+   * 的 statementCounter——不改产品代码，只观察内部调用）。
+   */
+  function scoringProbe(svc: MemoryService): { shared: () => number; privateScans: () => number } {
+    const store = svc.store
+    const original = store.spaceEmbeddingMatrix.bind(store)
+    let shared = 0
+    let privateScans = 0
+    store.spaceEmbeddingMatrix = (spaceId: string, embeddingModel?: string, stamp?: string) => {
+      if (spaceId === SHARED_SPACE) shared += 1
+      else privateScans += 1
+      return original(spaceId, embeddingModel, stamp)
+    }
+    return { shared: () => shared, privateScans: () => privateScans }
+  }
+
+  /** 共享空间带向量 + 两个成员各带私有向量 + 一条共享画像。 */
+  function fanoutService(): MemoryService {
+    const vectors = new HashEmbeddings()
+    const svc = new MemoryService({ dbPath: dbPath(), embeddings: vectors })
+    svc.store.insert({ agentId: SHARED_SPACE, kind: 'profile', content: '用户养了一只橘猫叫布丁' })
+    svc.store.insert({
+      agentId: SHARED_SPACE,
+      kind: 'fact',
+      content: '共享事实：用户在全群面前提过喜欢条目式写法',
+      embedding: vectors.vectorOf('共享 条目式'),
+      embeddingModel: vectors.model,
+    })
+    svc.store.insert({
+      agentId: 'a1',
+      kind: 'fact',
+      content: 'A 的私有事实：用户喜欢川菜',
+      embedding: vectors.vectorOf('川菜'),
+      embeddingModel: vectors.model,
+    })
+    svc.store.insert({
+      agentId: 'b1',
+      kind: 'fact',
+      content: 'B 的私有事实：用户在学日语',
+      embedding: vectors.vectorOf('日语'),
+      embeddingModel: vectors.model,
+    })
+    return svc
+  }
+
+  it('同一段输入的 3 成员同步召回：共享空间打分 1 次，私有空间各扫各的', async () => {
+    const svc = fanoutService()
+    const query = '条目式 写法'
+    await svc.recallRefine('a1', query)
+    const probe = scoringProbe(svc)
+    const blocks = ['a1', 'b1', 'c1'].map((agentId) => {
+      return svc.recallSync(agentId, query)
+    })
+    expect(probe.shared()).toBe(1)
+    expect(probe.privateScans()).toBe(3)
+    svc.close()
+    // 共享事实对每个成员都可见；A 的私有事实不进 B 的注入块。
+    expect(blocks[0]).toContain('共享事实')
+    expect(blocks[1]).toContain('共享事实')
+    expect(blocks[1]).not.toContain('川菜')
+  })
+
+  it('换一段输入或写代变化后重新打分（缓存不跨输入、不跨写代复用）', async () => {
+    const svc = fanoutService()
+    const first = '条目式 写法'
+    const second = '橘猫 布丁'
+    await svc.recallRefine('a1', first)
+    await svc.recallRefine('b1', second)
+    const probe = scoringProbe(svc)
+    svc.recallSync('a1', first)
+    expect(probe.shared()).toBe(1)
+    // 不同输入：查询向量不同，共享空间必须真算一遍。
+    svc.recallSync('b1', second)
+    expect(probe.shared()).toBe(2)
+    // 写代变化（抽取落库、编辑都走这条路）：同一输入也立即重算。
+    svc.store.insert({ agentId: 'b1', kind: 'fact', content: '新落库的事实' })
+    svc.recallSync('a1', first)
+    expect(probe.shared()).toBe(3)
+    svc.close()
+  })
+
+  it('共享访问计数口径不变：仍按每个成员的注入各记一次（与逐成员透传时一致）', async () => {
+    const svc = fanoutService()
+    const query = '条目式 写法'
+    await svc.recallRefine('a1', query)
+    const before = svc.store.listSharedProfile()[0]?.accessCount ?? 0
+    svc.recallSync('a1', query)
+    svc.recallSync('b1', query)
+    const after = svc.store.listSharedProfile()[0]?.accessCount ?? 0
+    svc.close()
+    // 同步路径逐成员各自组装注入块，画像各记 1 次；共享的只是"打分"，不是"记账"。
+    expect(after - before).toBe(2)
+  })
+})
+
+describe('语义通道打分：矩阵单趟与逐行 cosine 同一结果', () => {
+  /**
+   * 对照函数：旧 scoreSemantic 的打分形状（逐行 cosine + 降序）。
+   *
+   * 查询文本与全部记忆字面无交集 → FTS 通道零命中，注入的"相关记忆"就是语义
+   * 通道的 top-5；它必须与对照函数在同一桶、同一向量上算出的 top-5 完全一致。
+   */
+  it('召回集合与排序和逐行 cosine 对照完全一致', () => {
+    const vectors = new HashEmbeddings()
+    const svc = new MemoryService({ dbPath: dbPath(), embeddings: vectors })
+    for (let index = 0; index < 40; index++) {
+      svc.store.insert({
+        agentId: 'a1',
+        kind: 'fact',
+        content: `记忆 ${index}：主题甲乙丙丁戊己庚辛壬癸#${index}`,
+        embedding: vectors.vectorOf(`种子 ${index}`),
+        embeddingModel: vectors.model,
+      })
+    }
+    const query = '完全无关的查询词组'
+    svc.store.cacheEmbedding(query, vectors.vectorOf(query), svc.embeddingModel)
+    const vector = svc.store.cachedEmbedding(query, svc.embeddingModel)
+    expect(vector).not.toBeNull()
+    if (vector === null) {
+      svc.close()
+      throw new Error('查询向量未入缓存')
+    }
+    const expected = svc.store
+      .listSpaceEmbeddings('a1', svc.embeddingModel)
+      .filter((memory) => {
+        return memory.embedding !== null && memory.embedding.length === vector.length
+      })
+      .map((memory) => {
+        return { memory, score: cosine(vector, memory.embedding as Float32Array) }
+      })
+      .sort((a, b) => {
+        return b.score - a.score
+      })
+      .slice(0, 5)
+      .map((hit) => {
+        return hit.memory.content
+      })
+    const block = svc.recallSync('a1', query) ?? ''
+    svc.close()
+    const recalled = block
+      .split('\n')
+      .filter((line) => {
+        return line.startsWith('- ') && line.includes('记忆 ')
+      })
+      .map((line) => {
+        return line.slice(2)
+      })
+    expect(recalled).toEqual(expected)
   })
 })
 

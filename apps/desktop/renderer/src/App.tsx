@@ -28,6 +28,7 @@ import { errorDetail, humanError } from './lib/error-text.ts'
 import { type AffinityTier, affinityTier, normalizePersona } from './lib/persona.ts'
 import { readSetting, writeSetting } from './lib/storage.ts'
 import { toast } from './lib/toast.ts'
+import type { TurnErrorTarget } from './lib/turn-errors.ts'
 import { withViewTransition } from './lib/view-transition.ts'
 import { ConversationCache } from './store.ts'
 
@@ -47,6 +48,14 @@ const REFRESH_DEBOUNCE_MS = 800
  * main.ts 的 NEW_CHAT_SCRIPT 只负责派发这个事件。
  */
 export const NEW_CHAT_EVENT = 'ryharness:new-chat'
+/**
+ * 系统通知点击「落到那条会话」的事件名。
+ *
+ * 与 electron/main.ts 的 OPEN_CONVERSATION_EVENT 是同一个字符串（两边各自打包、
+ * 只靠名字对齐，改一边必须改另一边）。detail 带目标会话 id：IM 的肌肉记忆是
+ * 「点通知 → 落到那条聊天」，而不是窗口弹起来之后自己去翻是谁回了话。
+ */
+export const OPEN_CONVERSATION_EVENT = 'ryharness:open-conversation'
 /**
  * 无存储时的兜底：跟随系统深浅色。此前一律硬回浅色，等于把系统设置反着来——
  * Windows 开着暗色的用户一进窗口就是一片奶油色，还得自己翻设置才发现能改。
@@ -344,6 +353,23 @@ export function App() {
   const toggleDrawer = useCallback(() => {
     setDrawerOpen((v) => {
       return !v
+    })
+  }, [])
+
+  /**
+   * 错误条/失败横幅上「去配 Key、去改 agent」的跳转：聊天页与 RyVibe 共用同一份
+   * 接线，两个页面给的下一步才是同一条路。重试类动作不经过这里（各页就地做）。
+   */
+  const navigateFromError = useCallback((target: TurnErrorTarget): void => {
+    if (target === 'retry') return
+    if (target === 'contacts') {
+      setTab('contacts')
+      return
+    }
+    setTab('me')
+    // 供应商区块在「我的」页中段：直接跳过去，省得用户再滚一遍。
+    requestAnimationFrame(() => {
+      document.getElementById('provider-settings')?.scrollIntoView({ block: 'center' })
     })
   }, [])
 
@@ -761,6 +787,29 @@ export function App() {
   }, [])
 
   /**
+   * 通知点击：切到聊天页并选中那条会话（事件 detail 带会话 id，来源见
+   * main.ts 的 openConversationScript）。
+   *
+   * 监听器处理完事件会把 data-ryharness-open-conversation 盖成目标 id——主进程
+   * 的重试脚本拿它当落地判据，事件只有被 React 处理过那边才会停发。
+   */
+  useEffect(() => {
+    const onOpenConversation = (event: Event): void => {
+      if (!(event instanceof CustomEvent)) return
+      const id = event.detail
+      if (typeof id !== 'string' || id.length === 0) return
+      setPendingSend(undefined)
+      setActiveId(id)
+      setTab('chats')
+      document.documentElement.dataset.ryharnessOpenConversation = id
+    }
+    window.addEventListener(OPEN_CONVERSATION_EVENT, onOpenConversation)
+    return () => {
+      window.removeEventListener(OPEN_CONVERSATION_EVENT, onOpenConversation)
+    }
+  }, [])
+
+  /**
    * 全局快捷键：**一条**处理器，不散落各处。
    *
    * - `Ctrl/Cmd+K` → 聚焦左栏搜索框（搜索框在会话列表里，用事件搭桥）
@@ -984,23 +1033,7 @@ export function App() {
                 setPendingSend(undefined)
                 scheduleRefresh()
               }}
-              onNavigate={(target) => {
-                // 错误条上的「去我的 → 模型供应商」/「去通讯录改 agent」此前是死
-                // 按钮：onNavigate 没传，ChatView 退化成派发窗口事件，而生产代码
-                // 里没有任何收件人。新用户最高频的失败（没配 key、模型选错）恰好走
-                // 这条路，提示给的下一步点不动等于没给。
-                if (target === 'contacts') {
-                  setTab('contacts')
-                  return
-                }
-                if (target === 'me') {
-                  setTab('me')
-                  // 供应商区块在「我的」页中段：直接跳过去，省得用户再滚一遍。
-                  requestAnimationFrame(() => {
-                    document.getElementById('provider-settings')?.scrollIntoView({ block: 'center' })
-                  })
-                }
-              }}
+              onNavigate={navigateFromError}
               onAffinityChange={() => {
                 // 👍/👎 已经动了亲密度（服务端按 nextAffinity 加权）：同一路重拉，让
                 // 头部徽标、通讯录卡片与右栏当场跟上新分数；也算一次「聊出来的」变化，
@@ -1059,6 +1092,8 @@ export function App() {
             <div className="chat-scroll">
               <RyVibePage
                 api={api}
+                providers={providers}
+                providersLoading={listLoading}
                 onOpenConversation={(id) => {
                   setTab('chats')
                   setActiveId(id)
@@ -1066,6 +1101,7 @@ export function App() {
                 onOpenAgent={(agentId) => {
                   void openDirectChat(agentId)
                 }}
+                onNavigate={navigateFromError}
               />
             </div>
           </section>

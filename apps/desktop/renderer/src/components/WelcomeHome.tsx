@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import type { AgentDef, Conversation, ProviderInfo, ProviderPreset } from '../api.ts'
 import { authedFetch } from '../lib/authed-fetch.ts'
 import { useApiBase } from '../lib/boot.ts'
@@ -205,6 +205,11 @@ export function WelcomeHome({
   const [focusToken, setFocusToken] = useState(0)
   /** 读屏器听到的最近一次动作，由下方 aria-live 区域播报。 */
   const [announcement, setAnnouncement] = useState('')
+  /**
+   * 配置卡容器：供应商未就绪时，建议卡把焦点引到这里——那一刻输入框是禁用的，
+   * 把词填进去等于把字写进一个灰掉的框。tabIndex=-1 只为可编程聚焦，不进 Tab 序。
+   */
+  const prereqRef = useRef<HTMLDivElement | null>(null)
   const [deletingDemo, setDeletingDemo] = useState(false)
   /** 小队 = 通讯录里的全体 agent；少于两位就没有「小队」可开。 */
   const squad = agents
@@ -318,6 +323,18 @@ export function WelcomeHome({
     setAnnouncement(message)
   }
   const fillTask = (task: WelcomeTask): void => {
+    // 供应商未就绪时输入框是禁用的：此刻填词，字进的是灰掉的框，读屏还会宣布
+    // 「你可以改完再发」——自相矛盾。焦点与播报都改为引向上面的配 Key 卡。
+    if (!usable && !loadingProviders) {
+      prereqRef.current?.focus()
+      // 与 focusComposer 同一条播报通道：focusToken 变化让 aria-live 区域重挂，
+      // 连点同一张卡时同一句引导也会再念一次。
+      setFocusToken((token) => {
+        return token + 1
+      })
+      setAnnouncement(`还没有可用的模型供应商：先在上面配一家，配好后再点「${task.title}」就行。`)
+      return
+    }
     setDraft(task.prompt)
     setTarget(task.target)
     focusComposer(
@@ -349,7 +366,7 @@ export function WelcomeHome({
         </header>
         {/* 凭据前置：排在能打字之前。硬前置放在页尾，就等于让每个新用户先撞一次错。
             清单还在加载时只画一块轻骨架：这一帧既不能说「缺 Key」，也不该把输入框锁上。 */}
-        <div className="welcome-prereq">
+        <div className="welcome-prereq" ref={prereqRef} tabIndex={-1}>
           {loadingProviders && (
             <AsyncState
               loading

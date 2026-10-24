@@ -1,6 +1,14 @@
 import { type ReactNode, useEffect, useMemo, useState } from 'react'
 import { animalAssetUrl, animalHueFilter, parseAnimalAvatar } from '../../lib/animal-3d.ts'
+import {
+  type AvatarTemperament,
+  avatarBreathAllowed,
+  avatarMotionAllowed,
+  avatarMotionOf,
+  avatarMotionStyle,
+} from '../../lib/avatar-motion.ts'
 import { portraitOf, portraitSrc, portraitSrcSet } from '../../lib/brand-portraits.ts'
+import type { StyleVars } from '../../lib/stagger.ts'
 import { Cat } from '../Cat.tsx'
 import {
   AVATAR_SPEC,
@@ -12,9 +20,16 @@ import {
   loadAvatarStyle,
   parseAvatarSpec,
 } from './avatars.tsx'
+import '../../styles-avatar-motion.css'
+
+/** 动效（类名 + CSS 变量）；不需要动效时给空对象。 */
+interface AvatarMotion {
+  className: string
+  style: StyleVars
+}
 
 /**
- * 头像外壳：猫 / DiceBear 风格 / 加载骨架 / 首字符兜底四种内容走同一块画布
+ * 头像外壳：猫 / DiceBear 风格 / 加载骨架 / 首字母兜底四种内容走同一块画布
  * （见 AVATAR_SPEC）。内容不同，画布规格只有这一处。
  */
 function AvatarShell({
@@ -25,6 +40,7 @@ function AvatarShell({
   busy,
   variantStyle,
   html,
+  motion,
   children,
 }: {
   size: number
@@ -37,11 +53,13 @@ function AvatarShell({
   variantStyle?: { background: string; fontSize?: number }
   /** DiceBear 本地生成的 SVG（无外部输入）。 */
   html?: string
+  /** 动效（类名 + CSS 变量）。 */
+  motion: AvatarMotion
   children?: ReactNode
 }) {
   return (
     <span
-      className={['avatar', variant, className]
+      className={['avatar', variant, className, motion.className]
         .filter((part) => {
           return part !== undefined && part !== ''
         })
@@ -50,6 +68,7 @@ function AvatarShell({
         ...avatarCanvas(size),
         ...(variantStyle?.background === undefined ? {} : { background: variantStyle.background }),
         ...(variantStyle?.fontSize === undefined ? {} : { fontSize: variantStyle.fontSize }),
+        ...motion.style,
       }}
       role="img"
       aria-label={label}
@@ -68,6 +87,9 @@ function AvatarShell({
  *   按 styleKey 懒加载；未就绪时渲染等尺寸骨架，不产生布局抖动）
  * - 未知/旧值 → 首字符饱和色块兜底
  * 四者的画布、描边、圆角统一由 AVATAR_SPEC 给，24/32/48/64px 下规格一致。
+ *
+ * 动效（呼吸 / 说话 / 思考）见 lib/avatar-motion.ts：同一套动画，幅度与节奏按性格
+ * 四维走；同屏只许有一个在动，所以这些开关默认全是关的，由调用点按场景显式开。
  */
 export function Avatar({
   avatarKey,
@@ -75,6 +97,10 @@ export function Avatar({
   seed,
   size = 40,
   className = '',
+  speaking = false,
+  pondering = false,
+  breathing = false,
+  temperament,
 }: {
   avatarKey?: string
   name: string
@@ -82,14 +108,42 @@ export function Avatar({
   seed?: string
   size?: number
   className?: string
+  /** 这位此刻正在回话：头像跟着动。 */
+  speaking?: boolean
+  /** 这位正在等首 token：视线左右游走。 */
+  pondering?: boolean
+  /** 闲置呼吸：只给**单独出现**的头像（列表里的头像一律静态）。 */
+  breathing?: boolean
+  /** 性格三维：决定动效的幅度与节奏（见 lib/avatar-motion.ts）。 */
+  temperament?: AvatarTemperament
 }) {
   const initial = (name.trim().slice(0, 1) || '?').toUpperCase()
+
+  /**
+   * 动效类名与参数。
+   *
+   * 三种状态互斥：说话 > 思考 > 呼吸。两个动画抢同一个 transform 会互相打断，
+   * 看起来是抽搐——所以这里只让优先级最高的那一个生效。
+   */
+  const motion = useMemo<AvatarMotion>(() => {
+    const kind = avatarMotionOf(avatarKey)
+    if (speaking && avatarMotionAllowed(size)) {
+      return { className: 'is-speaking', style: avatarMotionStyle(kind, temperament, true) }
+    }
+    if (pondering && avatarMotionAllowed(size)) {
+      return { className: 'is-pondering', style: avatarMotionStyle(kind, temperament, false) }
+    }
+    if (breathing && avatarBreathAllowed(size)) {
+      return { className: 'is-breathing', style: avatarMotionStyle(kind, temperament, false) }
+    }
+    return { className: '', style: {} }
+  }, [avatarKey, size, speaking, pondering, breathing, temperament])
 
   const spec = useMemo(() => {
     return parseAvatarSpec(avatarKey)
   }, [avatarKey])
 
-  // DiceBear 风格按需加载：加载完成后同一 key 只渲染一次骨架。
+  // DiceBear 风格按需加载；加载完成后同一 key 只渲染一次骨架。
   const styleKey = spec?.styleKey
   const [ready, setReady] = useState(() => {
     return styleKey === undefined || isAvatarStyleLoaded(styleKey)
@@ -131,7 +185,7 @@ export function Avatar({
 
   if (avatarKey === BRAND_AVATAR) {
     return (
-      <AvatarShell size={size} variant="avatar-cat" className={className} label={name}>
+      <AvatarShell size={size} variant="avatar-cat" className={className} label={name} motion={motion}>
         <Cat shape="circle" size={size} />
       </AvatarShell>
     )
@@ -145,7 +199,7 @@ export function Avatar({
     const src = animalAssetUrl(animal.kind, 'front')
     if (src !== undefined) {
       return (
-        <AvatarShell size={size} variant="avatar-animal" className={className} label={name}>
+        <AvatarShell size={size} variant="avatar-animal" className={className} label={name} motion={motion}>
           <img
             className="avatar-portrait-img"
             src={src}
@@ -165,7 +219,7 @@ export function Avatar({
   const portrait = portraitOf(avatarKey)
   if (portrait !== undefined) {
     return (
-      <AvatarShell size={size} variant="avatar-portrait" className={className} label={name}>
+      <AvatarShell size={size} variant="avatar-portrait" className={className} label={name} motion={motion}>
         <img
           className="avatar-portrait-img"
           src={portraitSrc(portrait.key, 256)}
@@ -181,7 +235,7 @@ export function Avatar({
     )
   }
   if (dicebear !== null) {
-    return <AvatarShell size={size} className={className} label={name} html={dicebear} />
+    return <AvatarShell size={size} className={className} label={name} html={dicebear} motion={motion} />
   }
   if (spec !== null && !failed) {
     // 骨架：容器尺寸与最终头像完全一致，加载完成只是内部替换，无跳动。
@@ -193,6 +247,7 @@ export function Avatar({
         label={name}
         busy
         variantStyle={{ background: 'var(--bg-subtle)' }}
+        motion={motion}
       />
     )
   }
@@ -206,6 +261,7 @@ export function Avatar({
         background: fallbackColor(seed ?? name),
         fontSize: Math.round(size * AVATAR_SPEC.letterRatio),
       }}
+      motion={motion}
     >
       {initial}
     </AvatarShell>
