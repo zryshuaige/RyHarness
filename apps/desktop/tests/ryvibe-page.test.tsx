@@ -31,14 +31,28 @@ const session: VibeSessionView = {
   createdAt: 0,
   status: 'asking',
   busy: false,
-  pendingAnswers: 2,
+  pendingAnswers: 1,
   round: 0,
-  maxRounds: 1,
+  maxRounds: 4,
 }
 
+/**
+ * 小队正在问的那一道题。
+ *
+ * 一次只问一题：上一题的答案回来了，小队才问下一题。用户全程只需要点几下，
+ * 中间那一段等待里也确实有"我根据你的答案改了问题"的实质变化。
+ */
+const oneQuestion: VibeQuestionView[] = [{ id: 'q1', question: '这东西跑在哪？', options: ['网页', '桌面', '手机'] }]
+
+/** 一次来了两道（老数据 / 兼容）：卡片照旧摆得下。 */
 const questions: VibeQuestionView[] = [
   { id: 'q1', question: '这东西跑在哪？', options: ['网页', '桌面', '手机'] },
   { id: 'q2', question: '第一版要几屏？', options: ['1 屏', '2-3 屏'] },
+]
+
+/** 已经答过的那一道：答案留在流里，旁边有「改一下」。 */
+const answeredQuestions: VibeQuestionView[] = [
+  { id: 'q1', question: '这东西跑在哪？', options: ['网页', '桌面', '手机'], answered: true, selected: ['桌面'] },
 ]
 
 let container: HTMLDivElement
@@ -217,8 +231,8 @@ describe('RyVibe 页面', () => {
     expect(api.startVibe).toHaveBeenCalledWith('给独立开发者做个记账工具')
   })
 
-  it('盘问是一张卡：所有问题在一张卡上、每题预选第一项、一次提交', async () => {
-    const api = stub({ questions })
+  it('小队问的那一题就在卡上：预选第一项，答完只交这一道', async () => {
+    const api = stub({ questions: oneQuestion })
     render(api)
     typeInto(must(container.querySelector<HTMLTextAreaElement>('.vibe-input'), '.vibe-input'), '做个记账工具')
     await act(async () => {
@@ -227,28 +241,24 @@ describe('RyVibe 页面', () => {
     await settle()
 
     expect(container.querySelectorAll('.vibe-card')).toHaveLength(1)
-    expect(container.querySelectorAll('.vibe-question')).toHaveLength(2)
+    expect(container.querySelectorAll('.vibe-question')).toHaveLength(1)
     // 每题都预选了第一个选项：用户不改也能直接提交
     const chosen = container.querySelectorAll('.vibe-option.is-chosen')
-    expect(chosen).toHaveLength(2)
+    expect(chosen).toHaveLength(1)
     expect(chosen[0]?.textContent).toBe('网页')
-    expect(chosen[1]?.textContent).toBe('1 屏')
 
     await act(async () => {
       must(container.querySelector<HTMLButtonElement>('.vibe-card-submit'), '.vibe-card-submit').click()
     })
-    // 一次请求带上全部答案
+    // 一次只交一道：下一道是小队看到这一道的答案之后才问出来的。
     expect(api.answerVibe).toHaveBeenCalledTimes(1)
     expect(api.answerVibe).toHaveBeenCalledWith('v1', {
-      answers: [
-        { questionId: 'q1', selected: ['网页'] },
-        { questionId: 'q2', selected: ['1 屏'] },
-      ],
+      answers: [{ questionId: 'q1', selected: ['网页'] }],
     })
   })
 
   it('可以改选项再提交', async () => {
-    const api = stub({ questions })
+    const api = stub({ questions: oneQuestion })
     render(api)
     typeInto(must(container.querySelector<HTMLTextAreaElement>('.vibe-input'), '.vibe-input'), '做个记账工具')
     await act(async () => {
@@ -263,15 +273,12 @@ describe('RyVibe 页面', () => {
       must(container.querySelector<HTMLButtonElement>('.vibe-card-submit'), '.vibe-card-submit').click()
     })
     expect(api.answerVibe).toHaveBeenCalledWith('v1', {
-      answers: [
-        { questionId: 'q1', selected: ['桌面'] },
-        { questionId: 'q2', selected: ['1 屏'] },
-      ],
+      answers: [{ questionId: 'q1', selected: ['桌面'] }],
     })
   })
 
   it('「按你们的默认方案来」：照旧提交预选项，但告诉小队是默认', async () => {
-    const api = stub({ questions })
+    const api = stub({ questions: oneQuestion })
     render(api)
     typeInto(must(container.querySelector<HTMLTextAreaElement>('.vibe-input'), '.vibe-input'), '做个记账工具')
     await act(async () => {
@@ -282,10 +289,7 @@ describe('RyVibe 页面', () => {
       must(container.querySelector<HTMLButtonElement>('.vibe-card-skip'), '.vibe-card-skip').click()
     })
     expect(api.answerVibe).toHaveBeenCalledWith('v1', {
-      answers: [
-        { questionId: 'q1', selected: ['网页'] },
-        { questionId: 'q2', selected: ['1 屏'] },
-      ],
+      answers: [{ questionId: 'q1', selected: ['网页'] }],
       skipped: true,
     })
   })
@@ -553,22 +557,52 @@ describe('RyVibe 页面', () => {
     expect(cells).toEqual(['项目', '金额', '房租', '1200', '吃饭', '380'])
   })
 
-  it('答完也能改：提交后卡片还在，「改一下」点得到', async () => {
-    const api = stub({ questions })
+  it('答完就进对话流：小队问的那句 + 你的回答，旁边有「改一下」', async () => {
+    const api = stub({ sessions: [session], questions: answeredQuestions })
     render(api)
-    typeInto(must(container.querySelector<HTMLTextAreaElement>('.vibe-input'), '.vibe-input'), '做个记账工具')
-    await act(async () => {
-      must(container.querySelector<HTMLButtonElement>('.vibe-start'), '.vibe-start').click()
-    })
+    await settle()
+    // 答案不是折进一张"你已经选好了"的卡，而是留在流里，像一句说过的话。
+    expect(container.textContent).toContain('这东西跑在哪？')
+    expect(container.textContent).toContain('桌面')
+    expect(container.querySelector('.vibe-asked-edit-link')).not.toBeNull()
+  })
+
+  it('「改一下」：展开选项、填回上次的答案，改完只交这一道', async () => {
+    const api = stub({ sessions: [session], questions: answeredQuestions })
+    render(api)
     await settle()
     await act(async () => {
-      must(container.querySelector<HTMLButtonElement>('.vibe-card-submit'), '.vibe-card-submit').click()
+      must(container.querySelector<HTMLButtonElement>('.vibe-asked-edit-link'), '.vibe-asked-edit-link').click()
     })
+    // 上次选的那个被勾上了：改主意不是从零开始。
+    const chosen = container.querySelectorAll('.vibe-asked-edit .vibe-option.is-chosen')
+    expect(chosen).toHaveLength(1)
+    expect(chosen[0]?.textContent).toBe('桌面')
+
+    const options = container.querySelectorAll<HTMLButtonElement>('.vibe-asked-edit .vibe-option')
+    await act(async () => {
+      must(options[0], '第一个选项').click()
+    })
+    await act(async () => {
+      must(container.querySelector<HTMLButtonElement>('.vibe-asked-edit .vibe-card-submit'), '改好了').click()
+    })
+    expect(api.answerVibe).toHaveBeenCalledWith('v1', {
+      answers: [{ questionId: 'q1', selected: ['网页'] }],
+    })
+  })
+
+  it('「算了」：不改了就把这一道收回原样', async () => {
+    const api = stub({ sessions: [session], questions: answeredQuestions })
+    render(api)
     await settle()
-    // 答错了要能回去改：卡片不能从 DOM 上消失，「改一下」也不能是空气。
-    expect(container.querySelector('.vibe-card')).not.toBeNull()
-    expect(container.querySelector('.vibe-card-edit')).not.toBeNull()
-    expect(container.textContent).toContain('你已经选好了')
+    await act(async () => {
+      must(container.querySelector<HTMLButtonElement>('.vibe-asked-edit-link'), '.vibe-asked-edit-link').click()
+    })
+    await act(async () => {
+      must(container.querySelector<HTMLButtonElement>('.vibe-asked-edit .vibe-card-skip'), '算了').click()
+    })
+    expect(container.querySelector('.vibe-asked-edit')).toBeNull()
+    expect(api.answerVibe).not.toHaveBeenCalled()
   })
 
   it('每题能自己写一句：写了字的那题按写的交，不按预选项', async () => {

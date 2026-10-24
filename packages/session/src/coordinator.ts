@@ -160,8 +160,13 @@ export interface ChatTurnOptions {
   turnIndex?: number
 }
 
-/** 工具结果消息文本前缀（也是历史格式化时识别工具消息的标志）。 */
-const TOOL_RESULT_PREFIX = '〔tool〕'
+/**
+ * 工具结果消息文本前缀（也是历史格式化时识别工具消息的标志）。
+ *
+ * 导出它是为了让**别的层也能认出工具行**：RyVibe 的产出流要把它当内部流水滤掉
+ * （工具结果落库只是为了回放给模型看，不是小队对用户说的话）。
+ */
+export const TOOL_RESULT_PREFIX = '〔tool〕'
 /**
  * 工具结果消息里的失败标记块（只留在库里给回放看，不进模型上下文）。
  *

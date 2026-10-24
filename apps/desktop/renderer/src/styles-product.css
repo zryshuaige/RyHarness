@@ -2302,7 +2302,10 @@
   background: var(--amber-primary-soft);
 }
 
-.vibe-card-edit {
+/* 「改一下」：答案就摆在那条对话里，改主意的入口也就长在那条对话里。
+   靠右对齐——它在用户的答案底下，贴着答案才看得出「改的是我刚说的那句」。 */
+.vibe-asked-edit-link {
+  align-self: flex-end;
   border: none;
   background: none;
   padding: 0;
@@ -2311,7 +2314,16 @@
   font-size: var(--fs-xs);
   cursor: pointer;
 }
-.vibe-card-edit:hover { text-decoration: underline; }
+.vibe-asked-edit-link:hover:not(:disabled) { text-decoration: underline; }
+.vibe-asked-edit-link:disabled { opacity: .55; cursor: not-allowed; }
+
+/* 改主意的展开态：选项还是那几个，填回他上次说的。 */
+.vibe-asked-edit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-left: var(--space-2);
+}
 
 .vibe-card-actions {
   display: flex;
@@ -2323,20 +2335,6 @@
 .vibe-card-submit { padding: var(--space-2) var(--space-4); }
 
 .vibe-card-skip { color: var(--text-secondary); }
-
-/* 答完的卡片折起来：留下的只有"你选了什么"，问题本身还在。 */
-.vibe-card.is-answered { background: var(--bg-subtle); box-shadow: none; }
-.vibe-card.is-answered .vibe-card-head { color: var(--text-secondary); font-weight: 500; }
-
-.vibe-answered-list { list-style: none; margin: 0; padding: 0; }
-.vibe-answered-list li {
-  display: flex;
-  gap: var(--space-3);
-  padding: var(--space-1) 0;
-  font-size: var(--fs-sm);
-}
-.vibe-answered-q { color: var(--text-tertiary); }
-.vibe-answered-a { color: var(--text-primary); font-weight: 600; }
 
 /* 等待期的进度：小队开工到出方案之间可能有一两分钟，空转圈最容易让人放弃。 */
 .vibe-progress { margin-top: var(--space-4); }

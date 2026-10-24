@@ -9,9 +9,13 @@
  *
  * 为什么不用现成的 `ask_user` 就够了：`ask_user` 允许问开放题、允许一轮问很多题、
  * 也不管总共问了几轮。而 RyVibe 的产品承诺是「用户全程只需要点几下」——所以
- * 盘问工具自己带三条硬约束：**每题必带选项、一轮最多四题、一轮问完就停**。
- * 名额由 RyVibe 的存储层记账（一轮最多四题、只问一轮），
+ * 盘问工具自己带三条硬约束：**每题必带选项、一次只问一题、总共不超过四题**。
+ * 名额由 RyVibe 的存储层记账（最多四轮、一轮一题），
  * 约束落在工具里（模型绕不过去），而不是写在 skill 正文里（模型可能不听）。
+ *
+ * **一次只问一题**是这一版改掉的关键：此前一轮丢四张卡给用户，用户看到的是一张
+ * 问卷而不是一次对话，他连"刚才那题"都来不及看。改成问一题就停、等用户回答了
+ * 再问下一题，这一段才真的像两个人在来回说话。
  *
  * 工具只对「正在进行的那次 RyVibe」可用：它靠会话 id 反查 RyVibe 的记录，
  * 查不到就是硬错误。助理自己的工具清单是常驻的，不会为了这个功能页被改掉。
@@ -39,7 +43,25 @@ export const MAX_GRILL_OPTIONS = 5
 export const MAX_GRILL_QUESTION = 120
 
 /** 工具回给模型的停止信号：问够了就别再问，去出方案。 */
-export const GRILL_STOP = '这一轮的问题已经问够了（或者已经问满四题）。不要再问用户；请直接给出你的结论或方案。'
+export const GRILL_STOP = '这一轮的问题已经问够了（最多四题）。不要再问用户；请直接给出你的结论或方案。'
+
+/**
+ * 工具回给模型的停止信号：已经有一道题在等用户回答。
+ *
+ * 与 {@link GRILL_STOP} 的区别很重要：问够了该**出方案**，上一题没答该**等着**——
+ * 混成一句话，模型要么提前出方案（用户还没答就跑了），要么一直等着（用户已经答完了
+ * 它还在等）。
+ */
+export const GRILL_WAIT =
+  '已经有一道题送到用户面前、还在等回答，本轮到此为止：不要再问问题，也不要出方案，等用户回答后会自动继续。'
+
+/**
+ * 工具回给模型的话：这道题已经送到用户面前了。
+ *
+ * 它必须把「停」说死。此前那句「等这一轮的问题都问完，用户会一次看到并一起回答」
+ * 是在**邀请**模型继续问——于是模型一口气问了四题，用户拿到的是一张问卷。
+ */
+export const GRILL_ASKED = '这道题已经送到用户面前，本轮到此为止：不要再问别的，也不要出方案，等用户回答后会自动继续。'
 
 function argsOf(args: unknown): Record<string, unknown> {
   return typeof args === 'object' && args !== null ? (args as Record<string, unknown>) : {}
@@ -69,11 +91,12 @@ export function createGrillTool(deps: { questions: QuestionStore; vibe: VibeStor
     name: GRILL_TOOL_NAME,
     description: [
       '盘问用户：把一句模糊的需求问清楚，好让它能开工。',
-      '一次提 1 个问题，必须带 2–5 个选项（用户点一下就是答案，不要让他写字）；',
+      '**一次只问一题**，必须带 2–5 个选项（用户点一下就是答案，不要让他写字）；',
       '选项要写成**用户会怎么回答**：用他的词（「手机上」「电脑里」「发给别人一个链接」），',
       '不要用产品文档的词，更不要问实现细节（几屏、几个字段、要不要数据库、技术栈）；',
       '选项要覆盖不同方向，最后一个留给「都不对 / 我自己说」。',
-      '这一轮最多提 4 个问题，问完就停手去出方案——一轮问完，不要挤牙膏，也不要分两轮。',
+      '问完这一题就**停手**：用户回答之后你才能问下一题。整次 RyVibe 最多问四题，',
+      '问够了就去出方案——剩下的不确定你自己拿主意。',
       '只在这一次 RyVibe 里用；普通聊天不要调用它。',
     ].join(''),
     parameters: {
@@ -120,8 +143,11 @@ export function createGrillTool(deps: { questions: QuestionStore; vibe: VibeStor
       }
       // 先占名额：提问存储里没有「删掉一道题」这个动作，先记后判会留下一道
       // 用户其实不该看到的题。
-      const allowed = await deps.vibe.reserveAsk(session.id)
-      if (!allowed) return failure(GRILL_STOP)
+      const slot = await deps.vibe.reserveAsk(session.id)
+      if (!slot.ok) {
+        // 两种拒绝给模型的信号不一样：问够了 → 去出方案；上一题没答 → 停下等。
+        return { content: slot.reason === 'pending' ? GRILL_WAIT : GRILL_STOP }
+      }
       try {
         const entry = await deps.questions.ask({
           conversationId,
@@ -130,10 +156,7 @@ export function createGrillTool(deps: { questions: QuestionStore; vibe: VibeStor
           options,
         })
         await deps.vibe.noteQuestion(session.id, entry.id)
-        return {
-          content:
-            '这个问题已经进到卡片里，等这一轮的问题都问完，用户会一次看到并一起回答；本轮到此为止，请不要再问别的。',
-        }
+        return { content: GRILL_ASKED }
       } catch (error) {
         // 落题失败要把名额还回去：不然模型问了个超长问题就把本轮的名额白吃了，
         // 用户一个问题都没被问到，而界面上还写着「小队想先问清楚几件事」。

@@ -47,6 +47,14 @@ export interface VibeSession {
   /** 本轮问出的问题 id（按顺序）。 */
   questionIds: string[]
   /**
+   * 用户点了「按你们的默认方案来」：不再问了，直接出方案。
+   *
+   * 它是一个**状态**而不是一个计数：跳过之后「还剩几轮」已经不重要了，重要的是
+   * 小队别再问。计数被顶到上限也能达到同样效果，但那样界面上会显示成「4/4 轮」——
+   * 用户明明只答了一题。
+   */
+  noMoreQuestions?: boolean
+  /**
    * 上一次交给小队的答案摘要。
    *
    * 它是幂等位：用户一次提交四道题会连着发四个请求，只有最后一个看到"都答完了"；
@@ -66,22 +74,31 @@ export interface VibeSession {
 }
 
 /**
- * 一轮最多问几题。
+ * 一轮问几题：一题。
  *
- * 四题是一张卡的分量（Lovable 的设计问题卡就是最多四题），而**一轮问完**才是
- * 关键：分两轮问，用户会被打断两次，中间那一次等待里并没有"我根据你的答案改了
- * 问题"的实质变化。
+ * 改成「一轮一题」是因为一次丢四张卡给用户等于没有交互——用户看到的是一张问卷，
+ * 不是一次对话。一题一问之后，小队每问一题都要等用户回答，才能问下一题；用户点一下，
+ * 小队接着往下走，这一段才真的像对话。
  */
-export const MAX_QUESTIONS_PER_ROUND = 4
+export const MAX_QUESTIONS_PER_ROUND = 1
 /**
- * 最多问几轮：只问一轮。
+ * 最多问几轮（一轮 = 一道题 + 用户的一个回答）：四轮就是四道题。
  *
  * 问完就该出方案。剩下的不确定由小队自己拿主意（skill 里写死了「能自己定的就
  * 自己定」），而不是把用户当问卷填。
  */
-export const MAX_ROUNDS = 1
+export const MAX_ROUNDS = 4
 /** 需求字数上限：它要当群会话的第一条消息，太长会被当成需求说明书。 */
 export const MAX_REQUIREMENT_LENGTH = 500
+
+/**
+ * 还能不能再问一题。
+ *
+ * `ok: false` 时带上原因，因为两种原因给模型的信号完全不同：问够了该**出方案**，
+ * 上一题没答该**停下等**。只回一个「不行」，模型会自己猜——猜错就是提前出方案，
+ * 或者用户都答完了它还在等。
+ */
+export type AskSlot = { ok: true } | { ok: false; reason: 'budget' | 'pending' }
 
 /** 领域错误：路由据此映射 HTTP 状态。 */
 export class VibeError extends Error {
@@ -130,6 +147,7 @@ function parseSession(value: unknown): VibeSession | undefined {
     askedInRound:
       typeof value.askedInRound === 'number' && Number.isFinite(value.askedInRound) ? value.askedInRound : 0,
     questionIds: stringArray(value.questionIds),
+    ...(value.noMoreQuestions === true ? { noMoreQuestions: true } : {}),
     ...(typeof value.lastSummary === 'string' ? { lastSummary: value.lastSummary } : {}),
     ...(typeof value.failure === 'string' ? { failure: value.failure } : {}),
     ...(project === undefined ? {} : { project }),
@@ -270,23 +288,27 @@ export class VibeStore {
   /**
    * 问一道新题之前先占一个名额。
    *
-   * 返回 false 表示**这一轮已经问够了**（一轮最多四题，且只问一轮）：调用方据此拒绝
-   * 这次提问，模型就会停手去做别的事。计数与写入在同一条队列里，六位 agent 并发调用
-   * 时也只会有前几个算数。
+   * 两种「不能问」给模型的信号不一样，混成一句模型就会乱来：
+   * - `budget`：问够了（四轮用完，或用户点了「按默认方案来」）→ 该去出方案了。
+   * - `pending`：已经有一道题在等用户回答 → 该**停下等**，别再问、也别出方案。
+   *
+   * 计数与写入在同一条队列里：四位小队成员并发调用时只有前一个算数，其余拿到的是
+   * `pending`（用户面前已经有那道题了）。
    *
    * 之所以先占名额再落问题：提问存储里没有「删掉一道题」这个动作，先记后判会留下
    * 一道用户其实不该看到的题。
    */
-  async reserveAsk(sessionId: string): Promise<boolean> {
+  async reserveAsk(sessionId: string): Promise<AskSlot> {
     return this.enqueue(() => {
       const session = this.sessions.get(sessionId)
       if (session === undefined) throw new VibeError('NOT_FOUND', `没有这次 RyVibe：${sessionId}`)
-      if (session.round >= MAX_ROUNDS) return false
-      if (session.askedInRound >= MAX_QUESTIONS_PER_ROUND) return false
+      if (session.noMoreQuestions === true) return { ok: false, reason: 'budget' }
+      if (session.round >= MAX_ROUNDS) return { ok: false, reason: 'budget' }
+      if (session.askedInRound >= MAX_QUESTIONS_PER_ROUND) return { ok: false, reason: 'pending' }
       session.askedInRound += 1
       session.status = 'asking'
       this.save()
-      return true
+      return { ok: true }
     })
   }
 
@@ -301,37 +323,54 @@ export class VibeStore {
   }
 
   /**
-   * 记一次用户回答：全部答完就把这一轮收掉，小队可以接着往下走。
+   * 记一次用户回答：当前这题答完了就把这一轮收掉，小队可以接着往下走。
    *
    * `summary` 是这一轮答案的摘要（由调用方把「问了什么、选了什么」拼成一句）。
-   * 拿它做幂等位：**同样的答案不必让小队再跑一遍**——用户一次提交四道题时，
-   * 四个请求会依次到达，只有最后一个看到「已答完」，而它带回来的摘要与上一个
-   * 相同（答案没变）时就不再触发新一轮。改了主意再提交，摘要变了，才会重跑。
+   * 拿它做幂等位：**同样的答案不必让小队再跑一遍**——重复提交（网络重试、用户又点
+   * 了一次提交）会带着同一份摘要回来，此时不再触发新一轮。改了主意再提交，摘要变了，
+   * 才重跑。
+   *
+   * 「改主意」那一支是**另一道题还没答**的时候改的（用户先答了第一题、小队问了第二题，
+   * 用户回头改第一题）。这时 pendingCount > 0，本轮不收口，也**先不让小队跑**——
+   * 新答案跟着下一道题的答案一起过去，小队只重跑一次，界面上不会冒出一版半成品方案。
    *
    * @param sessionId - 会话 id。
    * @param pendingCount - 还没回答的问题数（由调用方按提问存储数出来）。
    * @param summary - 这一轮答案的摘要。
-   * @returns 这一轮是否收完（收完就可以发下一轮的话）。
+   * @returns 小队现在是否该跑这一轮（答案变了、且当前这轮已收口）。
    */
   async answer(sessionId: string, pendingCount: number, summary: string): Promise<boolean> {
     return this.enqueue(() => {
       const session = this.sessions.get(sessionId)
       if (session === undefined) throw new VibeError('NOT_FOUND', `没有这次 RyVibe：${sessionId}`)
-      if (pendingCount > 0) {
-        this.save()
-        return false
+      const changed = session.lastSummary !== summary
+      if (changed) session.lastSummary = summary
+      // 当前这题答完了：这一轮收口，小队可以接着往下走（问下一题或直接出方案）。
+      // 「本轮已问的题」清空，下一次提问重新从零计数——一题一问就是这么转起来的。
+      // 条件里的 askedInRound > 0 是防重复提交：同一份答案交两次不会白吃一轮名额。
+      if (pendingCount === 0 && session.askedInRound > 0) {
+        session.askedInRound = 0
+        session.questionIds = []
+        session.round += 1
+        session.status = 'building'
       }
-      if (session.lastSummary === summary) {
-        this.save()
-        return false
-      }
-      session.lastSummary = summary
-      session.round += 1
-      session.askedInRound = 0
-      session.questionIds = []
-      session.status = 'building'
       this.save()
-      return true
+      return changed && pendingCount === 0
+    })
+  }
+
+  /**
+   * 收摊：用户点了「按你们的默认方案来」，不再问了。
+   *
+   * 之后 {@link reserveAsk} 一律回 `budget`——小队拿到的是「问够了，去出方案」，
+   * 而不是「还有三问，接着问」。用户已经明说了，剩下的事该小队自己拿主意。
+   */
+  async stopAsking(sessionId: string): Promise<void> {
+    return this.enqueue(() => {
+      const session = this.sessions.get(sessionId)
+      if (session === undefined) throw new VibeError('NOT_FOUND', `没有这次 RyVibe：${sessionId}`)
+      session.noMoreQuestions = true
+      this.save()
     })
   }
 

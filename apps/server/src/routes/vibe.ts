@@ -17,7 +17,7 @@
 
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import type { Conversation, SessionStore, StoredMessage } from '@ryharness/session'
-import { normalizePersona } from '@ryharness/session'
+import { normalizePersona, TOOL_RESULT_PREFIX } from '@ryharness/session'
 import { QuestionError, type QuestionStore } from '../plugins/ask-user-store.ts'
 import { GRILL_ME_SKILL_ID } from '../plugins/skills.ts'
 import type { TodoItem, TodoStore } from '../plugins/todo-store.ts'
@@ -191,6 +191,19 @@ function textOf(message: StoredMessage): string {
 }
 
 /**
+ * 这条消息是不是一次工具调用的结果（而不是某个人说的话）。
+ *
+ * 工具结果在库里的正文是 `〔tool〕<名字>: <结果>`（见 packages/session/src/coordinator.ts），
+ * 它落库是为了**回放给模型看**，不是小队对用户说的话。此前产出流不认它，于是盘问工具
+ * 那句「这个问题已经进到卡片里…」被原样画成了聊天正文——同一个内部提示在屏幕上连着
+ * 出现四次，而用户一个字也看不懂。
+ */
+function isToolRow(message: StoredMessage): boolean {
+  if (message.toolCallId !== undefined) return true
+  return textOf(message).startsWith(TOOL_RESULT_PREFIX)
+}
+
+/**
  * 这一轮之后小队产出了什么：最后一条用户消息之后的 agent 消息。
  *
  * 取「最后一条用户消息之后」而不是「本轮」：一轮里用户可能又被问了一次、答了一次，
@@ -209,6 +222,8 @@ export function outputOf(messages: readonly StoredMessage[]): VibeOutputView[] {
   const out: VibeOutputView[] = []
   for (const message of messages.slice(lastUser + 1)) {
     if (message.senderType !== 'agent') continue
+    // 工具行不是小队说的话：内部机制不该上屏（问题卡才是小队问的那句话）。
+    if (isToolRow(message)) continue
     const text = textOf(message)
     if (text.length === 0) continue
     out.push({ senderId: message.senderId ?? '', text, createdAt: message.createdAt, seq: message.seq })
@@ -539,9 +554,14 @@ export function registerVibeRoutes(router: Router, deps: VibeRoutesDeps): void {
     }
     const pending = questions.list(session.conversationId, 'pending')
     const answered = questions.list(session.conversationId, 'answered')
-    const summary = summaryOf(answered, body.skipped === true)
-    const roundDone = await vibe.answer(session.id, pending.length, summary)
-    if (roundDone) {
+    const skipped = body.skipped === true
+    const summary = summaryOf(answered, skipped)
+    // 「按你们的默认方案来」= 不再问了：之后小队拿到的是「问够了，去出方案」，
+    // 而不是「还有三问，接着问」。
+    if (skipped) await vibe.stopAsking(session.id)
+    // 答案变了才让小队再跑一遍：同样的答案重复提交不必让它白跑一趟。
+    const changed = await vibe.answer(session.id, pending.length, summary)
+    if (changed) {
       const conversation = conversationOf(session)
       if (conversation !== undefined) {
         deps.enqueueTurn(

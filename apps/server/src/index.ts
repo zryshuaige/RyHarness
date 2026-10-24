@@ -42,9 +42,11 @@ export {
 export type { GrillMePluginDeps } from './plugins/grill-me.ts'
 export {
   createGrillTool,
+  GRILL_ASKED,
   GRILL_ME_PLUGIN_ID,
   GRILL_STOP,
   GRILL_TOOL_NAME,
+  GRILL_WAIT,
   grillMePlugin,
   MAX_GRILL_OPTIONS,
   MIN_GRILL_OPTIONS,
@@ -125,7 +127,7 @@ export type {
   VibeSessionView,
   VibeSquadMemberView,
 } from './routes/vibe.ts'
-export { MAX_SQUAD_SIZE, pickSquad, registerVibeRoutes } from './routes/vibe.ts'
+export { MAX_SQUAD_SIZE, outputOf, pickSquad, registerVibeRoutes } from './routes/vibe.ts'
 export type { AgentTemplate } from './seed.ts'
 export { AGENT_TEMPLATES, ensureSeedAgents, instantiateTemplate } from './seed.ts'
 export type { TelemetrySnapshot, TurnTiming } from './telemetry.ts'

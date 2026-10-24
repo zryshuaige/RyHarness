@@ -19,17 +19,20 @@ import {
   createGrillTool,
   createScaffoldTool,
   DELIVERABLE_KINDS,
+  GRILL_ASKED,
   GRILL_ME_SKILL,
   GRILL_STOP,
   GRILL_TOOL_NAME,
-  MAX_QUESTIONS_PER_ROUND,
+  GRILL_WAIT,
   MAX_ROUNDS,
+  outputOf,
   QuestionStore,
   RyHarnessServer,
   SCAFFOLD_TOOL_NAME,
   TodoStore,
   VibeStore,
 } from '@ryharness/server'
+import type { StoredMessage } from '@ryharness/session'
 import { afterEach, describe, expect, it } from 'vitest'
 
 const tmpDirs: string[] = []
@@ -162,7 +165,7 @@ async function waitUntil(check: () => boolean, timeoutMs = 8000): Promise<void> 
 }
 
 describe('VibeStore', () => {
-  it('一轮最多四题：第五题被拒；答完这一轮就封住（只问一轮）', async () => {
+  it('一次只问一题：第二题被拒，等用户回答上一题', async () => {
     const store = new VibeStore(tempDir('rounds'))
     const session = await store.create({
       conversationId: 'c1',
@@ -170,17 +173,16 @@ describe('VibeStore', () => {
       skillId: 'grill-me',
       memberAgentIds: ['a1'],
     })
-    for (let i = 0; i < MAX_QUESTIONS_PER_ROUND; i++) {
-      expect(await store.reserveAsk(session.id)).toBe(true)
-    }
-    expect(await store.reserveAsk(session.id)).toBe(false)
-    expect(store.get(session.id)?.askedInRound).toBe(MAX_QUESTIONS_PER_ROUND)
+    expect(await store.reserveAsk(session.id)).toEqual({ ok: true })
+    // 上一题还在等回答：这一轮不再问第二题（一次只问一题）。
+    expect(await store.reserveAsk(session.id)).toEqual({ ok: false, reason: 'pending' })
+    expect(store.get(session.id)?.askedInRound).toBe(1)
 
     expect(await store.answer(session.id, 0, '摘要一')).toBe(true)
     expect(store.get(session.id)?.round).toBe(1)
     expect(store.get(session.id)?.askedInRound).toBe(0)
-    // 只问一轮：答完就封住，小队该去出方案了。
-    expect(await store.reserveAsk(session.id)).toBe(false)
+    // 答完了才轮到下一题。
+    expect(await store.reserveAsk(session.id)).toEqual({ ok: true })
   })
 
   it('同样的答案不重复收口：改了主意（摘要变了）才重跑', async () => {
@@ -198,7 +200,7 @@ describe('VibeStore', () => {
     expect(await store.answer(session.id, 0, '· 跑在哪？→ 桌面')).toBe(true)
   })
 
-  it('最多一轮：问满就封住，不再放行', async () => {
+  it('最多四轮：问满就封住，不再放行', async () => {
     const store = new VibeStore(tempDir('max-rounds'))
     const session = await store.create({
       conversationId: 'c1',
@@ -207,10 +209,23 @@ describe('VibeStore', () => {
       memberAgentIds: ['a1'],
     })
     for (let round = 0; round < MAX_ROUNDS; round++) {
-      expect(await store.reserveAsk(session.id)).toBe(true)
+      expect(await store.reserveAsk(session.id)).toEqual({ ok: true })
       await store.answer(session.id, 0, `摘要${round}`)
     }
-    expect(await store.reserveAsk(session.id)).toBe(false)
+    expect(await store.reserveAsk(session.id)).toEqual({ ok: false, reason: 'budget' })
+  })
+
+  it('用户点了「按你们的默认方案来」：不再放行，小队直接去出方案', async () => {
+    const store = new VibeStore(tempDir('skip'))
+    const session = await store.create({
+      conversationId: 'c1',
+      requirement: '做个记账工具',
+      skillId: 'grill-me',
+      memberAgentIds: ['a1'],
+    })
+    expect(await store.reserveAsk(session.id)).toEqual({ ok: true })
+    await store.stopAsking(session.id)
+    expect(await store.reserveAsk(session.id)).toEqual({ ok: false, reason: 'budget' })
   })
 
   it('releaseAsk 把名额还回去：问坏一次不该把这一轮问空', async () => {
@@ -221,11 +236,10 @@ describe('VibeStore', () => {
       skillId: 'grill-me',
       memberAgentIds: ['a1'],
     })
-    expect(await store.reserveAsk(session.id)).toBe(true)
-    expect(await store.reserveAsk(session.id)).toBe(true)
+    expect(await store.reserveAsk(session.id)).toEqual({ ok: true })
     await store.releaseAsk(session.id)
-    expect(store.get(session.id)?.askedInRound).toBe(1)
-    expect(await store.reserveAsk(session.id)).toBe(true)
+    expect(store.get(session.id)?.askedInRound).toBe(0)
+    expect(await store.reserveAsk(session.id)).toEqual({ ok: true })
   })
 
   it('落盘：重开实例仍读得回来', async () => {
@@ -294,7 +308,7 @@ describe('grill 工具', () => {
     expect(questions.list('c1')).toHaveLength(0)
   })
 
-  it('一轮问满之后：工具让模型停手去出方案', async () => {
+  it('一次只问一题：第二题被拒，工具让模型等用户回答', async () => {
     const questions = new QuestionStore(join(tempDir('cap'), 'questions.json'))
     const vibe = new VibeStore(tempDir('cap-store'))
     const tool = createGrillTool({ questions, vibe })
@@ -305,13 +319,77 @@ describe('grill 工具', () => {
       memberAgentIds: ['a1'],
     })
     const context = { workspaceRoot: tempDir('ws'), conversationId: 'c1', agentId: 'a1' }
-    for (let i = 0; i < MAX_QUESTIONS_PER_ROUND; i++) {
-      expect((await tool.execute({ question: `第${i}题？`, options: ['a', 'b'] }, context)).isError).not.toBe(true)
+    const first = await tool.execute({ question: '跑在哪？', options: ['a', 'b'] }, context)
+    expect(first.isError).not.toBe(true)
+    expect(first.content).toBe(GRILL_ASKED)
+    // 第二题：上一题还在等回答，于是不再落题，只让模型停下等。
+    const second = await tool.execute({ question: '还问？', options: ['a', 'b'] }, context)
+    expect(second.content).toBe(GRILL_WAIT)
+    expect(questions.list('c1')).toHaveLength(1)
+  })
+
+  it('问够四题：工具让模型停手去出方案', async () => {
+    const questions = new QuestionStore(join(tempDir('four'), 'questions.json'))
+    const vibe = new VibeStore(tempDir('four-store'))
+    const tool = createGrillTool({ questions, vibe })
+    const session = await vibe.create({
+      conversationId: 'c1',
+      requirement: '做个记账工具',
+      skillId: 'grill-me',
+      memberAgentIds: ['a1'],
+    })
+    const context = { workspaceRoot: tempDir('ws'), conversationId: 'c1', agentId: 'a1' }
+    for (let i = 0; i < MAX_ROUNDS; i++) {
+      const asked = await tool.execute({ question: `第${i}题？`, options: ['a', 'b'] }, context)
+      expect(asked.isError).not.toBe(true)
+      // 用户答完这一题，小队才问得下一题。
+      await vibe.answer(session.id, 0, `摘要${i}`)
     }
     const extra = await tool.execute({ question: '还问？', options: ['a', 'b'] }, context)
-    expect(extra.isError).toBe(true)
     expect(extra.content).toBe(GRILL_STOP)
-    expect(questions.list('c1')).toHaveLength(MAX_QUESTIONS_PER_ROUND)
+    expect(questions.list('c1')).toHaveLength(MAX_ROUNDS)
+  })
+})
+
+describe('产出流', () => {
+  it('工具结果不上屏：内部提示不该被当成小队说的话', () => {
+    const rows: StoredMessage[] = [
+      {
+        id: 'm1',
+        seq: 1,
+        conversationId: 'c1',
+        senderType: 'user',
+        contentBlocks: [{ type: 'text', text: '做个记账工具' }],
+        mentions: [],
+        turnIndex: 0,
+        createdAt: 1,
+      },
+      {
+        id: 'm2',
+        seq: 2,
+        conversationId: 'c1',
+        senderType: 'agent',
+        senderId: 'ryen',
+        contentBlocks: [{ type: 'text', text: '先确认一件事。' }],
+        mentions: [],
+        turnIndex: 0,
+        createdAt: 2,
+      },
+      {
+        id: 'm3',
+        seq: 3,
+        conversationId: 'c1',
+        senderType: 'agent',
+        senderId: 'ryen',
+        contentBlocks: [{ type: 'text', text: '〔tool〕grill: 这个问题已经进到卡片里，等用户回答' }],
+        mentions: [],
+        toolCallId: 'call-1',
+        turnIndex: 0,
+        createdAt: 3,
+      },
+    ]
+    // 此前工具行原样画成了聊天正文：同一个内部提示在屏幕上连着出现四次。
+    expect(outputOf(rows).map((item) => item.text)).toEqual(['先确认一件事。'])
   })
 })
 

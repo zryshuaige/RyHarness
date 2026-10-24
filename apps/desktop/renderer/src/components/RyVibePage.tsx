@@ -200,73 +200,101 @@ function SquadPanel({
 }
 
 /**
- * 一张盘问卡：所有问题放在一张卡上，一次提交。
+ * 一道题的选项 + 「我自己说」那一行。
  *
- * 抄的是 Lovable 的提问卡片，不是 Cursor 的逐题弹窗：
- * - **一次一张卡**：分两轮问，用户会被打断两次，中间那次等待里并没有「我根据你的
- *   答案改了问题」的实质变化。
+ * 正在问的那道题（卡片）与「改一下」展开的那一道共用这一份：两处摆的是同一个东西
+ * （几个选项 + 一个输入框），抄两遍必然漂。
+ */
+function AnswerOptions({
+  question,
+  current,
+  draft,
+  busy,
+  onPick,
+  onDraft,
+}: {
+  question: VibeQuestionView
+  /** 当前选中的选项（空串 = 一个都没选）。 */
+  current: string
+  /** 用户自己写的那句。 */
+  draft: string
+  busy: boolean
+  onPick: (option: string) => void
+  onDraft: (text: string) => void
+}) {
+  return (
+    <>
+      <div className="vibe-options">
+        {question.options.map((option) => {
+          const chosen = current === option && draft.trim().length === 0
+          return (
+            <button
+              key={option}
+              type="button"
+              className={chosen ? 'vibe-option is-chosen' : 'vibe-option'}
+              disabled={busy}
+              onClick={() => {
+                onPick(option)
+              }}
+            >
+              {option}
+            </button>
+          )
+        })}
+      </div>
+      {/* 自己写一句：没有这一行，选项之外的话就没地方说了——用户只能把
+          「我自己说」这个选项当成答案交上去，等于什么都没说。 */}
+      <input
+        type="text"
+        className="vibe-own-answer"
+        value={draft}
+        placeholder="都不对？我自己说"
+        aria-label={`${question.question} —— 自己写一句`}
+        disabled={busy}
+        onChange={(event) => {
+          onDraft(event.target.value)
+        }}
+      />
+    </>
+  )
+}
+
+/**
+ * 一张盘问卡：小队正在问的那一道题，带选项。
+ *
+ * 抄的是 Lovable 的提问卡片，但**不抄它「一次四题」那一半**：
+ * - **一次一题**：小队问一题就停下等，用户点完它才问下一题。此前一轮丢四题过来，
+ *   用户看到的是一张问卷——他连第一题都来不及看，整段交互等于没有交互。
  * - **每题预选第一项**：小队认为最稳的选项默认选中，用户不改也能直接提交——于是
  *   「完全不想被打扰」也是一种合法选择。
- * - **一次提交**：所有答案一起交，答案进小队共同看到的那条正文里。
- * - **可以跳过**：按默认方案来，不追问。
- * - **提交后还能改**：改主意重交一次，小队按新答案重出方案。
- *
- * 「提交后还能改」这一条曾经是个**空承诺**：提交后服务端把题标成已答，前端又把已答的
- * 题从待答列表里滤掉，整张卡于是从 DOM 上消失——「你已经选好了 / 改一下」那一支从来
- * 没有机会渲染。用户答错了只能重开一轮（重新说一遍需求、重新答一遍）。
+ * - **可以跳过**：按默认方案来，不追问，直接出方案。
+ * - **提交后还能改**：答案那一行旁边有「改一下」，改完小队按新答案重出方案。
  */
 function QuestionCard({
   questions,
   picks,
   drafts,
-  submitted,
   busy,
   squad,
   onPick,
   onDraft,
   onSubmit,
   onSkip,
-  onEdit,
 }: {
   questions: VibeQuestionView[]
   /** 当前选择（questionId → 选项）。 */
   picks: Record<string, string>
   /** 用户自己写的答案（questionId → 他写的那句话）。 */
   drafts: Record<string, string>
-  /** 已提交的答案；undefined = 卡片还开着。 */
-  submitted: Record<string, string> | undefined
   busy: boolean
   /** 小队成员：谁问的题，头像就挂在题旁边。 */
   squad: readonly VibeSquadMemberView[]
   onPick: (questionId: string, option: string) => void
   onDraft: (questionId: string, text: string) => void
   onSubmit: () => void
-  /** 「按你们的默认方案来」：改主意那一轮没有它（都已经答过了）。 */
+  /** 「按你们的默认方案来」：不再追问了。 */
   onSkip?: () => void
-  onEdit: () => void
 }) {
-  if (submitted !== undefined) {
-    return (
-      <div className="vibe-card is-answered">
-        <div className="vibe-card-head">
-          <span>你已经选好了</span>
-          <button type="button" className="vibe-card-edit" disabled={busy} onClick={onEdit}>
-            改一下
-          </button>
-        </div>
-        <ul className="vibe-answered-list">
-          {questions.map((question) => {
-            return (
-              <li key={question.id}>
-                <span className="vibe-answered-q">{question.question}</span>
-                <span className="vibe-answered-a">{submitted[question.id]}</span>
-              </li>
-            )
-          })}
-        </ul>
-      </div>
-    )
-  }
   return (
     <div className="vibe-card">
       {/* 卡片头只留一句操作提示，不再写「小队有几件事想跟你确认」——
@@ -306,35 +334,16 @@ function QuestionCard({
               }
               fileUrl={vibeFileUrl}
             />
-            <div className="vibe-options">
-              {question.options.map((option) => {
-                const chosen = current === option && draft.trim().length === 0
-                return (
-                  <button
-                    key={option}
-                    type="button"
-                    className={chosen ? 'vibe-option is-chosen' : 'vibe-option'}
-                    disabled={busy}
-                    onClick={() => {
-                      onPick(question.id, option)
-                    }}
-                  >
-                    {option}
-                  </button>
-                )
-              })}
-            </div>
-            {/* 自己写一句：没有这一行，选项之外的话就没地方说了——用户只能把
-                「我自己说」这个选项当成答案交上去，等于什么都没说。 */}
-            <input
-              type="text"
-              className="vibe-own-answer"
-              value={draft}
-              placeholder="都不对？我自己说"
-              aria-label={`${question.question} —— 自己写一句`}
-              disabled={busy}
-              onChange={(event) => {
-                onDraft(question.id, event.target.value)
+            <AnswerOptions
+              question={question}
+              current={current}
+              draft={draft}
+              busy={busy}
+              onPick={(option) => {
+                onPick(question.id, option)
+              }}
+              onDraft={(text) => {
+                onDraft(question.id, text)
               }}
             />
           </div>
@@ -342,7 +351,7 @@ function QuestionCard({
       })}
       <div className="vibe-card-actions">
         <button type="button" className="btn btn-primary vibe-card-submit" disabled={busy} onClick={onSubmit}>
-          就这样，开始出方案
+          就这个
         </button>
         {onSkip !== undefined && (
           <button type="button" className="btn vibe-card-skip" disabled={busy} onClick={onSkip}>
@@ -514,9 +523,11 @@ function TaskList({
 function statusLine(session: VibeSessionView): string {
   if (session.status === 'failed') return '没做出来'
   if (session.status === 'asking') {
-    return session.pendingAnswers > 0
-      ? `小队想先问清楚 ${session.pendingAnswers} 件事，选完就开工`
-      : '小队正在整理你的选择…'
+    if (session.pendingAnswers <= 0) return '小队正在整理你的选择…'
+    // 一次只问一题：「一件事」比「1 件事」像人话。
+    return session.pendingAnswers === 1
+      ? '小队问你一件事，选完就接着往下走'
+      : `小队想先问清楚 ${session.pendingAnswers} 件事，选完就开工`
   }
   if (session.status === 'building') return '小队正在做…'
   return '做好了'
@@ -548,15 +559,13 @@ export function RyVibePage({
   const [picks, setPicks] = useState<Record<string, string>>({})
   /** 用户自己写的答案（questionId → 他写的那句话）。 */
   const [drafts, setDrafts] = useState<Record<string, string>>({})
-  /** 已提交的答案；undefined = 卡片还开着。 */
-  const [submitted, setSubmitted] = useState<Record<string, string> | undefined>(undefined)
   /**
-   * 「改一下」进入的状态：把已答的题也放回可编辑的视图里。
+   * 正在改主意的题（questionId）：undefined = 没在改。
    *
-   * 服务端是支持的（重复回答会覆盖上一次），缺的只是这个入口——没有它，整轮盘问就是
-   * 一次性提交，答错了只能重开一轮。
+   * 答案就摆在那条对话里，所以「改一下」也长在那条对话里——不再单独做一张
+   * 「你已经选好了」的卡（此前那张卡一提交就占着位置，把小队新问的那道题挤没了）。
    */
-  const [editing, setEditing] = useState(false)
+  const [editingId, setEditingId] = useState<string | undefined>(undefined)
   const [starting, setStarting] = useState(false)
   const [answering, setAnswering] = useState(false)
   const [error, setError] = useState<string | undefined>(undefined)
@@ -738,7 +747,7 @@ export function RyVibePage({
       setOutput([])
       setPicks({})
       setDrafts({})
-      setSubmitted(undefined)
+      setEditingId(undefined)
       setTodos([])
       setPreview(undefined)
       outputCursorRef.current = 0
@@ -751,37 +760,53 @@ export function RyVibePage({
     }
   }
 
-  /** 提交这张卡上的全部答案（一次请求，答案一起交）。 */
-  const submit = async (skipped: boolean): Promise<void> => {
+  /**
+   * 「改一下」：把他上次怎么答的填回去，再把这道题放回可编辑的状态。
+   *
+   * 服务端是支持的（重复回答会覆盖上一次）。新答案跟着下一道题的答案一起交给小队，
+   * 所以小队只重跑一次，界面上不会冒出一版半成品方案。
+   */
+  const startEdit = (question: VibeQuestionView): void => {
+    const selected = question.selected?.[0]
+    setPicks((prev) => {
+      return { ...prev, [question.id]: selected ?? '' }
+    })
+    setDrafts((prev) => {
+      // 没勾选项 = 他自己写的那句话，把原话填回去。
+      return { ...prev, [question.id]: selected === undefined ? (question.answer ?? '') : '' }
+    })
+    setEditingId(question.id)
+  }
+
+  /**
+   * 提交答案。
+   *
+   * 正常答题交的是「当前待答的那道题」，改主意交的是「被改的那一道」。答案进小队
+   * 共同看到的那条正文里——下一道题就是小队看到它之后问出来的，所以这才是「一来一回」。
+   */
+  const submit = async (skipped: boolean, ids: readonly string[]): Promise<void> => {
     if (session === undefined) return
-    const answers = questions
-      .filter((question) => {
-        return question.answered !== true
+    const answers: { questionId: string; selected: string[]; text?: string }[] = []
+    for (const id of ids) {
+      const question = questions.find((item) => {
+        return item.id === id
       })
-      .map((question) => {
-        // 自己写了字就交字，没写才交选项。写了字还把预选项一起交上去，
-        // 小队看到的是两句而不是一句，反而更糊。
-        const draft = (drafts[question.id] ?? '').trim()
-        const useDraft = draft.length > 0 && !skipped
-        return {
-          questionId: question.id,
-          selected: useDraft ? [] : [picks[question.id] ?? question.options[0] ?? ''],
-          ...(useDraft ? { text: draft } : {}),
-        }
+      if (question === undefined) continue
+      // 自己写了字就交字，没写才交选项。写了字还把预选项一起交上去，
+      // 小队看到的是两句而不是一句，反而更糊。
+      const draft = (drafts[id] ?? '').trim()
+      const useDraft = draft.length > 0 && !skipped
+      answers.push({
+        questionId: id,
+        selected: useDraft ? [] : [picks[id] ?? question.options[0] ?? ''],
+        ...(useDraft ? { text: draft } : {}),
       })
+    }
     if (answers.length === 0) return
     setAnswering(true)
     try {
       await api.answerVibe(session.id, { answers, ...(skipped ? { skipped: true } : {}) })
-      setEditing(false)
-      setSubmitted(
-        Object.fromEntries(
-          answers.map((answer) => {
-            const text = answer.text ?? ''
-            return [answer.questionId, text.length > 0 ? text : (answer.selected[0] ?? '')]
-          }),
-        ),
-      )
+      setEditingId(undefined)
       await refresh(session.id)
     } catch (err) {
       toast.error(humanError(err, '这些答案没送出去，再点一次'))
@@ -793,7 +818,7 @@ export function RyVibePage({
   /** 重来一次：同样的需求，重新开一轮。 */
   const retry = (): void => {
     if (session === undefined) return
-    setSubmitted(undefined)
+    setEditingId(undefined)
     setPicks({})
     setDrafts({})
     setOutput([])
@@ -823,7 +848,7 @@ export function RyVibePage({
     setOutput([])
     setPicks({})
     setDrafts({})
-    setSubmitted(undefined)
+    setEditingId(undefined)
     setError(undefined)
     setRequirement('')
     setTodos([])
@@ -1005,10 +1030,8 @@ export function RyVibePage({
   const answered = questions.filter((question) => {
     return question.answered === true
   })
-  /** 卡片上正在编辑的题：改主意时是全部题，平时只看待答的。 */
-  const editable = editing ? questions : pending
-  /** 卡片该不该画：待答的题在，或者刚提交完还没点「改一下」。 */
-  const showCard = pending.length > 0 || submitted !== undefined
+  /** 卡片该不该画：小队正在等一道题的答案（一次只等一道）。 */
+  const showCard = pending.length > 0
 
   /**
    * 此刻正在说的是谁。
@@ -1165,6 +1188,7 @@ export function RyVibePage({
                 question.selected !== undefined && question.selected.length > 0
                   ? question.selected.join('、')
                   : (question.answer ?? '')
+              const editing = editingId === question.id
               return (
                 <div key={question.id} className="vibe-asked-pair">
                   <MessageBubble
@@ -1189,19 +1213,75 @@ export function RyVibePage({
                     }
                     fileUrl={vibeFileUrl}
                   />
-                  {answer.length > 0 && (
-                    <MessageBubble
-                      message={{
-                        key: `vibe-a-${question.id}`,
-                        senderType: 'user',
-                        senderId: 'user',
-                        senderName: '你',
-                        turnIndex: 0,
-                        parts: [{ kind: 'text', text: answer }],
-                        done: true,
-                      }}
-                      fileUrl={vibeFileUrl}
-                    />
+                  {editing ? (
+                    /* 改主意的展开态就长在答案底下：选项还是那几个，填回他上次说的。 */
+                    <div className="vibe-asked-edit">
+                      <AnswerOptions
+                        question={question}
+                        current={picks[question.id] ?? ''}
+                        draft={drafts[question.id] ?? ''}
+                        busy={answering}
+                        onPick={(option) => {
+                          setPicks((prev) => {
+                            return { ...prev, [question.id]: option }
+                          })
+                        }}
+                        onDraft={(text) => {
+                          setDrafts((prev) => {
+                            return { ...prev, [question.id]: text }
+                          })
+                        }}
+                      />
+                      <div className="vibe-card-actions">
+                        <button
+                          type="button"
+                          className="btn btn-primary vibe-card-submit"
+                          disabled={answering}
+                          onClick={() => {
+                            void submit(false, [question.id])
+                          }}
+                        >
+                          改好了
+                        </button>
+                        <button
+                          type="button"
+                          className="btn vibe-card-skip"
+                          disabled={answering}
+                          onClick={() => {
+                            setEditingId(undefined)
+                          }}
+                        >
+                          算了
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      {answer.length > 0 && (
+                        <MessageBubble
+                          message={{
+                            key: `vibe-a-${question.id}`,
+                            senderType: 'user',
+                            senderId: 'user',
+                            senderName: '你',
+                            turnIndex: 0,
+                            parts: [{ kind: 'text', text: answer }],
+                            done: true,
+                          }}
+                          fileUrl={vibeFileUrl}
+                        />
+                      )}
+                      <button
+                        type="button"
+                        className="vibe-asked-edit-link"
+                        disabled={answering}
+                        onClick={() => {
+                          startEdit(question)
+                        }}
+                      >
+                        改一下
+                      </button>
+                    </>
                   )}
                 </div>
               )
@@ -1213,10 +1293,9 @@ export function RyVibePage({
       {showCard && (
         <section className="vibe-section">
           <QuestionCard
-            questions={editable}
+            questions={pending}
             picks={picks}
             drafts={drafts}
-            submitted={editing ? undefined : submitted}
             busy={answering}
             squad={session.squad}
             onPick={(questionId, option) => {
@@ -1230,18 +1309,20 @@ export function RyVibePage({
               })
             }}
             onSubmit={() => {
-              void submit(false)
+              void submit(
+                false,
+                pending.map((question) => {
+                  return question.id
+                }),
+              )
             }}
-            onSkip={
-              editing
-                ? undefined
-                : () => {
-                    void submit(true)
-                  }
-            }
-            onEdit={() => {
-              // 「改一下」：把已答的题放回可编辑的视图，答案还在（picks / drafts 没清）。
-              setEditing(true)
+            onSkip={() => {
+              void submit(
+                true,
+                pending.map((question) => {
+                  return question.id
+                }),
+              )
             }}
           />
         </section>

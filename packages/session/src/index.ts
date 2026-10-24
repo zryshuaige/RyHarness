@@ -24,6 +24,7 @@ export {
   isToolErrorRow,
   SessionCoordinator,
   TOOL_ERROR_BLOCK_TYPE,
+  TOOL_RESULT_PREFIX,
 } from './coordinator.ts'
 export { bigrams, ftsMatchQuery, messageSearchText } from './fts.ts'
 export type {
