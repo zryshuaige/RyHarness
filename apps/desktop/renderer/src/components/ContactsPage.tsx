@@ -204,7 +204,7 @@ function IdentityCard({
   return (
     <aside className="agent-card" aria-label="助理卡">
       <span className="agent-card-face">
-        <Avatar3D avatarKey={avatarKey} name={displayName} size={88} tilt breathing />
+        <Avatar3D avatarKey={avatarKey} name={displayName} size={88} tilt action="breathing" />
       </span>
       <span className="agent-card-body">
         <span className={`agent-card-name${named ? '' : ' is-placeholder'}`}>{displayName}</span>

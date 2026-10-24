@@ -1,11 +1,12 @@
 import { type ReactNode, useEffect, useMemo, useState } from 'react'
 import { animalAssetUrl, animalHueFilter, parseAnimalAvatar } from '../../lib/animal-3d.ts'
 import {
+  type AvatarAction,
   type AvatarTemperament,
-  avatarBreathAllowed,
-  avatarMotionAllowed,
+  avatarActionAllowed,
+  avatarActionClass,
+  avatarActionStyle,
   avatarMotionOf,
-  avatarMotionStyle,
 } from '../../lib/avatar-motion.ts'
 import { portraitOf, portraitSrc, portraitSrcSet } from '../../lib/brand-portraits.ts'
 import type { StyleVars } from '../../lib/stagger.ts'
@@ -88,8 +89,9 @@ function AvatarShell({
  * - 未知/旧值 → 首字符饱和色块兜底
  * 四者的画布、描边、圆角统一由 AVATAR_SPEC 给，24/32/48/64px 下规格一致。
  *
- * 动效（呼吸 / 说话 / 思考）见 lib/avatar-motion.ts：同一套动画，幅度与节奏按性格
- * 四维走；同屏只许有一个在动，所以这些开关默认全是关的，由调用点按场景显式开。
+ * 动效（呼吸 / 说话 / 思考 / 在听 / 打招呼）见 lib/avatar-motion.ts：同一套动作，幅度与
+ * 节奏按性格四维走；同屏只许有一个在**大幅**动，所以这些动作默认全是"静止"，
+ * 由调用点按场景显式指定。
  */
 export function Avatar({
   avatarKey,
@@ -97,9 +99,7 @@ export function Avatar({
   seed,
   size = 40,
   className = '',
-  speaking = false,
-  pondering = false,
-  breathing = false,
+  action = 'idle',
   temperament,
 }: {
   avatarKey?: string
@@ -108,12 +108,8 @@ export function Avatar({
   seed?: string
   size?: number
   className?: string
-  /** 这位此刻正在回话：头像跟着动。 */
-  speaking?: boolean
-  /** 这位正在等首 token：视线左右游走。 */
-  pondering?: boolean
-  /** 闲置呼吸：只给**单独出现**的头像（列表里的头像一律静态）。 */
-  breathing?: boolean
+  /** 这位此刻在做哪件事（见 lib/avatar-motion.ts 的动作包）。 */
+  action?: AvatarAction
   /** 性格三维：决定动效的幅度与节奏（见 lib/avatar-motion.ts）。 */
   temperament?: AvatarTemperament
 }) {
@@ -122,22 +118,19 @@ export function Avatar({
   /**
    * 动效类名与参数。
    *
-   * 三种状态互斥：说话 > 思考 > 呼吸。两个动画抢同一个 transform 会互相打断，
-   * 看起来是抽搐——所以这里只让优先级最高的那一个生效。
+   * 一个动作一个类名：样式表里各写各的关键帧，参数（幅度、周期）走 CSS 变量。
+   * 尺寸不够时这个动作就不做——24px 的头像动起来是闪烁不是生命感。
    */
   const motion = useMemo<AvatarMotion>(() => {
     const kind = avatarMotionOf(avatarKey)
-    if (speaking && avatarMotionAllowed(size)) {
-      return { className: 'is-speaking', style: avatarMotionStyle(kind, temperament, true) }
+    if (!avatarActionAllowed(action, size)) {
+      return { className: '', style: {} }
     }
-    if (pondering && avatarMotionAllowed(size)) {
-      return { className: 'is-pondering', style: avatarMotionStyle(kind, temperament, false) }
+    return {
+      className: avatarActionClass(action),
+      style: avatarActionStyle(action, kind, temperament, size),
     }
-    if (breathing && avatarBreathAllowed(size)) {
-      return { className: 'is-breathing', style: avatarMotionStyle(kind, temperament, false) }
-    }
-    return { className: '', style: {} }
-  }, [avatarKey, size, speaking, pondering, breathing, temperament])
+  }, [action, avatarKey, size, temperament])
 
   const spec = useMemo(() => {
     return parseAvatarSpec(avatarKey)

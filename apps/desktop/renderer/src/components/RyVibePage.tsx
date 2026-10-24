@@ -163,19 +163,21 @@ function SquadPanel({
       {squad.map((member) => {
         const speaking = member.id === speakingId
         const pondering = !speaking && member.id === ponderingId
+        /** 队伍里有人正在动：其余成员在听（给一句极浅的呼吸，当底噪）。 */
+        const live = speaking || pondering
         const state = speaking ? '正在说' : pondering ? '正在想' : '在听'
         return (
           <div key={member.id} className={`vibe-squad-row${speaking ? ' is-speaking' : ''}`}>
-            {/* 头像只在**还在等首 token**（一段输出都还没有）时动：那时屏幕上没有
-                正在长出来的正文，动效没处可挂，就落在"正在想"的那一位身上。
-                一旦开始输出，动效就交给正文旁边那个署名头像（见输出区），同一时刻
-                全页只有一个在动——周边运动多了会抢注意力。 */}
+            {/* 头像在动之前先想清楚这一位此刻在做什么：
+                正在想（还在等首 token）→ 视线左右游走；别人在说话时 → 极浅的呼吸（底噪）；
+                正在说的那一位不在这里动——输出区那个署名头像在动（那里才是眼睛盯着的地方）。
+                同屏只许有一个在**大幅**动，所以这里是互斥的。 */}
             <Avatar
               avatarKey={member.avatar}
               name={member.name}
               seed={member.id}
               size={40}
-              pondering={pondering}
+              action={speaking ? 'idle' : pondering ? 'pondering' : live ? 'listening' : 'idle'}
               {...(member.temperament === undefined ? {} : { temperament: member.temperament })}
             />
             <button

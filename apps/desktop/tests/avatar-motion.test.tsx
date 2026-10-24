@@ -12,16 +12,24 @@
  * 另外钉住"性格决定表演"：同一个助理，外向的和严谨的动起来幅度与节奏不同——
  * 否则动画就成了全站统一的一层贴纸。
  */
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { MessageBubble } from '../renderer/src/components/MessageBubble.tsx'
 import {
   AVATAR_BREATHE_MIN_SIZE,
   AVATAR_MOTION_MIN_SIZE,
+  avatarActionAllowed,
+  avatarActionClass,
   avatarMotionOf,
+  avatarMotionScale,
   avatarTemperamentOf,
 } from '../renderer/src/lib/avatar-motion.ts'
 import type { UiMessage } from '../renderer/src/store.ts'
+
+const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '../renderer/src')
 
 const fileUrl = (name: string): string => {
   return `/api/files/${name}`
@@ -104,5 +112,55 @@ describe('头像动效：尺寸红线', () => {
   it('小于门槛的尺寸不给动效（24px 的头像动起来是闪烁不是生命感）', () => {
     expect(AVATAR_MOTION_MIN_SIZE).toBeGreaterThanOrEqual(24)
     expect(AVATAR_BREATHE_MIN_SIZE).toBeGreaterThanOrEqual(48)
+  })
+})
+
+describe('动作包：每个动作都有名字、有动画、有用法', () => {
+  it('五个动作各对应一个类名，静止时什么都不挂', () => {
+    expect(avatarActionClass('speaking')).toBe('is-speaking')
+    expect(avatarActionClass('pondering')).toBe('is-pondering')
+    expect(avatarActionClass('breathing')).toBe('is-breathing')
+    expect(avatarActionClass('listening')).toBe('is-listening')
+    expect(avatarActionClass('greeting')).toBe('is-greeting')
+    expect(avatarActionClass('idle')).toBe('')
+  })
+
+  it('样式表里这五个类各自有动画，且都在「减少动态效果」时被关掉', () => {
+    const css = readFileSync(resolve(SRC, 'styles-avatar-motion.css'), 'utf8')
+    for (const cls of ['is-breathing', 'is-speaking', 'is-pondering', 'is-listening', 'is-greeting']) {
+      // 要找的是**单类**规则：此前 `is-speaking` 只出现在 `.is-breathing.is-speaking`
+      // 这条组合规则里，而组件每次只挂一个动作类——「正在说」那张脸因此一直没动过。
+      const solo = new RegExp(`\\.avatar\\.${cls}\\s*\\{[^}]*animation`)
+      expect(css, `${cls} 得有自己的动画规则`).toMatch(solo)
+    }
+    const reduced = css.slice(css.indexOf('prefers-reduced-motion'))
+    for (const cls of ['is-breathing', 'is-speaking', 'is-pondering', 'is-listening', 'is-greeting']) {
+      expect(reduced, `减少动态效果时 ${cls} 也要被关掉`).toContain(`.avatar.${cls}`)
+    }
+  })
+
+  it('24–40px 的头像也做动作，但幅度打折（24px 上同样的 1.5px 是整张脸在抖）', () => {
+    // 打字行那张头像此前是 28px、门槛却是 32px ——「正在想」那张脸其实一直是静止的。
+    expect(avatarActionAllowed('pondering', 28)).toBe(true)
+    expect(avatarActionAllowed('speaking', 20)).toBe(false)
+    expect(avatarMotionScale(48)).toBe(1)
+    expect(avatarMotionScale(28)).toBe(0.5)
+    expect(avatarMotionScale(20)).toBe(0)
+  })
+
+  it('「在听」是底噪：幅度远小于说话，周期更长（不跟正在说的那位抢注意力）', () => {
+    const profile = avatarTemperamentOf({ extroversion: 50, rigor: 50, humor: 50 })
+    expect(profile.listen).toBeLessThan(profile.breathe)
+    expect(profile.listenMs).toBeGreaterThan(profile.breatheMs)
+  })
+
+  it('打字行那位「正在想」的头像真的接上了动作', () => {
+    const source = readFileSync(resolve(SRC, 'components/ChatView.tsx'), 'utf8')
+    expect(source).toContain('action="pondering"')
+  })
+
+  it('小队面板：正在想 pondering、别人在说时 listening，正在说的那一位不动（输出区在动）', () => {
+    const source = readFileSync(resolve(SRC, 'components/RyVibePage.tsx'), 'utf8')
+    expect(source).toContain("action={speaking ? 'idle' : pondering ? 'pondering' : live ? 'listening' : 'idle'}")
   })
 })

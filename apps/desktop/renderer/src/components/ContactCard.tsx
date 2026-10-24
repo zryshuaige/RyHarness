@@ -73,6 +73,9 @@ function ContactCardImpl({
         seed={agent.id}
         size={56}
         tilt
+        // 正在出声（用户点了「听听」）的那一位说得上话：头像跟着动。
+        // 其余卡片一律静止——一屏几十张脸一起动，界面就在发颤。
+        action={speaking ? 'speaking' : 'idle'}
         temperament={{ extroversion: persona.extroversion, rigor: persona.rigor, humor: persona.humor }}
       />
       {/* 名字就是入口：点它直接开聊。此前整张卡看着能点（悬停会抬起来），

@@ -389,7 +389,7 @@ function agentAvatar(agent: BubbleAgent | undefined, speaking: boolean): ReactNo
       name={agent.name}
       seed={agent.id}
       size={40}
-      speaking={speaking}
+      action={speaking ? 'speaking' : 'idle'}
       {...(agent.temperament === undefined ? {} : { temperament: agent.temperament })}
     />
   )
@@ -599,6 +599,9 @@ function MessageBubbleInner({
                   if (event.key !== 'Enter') return
                   // 输入法组合中的回车是"选词"，不是"保存"。
                   if (event.nativeEvent.isComposing || composingRef.current) return
+                  // Shift+Enter 换行，与输入框同一套口径：这一框有 3 行，
+                  // 用户却打不出第二行——看着能多行、实际存不进去。
+                  if (event.shiftKey) return
                   event.preventDefault()
                   submitEdit()
                 }}

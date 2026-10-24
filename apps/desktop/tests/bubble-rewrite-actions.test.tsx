@@ -164,6 +164,21 @@ describe('编辑并重发', () => {
     expect(onEdit).not.toHaveBeenCalled()
     unmount()
   })
+
+  it('Shift+Enter 是换行，不是保存（与输入框同一套口径）', () => {
+    // 这一框有 3 行，看着能多行；但回车一律保存，用户打不出第二行。
+    const onEdit = vi.fn()
+    const { container, unmount } = mount(<MessageBubble message={userMessage()} fileUrl={fileUrl} onEdit={onEdit} />)
+    act(() => {
+      button(container, '编辑并重发')?.click()
+    })
+    const input = container.querySelector('.bubble-edit-input') as HTMLTextAreaElement
+    act(() => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true }))
+    })
+    expect(onEdit).not.toHaveBeenCalled()
+    unmount()
+  })
 })
 
 describe('重新生成与从这里分支', () => {

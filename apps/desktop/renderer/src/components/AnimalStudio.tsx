@@ -146,7 +146,7 @@ export function AnimalStudio({
       {/* 预览：这一块是主角（大头像 + 名字 + 动作）。挑选器在下面，只是备选。 */}
       <div className="animal-studio-preview">
         <span className="animal-studio-preview-face">
-          <Avatar3D avatarKey={avatar} name="你" seed="you" size={144} tilt breathing />
+          <Avatar3D avatarKey={avatar} name="你" seed="you" size={144} tilt action="breathing" />
           <span className="animal-studio-current">{draftName}</span>
         </span>
         <div className="animal-studio-preview-side">

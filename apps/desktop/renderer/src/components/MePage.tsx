@@ -230,7 +230,14 @@ export function MePage({
                   setAvatarDraft(profile?.avatar === '' ? BRAND_AVATAR : (profile?.avatar ?? BRAND_AVATAR))
                 }}
               >
-                <Avatar3D avatarKey={profile?.avatar} name={profile?.name ?? '你'} seed="you" size={72} tilt />
+                <Avatar3D
+                  avatarKey={profile?.avatar}
+                  name={profile?.name ?? '你'}
+                  seed="you"
+                  size={72}
+                  tilt
+                  action="breathing"
+                />
                 {/* 角标常驻：只靠悬停才冒出来的话，第一次来的人不知道这张脸可以点。 */}
                 <span className="me-avatar-edit" aria-hidden="true">
                   <Icon name="pencil" size={14} />

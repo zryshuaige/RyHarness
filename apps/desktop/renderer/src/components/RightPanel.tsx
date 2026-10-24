@@ -603,7 +603,7 @@ const DirectProfile = memo(function DirectProfile({
           seed={agent.id}
           size={56}
           className="avatar-lg-ring"
-          breathing
+          action="breathing"
         />
         <div className="profile-id">
           <h3>

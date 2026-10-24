@@ -2183,8 +2183,10 @@ export function ChatView({
                         avatarKey={bubble.avatar}
                         name={bubble.name}
                         seed={bubble.id}
-                        size={28}
-                        pondering
+                        // 32px：动效的幅度在 24–40px 这一档要打折，28px 那张小脸动
+                        // 起来几乎看不出来——而这恰恰是"正在想"最该被看见的几秒。
+                        size={32}
+                        action="pondering"
                         {...(bubble.temperament === undefined ? {} : { temperament: bubble.temperament })}
                       />
                     )
@@ -2302,7 +2304,9 @@ function ApprovalCards({
     })
   }
   return (
-    <section className="approval-stack" aria-label="工具执行审批">
+    // role="alert"：这张卡是**卡住流程的请求**——助理在等用户点头，用户没看到它，
+    // 这一轮就一直停着。读屏器用户看不到屏幕，得靠这条被播报出来。
+    <section className="approval-stack" role="alert" aria-label="工具执行审批，等你点头">
       {approvals.map((approval) => {
         return (
           <div key={approval.approvalId} className="approval-card">

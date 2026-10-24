@@ -8,7 +8,7 @@ import {
   animalHueFilter,
   parseAnimalAvatar,
 } from '../../lib/animal-3d.ts'
-import type { AvatarTemperament } from '../../lib/avatar-motion.ts'
+import type { AvatarAction, AvatarTemperament } from '../../lib/avatar-motion.ts'
 import { Avatar } from './Avatar.tsx'
 
 /**
@@ -246,8 +246,7 @@ export function Avatar3D({
   size = 40,
   tilt = false,
   className = '',
-  breathing = false,
-  speaking = false,
+  action = 'idle',
   temperament,
 }: {
   avatarKey?: string
@@ -256,10 +255,8 @@ export function Avatar3D({
   size?: number
   tilt?: boolean
   className?: string
-  /** 闲置呼吸：只给**单独出现**的大头像（身份卡、形象预览）。列表里的头像一律静态。 */
-  breathing?: boolean
-  /** 这位此刻正在回话。 */
-  speaking?: boolean
+  /** 这位此刻在做哪件事（见 lib/avatar-motion.ts 的动作包）。 */
+  action?: AvatarAction
   /** 性格三维：决定动效的幅度与节奏（见 lib/avatar-motion.ts）。 */
   temperament?: AvatarTemperament
 }) {
@@ -296,8 +293,7 @@ export function Avatar3D({
           name={name}
           seed={seed}
           size={size}
-          breathing={breathing}
-          speaking={speaking}
+          action={action}
           {...(temperament === undefined ? {} : { temperament })}
         />
       </span>
