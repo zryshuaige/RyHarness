@@ -557,6 +557,20 @@ async function runUiAudit(window: BrowserWindow, here: string): Promise<void> {
     })()`)
   }
   /**
+   * 关掉当前弹层。
+   *
+   * 弹层是挂在壳上的，不随页签切换消失——此前「建群弹层」拍完没关，后面几张图全被
+   * 它盖着，证据看着还挺正常，只是拍的根本不是那一屏。
+   */
+  const closeModal = async (): Promise<void> => {
+    await run(`(() => {
+      const close = document.querySelector('.modal-header button')
+      if (!close) return false
+      close.click()
+      return true
+    })()`)
+  }
+  /**
    * 切到某个 rail 页签。
    *
    * 按**名字**切，不按下标：RyVibe 插进聊天下面那一次，页签的顺序就变了，按下标
@@ -599,11 +613,7 @@ async function runUiAudit(window: BrowserWindow, here: string): Promise<void> {
   })()`)
   await shoot('audit-create-agent-persona.png')
   // 关掉
-  await run(`(() => {
-    const node = document.querySelector('.modal-actions button')
-    if (node) node.click()
-    return true
-  })()`)
+  await closeModal()
   await tab('我的')
   await shoot('audit-me.png')
   /**
@@ -627,7 +637,90 @@ async function runUiAudit(window: BrowserWindow, here: string): Promise<void> {
   await tab('通讯录')
   await clickText('建群')
   await shoot('audit-create-group.png')
+  await closeModal()
   // RyVibe 页：盘问卡与小队面板
   await tab('RyVibe')
   await shoot('audit-vibe.png')
+
+  /**
+   * 下面这些是**平时看不见的面**：浮层、菜单、抽屉。
+   *
+   * 主流程的截图只能看到主流程——而交互问题大多藏在这里：会话项的「⋯」菜单、
+   * 输入框里的「/」命令面板、右栏收成窄边再展开的样子。这一组专门去点开它们。
+   */
+  await tab('聊天')
+  // 会话项的「⋯」菜单：置顶/静音/删除/分支都在这一层。
+  await run(`(() => {
+    const more = document.querySelector('.conversation-more')
+    if (!more) return false
+    more.click()
+    return true
+  })()`)
+  await shoot('audit-conversation-menu.png')
+  // 关掉菜单（Esc 归它自己：外面点一下关不掉，得用键盘路径）
+  await run(`(() => {
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    return true
+  })()`)
+  // 输入框里的「/」命令面板
+  await run(`(() => {
+    const box = document.querySelector('.chat-input-box textarea')
+    if (!box) return false
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
+    setter?.call(box, '/')
+    box.dispatchEvent(new Event('input', { bubbles: true }))
+    return true
+  })()`)
+  await shoot('audit-command-palette.png')
+  // 清掉输入，免得这一轮的图带着半截命令
+  await run(`(() => {
+    const box = document.querySelector('.chat-input-box textarea')
+    if (!box) return false
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
+    setter?.call(box, '')
+    box.dispatchEvent(new Event('input', { bubbles: true }))
+    return true
+  })()`)
+  // 右栏：收成窄边（44px）再展开——窄栏是抽屉形态，得单独看一眼
+  await run(`(() => {
+    const toggle = document.querySelector('.right-panel-toggle')
+    if (!toggle) return false
+    toggle.click()
+    return true
+  })()`)
+  await shoot('audit-right-panel.png')
+  // 点开一条会话，进到真正的聊天页（欢迎页里看不到气泡与输入区）
+  await run(`(() => {
+    const item = document.querySelector('.conversation-item-main')
+    if (!item) return false
+    item.click()
+    return true
+  })()`)
+  await shoot('audit-chat-conversation.png')
+  /**
+   * 壳的几栏各占多宽。
+   *
+   * 截图上右边空着一条（宽屏下尤其显眼），得先量出来：那一片到底是"右栏收起了"
+   * 还是"壳没铺满窗口"——两者的修法完全不同。
+   */
+  const columns = await window.webContents.executeJavaScript(
+    `(() => {
+      const shell = document.querySelector('.app-shell')
+      if (!shell) return null
+      const panel = document.querySelector('.right-panel')
+      const panelStyle = panel ? getComputedStyle(panel) : null
+      return {
+        inner: window.innerWidth,
+        outer: window.outerWidth,
+        dpr: window.devicePixelRatio,
+        matches1199: window.matchMedia('(max-width: 1199px)').matches,
+        panel: panelStyle ? { position: panelStyle.position, width: panelStyle.width } : null,
+        columns: [...shell.children].map((child) => {
+          const rect = child.getBoundingClientRect()
+          return { cls: child.className, w: Math.round(rect.width), position: getComputedStyle(child).position }
+        }),
+      }
+    })()`,
+  )
+  console.log(`[audit] 壳的各栏 = ${JSON.stringify(columns)}`)
 }

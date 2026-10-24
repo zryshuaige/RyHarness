@@ -444,36 +444,6 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
 @media (max-width: 1199px) {
   .list-panel { width: var(--list-panel-w-md); }
 }
-/* 窄窗下的右栏：覆盖式抽屉。
-   此前这里是 display:none——记忆、手册、待办、调度轨迹在这个宽度下**一个入口都没有**，
-   内容还在服务端却既看不到也打不开，用户只能把窗口拉宽才找得到。
-   现在面板保留在 DOM 里，关着时滑出屏幕右侧（translateX），开着时盖在聊天区上面：
-   不占固定的一列（那一列在这个宽度下会把消息挤到不可读），内容一条不少。
-   位移过渡取代宽度过渡——抽屉不该把聊天区推着走。 */
-@media (max-width: 1199px) {
-  .right-panel {
-    position: absolute; top: var(--titlebar-h); right: 0; bottom: 0;
-    width: min(320px, 88vw);
-    z-index: var(--z-sticky);
-    border-left: 1px solid var(--divider);
-    box-shadow: -18px 0 40px rgb(0 0 0 / 22%);
-    transform: translateX(100%);
-    visibility: hidden;
-    transition-property: transform, visibility;
-    transition-duration: 220ms, 0s;
-    transition-delay: 0s, 220ms;
-    transition-timing-function: var(--ease-out);
-  }
-  .right-panel.is-overlay-open {
-    transform: translateX(0);
-    visibility: visible;
-    transition-delay: 0s, 0s;
-  }
-  /* 覆盖态下面板本体始终是展开的：抽屉里再套一层"收起成 44px 窄边"没有意义。 */
-  .right-panel.is-overlay.is-collapsed { width: min(320px, 88vw); border-left: 1px solid var(--divider); }
-  .right-panel.is-overlay.is-collapsed .panel-banner,
-  .right-panel.is-overlay.is-collapsed .panel-body { visibility: visible; }
-}
 /* 抽屉的遮罩：点它收起。没有这层，窄屏用户打开抽屉之后只能把窗口拉宽才能继续打字。
    顶部从标题栏之下开始：不盖住窗口按钮（Window Controls Overlay 浮在页面之上，
    盖住了就点不动关不掉应用）。 */
@@ -1269,6 +1239,41 @@ button.tool-row:disabled { cursor: default; }
 .right-panel.is-collapsed .panel-banner,
 .right-panel.is-collapsed .panel-body { visibility: hidden; }
 .right-panel.is-collapsed .panel-expand-btn { left: 10px; right: auto; }
+/* 窄窗下的右栏：覆盖式抽屉。
+   此前这里是 display:none——记忆、手册、待办、调度轨迹在这个宽度下**一个入口都没有**，
+   内容还在服务端却既看不到也打不开，用户只能把窗口拉宽才找得到。
+   现在面板保留在 DOM 里，关着时滑出屏幕右侧（translateX），开着时盖在聊天区上面：
+   不占固定的一列（那一列在这个宽度下会把消息挤到不可读），内容一条不少。
+   位移过渡取代宽度过渡——抽屉不该把聊天区推着走。
+
+   **这一段必须排在上面那条基础规则之后**：同优先级（0,1,0）时靠源码顺序取胜，
+   写在前面就被基础规则的 `position: relative` 与 `width: 280px` 盖掉——面板于是
+   一边保持覆盖态的类名、一边按常驻栏参与布局：占着 280px 却不显示（右边空一条），
+   聊天区被挤到只剩 476px。真机 1108px 宽的窗口上量出来就是这样。 */
+@media (max-width: 1199px) {
+  .right-panel {
+    position: absolute; top: var(--titlebar-h); right: 0; bottom: 0;
+    width: min(320px, 88vw);
+    z-index: var(--z-sticky);
+    border-left: 1px solid var(--divider);
+    box-shadow: -18px 0 40px rgb(0 0 0 / 22%);
+    transform: translateX(100%);
+    visibility: hidden;
+    transition-property: transform, visibility;
+    transition-duration: 220ms, 0s;
+    transition-delay: 0s, 220ms;
+    transition-timing-function: var(--ease-out);
+  }
+  .right-panel.is-overlay-open {
+    transform: translateX(0);
+    visibility: visible;
+    transition-delay: 0s, 0s;
+  }
+  /* 覆盖态下面板本体始终是展开的：抽屉里再套一层"收起成 44px 窄边"没有意义。 */
+  .right-panel.is-overlay.is-collapsed { width: min(320px, 88vw); border-left: 1px solid var(--divider); }
+  .right-panel.is-overlay.is-collapsed .panel-banner,
+  .right-panel.is-overlay.is-collapsed .panel-body { visibility: visible; }
+}
 .panel-banner {
   position: absolute; inset: 0 0 auto; height: var(--panel-banner-h); pointer-events: none;
   background: radial-gradient(130% 120% at 50% -30%,
