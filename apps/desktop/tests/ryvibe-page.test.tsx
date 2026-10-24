@@ -450,7 +450,7 @@ describe('RyVibe 页面', () => {
     expect(speaking).not.toBeNull()
     expect(speaking?.querySelector('.vibe-squad-state')?.textContent).toBe('正在说')
     // 动的是输出区那个署名头像——动效要落在正在长出来的内容旁边。
-    expect(container.querySelector('.vibe-output .avatar.is-speaking')).not.toBeNull()
+    expect(container.querySelector('.bubble-avatar-gutter .avatar.is-speaking')).not.toBeNull()
     // 同屏只许有一个在动：工作台里的头像不跟着动（周边运动会抢注意力）。
     expect(container.querySelectorAll('.avatar.is-speaking')).toHaveLength(1)
   })

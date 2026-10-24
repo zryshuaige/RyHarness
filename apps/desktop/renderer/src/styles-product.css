@@ -2116,17 +2116,6 @@
 
 .vibe-reset { flex-shrink: 0; }
 
-.vibe-requirement {
-  margin: var(--space-4) 0 var(--space-2);
-  padding: var(--space-3) var(--space-4);
-  border-left: 3px solid var(--amber-primary);
-  border-radius: var(--radius-sm);
-  background: var(--bg-surface);
-  color: var(--text-primary);
-  font-size: var(--fs-base);
-  line-height: 1.7;
-}
-
 /* 小队工作台：这一轮谁在、谁在忙。
    此前小队只是一行文字，等的那一两分钟里屏幕上没有任何东西在动——这一页看着像一张
    空表单，而不是一支队伍在干活。现在每人一行：头像 + 名字 + 此刻在做什么，
@@ -2189,6 +2178,18 @@
   max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
+/* ---- 消息流：RyVibe 就是一段对话 ----
+
+   小队每个人的发言是一条气泡，用户那句话也是。此前每段产出是一个带边框的独立
+   卡片——那是一份**日志**：看得见"有几条记录"，看不见"谁在跟谁说话"。RyVibe 讲的
+   就是一支队伍在接力干活，它该长得像一段对话。气泡直接复用聊天页那套（同一个
+   组件），RyVibe 与聊天页因此不会是两副面孔。 */
+.vibe-stream { display: flex; flex-direction: column; gap: var(--space-2); }
+.vibe-stream-section { margin-top: var(--space-5); }
+
+/* 「小队问过 + 你答过」这一对：问题与回答挨着，中间不留大空。 */
+.vibe-asked-pair { display: flex; flex-direction: column; gap: var(--space-1); }
+
 .vibe-section { margin-top: var(--space-6); }
 
 .vibe-section-title {
@@ -2201,17 +2202,13 @@
 
 .vibe-round { color: var(--text-tertiary); font-size: var(--fs-xs); font-weight: 400; }
 
-/* 盘问卡：所有问题在一张卡上，一次提交。
-   卡片是一块抬升面（--shadow-1 + 一根 --edge 描边），和"小队正在写的"那几段正文
-   区分开：卡是**要你动手**的，正文是**给你看的**。 */
-.vibe-card {
-  margin-top: var(--space-3);
-  padding: var(--space-4);
-  border: 1px solid var(--edge);
-  border-radius: var(--radius-lg);
-  background: var(--bg-surface);
-  box-shadow: var(--shadow-1);
-}
+/* 盘问区：题与选项同属一段对话——题是小队的气泡，选项紧跟在下面。
+   这里**不画卡**：题本身已经是气泡，再套一张白卡等于把气泡关进抽屉里。选项各自是
+   一张小卡，够分组了。 */
+.vibe-card { margin-top: var(--space-3); }
+
+/* 题干（气泡）与选项之间的距离：气泡说完，选项紧接着就该在。 */
+.vibe-question .bubble-row { margin-bottom: var(--space-2); }
 
 .vibe-card-head {
   display: flex;
@@ -2341,22 +2338,6 @@
 .vibe-answered-q { color: var(--text-tertiary); }
 .vibe-answered-a { color: var(--text-primary); font-weight: 600; }
 
-/* 问答记录：问过什么、答了什么，一直留在页面上。
-   左边挂上问的人的头像——「小队问过我什么」要能看出是谁问的。 */
-.vibe-record { list-style: none; margin: 0; padding: 0; }
-.vibe-record-item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-3);
-  border-left: 3px solid var(--amber-primary);
-  border-radius: var(--radius-xs);
-  background: var(--bg-surface);
-  font-size: var(--fs-sm);
-}
-.vibe-record-q { color: var(--text-tertiary); }
-.vibe-record-a { color: var(--text-primary); font-weight: 600; }
-
 /* 等待期的进度：小队开工到出方案之间可能有一两分钟，空转圈最容易让人放弃。 */
 .vibe-progress { margin-top: var(--space-4); }
 .vibe-progress-bar {
@@ -2399,28 +2380,6 @@
 .vibe-failed span { color: var(--text-secondary); font-size: var(--fs-sm); }
 .vibe-failed-actions { display: flex; gap: var(--space-2); margin-top: var(--space-2); }
 .vibe-retry { color: var(--amber-text); }
-
-/* 小队产出：谁写的 + 正文。
-   头像在左、名字与正文在右：此前只有一行小字，看不出这段出自谁——而这页讲的就是
-   "一支队伍在接力干活"，谁在说是关键信息。 */
-.vibe-output {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-3);
-  margin-top: var(--space-3);
-  padding: var(--space-4);
-  border: 1px solid var(--edge);
-  border-radius: var(--radius-lg);
-  background: var(--bg-surface);
-}
-
-.vibe-output-main { flex: 1; min-width: 0; }
-
-.vibe-output-name { margin-bottom: var(--space-2); color: var(--text-secondary); font-size: var(--fs-xs); }
-
-.vibe-output-body { font-size: var(--fs-body); line-height: 1.7; }
-.vibe-output-body .md-p { margin: 0 0 var(--space-2); }
-.vibe-output-body .md-p:last-child { margin-bottom: 0; }
 
 .vibe-continue { margin-top: var(--space-5); }
 

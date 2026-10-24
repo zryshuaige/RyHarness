@@ -34,7 +34,7 @@ import { toast } from '../lib/toast.ts'
 import { explainTurnError, type TurnErrorTarget } from '../lib/turn-errors.ts'
 import { Avatar } from './avatars/Avatar.tsx'
 import { Icon } from './Icon.tsx'
-import { Markdown } from './Markdown.tsx'
+import { MessageBubble } from './MessageBubble.tsx'
 import { VibeArtifactPreview } from './VibeArtifactPreview.tsx'
 
 /**
@@ -124,6 +124,11 @@ export interface RyVibePageProps {
    * 接线；重试这类就地动作不经过它）。
    */
   onNavigate?: (target: TurnErrorTarget) => void
+}
+
+/** 消息流里没有文件部件，但 MessageBubble 的 fileUrl 是必填的：给一个空串即可。 */
+const vibeFileUrl = (): string => {
+  return ''
 }
 
 /**
@@ -264,8 +269,9 @@ function QuestionCard({
   }
   return (
     <div className="vibe-card">
+      {/* 卡片头只留一句操作提示，不再写「小队有几件事想跟你确认」——
+          下面每一道题本身就是小队说的一句话（气泡形态），再说一遍是重复。 */}
       <div className="vibe-card-head">
-        <span>小队有几件事想跟你确认</span>
         <span className="vibe-card-hint">选一个就行，也可以自己写</span>
       </div>
       {questions.map((question) => {
@@ -277,18 +283,29 @@ function QuestionCard({
         })
         return (
           <div key={question.id} className="vibe-question">
-            <div className="vibe-question-head">
-              {asker !== undefined && (
-                <Avatar
-                  avatarKey={asker.avatar}
-                  name={asker.name}
-                  seed={asker.id}
-                  size={32}
-                  {...(asker.temperament === undefined ? {} : { temperament: asker.temperament })}
-                />
-              )}
-              <p className="vibe-question-text">{question.question}</p>
-            </div>
+            {/* 题干就是小队说的一句话：气泡形态，与上面的产出、下面你的回答同一条流。 */}
+            <MessageBubble
+              message={{
+                key: `vibe-q-${question.id}`,
+                senderType: 'agent',
+                senderId: question.agentId ?? 'squad',
+                senderName: asker?.name ?? '小队',
+                turnIndex: 0,
+                parts: [{ kind: 'text', text: question.question }],
+                done: true,
+              }}
+              agent={
+                asker === undefined
+                  ? undefined
+                  : {
+                      id: asker.id,
+                      name: asker.name,
+                      ...(asker.avatar === undefined ? {} : { avatar: asker.avatar }),
+                      ...(asker.temperament === undefined ? {} : { temperament: asker.temperament }),
+                    }
+              }
+              fileUrl={vibeFileUrl}
+            />
             <div className="vibe-options">
               {question.options.map((option) => {
                 const chosen = current === option && draft.trim().length === 0
@@ -1057,17 +1074,35 @@ export function RyVibePage({
         <Progress step={stepOf(session, output.length)} status={session.status} />
       )}
 
-      <blockquote className="vibe-requirement">{session.requirement}</blockquote>
       {/* 小队工作台：这一轮谁在、谁在忙。
           此前这里只有一行「小队：Ryen、CodeBot」的文字链接，等的那一两分钟里屏幕上
           没有任何东西在动——用户不知道是谁在写、写到哪了。现在每人一行：头像 + 名字 +
-          此刻在做什么，正在说的那一位头像会动。 */}
+          此刻在做什么，正在说的那一位头像会动。
+          它放在消息流**之上**：夹在对话中间会把一段话切成两半。 */}
       <SquadPanel
         squad={session.squad}
         speakingId={speakingId}
         ponderingId={ponderingId}
         {...(onOpenAgent === undefined ? {} : { onOpenAgent })}
       />
+
+      {/* 消息流：你那句话在最上面，小队的回话往下接。
+          此前那句话是一块左边带竖线的引用块——那是一句**引文**，不像一句你说的话。
+          放进流里当用户气泡，这一页从头到尾就是一段对话。 */}
+      <div className="vibe-stream">
+        <MessageBubble
+          message={{
+            key: 'vibe-requirement',
+            senderType: 'user',
+            senderId: 'user',
+            senderName: '你',
+            turnIndex: 0,
+            parts: [{ kind: 'text', text: session.requirement }],
+            done: true,
+          }}
+          fileUrl={vibeFileUrl}
+        />
+      </div>
 
       {session.status === 'failed' && (
         <div className="vibe-failed" role="alert">
@@ -1116,35 +1151,62 @@ export function RyVibePage({
       )}
 
       {answered.length > 0 && (
-        <section className="vibe-section">
-          <h2 className="vibe-section-title">你们问过这些</h2>
-          <ul className="vibe-record">
+        <section className="vibe-section vibe-stream-section">
+          {/*
+            已经答过的题也留在流里：小队问的那句是一条气泡，你的回答是另一条。
+            此前它们被折成一张"你们问过这些"的表——那是记录表，不是对话。
+          */}
+          <div className="vibe-stream">
             {answered.map((question) => {
               const asker = session.squad.find((member) => {
                 return member.id === question.agentId
               })
+              const answer =
+                question.selected !== undefined && question.selected.length > 0
+                  ? question.selected.join('、')
+                  : (question.answer ?? '')
               return (
-                <li key={question.id} className="vibe-record-item">
-                  {/* 谁问的：盘问记录带上问的人，这一列才读得出"小队问过我什么"。 */}
-                  {asker !== undefined && (
-                    <Avatar
-                      avatarKey={asker.avatar}
-                      name={asker.name}
-                      seed={asker.id}
-                      size={28}
-                      {...(asker.temperament === undefined ? {} : { temperament: asker.temperament })}
+                <div key={question.id} className="vibe-asked-pair">
+                  <MessageBubble
+                    message={{
+                      key: `vibe-q-${question.id}`,
+                      senderType: 'agent',
+                      senderId: question.agentId ?? 'squad',
+                      senderName: asker?.name ?? '小队',
+                      turnIndex: 0,
+                      parts: [{ kind: 'text', text: question.question }],
+                      done: true,
+                    }}
+                    agent={
+                      asker === undefined
+                        ? undefined
+                        : {
+                            id: asker.id,
+                            name: asker.name,
+                            ...(asker.avatar === undefined ? {} : { avatar: asker.avatar }),
+                            ...(asker.temperament === undefined ? {} : { temperament: asker.temperament }),
+                          }
+                    }
+                    fileUrl={vibeFileUrl}
+                  />
+                  {answer.length > 0 && (
+                    <MessageBubble
+                      message={{
+                        key: `vibe-a-${question.id}`,
+                        senderType: 'user',
+                        senderId: 'user',
+                        senderName: '你',
+                        turnIndex: 0,
+                        parts: [{ kind: 'text', text: answer }],
+                        done: true,
+                      }}
+                      fileUrl={vibeFileUrl}
                     />
                   )}
-                  <span className="vibe-record-q">{question.question}</span>
-                  <span className="vibe-record-a">
-                    {question.selected !== undefined && question.selected.length > 0
-                      ? question.selected.join('、')
-                      : (question.answer ?? '')}
-                  </span>
-                </li>
+                </div>
               )
             })}
-          </ul>
+          </div>
         </section>
       )}
 
@@ -1186,35 +1248,60 @@ export function RyVibePage({
       )}
 
       {output.length > 0 && (
-        <section className="vibe-section">
-          <h2 className="vibe-section-title">{session.status === 'done' ? '做好的东西' : '小队正在做的'}</h2>
-          {output.map((item, index) => {
-            const member = session.squad.find((row) => {
-              return row.id === item.senderId
-            })
-            // 最后一段就是正在写的那一段（流式写入时它在长）。头像跟着动。
-            const speaking = item.senderId === speakingId
-            return (
-              <article key={`${item.seq}`} className="vibe-output">
-                {/* 谁写的：头像 + 名字。此前只有一行小字，看不出这段出自谁。 */}
-                <Avatar
-                  avatarKey={member?.avatar}
-                  name={nameOf(item.senderId)}
-                  seed={item.senderId}
-                  size={36}
-                  speaking={speaking}
-                  {...(member?.temperament === undefined ? {} : { temperament: member.temperament })}
+        <section className="vibe-section vibe-stream-section">
+          {/*
+            这一页就是一条消息流。
+            此前每段产出是一个带边框的独立卡片——那是一份**日志**：看得见"有几条记录"，
+            看不见"谁在跟谁说话"。RyVibe 讲的就是一支队伍在接力干活，那它就该长得
+            像一段对话：小队每个人的发言是一条气泡，用户那句话也在流里。
+            视觉直接复用聊天页那套气泡（同一个组件），于是复制、朗读、流式光标、
+            头像列对齐全是白捡的，RyVibe 与聊天页也不会是两副面孔。
+          */}
+          <div className="vibe-stream">
+            {output.map((item, index) => {
+              const member = session.squad.find((row) => {
+                return row.id === item.senderId
+              })
+              const previous = output[index - 1]
+              // 同一个人连着说几句：收紧间距，头像只在组首画一次（与聊天页同一套口径）。
+              const tight = previous !== undefined && previous.senderId === item.senderId
+              /**
+               * 正在写的那一条标成"还没写完"：气泡组件靠这一位决定头像要不要动
+               * （未完成的 agent 消息，头像会跟着说话律动）。
+               */
+              const last = index === output.length - 1
+              const writing = last && session.status === 'building'
+              return (
+                <MessageBubble
+                  key={`vibe-${item.seq}`}
+                  message={{
+                    key: `vibe-${item.seq}`,
+                    senderType: 'agent',
+                    senderId: item.senderId,
+                    senderName: nameOf(item.senderId),
+                    turnIndex: 0,
+                    seq: item.seq,
+                    createdAt: item.createdAt,
+                    parts: [{ kind: 'text', text: item.text }],
+                    done: !writing,
+                  }}
+                  agent={
+                    member === undefined
+                      ? undefined
+                      : {
+                          id: member.id,
+                          name: member.name,
+                          ...(member.avatar === undefined ? {} : { avatar: member.avatar }),
+                          ...(member.temperament === undefined ? {} : { temperament: member.temperament }),
+                        }
+                  }
+                  fileUrl={vibeFileUrl}
+                  firstOfGroup={!tight}
+                  tight={tight}
                 />
-                <div className="vibe-output-main">
-                  <div className="vibe-output-name">{nameOf(item.senderId)}</div>
-                  <div className="vibe-output-body">
-                    <Markdown text={item.text} />
-                  </div>
-                </div>
-                {index === output.length - 1 ? null : null}
-              </article>
-            )
-          })}
+              )
+            })}
+          </div>
         </section>
       )}
 
