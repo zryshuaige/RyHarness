@@ -31,6 +31,8 @@ const OPEN_RE = /<!--\s*notice:([\w.-]+)\s*-->/g
 
 /** Lucide 图标的入库目录（由 gen-lucide-icons.mjs 从 lucide-static 拷入，随源码分发）。 */
 const LUCIDE_DIR = 'apps/desktop/renderer/src/assets/lucide'
+/** 供应商品牌标识的入库目录（随源码分发，因此是分发物的一部分，必须署名）。 */
+const PROVIDER_LOGOS_DIR = 'apps/desktop/assets/providers'
 /** electron-builder 的应用入口：随包交付的运行期依赖闭包从它的 dependencies 起算。 */
 const APP_MANIFEST = 'apps/desktop/package.json'
 /** 桌面应用的分发目录，打包产物的实际位置（用于判断某工作区包是否真的进包）。 */
@@ -50,6 +52,7 @@ const CHECKS = [
   { key: 'icons.list', from: `${LUCIDE_DIR}/*.svg`, pick: (f) => f.icons.join('、') },
   { key: 'avatars.styles', from: 'renderer 的头像样式注册表', pick: (f) => `${f.avatarStyles.length}` },
   { key: 'avatars.stylesList', from: 'renderer 的头像样式注册表', pick: (f) => f.avatarStyles.join('、') },
+  { key: 'providerLogos.count', from: `${PROVIDER_LOGOS_DIR}/*.png`, pick: (f) => `${f.providerLogos.length}` },
 
   // ---- 运行时依赖 ----
   { key: 'runtime.react', from: 'react（已安装）', pick: (f) => f.runtime.react.version },
@@ -258,6 +261,14 @@ export function scanRepo(root = ROOT) {
         .sort()
     : fail(`找不到 Lucide 图标目录：${LUCIDE_DIR}`)
 
+  const providerLogosDir = path.join(ROOT, PROVIDER_LOGOS_DIR)
+  const providerLogos = existsSync(providerLogosDir)
+    ? readdirSync(providerLogosDir)
+        .filter((name) => name.endsWith('.png'))
+        .map((name) => name.slice(0, -'.png'.length))
+        .sort()
+    : fail(`找不到供应商品牌标识目录：${PROVIDER_LOGOS_DIR}`)
+
   const shipped = shippedWorkspacePackages(ROOT)
   const shippedLicenses = new Set(shipped.map((entry) => entry.manifest.license ?? '未声明'))
   if (shippedLicenses.size !== 1) {
@@ -283,6 +294,7 @@ export function scanRepo(root = ROOT) {
 
   return {
     icons,
+    providerLogos,
     shipped,
     shippedNonVendor: shipped.filter((entry) => {
       return !entry.dir.startsWith('vendor/')

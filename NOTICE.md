@@ -37,8 +37,22 @@ Electron 自带的 Chromium / V8 / Node.js 属于第四类：**我方没有选�
 
 | 资产 | 来源 | License | 用途 |
 |---|---|---|---|
+| 供应商品牌标识（<!-- notice:providerLogos.count -->13<!-- /notice --> 个） | [Simple Icons](https://simpleicons.org)（CC0，单色 path）11 个 + [LobeHub Icons](https://lobehub.com/icons)（MIT）2 个；硅基流动取自其官网 favicon（彩色） | **CC0-1.0** / **MIT** | 设置页「先挑一家」网格与供应商列表里的品牌标识（`apps/desktop/assets/providers/`，构建前光栅化成 256px PNG） |
 | Lucide 图标（<!-- notice:icons.count -->36<!-- /notice --> 个） | [lucide-static](https://lucide.dev) v<!-- notice:icons.version -->1.55.0<!-- /notice --> | <!-- notice:license.lucideStatic -->**ISC**<!-- /notice --> | UI chrome 全部图标（`renderer/src/assets/lucide/`，经 `scripts/gen-lucide-icons.mjs` 从 npm 包拷入并入库） |
 | DiceBear 头像（<!-- notice:avatars.styles -->2<!-- /notice --> 个家族） | [@dicebear/core + @dicebear/collection](https://dicebear.com) v9 | 框架 **MIT**；风格许可见下 | agent 头像（本地 SVG 生成，无网络请求） |
+
+### 供应商品牌标识（13 个）
+
+| 标识 | 来源 | License |
+|---|---|---|
+| SiliconFlow | 官网 favicon（彩色透明底，不套品牌底） | 商标归其所有者 |
+| DeepSeek、Moonshot、Kimi、MiniMax、OpenRouter、Ollama、Anthropic、Google、Hugging Face、Qwen | [Simple Icons](https://simpleicons.org) 单色 path | **CC0-1.0**（图形整理） |
+| OpenAI、智谱 GLM（Zhipu） | [LobeHub Icons](https://lobehub.com/icons) 单色变体 | **MIT** |
+
+这些标识只用于**指明用户正在配置哪家的服务**（指示性使用），不表示任何关联或背书。
+各品牌的商标权仍归其所有者；CC0 / MIT 只覆盖图形的整理与再分发。
+（OpenAI 那个是官方的六瓣结标识，智谱是分子节点标识——此前前者是"绿底 + 白 O"的首
+字母方块、后者用的根本不是智谱的标识，一屏排开认不出是哪家。）
 
 入库图标（`renderer/src/assets/lucide/` 目录下逐个扫描，缺一个就说明登记表与目录脱节）：
 <!-- notice:icons.list -->alert、arrow-up、arrow-up-right、at-sign、blocks、brain、calendar-days、chat-bubble、check、chevron-left、chevron-right、clipboard-list、copy、crown、dices、ellipsis、file、gear、group、mail、moon、panel-right、pencil、plus、search、send、sparkles、speaker、square、sun、thumbs-down、thumbs-up、user、users、volume-2、x<!-- /notice -->

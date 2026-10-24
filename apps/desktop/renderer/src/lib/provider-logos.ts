@@ -11,6 +11,10 @@
  * 来源与授权：
  * - 标识图形来自 Simple Icons（CC0-1.0，单色 path，24×24 归一化 viewBox），
  *   由构建前的一次性脚本光栅化成 256px PNG（见下「怎么加一家」）。
+ * - **OpenAI 与智谱（GLM）取自 LobeHub Icons 的单色变体**（MIT）：Simple Icons 早期
+ *   版本因商标原因下架过 OpenAI，后来又加回来了（15.15.0 的 icons/openai.svg 就是
+ *   官方的六瓣结）；智谱那一版则一直没有收录。此前的 OpenAI 是「品牌绿底 + 白 O」
+ *   的**首字母方块**、智谱用的是一张**并非智谱标识**的图——用户一眼就认不出是哪家。
  * - 硅基流动的标识不在 Simple Icons 里，取自其官网 favicon——它本身是彩色
  *   带透明底的图形，因此不再套品牌底（套了会把阶梯块的层次糊掉）。
  * - 各品牌标识的著作权仍归各公司，CC0 只覆盖 Simple Icons 的图形整理。
@@ -19,9 +23,6 @@
  *
  * 挑 Simple Icons 而不是各站 favicon 的原因：favicon 是多尺寸位图、清晰度不一、
  * 带透明边缘，在 20px 的列表行里糊成一团；单色 path 放大到 256 再缩到 20 依然干净。
- *
- * **OpenAI 没有 logo**：其标识因商标原因不在 Simple Icons（连 openai / chatgpt 都已
- * 下架），官方 favicon 也拒绝跨站引用。宁可留首字母兜底，也不挂一张来源不明的图。
  */
 import anthropicLogo from '../../../assets/providers/anthropic.png'
 import deepseekLogo from '../../../assets/providers/deepseek.png'
@@ -31,6 +32,7 @@ import kimiLogo from '../../../assets/providers/kimi.png'
 import minimaxLogo from '../../../assets/providers/minimax.png'
 import moonshotLogo from '../../../assets/providers/moonshot.png'
 import ollamaLogo from '../../../assets/providers/ollama.png'
+import openaiLogo from '../../../assets/providers/openai.png'
 import openrouterLogo from '../../../assets/providers/openrouter.png'
 import qwenLogo from '../../../assets/providers/qwen.png'
 import siliconflowLogo from '../../../assets/providers/siliconflow.png'
@@ -45,8 +47,7 @@ const BRAND_LOGOS: Readonly<Record<string, string | undefined>> = Object.freeze(
   zhipu: zhipuLogo,
   minimax: minimaxLogo,
   openrouter: openrouterLogo,
-  // OpenAI 的标识因商标原因不可用，见文件头说明。
-  openai: undefined,
+  openai: openaiLogo,
   ollama: ollamaLogo,
   anthropic: anthropicLogo,
   google: googleLogo,
@@ -67,20 +68,14 @@ export function providerLogo(id: string | undefined): string | undefined {
 export const PROVIDER_LETTER_BG = '#8A7F72'
 
 /**
- * 个别供应商的兜底底色：按它自己的品牌色垫。
+ * 首字母兜底的底色：中性灰，如实说明「这是占位」。
  *
- * OpenAI 的标识因商标原因不能随包分发（Simple Icons 已下架、官网也拒绝跨站引用），
- * 所以那一格只能首字母。但用中性灰会变成一排彩色标识里最突兀的一块，改用它自己的
- * 品牌绿之后，一眼能对上是谁——底色是它家的绿，字是它家的 O。
+ * 现在内置的十三家都有真标识了，这条只剩**用户自建的路由**会走到（自建的那家
+ * 本来就没有官方标识）。曾经 OpenAI 也走这里（"品牌绿底 + 白 O"），现在它有自己的
+ * 标识了，这条不再按品牌色分叉——同一套兜底在一屏里才不会像两种设计。
  */
-const LETTER_BG_BY_ID: Readonly<Record<string, string>> = Object.freeze({
-  openai: '#10A37F',
-})
-
-/** 首字母兜底的底色：这家有品牌色就用品牌色，否则用中性灰。 */
-export function providerLetterBg(id: string | undefined): string {
-  if (id === undefined) return PROVIDER_LETTER_BG
-  return LETTER_BG_BY_ID[id] ?? PROVIDER_LETTER_BG
+export function providerLetterBg(_id: string | undefined): string {
+  return PROVIDER_LETTER_BG
 }
 
 /**

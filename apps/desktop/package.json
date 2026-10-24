@@ -15,6 +15,7 @@
     "start": "electron .",
     "capture": "node scripts/capture.mjs",
     "gen:icon": "node scripts/gen-icon.mjs",
+    "gen:provider-logos": "node scripts/gen-provider-logos.mjs",
     "package": "pnpm run build && electron-builder --win",
     "package:dir": "pnpm run build && electron-builder --win --dir",
     "package:release": "node scripts/package-release.mjs",
