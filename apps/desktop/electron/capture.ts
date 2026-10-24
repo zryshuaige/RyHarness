@@ -556,13 +556,16 @@ async function runUiAudit(window: BrowserWindow, here: string): Promise<void> {
       return true
     })()`)
   }
-  /** 切到第 n 个 rail 页签。 */
-  const tab = async (index: number): Promise<void> => {
-    await run(`(() => {
-      const tabs = document.querySelectorAll('.rail-tab')
-      if (tabs[${index}]) tabs[${index}].click()
-      return true
-    })()`)
+  /**
+   * 切到某个 rail 页签。
+   *
+   * 按**名字**切，不按下标：RyVibe 插进聊天下面那一次，页签的顺序就变了，按下标
+   * 切出来的图会**看着还挺正常**——「新建助理」那张拍成了 RyVibe 页，「插件」那张
+   * 拍成了通讯录页，图上看不出错，只有对着文件名才发现全错位。巡检的全部价值就是
+   * 「这些面我点开看过」，图错位了这份证据就不作数。
+   */
+  const tab = async (label: string): Promise<void> => {
+    await gotoTab(window, label)
   }
   /** 把指针放到某个元素的横向某个位置（0=最左 0.5=中间 1=最右）。 */
   const hoverAt = async (selector: string, ratio: number): Promise<void> => {
@@ -578,9 +581,9 @@ async function runUiAudit(window: BrowserWindow, here: string): Promise<void> {
     })()`)
   }
 
-  await tab(0)
+  await tab('聊天')
   await shoot('audit-chat.png')
-  await tab(1)
+  await tab('通讯录')
   await shoot('audit-contacts.png')
   // 新建 Agent 弹层
   await clickText('新建 Agent')
@@ -601,15 +604,18 @@ async function runUiAudit(window: BrowserWindow, here: string): Promise<void> {
     if (node) node.click()
     return true
   })()`)
-  await tab(3)
+  await tab('我的')
   await shoot('audit-me.png')
   // 把指针停在「我的形象」的大预览上：应当抬起爪子打招呼。
   await hoverAt('.animal-studio-preview .avatar-3d', 0.5)
   await shoot('audit-me-wave.png')
-  await tab(2)
+  await tab('插件')
   await shoot('audit-plugins.png')
   // 建群弹层
-  await tab(1)
+  await tab('通讯录')
   await clickText('建群')
   await shoot('audit-create-group.png')
+  // RyVibe 页：盘问卡与小队面板
+  await tab('RyVibe')
+  await shoot('audit-vibe.png')
 }
