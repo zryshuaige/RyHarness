@@ -102,6 +102,14 @@ function runtimeNote(plugin: PluginView): string | undefined {
   return undefined
 }
 
+/**
+ * 「开关开着、插件却没跑」和「用户自己把它关了」是两回事，页面上必须能分开：
+ * 前者状态点画成空心琥珀环并补一行说明，后者就是普通的灰点「已停止」。
+ */
+function isStalled(plugin: PluginView): boolean {
+  return statusOf(plugin) === 'stopped' && plugin.enabled
+}
+
 type LoadState =
   | { kind: 'loading' }
   | { kind: 'error'; detail: string }
@@ -124,6 +132,7 @@ function PluginCard({
   const group = groupOf(plugin)
   const status = statusOf(plugin)
   const note = runtimeNote(plugin)
+  const stalled = isStalled(plugin)
   const tools = capabilityList(plugin.capabilities?.tools)
   const routes = capabilityList(plugin.capabilities?.routes)
   const panelId = `plugin-detail-${plugin.id}`
@@ -143,12 +152,25 @@ function PluginCard({
           <span className="plugin-body">
             <span className="plugin-name">{plugin.name}</span>
             <span className="plugin-desc">{plugin.description}</span>
-            {plugin.core && <span className="plugin-core-note">{impactOf(plugin)}</span>}
-            {!plugin.core && note !== undefined && <span className="plugin-note">{note}</span>}
+            {plugin.core && (
+              // 内置那组要解释为什么关不掉。这句话与展开区里的「为什么不可关闭」是同一句，
+              // 所以展开后这行让位给展开区（见 styles-plugins.css 的 .is-open 规则），
+              // 同一屏不出现两遍一样的话。
+              <span className="plugin-core-note">{impactOf(plugin)}</span>
+            )}
+            {!plugin.core && note !== undefined && (
+              <span className="plugin-note">
+                <Icon name="alert" size={16} />
+                <span>{note}</span>
+              </span>
+            )}
           </span>
         </button>
         <div className="plugin-side">
-          <span className={`plugin-status is-${status}`}>{STATUS_LABELS[status]}</span>
+          <span className={`plugin-status is-${status}${stalled ? ' is-stalled' : ''}`}>
+            <span className="plugin-status-dot" aria-hidden="true" />
+            {STATUS_LABELS[status]}
+          </span>
           {plugin.core ? (
             // core 不用禁用开关：一个灰掉的开关暗示「以后也许能开」，静态徽章才
             // 准确表达「它不参与开关」。原因在卡片正文里说清楚。
@@ -158,12 +180,17 @@ function PluginCard({
               type="button"
               role="switch"
               aria-checked={plugin.enabled}
-              aria-label={`${plugin.enabled ? '关闭' : '开启'}${plugin.name}`}
-              className={`btn btn-mini plugin-switch${plugin.enabled ? ' btn-primary' : ''}`}
+              aria-label={`${plugin.name}（${plugin.enabled ? '已开启' : '已关闭'}，点一下${plugin.enabled ? '关闭' : '开启'}）`}
+              className={`plugin-switch${plugin.enabled ? ' is-on' : ''}`}
               disabled={busy}
               onClick={onToggleEnabled}
             >
-              {plugin.enabled ? '已开启' : '已关闭'}
+              {/* 开关画成真开关：滑块的位置、颜色、旁边那两个字一起变，只换颜色分不出
+                  开还是关。字面文案放在可见标签上，屏幕阅读器读到的名字也带上它。 */}
+              <span className="plugin-switch-track" aria-hidden="true">
+                <span className="plugin-switch-knob" />
+              </span>
+              <span className="plugin-switch-label">{plugin.enabled ? '已开启' : '已关闭'}</span>
             </button>
           )}
           <button
@@ -230,6 +257,9 @@ function EmptyPlugins({ hasPlugins, query, onClear }: { hasPlugins: boolean; que
   const trimmed = query.trim()
   return (
     <div className="plugins-empty">
+      <span className="plugins-empty-icon" aria-hidden="true">
+        <Icon name={hasPlugins ? 'search' : 'blocks'} size={20} />
+      </span>
       <h3>{hasPlugins ? '没有找到匹配的插件' : '还没有可显示的插件'}</h3>
       <p>
         {hasPlugins
@@ -372,7 +402,12 @@ export function PluginsPage({ api }: { api: PluginsApi }) {
       <header className="page-header plugins-header">
         <div className="plugins-head-text">
           <h2>插件</h2>
-          <p className="plugins-lede">关掉后，对应的工具与界面会一起消失。</p>
+          <p className="plugins-lede">关掉后，对应的工具与界面会一起消失。「内置」那组是助理的地盘，不能关。</p>
+          {state.kind === 'ready' && needle !== '' && visible.length > 0 && (
+            <p className="plugins-result" aria-live="polite">
+              找到 {visible.length} 个插件
+            </p>
+          )}
         </div>
         <div className="page-actions plugins-search">
           <label className="search-box-wrap">
@@ -395,7 +430,13 @@ export function PluginsPage({ api }: { api: PluginsApi }) {
       <div className="page-scroll">
         <div className="page-scroll-col plugins-col">
           {state.kind === 'unsupported' ? (
-            <p className="panel-empty plugins-unsupported">这版服务端还没有插件接口，插件页暂时不可用。</p>
+            <div className="plugins-empty plugins-unsupported">
+              <span className="plugins-empty-icon" aria-hidden="true">
+                <Icon name="blocks" size={20} />
+              </span>
+              <h3>这版服务端还没有插件接口</h3>
+              <p>插件页暂时不可用。</p>
+            </div>
           ) : (
             <AsyncState
               loading={state.kind === 'loading'}

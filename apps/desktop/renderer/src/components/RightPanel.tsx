@@ -470,11 +470,16 @@ const ConversationUsage = memo(function ConversationUsage({
   }, [api, conversationId, updatedAt])
   if (usage === undefined || usage.messages === 0) return null
   return (
-    <dl className="profile-fields">
+    /* 仍是 dl/dt/dd：这一行是「一个标签配一个值」，屏幕阅读器读出来也是一对。 */
+    <dl className="panel-usage">
       <dt>本会话用量</dt>
       <dd>
-        已用 {humanTokens(usage.totalTokens)}（输入 {humanTokens(usage.inputTokens)} · 输出{' '}
-        {humanTokens(usage.outputTokens)}）
+        <span className="panel-usage-main">
+          已用 <span className="panel-usage-num">{humanTokens(usage.totalTokens)}</span>
+        </span>
+        <span className="panel-usage-sub">
+          输入 {humanTokens(usage.inputTokens)} · 输出 {humanTokens(usage.outputTokens)}
+        </span>
       </dd>
     </dl>
   )
@@ -496,8 +501,7 @@ const ArtifactList = memo(function ArtifactList({
         <span className="artifact-empty-cat" aria-hidden="true">
           <Cat size={56} shape="circle" />
         </span>
-        <p className="panel-empty">本会话还没有产物文件</p>
-        <p className="panel-empty">助理产出文件后会出现在这里。</p>
+        <p className="panel-empty">还没有产物文件。助理产出后会出现在这里。</p>
       </div>
     )
   }
@@ -505,34 +509,40 @@ const ArtifactList = memo(function ArtifactList({
     <ul className="artifact-list">
       {artifacts.map((artifact) => (
         <li key={artifact.callId}>
-          <span aria-hidden="true">
+          <span className="artifact-icon" aria-hidden="true">
             <Icon name="file" size={16} />
           </span>
-          <span className="artifact-name" title={artifact.name}>
-            {artifact.name}
-            <small>{formatSize(artifact.size)}</small>
+          {/* 窄栏里一行放不下「文件名 + 体积 + 两个动作」：文件名独占第一行，
+              体积与动作落到第二行。挤在一行时体积被截掉、两个按钮贴在一起互点。 */}
+          <span className="artifact-main">
+            <span className="artifact-name" title={artifact.name}>
+              {artifact.name}
+            </span>
+            <span className="artifact-meta">
+              <small className="artifact-size">{formatSize(artifact.size)}</small>
+              {/* 与气泡里的文件卡同一个判断：产物先给人看，下载是显式的第二个动作。 */}
+              {onPreview === undefined ? (
+                <a href={fileUrl(artifact.name)} target="_blank" rel="noreferrer">
+                  打开
+                </a>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onPreview({ name: artifact.name, mime: artifact.mime, size: artifact.size })
+                  }}
+                >
+                  预览
+                </button>
+              )}
+              {/* `file-open` 不能少：静默样式的规则是 `.file-open.is-quiet`（两个类），
+                  只写 `is-quiet` 就不命中，下载会落回 `.artifact-list a` 的主操作样式——
+                  于是「预览」与「下载」同色同字重，两个并列的主要动作。 */}
+              <a className="file-open is-quiet" href={fileUrl(artifact.name)} download={artifact.name}>
+                下载
+              </a>
+            </span>
           </span>
-          {/* 与气泡里的文件卡同一个判断：产物先给人看，下载是显式的第二个动作。 */}
-          {onPreview === undefined ? (
-            <a href={fileUrl(artifact.name)} target="_blank" rel="noreferrer">
-              打开
-            </a>
-          ) : (
-            <button
-              type="button"
-              onClick={() => {
-                onPreview({ name: artifact.name, mime: artifact.mime, size: artifact.size })
-              }}
-            >
-              预览
-            </button>
-          )}
-          {/* `file-open` 不能少：静默样式的规则是 `.file-open.is-quiet`（两个类），
-              只写 `is-quiet` 就不命中，下载会落回 `.artifact-list a` 的主操作样式——
-              于是「预览」与「下载」同色同字重，两个并列的主要动作。 */}
-          <a className="file-open is-quiet" href={fileUrl(artifact.name)} download={artifact.name}>
-            下载
-          </a>
         </li>
       ))}
     </ul>
@@ -569,6 +579,9 @@ const DirectProfile = memo(function DirectProfile({
   onShowMemories: (agent: AgentDef) => void
   onShowPlaybook: (agent: AgentDef) => void
 }) {
+  // 人设默认只露几行：右栏本来就窄，一段长提示词塞在里面要自己滚，
+  // 想细看再点「展开」。展开与否是这块自己的状态，右栏别处不受影响。
+  const [promptOpen, setPromptOpen] = useState(false)
   const agent = agents.find((a) => {
     return a.id === agentId
   })
@@ -577,63 +590,90 @@ const DirectProfile = memo(function DirectProfile({
   const persona = normalizePersona(agent.persona)
   const tier = affinityTier(persona.affinity)
   const badge = builtinBadge(agent)
+  const prompt = agent.systemPrompt.trim()
+  // 短提示词一屏放得下，就不必多一个「展开」键。
+  const promptLong = prompt.length > 96
   return (
     <>
+      {/* 头像、名字、亲密度档位说的是同一个人：横着排一行，窄栏里不用竖着堆三样东西。 */}
       <div className="profile-head">
         <Avatar
           avatarKey={agent.avatar}
           name={agent.name}
           seed={agent.id}
-          size={80}
+          size={56}
           className="avatar-lg-ring"
           breathing
         />
-        <h3>
-          {agent.name}
-          {badge !== undefined && <span className="badge">{badge}</span>}
-        </h3>
-        <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-          <button
-            type="button"
-            className="btn"
-            onClick={() => {
-              onShowMemories(agent)
-            }}
-          >
-            <Icon name="brain" size={16} /> 记忆
-          </button>
-          <button
-            type="button"
-            className="btn"
-            onClick={() => {
-              onShowPlaybook(agent)
-            }}
-          >
-            <Icon name="check" size={16} /> 经验手册
-          </button>
+        <div className="profile-id">
+          <h3>
+            {agent.name}
+            {badge !== undefined && <span className="badge">{badge}</span>}
+          </h3>
+          {/* 亲密度档位跟名字放一行：它们说的是同一个人，
+              拆到资料卡下面就成了两处互不相干的数字。 */}
+          <p className="profile-tier">
+            {tier.label}（亲密度 {persona.affinity}/100）
+          </p>
         </div>
       </div>
+      <div className="profile-actions">
+        <button
+          type="button"
+          className="btn btn-mini"
+          onClick={() => {
+            onShowMemories(agent)
+          }}
+        >
+          <Icon name="brain" size={16} /> 记忆
+        </button>
+        <button
+          type="button"
+          className="btn btn-mini"
+          onClick={() => {
+            onShowPlaybook(agent)
+          }}
+        >
+          <Icon name="check" size={16} /> 经验手册
+        </button>
+      </div>
       <dl className="profile-fields">
-        <dt>人设</dt>
-        <dd className="profile-prompt">{agent.systemPrompt}</dd>
+        {prompt.length > 0 && (
+          <>
+            <dt>人设</dt>
+            <dd>
+              <div className={promptOpen ? 'profile-prompt is-open' : 'profile-prompt'}>{prompt}</div>
+              {promptLong && (
+                <button
+                  type="button"
+                  className="panel-link"
+                  aria-expanded={promptOpen}
+                  onClick={() => {
+                    setPromptOpen(!promptOpen)
+                  }}
+                >
+                  {promptOpen ? '收起人设' : '展开人设'}
+                </button>
+              )}
+            </dd>
+          </>
+        )}
         {/* 性格四维：分档名与描述取自内核同一份文案，鼠标悬停看得到该档的行为解释。 */}
         <dt>性格</dt>
         <dd>
-          <span className="tool-chips">
+          <span className="trait-list">
             {TRAIT_META.map((meta) => {
               const band = traitBand(meta, persona[meta.key])
               return (
-                <span key={meta.key} className="chip" title={band.describe}>
+                <span key={meta.key} className="trait-item" title={`${band.describe}（${persona[meta.key]}/100）`}>
                   {meta.label} · {band.label}
                 </span>
               )
             })}
           </span>
         </dd>
-        <dt>相处</dt>
-        <dd>
-          {tier.label}（亲密度 {persona.affinity}/100）——{tier.address}
-        </dd>
+        <dt>称呼</dt>
+        <dd>{tier.address}</dd>
         {persona.birthday !== undefined && (
           <>
             <dt>生日</dt>

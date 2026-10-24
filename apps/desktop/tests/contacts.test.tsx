@@ -96,6 +96,29 @@ const agents: AgentDef[] = [
 ]
 
 describe('通讯录', () => {
+  it('助理清单没读出来时：说清是「没读出来」，并给一次重试——不是「还没有助理」', () => {
+    // 「没读出来」和「真的还没有助理」是两件事。此前这一项失败只留一句 toast，
+    // 页面照常显示「还没有助理」——用户以为是自己没建人，实际是接口没读到。
+    const html = renderToStaticMarkup(
+      <ContactsPage
+        agents={[]}
+        templates={templates}
+        error="助理清单没读出来"
+        errorDetail="HTTP 503"
+        onRetry={() => {}}
+        onChat={() => {}}
+        onCreateAgent={() => {}}
+        onEditAgent={() => {}}
+        onDeleteAgent={() => {}}
+        onCreateGroup={() => {}}
+      />,
+    )
+    expect(html).toContain('助理清单没读出来')
+    expect(html).not.toContain('还没有助理')
+    // 失败态得给一条能重试的路。
+    expect(html).toContain('重试')
+  })
+
   it('助理卡是 memo 的：别人的状态一变，不该把三十张卡一起重画', () => {
     // 性能实测里这一项让每轮重渲成本翻倍（10 位 0.72ms → 1.58ms，30 位 1.81ms →
     // 4.32ms）：点一下「试听」，语音状态一变，整页卡片就跟着重画一遍。

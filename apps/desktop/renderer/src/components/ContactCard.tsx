@@ -10,6 +10,10 @@
  * 现在这张卡是 memo 组件：只有「这位助理的数据变了」或「他在出声」这两件事会让它
  * 重画。点击回调不走 props，而是从一个稳定的 ref 里读（`handlers`）——父级每次
  * 渲染都会重建函数，把它们当 props 传下去，memo 就等于没开。
+ *
+ * **这一轮改了卡里的层次**（详见 styles-contacts.css）：
+ * 名字是唯一能点开这位助理的地方（按钮，键盘可达）；模型名退到等宽的次要信息；
+ * 性格四条给出档位名；口头禅最多两行、长名字截断，都不撑破卡片。
  * @module @ryharness/desktop/renderer/components/ContactCard
  */
 
@@ -71,8 +75,19 @@ function ContactCardImpl({
         tilt
         temperament={{ extroversion: persona.extroversion, rigor: persona.rigor, humor: persona.humor }}
       />
-      <h3>
-        {agent.name}
+      {/* 名字就是入口：点它直接开聊。此前整张卡看着能点（悬停会抬起来），
+          真正能点的却只有下面那个「发消息」——卡片与实际能力对不上。 */}
+      <h3 className="contact-title">
+        <button
+          type="button"
+          className="contact-open"
+          title={`和 ${agent.name} 开聊`}
+          onClick={() => {
+            handlers.current.onChat(agent.id)
+          }}
+        >
+          {agent.name}
+        </button>
         {badge !== undefined && <span className="badge">{badge}</span>}
       </h3>
       {/* 模型标识是开发者单位：直接上屏是「siliconflow / deepseek-ai/DeepSeek-V3」，
@@ -94,7 +109,9 @@ function ContactCardImpl({
                 <span className="contact-trait-bar" aria-hidden="true">
                   <span style={{ width: `${score}%` }} />
                 </span>
-                {same ? null : <span className="contact-trait-value">{band.label}</span>}
+                {/* 档位名那格永远占位（撞名时留空）：四条进度条要一样长，
+                    否则长短会被「哪一行没字」带偏，看着像四条不同量程的尺子。 */}
+                <span className={`contact-trait-value${same ? ' is-empty' : ''}`}>{same ? '' : band.label}</span>
               </dd>
             </div>
           )
@@ -102,7 +119,7 @@ function ContactCardImpl({
       </dl>
       {/* 口头禅：他常挂在嘴边的那句话，比系统提示更能让人记住这位是谁。 */}
       {persona.catchphrase.length > 0 && <p className="contact-catchphrase">「{persona.catchphrase}」</p>}
-      <p className="provider-note">
+      <p className="provider-note contact-affinity">
         亲密度 {persona.affinity}/100 · {affinityTier(persona.affinity).label}
       </p>
       <div className="contact-actions" style={cardActionsStyle}>
@@ -137,7 +154,7 @@ function ContactCardImpl({
           }}
         >
           <Icon name={speaking ? 'square' : 'volume-2'} size={14} />
-          {speaking ? '停止' : '听听'}
+          <span>{speaking ? '停止' : '听听'}</span>
         </button>
         {/* 内置 agent 只锁删除（服务端本来就 409），不锁编辑：
             Ryen 是这个家里唯一一位一直在用的助理，把它钉死在出厂模型上

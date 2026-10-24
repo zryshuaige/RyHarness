@@ -33,28 +33,31 @@ export function GroupEvolution({
         {members.map((member) => (
           <li key={member.id} className="evolution-row">
             <Avatar avatarKey={member.avatar} name={member.name} seed={member.id} size={28} />
-            <span className="evolution-name">{member.name}</span>
-            <span className="evolution-actions">
-              <button
-                type="button"
-                className="btn btn-mini"
-                title={`查看 ${member.name} 的记忆`}
-                onClick={() => {
-                  onShowMemories(member)
-                }}
-              >
-                <Icon name="brain" size={16} /> 记忆
-              </button>
-              <button
-                type="button"
-                className="btn btn-mini"
-                title={`查看 ${member.name} 的经验手册`}
-                onClick={() => {
-                  onShowPlaybook(member)
-                }}
-              >
-                <Icon name="check" size={16} /> 经验手册
-              </button>
+            {/* 名字与两个入口上下两行：窄栏里横着排，名字会被两个按钮挤成一条缝。 */}
+            <span className="evolution-main">
+              <span className="evolution-name">{member.name}</span>
+              <span className="evolution-actions">
+                <button
+                  type="button"
+                  className="btn btn-mini"
+                  title={`查看 ${member.name} 的记忆`}
+                  onClick={() => {
+                    onShowMemories(member)
+                  }}
+                >
+                  <Icon name="brain" size={16} /> 记忆
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-mini"
+                  title={`查看 ${member.name} 的经验手册`}
+                  onClick={() => {
+                    onShowPlaybook(member)
+                  }}
+                >
+                  <Icon name="check" size={16} /> 经验手册
+                </button>
+              </span>
             </span>
           </li>
         ))}
@@ -82,7 +85,9 @@ export function RelayTimeline({ relays, nameOf }: { relays: readonly RelayItem[]
   }
   return (
     <>
-      <h4>
+      {/* 标题行本身就是展开键，所以标题归按钮管：外面再套一层 h4 的话，
+          整行可点的目标就断了。标题与摘要上下两行，窄栏里一行放不下两者。 */}
+      <h4 className="panel-section panel-section-toggle">
         <button
           type="button"
           className="relay-toggle"
@@ -91,8 +96,10 @@ export function RelayTimeline({ relays, nameOf }: { relays: readonly RelayItem[]
             setOpen(!open)
           }}
         >
-          <Icon name="chevron-right" size={16} className="relay-caret" />
-          调度轨迹
+          <span className="relay-toggle-title">
+            <Icon name="chevron-right" size={16} className="relay-caret" />
+            调度轨迹
+          </span>
           <span className="relay-toggle-summary">{relayTimelineSummary(relays, nameOf)}</span>
         </button>
       </h4>
@@ -190,7 +197,7 @@ export function EntryExplain({ api, entry }: { api: EntryExplainApi; entry: Play
         title="这条经验从哪来"
         onClick={toggle}
       >
-        <Icon name="chevron-right" size={16} />
+        <Icon name="chevron-right" size={16} className="entry-explain-caret" />
         它从哪来
       </button>
       {open && (

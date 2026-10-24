@@ -251,6 +251,13 @@ export function App() {
   const [presets, setPresets] = useState<ProviderPreset[]>([])
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [listLoading, setListLoading] = useState(true)
+  /**
+   * 助理清单没读出来（人话 + 原文）。
+   *
+   * 此前这一项失败只在界面上留一句 toast，通讯录那一屏显示的是「还没有助理」——
+   * 用户看到的是「没数据」，而实际是「没读出来」。两件事该分开说。
+   */
+  const [agentsError, setAgentsError] = useState<{ text: string; detail?: string } | undefined>(undefined)
   const [activeId, setActiveId] = useState<string | undefined>(undefined)
   const [modal, setModal] = useState<'agent' | 'group' | undefined>(undefined)
   /** 正在预览的产物。气泡里的文件卡与右栏的产物行共用这一个出口。 */
@@ -519,6 +526,14 @@ export function App() {
             }),
           ),
         )
+        setAgentsError(undefined)
+      } else {
+        // 读失败与「真的还没有助理」是两件事：前者要说明白并给一次重试，后者给「新建」。
+        const detail = errorDetail(agentRes.reason)
+        setAgentsError({
+          text: humanError(agentRes.reason, '助理清单没读出来'),
+          ...(detail === undefined ? {} : { detail }),
+        })
       }
       if (templateRes.status === 'fulfilled') {
         setTemplates((prev) => {
@@ -1110,6 +1125,14 @@ export function App() {
             agents={agents}
             templates={templates}
             loading={listLoading}
+            // 只在一份助理都没读到时把错误摆到这一屏上：手里已经有数据时刷新失败，
+            // 保留旧数据继续用（那边已经有 toast 说了一声）。
+            {...(agentsError === undefined || agents.length > 0
+              ? {}
+              : { error: agentsError.text, errorDetail: agentsError.detail })}
+            onRetry={() => {
+              void refresh()
+            }}
             onCreateAgent={(templateKey) => {
               setAgentTemplateKey(templateKey)
               setEditingAgent(undefined)

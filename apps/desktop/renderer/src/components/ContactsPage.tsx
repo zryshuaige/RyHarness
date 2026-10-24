@@ -517,6 +517,9 @@ export function ContactsPage({
   agents,
   templates,
   loading,
+  error,
+  errorDetail,
+  onRetry,
   onChat,
   onCreateAgent,
   onEditAgent,
@@ -527,6 +530,17 @@ export function ContactsPage({
   templates: AgentTemplate[]
   /** 首份数据是否还在路上：加载期画联系人卡骨架，别把「加载中」说成「通讯录还是空的」。 */
   loading?: boolean
+  /**
+   * 助理清单没读出来（人话）。
+   *
+   * 此前这一项失败只留一句 toast，页面显示的是「还没有助理」——用户以为是自己没建人，
+   * 实际是接口没读到。这两件事必须分开说。
+   */
+  error?: string | undefined
+  /** 原始报错：折在「详情」里，排障用。 */
+  errorDetail?: string | undefined
+  /** 重试一次（失败态给的那枚按钮）。 */
+  onRetry?: (() => void) | undefined
   onChat: (agentId: string) => void
   /** 传入模板 key 时以该模板为初始值新建（此前恒为第一个模板，等于假按钮）。 */
   onCreateAgent: (templateKey?: string) => void
@@ -569,7 +583,7 @@ export function ContactsPage({
       ? voicePlayback.key.slice('agent-voice-'.length)
       : undefined
   return (
-    <section className="page">
+    <section className="page contacts-page">
       <header className="page-header">
         <h2>通讯录</h2>
         <div className="page-actions">
@@ -592,17 +606,31 @@ export function ContactsPage({
           <AsyncState
             loading={loading === true}
             skeleton={<ContactSkeleton />}
+            error={error}
+            detail={errorDetail}
+            {...(onRetry === undefined ? {} : { onRetry })}
             empty={sorted.length === 0}
             emptyView={
-              <div className="empty-state">
+              <div className="empty-state contacts-empty">
                 <span className="empty-cat">
                   {/* 空态插画：徽标是装饰，「正在思考」由 ChatView 的 TypingDots 承担。
                       通讯录为空时并没有谁在思考，此前那个 thinking 三态是矢量猫时代的
                       遗留语义，位图徽标没有可换的眼形。 */}
                   <Cat size={88} />
                 </span>
-                <h3>通讯录还是空的</h3>
-                <p>从模板新建一位 agent 吧，挑个顺眼的头像。</p>
+                <h3>还没有助理</h3>
+                <p>先建一位吧：挑个头像、定个脾气，建完就能直接开聊。</p>
+                {/* 这一屏此前只有一句话，没有能点的地方——用户得自己抬头去找页头那个
+                    「新建 Agent」。空态是最该给按钮的地方。 */}
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => {
+                    onCreateAgent()
+                  }}
+                >
+                  <Icon name="plus" size={16} /> 新建 Agent
+                </button>
               </div>
             }
           >
@@ -621,7 +649,7 @@ export function ContactsPage({
                     <Icon name="plus" size={24} />
                   </span>
                   <h3>新建 Agent</h3>
-                  <p className="contact-prompt">从模板开始，挑头像、定人设</p>
+                  <p className="contact-prompt">从模板开始，挑头像、定脾气</p>
                 </button>
                 {sorted.map((agent, index) => {
                   return (
@@ -639,6 +667,7 @@ export function ContactsPage({
               <p className="section-title" style={{ marginTop: 24 }}>
                 可用模板（{templates.length}）
               </p>
+              <p className="contacts-hint">点一个模板，就按它的样子建一位：名字、头像、性格都会一起带过来。</p>
               <div className="template-rail">
                 {templates.map((template, index) => (
                   <button
@@ -963,10 +992,21 @@ function PersonaEditor({
                     onChange({ ...persona, [meta.key]: clampTrait(Number(e.target.value)) })
                   }}
                 />
-                {/* 两端就是这把尺子的刻度：拖到哪一头，用户能一眼看出自己的倾向。 */}
+                {/* 尺子：四档的名字都摆出来，当前那一档点亮。
+                    此前只标了两端（「安静」和「自来熟」），中间两档看得见却叫不出名字，
+                    拖到 60 分时不知道那算「适中」还是「外向」。档位名直接从分档表里取，
+                    不另抄一份，免得改了分档这里还在说旧话。 */}
                 <span className="persona-trait-scale">
-                  <span>{traitBand(meta, 0).label}</span>
-                  <span>{traitBand(meta, 100).label}</span>
+                  {meta.bands.map((stop) => {
+                    return (
+                      <span
+                        key={stop.max}
+                        className={`persona-trait-stop${stop.label === band.label ? ' is-current' : ''}`}
+                      >
+                        {stop.label}
+                      </span>
+                    )
+                  })}
                 </span>
               </span>
               <span className="persona-trait-band">
@@ -1467,6 +1507,9 @@ export function CreateAgentModal({
                 </span>
                 {/* 组合存不下来时先说清要改，而不是让人自己发现保存键点不动。 */}
                 {modelHint !== undefined && <span className="advanced-flag">需修改</span>}
+                {/* 这块能折起来：光靠一个转圈的箭头说不清眼下是折着还是开着，
+                    直接写「展开 / 收起」。 */}
+                <span className="advanced-state">{advancedOpen ? '收起' : '展开'}</span>
                 <Icon name="chevron-right" size={16} className={`advanced-chevron${advancedOpen ? ' is-open' : ''}`} />
               </button>
               {advancedOpen && (

@@ -1,0 +1,464 @@
+/*
+ * 通讯录页与助理身份卡的样式。
+ *
+ * 单独成文件而不是并进 styles.css / styles-product.css：那几个文件是全页共用的，
+ * 多人并行改时同一段 CSS 会被互相覆盖。这一份只归「通讯录」这条线改。
+ *
+ * 放在最后 import，规则覆盖前面同名的旧规则；旧规则留着不删（回滚时还在）。
+ *
+ * ============================================================
+ * 这一版做了什么（用户能看见的变化）
+ * ============================================================
+ * 1. 助理卡：名字成了唯一的入口（按钮，键盘能走到）；模型名退成等宽的次要信息；
+ *    性格四条各带一个档位标签，四条进度条一样长；口头禅最多两行、长名字截断，
+ *    都不再撑破卡片；四个动作排成 2×2，不再挤成一团换行。
+ * 2. 「新建 Agent」那块：它是一个动作，不是一张人卡——琥珀底 + 实心加号。
+ * 3. 空态多了一个能点的按钮：此前这一屏只有一句话，用户得自己抬头去找页头的按钮。
+ * 4. 身份卡与性格区：长名字截断；滑杆下面把四档的名字全摆出来、当前那档点亮；
+ *    头像选中的那一格给脸本身套一圈环；高级设置写清「展开 / 收起」。
+ *
+ * 颜色一律走 styles.css 里已有的 token，深浅两套主题自动成立；本文件不新增色值。
+ * 唯一的例外是下面那个圆角 token——那是尺寸，不是颜色。
+ */
+
+/* 卡片圆角：全站统一走 --radius-md（12px）这一档。
+   此前这里本地补过一个 16px 的 --radius-card，理由是「18px 偏圆、12px 偏方，卡片要落在
+   中间」——但这一轮五个二级页面一起改完，插件页 / 供应商页 / 「我的」页用的都是 12px，
+   通讯录单独一档 16px 反而成了孤例：用户在几页之间来回走，卡片的圆角会看出差别。
+   圆角梯度全站只用既有那几档（见 styles.css 的 --radius-*），不再另立一档。 */
+:root {
+  --radius-card: var(--radius-md);
+}
+
+/* ============================================================
+   通讯录页
+   ============================================================ */
+
+/* 卡片网格：窄了自动少一列（auto-fill 自己算），卡片之间留一档呼吸。 */
+.contacts-page .contact-grid {
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: var(--space-4);
+}
+
+/* 卡片本体：白面 + 1px 发丝描边 + 极轻阴影 + 12px 圆角。
+   描边是白卡压在暖奶油底上唯一的边缘信号（阴影量不出边）。 */
+.contacts-page .contact-card {
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-1);
+  padding: var(--space-5) var(--space-4);
+  gap: var(--space-2);
+}
+
+/* 悬停：抬起来 + 描边加深。
+   卡片本身不是可点的（可点的是名字与里面的按钮），所以抬的是这一格的分量，
+   不是在暗示「整张卡能按」。 */
+.contacts-page .contact-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-2);
+  border-color: var(--edge-strong);
+}
+
+/* 键盘焦点落在卡里的按钮上时，整张卡亮一圈：
+   Tab 走到哪一位助理身上，一眼看得出来。 */
+.contacts-page .contact-card:focus-within {
+  border-color: var(--amber-text);
+  box-shadow: var(--shadow-1), var(--focus-ring);
+}
+
+/* 名字那一行：名字可点（开聊），内置标记跟在旁边。 */
+.contacts-page .contact-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: center;
+  gap: 2px var(--space-2);
+  width: 100%;
+  margin: 0;
+  font-size: var(--fs-md);
+}
+
+/* 名字按钮：长得像标题，按下去能开聊。
+   最多两行——名字再长也不撑破卡片（overflow-wrap 处理没有空格的长串）。
+   高度用 max-height 掐：按钮上用 -webkit-line-clamp 不稳，而 line-height 1.35 ×
+   两行正好是 2.7em，切口落在行与行之间，第三行不会露出半行。
+   min-height 26px：一行字只有 21.6px，按 WCAG 2.5.8 的下限（24×24）不够。 */
+.contacts-page .contact-open {
+  display: inline-block;
+  max-width: 100%;
+  max-height: 2.7em;
+  min-height: 26px;
+  overflow: hidden;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text-primary);
+  text-align: center;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+  transition: color var(--dur-hover) var(--ease-out);
+}
+
+.contacts-page .contact-open:hover {
+  color: var(--amber-text);
+}
+
+/* 模型名：这是开发者单位，压到最弱的一档——等宽字体、灰、最多两行。 */
+.contacts-page .contact-model {
+  max-width: 100%;
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-tertiary);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+/* 性格四条：四条进度条 + 四个档位标签。
+   档位名那格固定占位（撞名时留空），四条条一样长——长短不一致时，
+   人眼会以为那四条量程不一样。 */
+.contacts-page .contact-traits {
+  margin: var(--space-2) 0 0;
+  display: grid;
+  gap: var(--space-1);
+  width: 100%;
+}
+
+.contacts-page .contact-trait {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.contacts-page .contact-trait dt {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  text-align: left;
+}
+
+.contacts-page .contact-trait dd {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.contacts-page .contact-trait-bar {
+  flex: 1;
+  min-width: 0;
+  height: var(--slider-track-h);
+  border-radius: var(--radius-pill);
+  background: var(--bg-subtle);
+  overflow: hidden;
+}
+
+.contacts-page .contact-trait-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background: var(--amber-primary);
+}
+
+/* 档位标签：「自来熟」比「外向 72」好懂。 */
+.contacts-page .contact-trait-value {
+  flex: none;
+  min-width: 5em;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* 档位名与轴名撞了（外向 → 外向）时，这格空着但仍占位。 */
+.contacts-page .contact-trait-value.is-empty {
+  visibility: hidden;
+}
+
+/* 口头禅：最多两行，中文不用斜体（合成斜体在汉字上很难看）。 */
+.contacts-page .contact-catchphrase {
+  max-width: 100%;
+  margin: var(--space-2) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-style: normal;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+/* 亲密度：一行弱信息，紧挨口头禅。 */
+.contacts-page .contact-affinity {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+/* 四个动作排成 2×2：此前四个按钮挤在一行，放不下就换行，换出来的行参差不齐。 */
+.contacts-page .contact-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+  width: 100%;
+  margin-top: auto;
+}
+
+/* 卡片里的按钮不再各自带一段上边距（grid 自己管间距）。 */
+.contacts-page .contact-actions .btn {
+  margin-top: 0;
+}
+
+/* 「听听」：图标与文字之间留一格——JSX 里的换行不会变成空格。 */
+.contacts-page .contact-voice {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.contacts-page .contact-voice .icon {
+  flex-shrink: 0;
+}
+
+/* ---- 「新建 Agent」那一格：它是一个动作，不是一张人卡 ----
+   此前它是一张空卡：同样的白底、同样的圆角、同样的悬停抬升，
+   用户会以为点它能选一位已有的人。现在给它琥珀底 + 实心加号 +
+   动作文案，一眼就知道是「加一个」。 */
+.contacts-page .contact-create {
+  border: 1px solid var(--edge);
+  /* 琥珀只做淡底：color-mix 的是已有的两个 token，深浅两套主题各自成立。 */
+  background: color-mix(in srgb, var(--amber-primary) 10%, var(--bg-surface));
+  box-shadow: var(--shadow-1);
+  color: var(--amber-text);
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: 208px;
+  transition: background var(--dur-hover) var(--ease-out), transform var(--dur-hover) var(--ease-out),
+    box-shadow var(--dur-hover) var(--ease-out), border-color var(--dur-hover) var(--ease-out);
+}
+
+.contacts-page .contact-create:hover {
+  background: color-mix(in srgb, var(--amber-primary) 18%, var(--bg-surface));
+  border-color: var(--amber-text);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-2);
+}
+
+.contacts-page .contact-create:active {
+  transform: translateY(-2px) scale(0.98);
+}
+
+/* 加号：实心琥珀圆牌，和「选中 / 主按钮」同一套「该注意的地方」的琥珀。 */
+.contacts-page .contact-create-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-pill);
+  background: var(--amber-primary);
+  color: var(--amber-on-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.contacts-page .contact-create h3 {
+  color: var(--amber-text);
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+.contacts-page .contact-prompt {
+  max-width: 18em;
+  margin: 0;
+  min-height: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+}
+
+/* ---- 空态：给一个能点的按钮 ---- */
+.contacts-page .contacts-empty {
+  gap: var(--space-3);
+}
+
+.contacts-page .contacts-empty p {
+  max-width: 24em;
+}
+
+.contacts-page .contacts-empty .btn {
+  margin-top: var(--space-2);
+}
+
+/* ---- 模板轨 ---- */
+.contacts-page .contacts-hint {
+  margin: 0 0 var(--space-2);
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+}
+
+.contacts-page .template-card {
+  flex: 0 0 240px;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-1);
+}
+
+.contacts-page .template-card strong {
+  font-size: var(--fs-base);
+  font-weight: 600;
+}
+
+.contacts-page .template-card span {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  line-height: 1.6;
+}
+
+/* ============================================================
+   建 Agent 工作台（身份卡 + 分区 + 性格 + 头像 + 高级设置）
+   ============================================================ */
+
+/* ---- 身份卡：右栏那张「它变成了谁」 ----
+   只改圆角：内边距与间距留给窄窗那档（styles-product.css 的 @media 里把它摊成
+   横向一条），这里插手会把窄窗的排版顶掉。 */
+.studio .agent-card {
+  border-radius: var(--radius-card);
+}
+
+/* 名字：长名字最多两行，不把整张卡撑开。 */
+.studio .agent-card-name {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.studio .agent-card-catch {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+
+/* 性格摘要：一行放不下就换行，别把卡片撑宽。 */
+.studio .agent-card-traits {
+  max-width: 100%;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+/* ---- 分区标题：页内的小标题，比页面标题弱一档，比正文强一档 ---- */
+.studio .studio-section-text strong {
+  font-size: var(--fs-md);
+}
+
+.studio .studio-section-text small {
+  line-height: 1.5;
+}
+
+/* ---- 头像选择器 ---- */
+.studio .face-cell {
+  border-radius: var(--radius-md);
+}
+
+/* 选中的那一格：除了卡片级的描边与软底，再给脸本身套一圈环。
+   一排小圆图里，卡片级的 2px 边框容易被当成「这一格的边框」，
+   脸上一圈才是「这张脸被选中了」。这不是投影，是选中环。 */
+.studio .face-cell.is-selected .face-cell-art {
+  box-shadow: 0 0 0 2px var(--amber-text);
+}
+
+/* 格子下面那行名字：再长也不把格子撑宽。 */
+.studio .face-cell small {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- 性格区 ---- */
+.studio .persona-card {
+  border-radius: var(--radius-card);
+}
+
+/* 四维一行：维度名 / 滑杆 / 当前档位。
+   维度名那列固定 72px，分数靠右对齐——四行的分数排成一条竖线，一眼能比。
+   滑杆那列留 120px 地板：窄窗下宁可档位说明窄一点，也不能把滑杆挤没了。 */
+.studio .persona-trait {
+  grid-template-columns: 72px minmax(120px, 1fr) minmax(140px, 190px);
+  gap: var(--space-3);
+}
+
+.studio .persona-trait-label {
+  width: 100%;
+  justify-content: space-between;
+}
+
+/* 尺子：四档的名字全摆出来，当前那一档点亮。
+   此前只标了两端，中间两档看得见却叫不出名字。两边各缩进半个拇指，
+   四档的分界才和滑杆上的 25/50/75 对得上。 */
+.studio .persona-trait-scale {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-1);
+  padding: 0 calc(var(--slider-thumb) / 2);
+  color: var(--text-disabled);
+  font-size: var(--fs-xs);
+  line-height: 1.3;
+}
+
+.studio .persona-trait-stop {
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.studio .persona-trait-stop.is-current {
+  color: var(--amber-text);
+  font-weight: 600;
+}
+
+/* 当前档位的说明：这一栏窄，长句子换行也不该把字压扁。 */
+.studio .persona-trait-band small {
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* ---- 高级设置 ---- */
+.studio .advanced {
+  border-radius: var(--radius-card);
+}
+
+/* 折叠入口是一整行按钮，热区够大（≥44px）。 */
+.studio .advanced-toggle {
+  min-height: 44px;
+}
+
+/* 「展开 / 收起」：光靠一个转圈的箭头说不清眼下是折着还是开着。 */
+.studio .advanced-state {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}

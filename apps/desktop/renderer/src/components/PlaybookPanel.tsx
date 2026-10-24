@@ -293,8 +293,10 @@ export function PlaybookPanel({
                   <li key={reflection.id} className="memory-row">
                     <span className="memory-kind kind-event">教训</span>
                     <span className="memory-content">{reflection.lesson}</span>
-                    <span className="memory-meta">
-                      命中 {reflection.hitCount}/{CONVERT_HIT_THRESHOLD} · {formatDate(reflection.createdAt)}
+                    <span className="memory-foot">
+                      <span className="memory-meta">
+                        命中 {reflection.hitCount}/{CONVERT_HIT_THRESHOLD} · {formatDate(reflection.createdAt)}
+                      </span>
                     </span>
                   </li>
                 ))}
@@ -319,34 +321,46 @@ export function PlaybookPanel({
                 </p>
                 <ul className="memory-list">
                   {entries.map((entry) => (
-                    <li key={entry.id} className={`memory-row ${entry.status === 'deprecated' ? 'is-deprecated' : ''}`}>
+                    <li
+                      key={entry.id}
+                      className={`memory-row memory-entry ${entry.status === 'deprecated' ? 'is-deprecated' : ''}`}
+                    >
                       {/* 溯源入口挂在正文列里：证据链要占满一整行的宽度，挤在行尾
                           会被正文压成一条缝。正文单占一块，入口与它天然换行。 */}
                       <div className="memory-content">
                         <div>{entry.content}</div>
                         <EntryExplain api={api} entry={entry} />
                       </div>
-                      <span
-                        className={`pb-count ${net(entry) >= 0 ? 'pos' : 'neg'}`}
-                        title="这条经验被标记有用/没用的次数"
-                      >
-                        有用 {entry.helpful} · 没用 {entry.harmful}
+                      {/* 计票、来源与开关落第二行：第一行只留经验本身，
+                          一行挤四样东西时用户读不出这条经验说了什么。 */}
+                      <span className="memory-foot">
+                        <span className="memory-meta">
+                          <span
+                            className={`pb-count ${net(entry) >= 0 ? 'pos' : 'neg'}`}
+                            title="这条经验被标记有用/没用的次数"
+                          >
+                            有用 {entry.helpful} · 没用 {entry.harmful}
+                          </span>
+                          <span className="memory-source">{SOURCE_LABELS[entry.source]}</span>
+                        </span>
+                        <span className="memory-actions">
+                          <button
+                            type="button"
+                            className="btn btn-mini memory-delete memory-toggle"
+                            title={
+                              entry.status === 'active'
+                                ? '停用这条经验：它不会再被注入提示'
+                                : '恢复这条经验：重新参与提示'
+                            }
+                            aria-label={`${entry.content.slice(0, 20)}：${entry.status === 'active' ? '停用' : '恢复'}`}
+                            onClick={() => {
+                              toggle(entry)
+                            }}
+                          >
+                            {entry.status === 'active' ? '停用' : '恢复'}
+                          </button>
+                        </span>
                       </span>
-                      <span className="memory-meta">{SOURCE_LABELS[entry.source]}</span>
-                      <button
-                        type="button"
-                        className="btn btn-mini memory-delete"
-                        style={{ width: 'auto', height: 'auto', padding: '2px 8px', whiteSpace: 'nowrap' }}
-                        title={
-                          entry.status === 'active' ? '停用这条经验：它不会再被注入提示' : '恢复这条经验：重新参与提示'
-                        }
-                        aria-label={`${entry.content.slice(0, 20)}：${entry.status === 'active' ? '停用' : '恢复'}`}
-                        onClick={() => {
-                          toggle(entry)
-                        }}
-                      >
-                        {entry.status === 'active' ? '停用' : '恢复'}
-                      </button>
                     </li>
                   ))}
                 </ul>

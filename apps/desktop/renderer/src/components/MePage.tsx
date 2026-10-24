@@ -52,10 +52,15 @@ interface MeApi extends ProviderApi {
 }
 
 /**
- * 「我的」页：用户卡（你）、猫管家卡（Ryen，昵称可改）、工作区、供应商、插件入口、共享画像、关于。
+ * 「我的」页：用户卡（你）、猫管家卡（Ryen，昵称可改）、我的形象、工作区、供应商、
+ * 插件入口、用量账单、记忆健康度、自动朗读、外观主题、关于。
  *
  * 此前这一页只有一张卡，画的是 Ryen 的猫、写的是它的名字——页面叫「我的」，
  * 用户却找不到自己，编辑的还总是内置 agent 的名字。用户与 agent 是两件事，分开说。
+ *
+ * 这一页的排布（自上而下）：个人卡 → 我的形象 → 助理 → 共享画像 → 这台电脑 →
+ * 模型供应商 → 更多 → 用量与记忆 → 偏好。同类的东西挤在一张卡里（行间一根发丝线），
+ * 卡片少一半，一屏能多看几行——这是这一页最要紧的一处改动。
  */
 export function MePage({
   api,
@@ -212,69 +217,77 @@ export function MePage({
       </header>
       <div className="page-scroll">
         <div className="page-scroll-col me-page">
+          {/* ---- 个人卡：这一页的头一块 ---- */}
           <div className="me-usercard">
-            <button
-              type="button"
-              className="me-avatar me-avatar-btn"
-              aria-label={editable ? '换头像' : '换头像（这个版本的服务端还不支持）'}
-              title={editable ? '换头像' : '这个版本的服务端还不支持改头像'}
-              disabled={!editable}
-              onClick={() => {
-                setAvatarDraft(profile?.avatar === '' ? BRAND_AVATAR : (profile?.avatar ?? BRAND_AVATAR))
-              }}
-            >
-              <Avatar3D avatarKey={profile?.avatar} name={profile?.name ?? '你'} seed="you" size={96} tilt />
-              <span className="me-avatar-edit" aria-hidden="true">
-                <Icon name="pencil" size={14} />
-              </span>
-            </button>
-            {editingUser ? (
-              <input
-                className="me-name-inline"
-                value={userNameDraft}
-                aria-label="你的名字"
-                // biome-ignore lint/a11y/noAutofocus: 点击名字进入行内编辑，聚焦输入框是预期行为
-                autoFocus
-                maxLength={32}
-                onChange={(e) => {
-                  setUserNameDraft(e.target.value)
-                }}
-                onBlur={() => {
-                  void commitUserName()
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') void commitUserName()
-                  if (e.key === 'Escape') setEditingUser(false)
-                }}
-              />
-            ) : (
+            <div className="me-usercard-main">
               <button
                 type="button"
-                className="me-name me-inline-edit"
-                title={editable ? '改你的名字' : '这个版本的服务端还不支持改名字'}
+                className="me-avatar me-avatar-btn"
+                aria-label={editable ? '换头像' : '换头像（这个版本的服务端还不支持）'}
+                title={editable ? '换头像' : '这个版本的服务端还不支持改头像'}
                 disabled={!editable}
                 onClick={() => {
-                  setUserNameDraft(profile?.name ?? '你')
-                  setEditingUser(true)
+                  setAvatarDraft(profile?.avatar === '' ? BRAND_AVATAR : (profile?.avatar ?? BRAND_AVATAR))
                 }}
               >
-                {profile?.name ?? '你'} <Icon name="pencil" size={16} className="me-pencil" />
+                <Avatar3D avatarKey={profile?.avatar} name={profile?.name ?? '你'} seed="you" size={72} tilt />
+                {/* 角标常驻：只靠悬停才冒出来的话，第一次来的人不知道这张脸可以点。 */}
+                <span className="me-avatar-edit" aria-hidden="true">
+                  <Icon name="pencil" size={14} />
+                </span>
               </button>
-            )}
-            <p className="me-sub">这台电脑上的使用者</p>
-            {/* 名字不是只在界面上换一换：服务端把它拼进 agent 的系统提示，改完
-                下一句对话就会用新名字叫你。说明写出来，免得用户以为这里只是标签。 */}
-            <p className="me-note">{LOCAL_DATA_NOTE} 改过的名字会随对话一起告诉每位助理。</p>
+              <div className="me-usercard-body">
+                {editingUser ? (
+                  <input
+                    className="me-name-inline"
+                    value={userNameDraft}
+                    aria-label="你的名字"
+                    // biome-ignore lint/a11y/noAutofocus: 点击名字进入行内编辑，聚焦输入框是预期行为
+                    autoFocus
+                    maxLength={32}
+                    onChange={(e) => {
+                      setUserNameDraft(e.target.value)
+                    }}
+                    onBlur={() => {
+                      void commitUserName()
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') void commitUserName()
+                      if (e.key === 'Escape') setEditingUser(false)
+                    }}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    className="me-name me-inline-edit"
+                    title={editable ? '改你的名字' : '这个版本的服务端还不支持改名字'}
+                    disabled={!editable}
+                    onClick={() => {
+                      setUserNameDraft(profile?.name ?? '你')
+                      setEditingUser(true)
+                    }}
+                  >
+                    {profile?.name ?? '你'} <Icon name="pencil" size={16} className="me-pencil" />
+                  </button>
+                )}
+                <p className="me-sub">这台电脑上的使用者</p>
+                <p className="me-hint">改过的名字会随对话一起告诉每位助理。</p>
+              </div>
+            </div>
+            {/* 存储口径说得挺长，但它说的是这台机器而不是这个人：放在卡片最下面
+                的一行小字里，不跟名字抢位置。 */}
+            <p className="me-note">{LOCAL_DATA_NOTE}</p>
           </div>
 
-          {/* 我的形象：一只可定制的立体动物。形状是参数化的（种类 × 毛色 × 花纹），
-              换一档只是改一个参数，不生成任何资源。 */}
+          {/* ---- 我的形象：一只可定制的立体动物 ---- */}
           <div className="me-section">
             <AnimalStudio
               // 资料是异步读回来的：key 让面板在资料到达时重挂一次，草稿就是
               // 用户存好的那一只（而不是先停在默认狗上）。
               key={profile?.avatar ?? 'no-avatar'}
               current={specOrDefault(profile?.avatar)}
+              savedAvatar={profile?.avatar}
+              pending={!profileReady}
               disabled={!editable}
               onSave={(avatar) => {
                 void saveProfile({ avatar })
@@ -285,86 +298,123 @@ export function MePage({
             />
           </div>
 
-          {ryen !== undefined && (
-            <div className="me-section">
-              <div className="me-row me-butler">
-                <Avatar avatarKey={ryen.avatar} name={ryen.name} seed={ryen.id} size={44} />
-                <div className="me-row-body">
-                  {editingName ? (
-                    <input
-                      className="me-name-inline"
-                      value={nameDraft}
-                      aria-label="猫管家昵称"
-                      // biome-ignore lint/a11y/noAutofocus: 点击昵称进入行内编辑，聚焦输入框是预期行为
-                      autoFocus
-                      onChange={(e) => {
-                        setNameDraft(e.target.value)
-                      }}
-                      onBlur={() => {
-                        void saveName()
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') void saveName()
-                        if (e.key === 'Escape') setEditingName(false)
-                      }}
-                    />
-                  ) : (
-                    <button
-                      type="button"
-                      className="me-row-title me-inline-edit"
-                      title="给它改个昵称"
-                      onClick={() => {
-                        setNameDraft(ryen.name)
-                        setEditingName(true)
-                      }}
-                    >
-                      {ryen.name} <Icon name="pencil" size={16} className="me-pencil" />
-                    </button>
-                  )}
-                  <div className="me-row-sub">总管 · 内置</div>
+          {/* ---- 助理 ---- */}
+          <div className="me-section">
+            <h3 className="me-group-title">助理</h3>
+            <div className="me-list">
+              {ryen !== undefined && (
+                <div className="me-row me-butler">
+                  <Avatar avatarKey={ryen.avatar} name={ryen.name} seed={ryen.id} size={44} />
+                  <div className="me-row-body">
+                    {editingName ? (
+                      <input
+                        className="me-name-inline"
+                        value={nameDraft}
+                        aria-label="猫管家昵称"
+                        // biome-ignore lint/a11y/noAutofocus: 点击昵称进入行内编辑，聚焦输入框是预期行为
+                        autoFocus
+                        onChange={(e) => {
+                          setNameDraft(e.target.value)
+                        }}
+                        onBlur={() => {
+                          void saveName()
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') void saveName()
+                          if (e.key === 'Escape') setEditingName(false)
+                        }}
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        className="me-row-title me-inline-edit"
+                        title="给它改个昵称"
+                        onClick={() => {
+                          setNameDraft(ryen.name)
+                          setEditingName(true)
+                        }}
+                      >
+                        {ryen.name} <Icon name="pencil" size={16} className="me-pencil" />
+                      </button>
+                    )}
+                    <div className="me-row-sub">总管助理</div>
+                  </div>
+                  <span className="me-tag">内置</span>
                 </div>
-                <span className="badge">内置</span>
+              )}
+
+              {/* 它对我了解多少：单独一块，和上面的身份行之间隔一根线。 */}
+              <div className="me-row me-row-block">
+                <div className="me-row-body">
+                  <div className="me-row-title">
+                    <Icon name="user" size={16} /> {ryen?.name ?? 'Ryen'} 了解你
+                  </div>
+                  <div className="me-row-sub">它从你们的对话里记住的事，每轮都会带上。</div>
+                  {sharedError !== undefined ? (
+                    <p className="apikey-error" role="alert" style={{ marginTop: 8 }}>
+                      共享画像没读出来：{sharedError}
+                    </p>
+                  ) : shared === undefined ? (
+                    <div className="me-skeleton" role="status" aria-label="正在读画像">
+                      <span className="skeleton" style={{ width: '70%', height: 12 }} />
+                      <span className="skeleton" style={{ width: '45%', height: 12 }} />
+                    </div>
+                  ) : shared.length === 0 ? (
+                    <p className="me-row-note">还没有画像，聊几轮就有了。</p>
+                  ) : (
+                    <ul className="memory-list" style={{ marginTop: 8 }}>
+                      {shared.map((memory) => (
+                        <li key={memory.id} className="memory-row">
+                          <span className={`memory-kind kind-${memory.kind}`}>{KIND_LABELS[memory.kind]}</span>
+                          <span className="memory-content">{memory.content}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
               </div>
             </div>
-          )}
-
-          <div className="me-section">
-            <WorkspaceSection api={api} />
           </div>
 
-          {api.backup !== undefined && (
-            <div className="me-section">
-              <div className="me-row" style={{ alignItems: 'flex-start' }}>
-                <div className="me-row-body">
-                  <div className="me-row-title">数据备份</div>
-                  <div className="me-row-sub">
-                    把全部会话与记忆导出成一份独立文件（保留最近 10 份）；升级或清理前先备一份
+          {/* ---- 这台电脑 ---- */}
+          <div className="me-section">
+            <h3 className="me-group-title">这台电脑</h3>
+            <div className="me-list">
+              <WorkspaceSection api={api} />
+              {api.backup !== undefined && (
+                <div className="me-row me-row-block">
+                  <div className="me-row-body">
+                    <div className="me-row-title">
+                      <Icon name="copy" size={16} /> 数据备份
+                    </div>
+                    <div className="me-row-sub">把全部会话与记忆导出成一个文件，最近 10 份留在这里。</div>
+                    {backupPath !== undefined && (
+                      <p className="me-path" data-testid="backup-path">
+                        上次备份：{backupPath}
+                      </p>
+                    )}
+                    {backupError !== undefined && (
+                      <p className="apikey-error" role="alert">
+                        备份失败：{backupError}
+                      </p>
+                    )}
                   </div>
-                  {backupPath !== undefined && (
-                    <p className="me-note" data-testid="backup-path">
-                      上次备份：{backupPath}
-                    </p>
-                  )}
-                  {backupError !== undefined && (
-                    <p className="apikey-error" role="alert">
-                      备份失败：{backupError}
-                    </p>
-                  )}
+                  <button
+                    type="button"
+                    className="btn btn-mini"
+                    disabled={backingUp}
+                    onClick={() => {
+                      void runBackup()
+                    }}
+                  >
+                    {backingUp ? '备份中…' : '立即备份'}
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  className="btn btn-mini"
-                  disabled={backingUp}
-                  onClick={() => {
-                    void runBackup()
-                  }}
-                >
-                  {backingUp ? '备份中…' : '立即备份'}
-                </button>
-              </div>
+              )}
             </div>
-          )}
+          </div>
 
+          {/* ---- 模型供应商 ---- */}
           {/* id 给「配置云端音色」这类跨页跳转当锚点：切到本页后滚到供应商区块。 */}
           <div className="me-section" id="provider-settings">
             <ProviderSettings
@@ -376,143 +426,132 @@ export function MePage({
             />
           </div>
 
+          {/* ---- 更多 ---- */}
           <div className="me-section">
-            {/* 插件开关搬到独立页签后，这里只留一个入口：能力管理不再埋在设置页
-                第三段，用户也不必滚过整个供应商区块才能找到。 */}
-            <button
-              type="button"
-              className="me-row me-row-btn"
-              onClick={() => {
-                onOpenPlugins?.()
-              }}
-            >
-              <div className="me-row-body">
-                <div className="me-row-title">
-                  <Icon name="blocks" size={16} /> 插件
-                </div>
-                <div className="me-row-sub">开关与说明</div>
-              </div>
-              <span className="me-chevron" aria-hidden="true">
-                <Icon name="chevron-right" size={16} />
-              </span>
-            </button>
-          </div>
-
-          <div className="me-section">
-            <div className="me-row" style={{ alignItems: 'flex-start' }}>
-              <div className="me-row-body">
-                <div className="me-row-title">
-                  <Icon name="clipboard-list" size={16} /> 用量账单
-                </div>
-                <div className="me-row-sub">跨会话、跨供应商累计花了多少 token——换模型前先在这里比一比</div>
-                <UsageLedger api={api} />
-              </div>
-            </div>
-            <div className="me-row" style={{ alignItems: 'flex-start' }}>
-              <div className="me-row-body">
-                <div className="me-row-title">
-                  <Icon name="brain" size={16} /> 记忆健康度
-                </div>
-                <div className="me-row-sub">长期记忆库的整体状态；单个 agent 的条目在右栏记忆面板里</div>
-                <MemoryHealth api={api} />
-              </div>
-            </div>
-          </div>
-
-          <div className="me-section">
-            <div className="me-row">
-              <div className="me-row-body">
-                <div className="me-row-title">
-                  <Icon name="speaker" size={16} /> 助理回复时自动朗读
-                </div>
-                <div className="me-row-sub">
-                  单聊里说完一句就念一句；群聊不自动朗读。云端音色不可用时会自动改用系统语音。
-                </div>
-              </div>
+            <h3 className="me-group-title">更多</h3>
+            <div className="me-list">
               <button
                 type="button"
-                role="switch"
-                aria-checked={autoSpeak}
-                className={`btn btn-mini${autoSpeak ? ' btn-primary' : ''}`}
+                className="me-row me-row-btn"
                 onClick={() => {
-                  const next = !autoSpeak
-                  setAutoSpeak(next)
-                  saveAutoSpeak(next)
+                  onOpenPlugins?.()
                 }}
               >
-                {autoSpeak ? '已开启' : '已关闭'}
+                <div className="me-row-body">
+                  <div className="me-row-title">
+                    <Icon name="blocks" size={16} /> 插件
+                  </div>
+                  <div className="me-row-sub">开关与说明</div>
+                </div>
+                <span className="me-chevron" aria-hidden="true">
+                  <Icon name="chevron-right" size={16} />
+                </span>
+              </button>
+              <button
+                type="button"
+                className="me-row me-row-btn"
+                onClick={() => {
+                  setShowAbout(true)
+                }}
+              >
+                <div className="me-row-body">
+                  <div className="me-row-title">
+                    <Icon name="gear" size={16} /> 关于 RyHarness
+                  </div>
+                  <div className="me-row-sub">版本、开源许可与第三方署名</div>
+                </div>
+                <span className="me-chevron" aria-hidden="true">
+                  <Icon name="chevron-right" size={16} />
+                </span>
               </button>
             </div>
-            <div className="me-row">
-              <div className="me-row-body">
-                <div className="me-row-title">外观主题</div>
-                <div className="me-row-sub">暖琥珀浅色 / 暖黑暗色</div>
-              </div>
-              <span className="theme-toggle" role="radiogroup" aria-label="主题">
-                {/* biome-ignore lint/a11y/useSemanticElements: 胶囊式单选，原生 radio 的样式无法套用 .theme-toggle button */}
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={theme === 'light'}
-                  className={theme === 'light' ? 'is-active' : ''}
-                  onClick={() => {
-                    onThemeChange('light')
-                  }}
-                >
-                  <Icon name="sun" size={16} /> 浅色
-                </button>
-                {/* biome-ignore lint/a11y/useSemanticElements: 同上 */}
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={theme === 'dark'}
-                  className={theme === 'dark' ? 'is-active' : ''}
-                  onClick={() => {
-                    onThemeChange('dark')
-                  }}
-                >
-                  <Icon name="moon" size={16} /> 暗色
-                </button>
-              </span>
-            </div>
-            <button
-              type="button"
-              className="me-row me-row-btn"
-              onClick={() => {
-                setShowAbout(true)
-              }}
-            >
-              <div className="me-row-body">
-                <div className="me-row-title">关于 RyHarness</div>
-                <div className="me-row-sub">版本、开源许可与第三方署名</div>
-              </div>
-              <span className="me-chevron" aria-hidden="true">
-                <Icon name="chevron-right" size={16} />
-              </span>
-            </button>
-            <div className="me-row" style={{ alignItems: 'flex-start' }}>
-              <div className="me-row-body">
-                <div className="me-row-title">
-                  <Icon name="brain" size={16} /> {ryen?.name ?? 'Ryen'} 了解你
+          </div>
+
+          {/* ---- 用量与记忆 ---- */}
+          <div className="me-section">
+            <h3 className="me-group-title">用量与记忆</h3>
+            <div className="me-list">
+              <div className="me-row me-row-block">
+                <div className="me-row-body">
+                  <div className="me-row-title">
+                    <Icon name="clipboard-list" size={16} /> 用量账单
+                  </div>
+                  <div className="me-row-sub">跨会话、跨供应商累计花了多少字，换模型前先在这里比一比。</div>
+                  <UsageLedger api={api} />
                 </div>
-                <div className="me-row-sub">共享画像——从你们的对话中沉淀，注入每轮记忆</div>
-                {sharedError !== undefined ? (
-                  <p className="apikey-error" role="alert" style={{ marginTop: 8 }}>
-                    共享画像没读出来：{sharedError}
-                  </p>
-                ) : (
-                  shared !== undefined && (
-                    <ul className="memory-list" style={{ marginTop: 8 }}>
-                      {shared.length === 0 && <li className="panel-empty">还没有画像，聊几轮就有了。</li>}
-                      {shared.map((memory) => (
-                        <li key={memory.id} className="memory-row">
-                          <span className={`memory-kind kind-${memory.kind}`}>{KIND_LABELS[memory.kind]}</span>
-                          <span className="memory-content">{memory.content}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  )
-                )}
+              </div>
+              <div className="me-row me-row-block">
+                <div className="me-row-body">
+                  <div className="me-row-title">
+                    <Icon name="brain" size={16} /> 记忆健康度
+                  </div>
+                  <div className="me-row-sub">长期记忆库的整体状态；单个助理的条目在右栏记忆面板里。</div>
+                  <MemoryHealth api={api} />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* ---- 偏好 ---- */}
+          <div className="me-section">
+            <h3 className="me-group-title">偏好</h3>
+            <div className="me-list">
+              <div className="me-row">
+                <div className="me-row-body">
+                  <div className="me-row-title">
+                    <Icon name="speaker" size={16} /> 助理回复时自动朗读
+                  </div>
+                  <div className="me-row-sub">单聊里说完一句就念一句；群聊不念。云端音色不可用时改用系统语音。</div>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={autoSpeak}
+                  aria-label="助理回复时自动朗读"
+                  className="me-switch"
+                  onClick={() => {
+                    const next = !autoSpeak
+                    setAutoSpeak(next)
+                    saveAutoSpeak(next)
+                  }}
+                >
+                  <span className="me-switch-track" aria-hidden="true" />
+                  <span>{autoSpeak ? '已开启' : '已关闭'}</span>
+                </button>
+              </div>
+              <div className="me-row">
+                <div className="me-row-body">
+                  <div className="me-row-title">
+                    <Icon name="sun" size={16} /> 外观主题
+                  </div>
+                  <div className="me-row-sub">现在是{theme === 'light' ? '暖琥珀浅色' : '暖黑暗色'}。</div>
+                </div>
+                <span className="theme-toggle" role="radiogroup" aria-label="主题">
+                  {/* biome-ignore lint/a11y/useSemanticElements: 胶囊式单选，原生 radio 的样式无法套用 .theme-toggle button */}
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={theme === 'light'}
+                    className={theme === 'light' ? 'is-active' : ''}
+                    onClick={() => {
+                      onThemeChange('light')
+                    }}
+                  >
+                    <Icon name="sun" size={16} /> 浅色
+                  </button>
+                  {/* biome-ignore lint/a11y/useSemanticElements: 同上 */}
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={theme === 'dark'}
+                    className={theme === 'dark' ? 'is-active' : ''}
+                    onClick={() => {
+                      onThemeChange('dark')
+                    }}
+                  >
+                    <Icon name="moon" size={16} /> 暗色
+                  </button>
+                </span>
               </div>
             </div>
           </div>
@@ -650,7 +689,7 @@ function isUsageReport(value: unknown): value is UsageReport {
 
 /**
  * 用量账单：跨会话、跨供应商的累计 token。此前只有右栏一行"本会话用了多少"，
- * 换个模型到底贵没贵、花在哪个会话，只能靠感觉。
+ * 换个模型到底贵不贵、花在哪个会话，只能靠感觉。
  *
  * 数据来自 GET /api/usage：两个维度由服务端从同一批消息算出，合计恒等于 totals。
  * 此前这一块是渲染层逐会话翻「最近 200 条消息」自己加总的——超过单页上限的会话
@@ -703,16 +742,19 @@ function UsageLedger({ api }: { api: MeApi }) {
 
   if (problem !== undefined) {
     return (
-      <p className="panel-empty" role="alert" style={{ marginTop: 8 }}>
+      <p className="me-row-note" role="alert" style={{ marginTop: 8 }}>
         {problem}
       </p>
     )
   }
   if (report === undefined) {
+    // 加载中：骨架条 + 一句给读屏的话。空态与加载态长得一样的话，
+    // 用户会以为这页没东西了。
     return (
-      <p className="panel-empty" style={{ marginTop: 8 }}>
-        用量统计中…
-      </p>
+      <div className="me-skeleton" role="status" aria-label="正在统计用量">
+        <span className="skeleton" style={{ width: '60%', height: 12 }} />
+        <span className="skeleton" style={{ width: '38%', height: 12 }} />
+      </div>
     )
   }
   const buckets =

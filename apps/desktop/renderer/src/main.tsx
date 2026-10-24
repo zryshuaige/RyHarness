@@ -7,6 +7,12 @@ import './styles-product.css'
 import './styles-provider.css'
 import './styles-memory.css'
 import './styles-control.css'
+// 各二级页面各自一份样式文件：并行改页面时各改各的，不会互相覆盖同一段 CSS。
+// 顺序在后 = 同名规则以新的为准。
+import './styles-contacts.css'
+import './styles-plugins.css'
+import './styles-me.css'
+import './styles-panel.css'
 
 const splash = document.getElementById('splash')
 

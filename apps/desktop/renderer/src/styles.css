@@ -1434,7 +1434,15 @@ button.tool-row:disabled { cursor: default; }
   background: var(--bubble-self); color: var(--amber-on-primary);
   box-shadow: var(--shadow-1);
 }
-.btn-primary:hover:not(:disabled) { box-shadow: var(--shadow-2); filter: brightness(1.04); }
+/* 主按钮 hover 时不能掉回普通按钮的灰底。
+   `.btn:hover` 的特异性（0,2,0）高过 `.btn-primary`（0,1,0），于是指针一移上去，
+   琥珀底就被换成 `--hover-bg`——主按钮最该给的那点颜色反馈，恰恰是它先丢。
+   这里的 `background` 把主色按回来（`filter: brightness` 再叠一层更亮）。 */
+.btn-primary:hover:not(:disabled) {
+  background: var(--bubble-self);
+  box-shadow: var(--shadow-2);
+  filter: brightness(1.04);
+}
 /* 禁用态不能只是降透明度：暗色主题下亮琥珀降一半就沉进背景里，看着像"这里本来
    就没有按钮"（发送键在空输入时、已保存的保存键都会这样）。改成灰底 + 弱化文字：
    禁用与可用一眼分得开，而不是变成一团说不清的暗色。 */

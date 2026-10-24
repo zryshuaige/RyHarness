@@ -1,0 +1,1078 @@
+/*
+ * 右侧信息板（画像、记忆、手册、进化轨迹）的样式。
+ *
+ * 单独成文件而不是并进 styles.css / styles-memory.css：那几个文件是全页共用的，
+ * 多人并行改时同一段 CSS 会被互相覆盖。这一份只归「右栏」这条线改。
+ *
+ * 放在最后 import，规则覆盖前面同名的旧规则；旧规则留着不删（回滚时还在）。
+ *
+ * ---- 作用域约定 ----
+ * 这份样式表里的每条规则都带作用域，为的是不去动别人的页面：
+ *   · `.right-panel …`  → 右栏这一列（RightPanel / GroupEvolution）。
+ *   · `.modal …`       → 记忆面板与经验手册这两个弹层（MemoryPanel / PlaybookPanel）。
+ * 同名的类在别处也在用（.chip 在聊天头部、.memory-row 在「我的」页、
+ * .section-title 在通讯录页、.profile-prompt 在人格编辑器、.panel-skeleton 在
+ * 聊天历史与插件页），不圈作用域就会把那些页面一起改了。
+ *
+ * ---- 用色 ----
+ * 只用既有 token，没有新色值。琥珀留给「该用户注意的地方」：缺向量的记忆、
+ * 资料卡头像的圈、展开人设的链接。其余一律 --text-* + --edge/--divider。
+ */
+
+/* ============================================================
+   1. 右栏骨架
+   ============================================================ */
+
+/* 顶部柔光带从 64px 收到 44px。窄栏只有 280px 宽，64px 的空白带把第一行内容
+   压到了下面——用户先看到的是一大片空，然后才开始读。带子还在（它同时是那根
+   分隔线），只是矮了一截。 */
+.right-panel .panel-banner {
+  height: 44px;
+}
+
+.right-panel .panel-body {
+  padding: 44px var(--space-4) var(--space-6);
+}
+
+/* 收起 / 展开两枚键：命中区从 30×30 提到 32×32，收起成窄边（44px）时那枚
+   展开键也挪进窄边里，不会有一半悬在外面。 */
+.right-panel .right-panel-toggle,
+.right-panel .panel-expand-btn {
+  top: 6px;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+}
+
+.right-panel.is-collapsed .panel-expand-btn {
+  left: 6px;
+  right: auto;
+}
+
+/* 分组标题：比正文重一档（16px 实色），右边接一根细线——
+   和插件页那套分组标题同一语言，一眼能扫到「这是哪一段」。 */
+.right-panel .panel-body h4 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-6) 0 var(--space-3);
+  color: var(--text-primary);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.right-panel .panel-body h4::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--divider);
+}
+
+/* 紧贴顶边的那一段：柔光带底下就是它，别再多顶一截空白。 */
+.right-panel .panel-body > :first-child,
+.right-panel .panel-body > h4:first-child {
+  margin-top: var(--space-3);
+}
+
+/* 待办那一行的标题跟着 flex 走，上下不额外留白（留白由 .todo-head 自己带）。
+   右边那根细线也省了：这行右边是「清空」按钮，塞根线进去只会挤。 */
+.right-panel .todo-head h4 {
+  margin: 0;
+}
+
+.right-panel .todo-head h4::after {
+  display: none;
+}
+
+.right-panel .panel-empty {
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+}
+
+/* ============================================================
+   2. 画像头
+   ============================================================ */
+
+/* 头像、名字、亲密度档位横着排一行：说的是同一个人，
+   竖着堆三样东西会把 280px 的窄栏切成三段。 */
+.right-panel .profile-head {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-3);
+  /* 上面那一段（待办）与资料卡之间要留一截，不然两块贴成一片。 */
+  margin-top: var(--space-5);
+  text-align: left;
+}
+
+.right-panel .profile-id {
+  flex: 1;
+  min-width: 0;
+}
+
+.right-panel .profile-head h3 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.right-panel .profile-tier {
+  margin: 2px 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+/* 两个入口（记忆 / 经验手册）平分一行：窄栏里并排两个主按钮刚好一行放得下，
+   竖着排要占两行的高度。 */
+.right-panel .profile-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.right-panel .profile-actions .btn {
+  width: 100%;
+  justify-content: center;
+}
+
+/* 资料卡正文：标签 12px 弱化，值 13px 实色——值才是要读的东西。 */
+.right-panel .profile-fields {
+  margin-top: var(--space-4);
+}
+
+.right-panel .profile-fields dt {
+  margin-top: var(--space-4);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+/* 第一个标签紧跟在资料卡标题下，不用再顶一截空白。 */
+.right-panel .profile-fields dt:first-of-type {
+  margin-top: 0;
+}
+
+.right-panel .profile-fields dd {
+  margin: var(--space-1) 0 0;
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+}
+
+/* 人设：默认只露四行，整段不再缩在一个框里自己滚。
+   180px 的滚动框在窄栏里谁也读不完——想细看就点「展开人设」。 */
+.right-panel .profile-prompt {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  /* line-clamp 万一不生效（老 WebView），max-height 兜住长度：
+     4 行 × 22.1px 行高 + 上下各 8px 内边距 ≈ 104px。 */
+  max-height: 106px;
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.7;
+}
+
+.right-panel .profile-prompt.is-open {
+  display: block;
+  max-height: none;
+  overflow: visible;
+}
+
+.right-panel .panel-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  margin-top: var(--space-1);
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--amber-text);
+  cursor: pointer;
+  font-size: var(--fs-xs);
+}
+
+/* 性格四维：两列两行的小标签格，每格写「维度 · 档位」。
+   四个小药丸顺着流排会读成「四件不重要的事」，排成齐整的两行才看得出这是四项设定。 */
+.right-panel .trait-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-1);
+}
+
+.right-panel .trait-item {
+  display: block;
+  min-width: 0;
+  min-height: 26px;
+  padding: 3px var(--space-2);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+  overflow-wrap: break-word;
+}
+
+/* 工具：安静的描边标签，不是一排实心药丸——工具是背景信息。 */
+.right-panel .tool-chips {
+  gap: var(--space-1);
+}
+
+.right-panel .chip {
+  padding: 1px 8px;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  line-height: 1.7;
+}
+
+/* ============================================================
+   3. 成员与产物
+   ============================================================ */
+
+.right-panel .member-grid {
+  gap: var(--space-3) var(--space-2);
+}
+
+.right-panel .member-cell {
+  gap: var(--space-1);
+}
+
+.right-panel .member-cell .member-name {
+  color: var(--text-secondary);
+}
+
+/* 产物：文件名独占第一行，体积与两个动作落第二行。
+   挤在一行时体积被截掉、两个动作贴在一起互点。 */
+.right-panel .artifact-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--divider);
+  font-size: var(--fs-sm);
+}
+
+.right-panel .artifact-icon {
+  flex: none;
+  padding-top: 2px;
+  color: var(--text-tertiary);
+  line-height: 0;
+}
+
+.right-panel .artifact-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.right-panel .artifact-name {
+  display: block;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.right-panel .artifact-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-xs);
+}
+
+.right-panel .artifact-size {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+}
+
+.right-panel .artifact-meta a,
+.right-panel .artifact-meta button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 var(--space-1);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--amber-text);
+  cursor: pointer;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+/* 下载是第二动作：安静一档，不跟「预览」抢同一个颜色。 */
+.right-panel .artifact-meta .file-open.is-quiet {
+  padding: 0 var(--space-2);
+  background: transparent;
+  color: var(--text-secondary);
+  box-shadow: var(--ring-edge);
+}
+
+.right-panel .artifact-meta .file-open.is-quiet:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+
+.right-panel .artifact-empty {
+  padding: var(--space-3) 0 var(--space-4);
+}
+
+/* ============================================================
+   4. 待办 / 进化入口 / 调度轨迹
+   ============================================================ */
+
+.right-panel .todo-text {
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+}
+
+.right-panel .todo-text input {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 3px;
+  accent-color: var(--amber-primary);
+}
+
+/* 谁在进化：名字一行、两个入口一行。横着排时名字会被按钮挤成一条缝。 */
+.right-panel .evolution-list {
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+}
+
+.right-panel .evolution-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.right-panel .evolution-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.right-panel .evolution-name {
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+}
+
+.right-panel .evolution-actions {
+  gap: var(--space-2);
+}
+
+/* 调度轨迹：标题与摘要上下两行（窄栏一行放不下两者），
+   标题行右边那根细线由标题自己画。
+   选择器带上 h4：上面的分组标题规则带元素名，权重更高，得压得住它。 */
+.right-panel .panel-body h4.panel-section-toggle {
+  display: block;
+  padding: 0;
+}
+
+.right-panel .panel-body h4.panel-section-toggle::after {
+  display: none;
+}
+
+.right-panel .panel-section-toggle .relay-toggle {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  min-height: 24px;
+  color: var(--text-primary);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.right-panel .relay-toggle-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+}
+
+.right-panel .relay-toggle-title::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--divider);
+}
+
+.right-panel .relay-toggle-summary {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-weight: 400;
+}
+
+/* ============================================================
+   5. 本会话用量
+   ============================================================ */
+
+.right-panel .panel-usage {
+  margin: var(--space-5) 0 0;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--divider);
+}
+
+.right-panel .panel-usage dt {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.right-panel .panel-usage dd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-2);
+  margin: 2px 0 0;
+}
+
+.right-panel .panel-usage-main {
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+}
+
+.right-panel .panel-usage-num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.right-panel .panel-usage-sub {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+/* ============================================================
+   6. 记忆面板 / 经验手册（弹层）
+   ============================================================ */
+
+/* 分组标题与右栏同一套语言：16px 实色 + 右边一根细线。 */
+.modal .section-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-5) 0 var(--space-3);
+  color: var(--text-primary);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.modal .section-title::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--divider);
+}
+
+.modal .panel-empty {
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+}
+
+/* 记忆行：第一行「类别 + 正文」，第二行「时间、来源、动作」。
+   五样东西挤一行时，正文会被时间和按钮压成一条缝。 */
+.modal .memory-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-1) var(--space-2);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--divider);
+  font-size: var(--fs-sm);
+}
+
+.modal .memory-row:last-child {
+  border-bottom: none;
+}
+
+/* 手册条目没有类别药丸：整行占满，正文不缩在空出来的那一列后面。 */
+.modal .memory-row.memory-entry {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.modal .memory-row.memory-entry .memory-content,
+.modal .memory-row.memory-entry .memory-foot {
+  grid-column: 1;
+}
+
+/* 类别：小圆点 + 两个字，不做底色药丸（插件页那套）。
+   圆点保留颜色的区分，字统一弱化——四种颜色铺满一屏会吵。 */
+.modal .memory-kind {
+  display: inline-flex;
+  grid-column: 1;
+  grid-row: 1;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.modal .memory-kind::before {
+  content: '';
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-disabled);
+}
+
+.modal .memory-kind.kind-profile::before {
+  background: var(--amber-primary);
+}
+
+.modal .memory-kind.kind-fact::before {
+  background: var(--success);
+}
+
+.modal .memory-kind.kind-preference::before {
+  background: var(--info);
+}
+
+.modal .memory-content {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+  line-height: 1.6;
+}
+
+.modal .memory-foot {
+  display: flex;
+  grid-column: 2;
+  grid-row: 2;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.modal .memory-meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+.modal .memory-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.modal .memory-source {
+  color: var(--text-tertiary);
+}
+
+/* 行内动作键：能读出字的按钮，不是 26px 的方块图标钮。 */
+.modal .memory-delete,
+.modal .memory-edit {
+  width: auto;
+  height: 26px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  line-height: 1;
+  white-space: nowrap;
+  box-shadow: none;
+}
+
+.modal .memory-edit:hover:not(:disabled) {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+
+/* 手册那枚是「停用 / 恢复」，不是删除，不该染成危险色。 */
+.modal .memory-toggle:hover:not(:disabled) {
+  background: var(--amber-primary-soft);
+  color: var(--amber-text);
+}
+
+.modal .memory-edit-box {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+}
+
+/* 已归档：默认收起，这一行是整行可点的（WCAG 2.5.8 的 24×24 下限之上）。 */
+.modal .memory-archived {
+  margin-top: var(--space-4);
+  padding-top: var(--space-1);
+  border-top: 1px solid var(--divider);
+}
+
+.modal .memory-archived-toggle {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 32px;
+  margin: var(--space-1) 0;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  text-align: left;
+}
+
+.modal .memory-restore {
+  flex-shrink: 0;
+  min-height: 26px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: var(--fs-xs);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.modal .memory-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--divider);
+}
+
+.modal .memory-footer-hint {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+}
+
+.modal .memory-reembed {
+  flex-shrink: 0;
+  height: 30px;
+  padding: 0 var(--space-3);
+  font-size: var(--fs-sm);
+}
+
+/* ============================================================
+   7. 记忆健康度
+   ============================================================ */
+
+.modal .memory-health {
+  margin-bottom: var(--space-5);
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+}
+
+.modal .memory-health-title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.modal .memory-health-scope {
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-elevated);
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-weight: 400;
+}
+
+/* 总数当头一个数（占满一行），下面四格是它的补充，不是四个平级的数。 */
+.modal .memory-health-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 var(--space-4);
+}
+
+.modal .health-stat {
+  display: flex;
+  /* 旧规则留了 flex-direction: column，这里必须显式改回横排：
+     标签在左、数值在右，一格一行才读得成一个「数」。 */
+  flex-direction: row;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--divider);
+}
+
+.modal .health-stat.is-lead {
+  grid-column: 1 / -1;
+  padding-bottom: var(--space-2);
+}
+
+.modal .health-stat.is-lead .health-value {
+  font-size: var(--fs-display);
+  line-height: 1.15;
+}
+
+.modal .health-label {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.modal .health-value {
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* 数字用等宽：健康度这一块是同一个组件，「我的」页也在用，
+   所以这条不圈 .modal——两处一起换数字的写法，比两处各写一套强。 */
+.memory-health .num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.modal .health-value.is-warn {
+  color: var(--amber-text);
+}
+
+/* 把数字翻成人话：光给五个数，用户不知道该担心哪一个。
+   「我的」页那块也用同一个组件，这句同样不圈 .modal。 */
+.memory-health-summary {
+  margin: var(--space-3) 0 0;
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+}
+
+.modal .memory-health-foot {
+  margin: var(--space-1) 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+}
+
+/* ============================================================
+   8. 进化记录
+   ============================================================ */
+
+.modal .evolve-stats {
+  margin-bottom: var(--space-5);
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+}
+
+.modal .evolve-stats-title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.modal .evolve-stats-scope {
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-elevated);
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-weight: 400;
+}
+
+.modal .evolve-stats-total {
+  margin: var(--space-2) 0 0;
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  line-height: 1.7;
+}
+
+/* 按种类分列：一行一种，左边名字、右边数字，不再是三个药丸。 */
+.modal .evolve-stats-kinds {
+  display: flex;
+  flex-direction: column;
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.modal .evolve-kind {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 4px 0;
+  border-bottom: 1px solid var(--divider);
+  border-radius: 0;
+  background: none;
+  font-size: var(--fs-xs);
+}
+
+.modal .evolve-kind:last-child {
+  border-bottom: none;
+}
+
+.modal .evolve-kind-name {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.modal .evolve-kind-num {
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.modal .evolve-rounds {
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.modal .evolve-round {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: 3px 0;
+  font-size: var(--fs-xs);
+}
+
+.modal .evolve-stats-foot {
+  margin: var(--space-2) 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+}
+
+/* ============================================================
+   9. 手册条目
+   ============================================================ */
+
+/* 计票：不再是一枚绿/红药丸，就是一行小字（数字用等宽对齐）。 */
+.modal .pb-count {
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  font-size: var(--fs-xs);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.modal .pb-count.pos {
+  background: none;
+  color: var(--success);
+}
+
+.modal .pb-count.neg {
+  background: none;
+  color: var(--danger);
+}
+
+/* 溯源入口：一枚安静的文字键，命中区不低于 24px。 */
+.modal .entry-explain {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+}
+
+.modal .entry-explain-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 24px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  font-size: var(--fs-xs);
+}
+
+.modal .entry-explain-body {
+  width: 100%;
+  margin-top: var(--space-1);
+  padding-left: var(--space-2);
+  border-left: 1px solid var(--divider);
+}
+
+.modal .entry-explain-summary {
+  display: block;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+}
+
+.modal .entry-explain-note {
+  display: block;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+.modal .entry-origin-list {
+  margin: var(--space-1) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.modal .entry-origin {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: 2px 0;
+  font-size: var(--fs-xs);
+}
+
+/* 来源种类也是「小圆点 + 两个字」：四种底色药丸在一屏里太吵。 */
+.modal .entry-origin-kind {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.modal .entry-origin-kind::before {
+  content: '';
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-disabled);
+}
+
+.modal .entry-origin-kind.is-reflection::before,
+.modal .entry-origin-kind.is-feedback::before {
+  background: var(--info);
+}
+
+.modal .entry-origin-kind.is-memory::before {
+  background: var(--amber-primary);
+}
+
+.modal .entry-origin-detail {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+/* ============================================================
+   10. 加载骨架
+   ============================================================ */
+
+/* 骨架的形状对上真内容：一条记忆是「类别 + 正文 + 一行元信息 + 动作」，
+   骨架画成一根线，内容真出来时版面会跳一下。
+   只圈 .modal —— 同一份骨架在聊天历史与插件页另有形状，别一起改。 */
+.modal .panel-skeleton {
+  gap: var(--space-4);
+}
+
+.modal .panel-skeleton-row {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) 52px;
+  grid-template-rows: auto auto;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.modal .panel-skeleton-kind {
+  grid-column: 1;
+  grid-row: 1;
+  width: 44px;
+  height: 12px;
+  border-radius: var(--radius-pill);
+}
+
+.modal .panel-skeleton-line {
+  grid-column: 2;
+  grid-row: 1;
+  height: 12px;
+}
+
+/* 第二行：元信息那一小截。 */
+.modal .panel-skeleton-row::after {
+  content: '';
+  grid-column: 2;
+  grid-row: 2;
+  width: 38%;
+  height: 10px;
+  border-radius: var(--radius-pill);
+  background: var(--skeleton-bg);
+}
+
+/* 右边那枚动作键。 */
+.modal .panel-skeleton-row::before {
+  content: '';
+  grid-column: 3;
+  grid-row: 1 / span 2;
+  width: 52px;
+  height: 12px;
+  border-radius: var(--radius-sm);
+  background: var(--skeleton-bg);
+}

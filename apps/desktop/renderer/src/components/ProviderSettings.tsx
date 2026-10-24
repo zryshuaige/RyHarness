@@ -35,7 +35,6 @@ import {
   formatContextWindow,
   mergeDiscovered,
   modelMeta,
-  modelTitle,
   type ProviderModelInput,
   parseContextWindowInput,
   providerModelPayload,
@@ -233,6 +232,8 @@ function ProviderItem({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | undefined>(undefined)
   const [replacingKey, setReplacingKey] = useState(false)
+  /** Key 默认遮住；用户偶尔要确认粘进去的那串有没有多一个空格，这时才需要看见它。 */
+  const [revealKey, setRevealKey] = useState(false)
   const [verify, setVerify] = useState<VerifyState>(() => {
     return initialVerifyState(provider, isLocalService(provider))
   })
@@ -262,6 +263,8 @@ function ProviderItem({
       .then(() => {
         setKey('')
         setReplacingKey(false)
+        // 存好了就把「显示」收回去：下一轮输入不该是明文摊在屏幕上。
+        setRevealKey(false)
         // 换了 key 就等于没验过：状态退回「凭据已备（未验证）」，别让旧的绿点骗人。
         setVerify({ kind: 'idle' })
         forgetProviderHealth(provider.id)
@@ -368,6 +371,18 @@ function ProviderItem({
         ? `${providerStatusText(status)} · ${verify.latencyMs}ms`
         : providerStatusText(status)
 
+  /**
+   * 状态在行里的分量，只分三档：
+   * - ok：刚测通过（绿）；
+   * - warn：该用户动手了才行的状态（没配凭据 / 凭据备好没验过 / 本地服务探不通）；
+   * - muted：本地服务还没探出结果，说不清就不说重话。
+   *
+   * 琥珀只留给 warn：那才是唯一需要用户去做点什么的一档。「内置」这类中性信息
+   * 挂着琥珀，一屏扫下来就分不出哪一行真的缺东西。
+   */
+  const statusKind: 'ok' | 'warn' | 'muted' =
+    verify.kind === 'ok' ? 'ok' : local ? (verify.kind === 'down' ? 'warn' : 'muted') : 'warn'
+
   return (
     <div className="provider-item">
       <button
@@ -385,23 +400,25 @@ function ProviderItem({
         <ProviderIcon id={provider.id} name={provider.displayName} />
         <span className="provider-name-col">
           <span className="provider-name">{provider.displayName}</span>
+          {/* 副行只留一枚徽标：类型（能不能删）。协议、免 key、模型数都退成一行弱化的
+              说明文字——它们是「这家是什么」，不是「这家缺什么」，混在一起时用户
+              分不出哪一枚药丸才需要动手。 */}
           <span className="provider-badges">
-            <span className="badge">{provider.custom === true ? '自定义' : '内置'}</span>
-            {/* 徽标本身已经说了协议是什么：title 再挂一遍原始标识（openai / ollama）
-                只是把同一个词换成用户看不懂的写法多显示一次。 */}
+            <span className="provider-chip">{provider.custom === true ? '自定义' : '内置'}</span>
+            {/* 协议给的是人话：openai / ollama 这种标识用户读不懂，也不用读。 */}
             {provider.protocol !== undefined && (
-              <span className="provider-chip">{protocolLabel(provider.protocol)}</span>
+              <span className="provider-tag">{protocolLabel(provider.protocol)}</span>
             )}
-            {local && <span className="provider-chip">免 key</span>}
+            {local && <span className="provider-tag">免 key</span>}
+            <span className="provider-models-count">{provider.models.length} 个模型</span>
           </span>
         </span>
         <span className="provider-meta">
-          <span className="provider-status">
+          <span className={`provider-status is-${statusKind}`}>
             {/* 免 key 的本地服务不挂绿点：它没经过任何凭据校验，绿点等于撒谎。 */}
             {!local && <span className={`status-dot ${status === 'verified' ? 'ok' : 'warn'}`} aria-hidden="true" />}
             {statusLabel}
           </span>
-          <span className="provider-models-count">{provider.models.length} 个模型</span>
           <span className={`me-chevron provider-chevron${open ? ' is-open' : ''}`} aria-hidden="true">
             <Icon name="chevron-right" size={16} />
           </span>
@@ -409,19 +426,35 @@ function ProviderItem({
       </button>
       {open && (
         <div className="provider-body" id={panelId}>
-          {provider.baseUrl !== undefined && <p className="provider-endpoint">{provider.baseUrl}</p>}
+          {provider.baseUrl !== undefined && (
+            <p className="provider-endpoint">
+              <span className="provider-endpoint-label">接口地址</span>
+              <span className="provider-endpoint-value">{provider.baseUrl}</span>
+            </p>
+          )}
           {configured && !replacingKey ? (
             <>
-              <ul className="provider-model-list">
-                {catalog.map((model) => {
-                  return (
-                    <li key={model.id}>
-                      {modelTitle(model)}
-                      <small>{modelMeta(model)}</small>
-                    </li>
-                  )
-                })}
-              </ul>
+              <div className="provider-catalog">
+                <p className="provider-catalog-head">模型（{catalog.length} 个）</p>
+                {catalog.length === 0 ? (
+                  <p className="provider-note">这家还没配模型：点下面的「编辑」补上模型 id，建 agent 才有模型可选。</p>
+                ) : (
+                  <ul className="provider-model-list">
+                    {catalog.map((model) => {
+                      return (
+                        <li key={model.id} className="provider-model">
+                          {model.name !== undefined && model.name !== model.id && (
+                            <span className="provider-model-name">{model.name}</span>
+                          )}
+                          {/* id 一律等宽：模型 id 是要照着抄进别处的字符串，不是标题。 */}
+                          <code className="provider-model-id">{model.id}</code>
+                          <small className="provider-model-meta">{modelMeta(model)}</small>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                )}
+              </div>
               <div className="provider-item-actions">
                 <button
                   type="button"
@@ -439,6 +472,7 @@ function ProviderItem({
                       className="btn btn-mini"
                       onClick={() => {
                         setReplacingKey(true)
+                        setRevealKey(false)
                         setError(undefined)
                       }}
                     >
@@ -467,12 +501,25 @@ function ProviderItem({
                 // 这一版测不了，但状态本身没丢：告诉用户还能怎么判断通不通。
                 <p className="provider-note">{unsupportedNotice('测试连接')}，发一条消息也能看出通不通。</p>
               )}
+              {/* 凭据备好但没验过是个死胡同：光看「凭据已备（未验证）」用户不知道
+                  该点什么。把这句下一步摆出来，他才知道「测试连接」不是可选项。 */}
+              {status === 'ready' && verify.kind === 'idle' && (
+                <p className="provider-note provider-next">Key 存好了，还没测过：点「测试连接」确认这家认你的 Key。</p>
+              )}
               <p className="provider-note">
                 {local ? '本地服务不需要 key：Ollama 起来了，这条会自动变成「在线」。' : KEY_STORAGE_NOTE}
               </p>
             </>
           ) : (
-            <>
+            <div className="provider-keyform">
+              {/* 这块最容易迷路：展开的是哪一家、Key 从哪来、为什么现在按不了「保存」。
+                  三句都写在按钮上方，用户不必先猜再试。 */}
+              <p className="apikey-title">
+                {replacingKey ? `换一份「${provider.displayName}」的 Key` : `填一下「${provider.displayName}」的 Key`}
+              </p>
+              <p className="apikey-hint">
+                {replacingKey ? '把新 Key 粘进来保存，旧的立刻作废。' : '去这家供应商的控制台拿 Key，粘到下面这框里。'}
+              </p>
               {/* 用 form 包裹：回车即可保存，键盘用户不必 Tab 去够「保存」按钮。 */}
               <form
                 className="apikey-row"
@@ -484,10 +531,11 @@ function ProviderItem({
                 }}
               >
                 <input
-                  type="password"
+                  type={revealKey ? 'text' : 'password'}
                   value={key}
                   placeholder="粘贴 API Key"
                   autoComplete="off"
+                  spellCheck={false}
                   // 保存中用 readOnly 而不是 disabled：禁用会把焦点从输入框上打掉，
                   // 键盘用户保存完还得重新 Tab 回来。
                   readOnly={busy}
@@ -499,13 +547,29 @@ function ProviderItem({
                     if (event.key === 'Escape') collapse()
                   }}
                 />
+                <button
+                  type="button"
+                  className="provider-reveal"
+                  aria-pressed={revealKey}
+                  onClick={() => {
+                    setRevealKey((prev) => {
+                      return !prev
+                    })
+                  }}
+                >
+                  {revealKey ? '隐藏' : '显示'}
+                </button>
                 <button type="submit" className="btn btn-primary" disabled={busy || key.trim().length === 0}>
                   {busy ? '保存中' : '保存'}
                 </button>
               </form>
+              {key.trim().length === 0 && !busy && (
+                <p className="provider-note">框里还是空的，粘上 Key 之后「保存」才能点。</p>
+              )}
               {error !== undefined && (
+                // 错在哪一家也要说清：这一屏上可能同时展开着好几家的输入框。
                 <p className="apikey-error" role="alert">
-                  {error}
+                  「{provider.displayName}」：{error}
                 </p>
               )}
               {replacingKey && (
@@ -514,6 +578,7 @@ function ProviderItem({
                   className="provider-back"
                   onClick={() => {
                     setReplacingKey(false)
+                    setRevealKey(false)
                     setError(undefined)
                   }}
                 >
@@ -521,7 +586,7 @@ function ProviderItem({
                 </button>
               )}
               <p className="provider-note">Key 只写在本机配置文件（api-keys.json，权限 0600）。</p>
-            </>
+            </div>
           )}
           {/*
             编辑与删除放同一行：两个都是"这条路由本身的命运"，与上面的凭据操作分开。
@@ -755,7 +820,12 @@ function ModelDiscoveryPanel({
             {models.map((model) => {
               const entry = toCatalogModel(model, 'discovered')
               return (
-                <li key={entry.id}>
+                // 勾上的那一行整行变色：清单可能有上百条，光看一个 16px 的方框，
+                // 扫不出自己到底勾了哪几个。
+                <li
+                  key={entry.id}
+                  className={picked.has(entry.id) ? 'provider-pick-model is-picked' : 'provider-pick-model'}
+                >
                   <label>
                     <input
                       type="checkbox"
@@ -764,8 +834,8 @@ function ModelDiscoveryPanel({
                         onToggle(entry.id, event.target.checked)
                       }}
                     />
-                    {entry.name ?? entry.id}
-                    {entry.name !== undefined && <small>{entry.id}</small>}
+                    <span className="provider-model-name">{entry.name ?? entry.id}</span>
+                    {entry.name !== undefined && <code className="provider-model-id">{entry.id}</code>}
                   </label>
                 </li>
               )
@@ -1141,106 +1211,118 @@ function ProviderForm({
         <Icon name="chevron-left" size={16} />
         {editing ? '取消编辑' : '重选供应商'}
       </button>
-      <label className="field">
-        <span>名称</span>
-        <input
-          value={displayName}
-          onChange={(event) => {
-            setDisplayName(event.target.value)
-          }}
-        />
-      </label>
-      <div className="field-row">
-        <div className="field">
-          <span>协议</span>
-          {/* 下拉而不是文本框：协议是有限集合（服务端 ProviderProtocol 只有两个值），
-              让用户手敲 `openai` 拼错成 `Openai` 时，错误要到保存之后、
-              真正发请求失败时才暴露出来。展示名走 protocolLabel，不给用户看标识。 */}
-          <Select
-            value={protocol}
-            options={PROTOCOL_OPTIONS}
-            ariaLabel="协议"
-            onChange={(next) => {
-              setProtocol(next)
+      {/* 这一步走到哪儿了，写在表单最上面：弹窗顶上只有一句「添加 DeepSeek」，
+          下面却是一屏字段，用户容易不知道自己是在挑厂商还是在填资料。 */}
+      <p className="provider-step">{editing ? '改这一条路由' : '第 2 步 · 填资料'}</p>
+      <div className="provider-form-group">
+        <p className="provider-form-group-title">这家是谁</p>
+        <label className="field">
+          <span>名称</span>
+          <input
+            value={displayName}
+            onChange={(event) => {
+              setDisplayName(event.target.value)
             }}
           />
+        </label>
+        <div className="field-row">
+          <div className="field">
+            <span>协议</span>
+            {/* 下拉而不是文本框：协议是有限集合（服务端 ProviderProtocol 只有两个值），
+                让用户手敲 `openai` 拼错成 `Openai` 时，错误要到保存之后、
+                真正发请求失败时才暴露出来。展示名走 protocolLabel，不给用户看标识。 */}
+            <Select
+              value={protocol}
+              options={PROTOCOL_OPTIONS}
+              ariaLabel="协议"
+              onChange={(next) => {
+                setProtocol(next)
+              }}
+            />
+          </div>
+          <label className="field">
+            <span>Base URL</span>
+            <input
+              value={baseUrl}
+              placeholder="https://api.example.com/v1"
+              onChange={(event) => {
+                setBaseUrl(event.target.value)
+              }}
+            />
+          </label>
         </div>
+      </div>
+      <div className="provider-form-group">
+        <p className="provider-form-group-title">模型</p>
         <label className="field">
-          <span>Base URL</span>
-          <input
-            value={baseUrl}
-            placeholder="https://api.example.com/v1"
+          <span>模型列表</span>
+          <textarea
+            rows={5}
+            value={modelsText}
+            placeholder="deepseek-ai/DeepSeek-V4-Flash&#10;gpt-oss-120b"
+            // 失焦时整理成一行一个：用户写的时候可以用空格、逗号、换行，也可以整段粘贴，
+            // 不必先去挑分隔符；整理只发生在他离开这个框之后，不打断正在输入的人。
+            onBlur={() => {
+              setModelsText(formatModels(parseModels(modelsText)))
+            }}
             onChange={(event) => {
-              setBaseUrl(event.target.value)
+              setModelsText(event.target.value)
             }}
           />
         </label>
-      </div>
-      <label className="field">
-        <span>模型列表</span>
-        <textarea
-          rows={5}
-          value={modelsText}
-          placeholder="deepseek-ai/DeepSeek-V4-Flash&#10;gpt-oss-120b"
-          // 失焦时整理成一行一个：用户写的时候可以用空格、逗号、换行，也可以整段粘贴，
-          // 不必先去挑分隔符；整理只发生在他离开这个框之后，不打断正在输入的人。
-          onBlur={() => {
-            setModelsText(formatModels(parseModels(modelsText)))
-          }}
-          onChange={(event) => {
-            setModelsText(event.target.value)
+        <ContextWindowEditor
+          models={parseModels(modelsText)}
+          windows={windows}
+          onChange={(modelId, raw) => {
+            setWindows((prev) => {
+              return { ...prev, [modelId]: raw }
+            })
           }}
         />
-      </label>
-      <ContextWindowEditor
-        models={parseModels(modelsText)}
-        windows={windows}
-        onChange={(modelId, raw) => {
-          setWindows((prev) => {
-            return { ...prev, [modelId]: raw }
-          })
-        }}
-      />
-      <ModelDiscoveryPanel
-        state={discovery}
-        picked={picked}
-        supported={canDiscover}
-        onReload={() => {
-          runDiscovery()
-        }}
-        onToggle={(modelId, checked) => {
-          setPicked((prev) => {
-            const next = new Set(prev)
-            if (checked) next.add(modelId)
-            else next.delete(modelId)
-            return next
-          })
-        }}
-        onToggleAll={(checked) => {
-          setPicked(
-            checked && discovery.kind === 'loaded'
-              ? new Set(
-                  discovery.models.map((model) => {
-                    return model.id
-                  }),
-                )
-              : new Set<string>(),
-          )
-        }}
-        onInsert={insertPicked}
-      />
+        <ModelDiscoveryPanel
+          state={discovery}
+          picked={picked}
+          supported={canDiscover}
+          onReload={() => {
+            runDiscovery()
+          }}
+          onToggle={(modelId, checked) => {
+            setPicked((prev) => {
+              const next = new Set(prev)
+              if (checked) next.add(modelId)
+              else next.delete(modelId)
+              return next
+            })
+          }}
+          onToggleAll={(checked) => {
+            setPicked(
+              checked && discovery.kind === 'loaded'
+                ? new Set(
+                    discovery.models.map((model) => {
+                      return model.id
+                    }),
+                  )
+                : new Set<string>(),
+            )
+          }}
+          onInsert={insertPicked}
+        />
+      </div>
       {!keyless && !editing && (
-        <label className="field">
-          <span>API Key（可稍后再填）</span>
-          <input
-            type="password"
-            value={apiKey}
-            autoComplete="off"
-            onChange={(event) => {
-              setApiKey(event.target.value)
-            }}
-          />
-        </label>
+        <div className="provider-form-group">
+          <p className="provider-form-group-title">凭据</p>
+          <label className="field">
+            <span>API Key（可稍后再填）</span>
+            <input
+              type="password"
+              value={apiKey}
+              autoComplete="off"
+              onChange={(event) => {
+                setApiKey(event.target.value)
+              }}
+            />
+          </label>
+        </div>
       )}
       {preset?.docsUrl !== undefined && (
         <p className="provider-note">
@@ -1325,6 +1407,9 @@ function AddProviderModal({
     <Modal title={title} onClose={onClose}>
       {selected === undefined ? (
         <>
+          {/* 走的是两步：先挑厂商，再填资料。把这一步写在网格上方，用户点下去之前
+              就知道后面还有一屏，不会以为「挑完就完事」。 */}
+          <p className="provider-step">第 1 步 · 挑一家</p>
           {presets === undefined ? (
             <p className="provider-note">正在读取预设…</p>
           ) : (
@@ -1424,6 +1509,11 @@ export function ProviderSettings({
   const [deleting, setDeleting] = useState<ProviderInfo | undefined>(undefined)
   /** 供应商预设目录：一张网格让用户**自己挑一家**，而不是默认点名某一家。 */
   const [presets, setPresets] = useState<ProviderPreset[]>([])
+  /**
+   * 预设目录读到没有。空态要说「还没添加」还是「还没读到」，全看这一条：
+   * 目录还在路上时先说「还没添加」，用户会以为自己的配置没存上。
+   */
+  const [presetsReady, setPresetsReady] = useState(api.providerPresets === undefined)
   /** 用户在网格里点过的那家：已存在就展开它，不存在就打开添加向导（预选）。 */
   const [pickedPreset, setPickedPreset] = useState<ProviderPreset | undefined>(undefined)
   /** 需要初始展开的条目（用户刚点过的那家）。 */
@@ -1437,10 +1527,14 @@ export function ProviderSettings({
       .then(({ presets: list }) => {
         // 后端没给 presets 字段（老服务端 / 替身）时别把 state 设成 undefined——
         // 下一行 presets.length 会直接崩，整个设置页跟着白屏。
-        if (!cancelled) setPresets(list ?? [])
+        if (!cancelled) {
+          setPresets(list ?? [])
+          setPresetsReady(true)
+        }
       })
       .catch(() => {
         // 读不到预设就当没有：设置页照常有列表，不因为这个接口挂了就整个不能用。
+        if (!cancelled) setPresetsReady(true)
       })
     return () => {
       cancelled = true
@@ -1462,12 +1556,12 @@ export function ProviderSettings({
     <>
       <div className="provider-section-head">
         <div className="provider-section-title">
-          <div className="me-row-title">模型供应商</div>
-          <div className="me-row-sub">对话能力由它们提供 · key 只保存在本机</div>
+          <div className="provider-section-heading">模型供应商</div>
+          <div className="provider-section-desc">对话能力由它们提供 · key 只保存在本机</div>
         </div>
         <button
           type="button"
-          className="btn provider-add-btn"
+          className="btn btn-primary provider-add-btn"
           onClick={() => {
             // 从这个按钮进来就回到「选哪一家」那一步，别带着上一次挑过的那家进来。
             setPickedPreset(undefined)
@@ -1479,7 +1573,8 @@ export function ProviderSettings({
       </div>
       {needPick && (
         <section className="provider-picker">
-          <p className="provider-note">先挑一家：哪家都行，之后在下面随时能换。key 只存在这台机器上。</p>
+          <p className="provider-picker-title">先挑一家</p>
+          <p className="provider-note">哪家都行，之后在下面随时能换。key 只存在这台机器上。</p>
           <div className="provider-picker-grid">
             {presets.map((preset) => {
               // 已经建过路由的那家（内置的 SiliconFlow）直接展开它填 key，
@@ -1515,11 +1610,30 @@ export function ProviderSettings({
         </section>
       )}
       {providers.length === 0 ? (
-        // 首次加载时 providers 也是空数组，所以这句话必须两种情况都成立，
-        // 不能一上来就喊「服务端没起来」。
-        <p className="provider-empty">
-          还没读到供应商：可能正在加载；若一直为空，多半是服务端没起来或 providers.json 是空的。
-        </p>
+        // 三种空态分开说：还在加载 / 预设读到了但一家都没加 / 连预设都读不到。
+        // 混成一句「还没读到供应商」，用户在「刚加完还没刷新」时会被吓一跳。
+        <div className="provider-empty">
+          {!presetsReady ? (
+            <>
+              <p className="provider-empty-title">正在读取…</p>
+              <p className="provider-empty-hint">供应商清单还在路上，稍等一下就出来了。</p>
+            </>
+          ) : presets.length > 0 ? (
+            <>
+              <p className="provider-empty-title">还没添加供应商</p>
+              <p className="provider-empty-hint">
+                在上面的网格里挑一家开始，或者点右上角「添加供应商」。key 只存在这台机器上。
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="provider-empty-title">还没读到供应商</p>
+              <p className="provider-empty-hint">
+                可能正在加载；若一直为空，多半是服务端没起来，或 providers.json 里一条都没有。
+              </p>
+            </>
+          )}
+        </div>
       ) : (
         <div className="provider-groups">
           <ProviderGroup

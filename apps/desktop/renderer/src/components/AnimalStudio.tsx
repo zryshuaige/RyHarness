@@ -48,12 +48,30 @@ export function specOrDefault(avatar: string | undefined): AnimalSpec {
 
 export function AnimalStudio({
   current,
+  savedAvatar,
+  pending,
   disabled,
   onSave,
   onPickOther,
 }: {
-  /** 当前形象（可能是别的形态，那就从默认开始）。 */
+  /** 已存着的那一只（可能是别的形态，那就从默认开始）。 */
   current: AnimalSpec
+  /**
+   * 头像字段原样传进来（`an3d:…` 或别的）。
+   *
+   * 为什么不能只看 current：头像字段不是立体动物时（品牌猫、DiceBear 立绘），
+   * current 会退回默认的一只动物——那时候「已保存」是在说谎：这一只根本没存过。
+   * 有了原字段才分得清「存着的」和「正要选的」。
+   */
+  savedAvatar?: string
+  /**
+   * 资料还没读到：此刻「存着的是哪只」是未知的。
+   *
+   * 没说清楚就会说谎：面板先按默认的一只动物起，保存键写「已保存」——可用户真正
+   * 存着的可能是另一只，甚至压根不是动物。资料到了会重挂面板（见 key），所以这里
+   * 只需要老实说「还在读」。
+   */
+  pending?: boolean
   /** 服务端不支持保存时为 true：只看不改。 */
   disabled?: boolean
   /** 保存：把选好的形象存进 profile.avatar。 */
@@ -69,10 +87,21 @@ export function AnimalStudio({
     return animalAvatar(draft.kind, draft.hue)
   }, [draft])
 
-  const dirty = avatar !== animalAvatar(current.kind, current.hue)
+  /**
+   * 存着的头像是不是一只动物。
+   *
+   * 不是的话（品牌猫、DiceBear），面板里这只只是「还没存的那只」，
+   * 保存键得是可点的——按「已保存」告诉用户一只从没存过的动物已经存好了。
+   */
+  const savedIsAnimal = savedAvatar === undefined ? true : parseAnimalAvatar(savedAvatar) !== undefined
 
-  /** 当前选的是什么：预览图旁边要写出名字，否则用户只看到"变了个样"。 */
-  const currentName = `${animalOf(draft.kind)?.label ?? draft.kind} · ${animalHueOf(draft.hue).label}`
+  const dirty = savedIsAnimal ? avatar !== animalAvatar(current.kind, current.hue) : true
+
+  /** 当前选中的那一只叫什么。 */
+  const draftName = `${animalOf(draft.kind)?.label ?? draft.kind} · ${animalHueOf(draft.hue).label}`
+
+  /** 已经存着的那一只叫什么。 */
+  const savedName = `${animalOf(current.kind)?.label ?? current.kind} · ${animalHueOf(current.hue).label}`
 
   /**
    * 个人资料是异步读回来的：首次渲染时 profile 还没到，面板会先按默认值起，
@@ -100,18 +129,30 @@ export function AnimalStudio({
     })
   }
 
+  /** 保存键上的字：说清这一步能不能做、做完会怎样。 */
+  const saveLabel = pending ? '正在读你的形象…' : disabled ? '这个版本不能改形象' : dirty ? '保存形象' : '已保存'
+
+  /** 一句话说清「存着的是哪只」和「挑的是哪只」。 */
+  const statusText = pending
+    ? '正在读你存着的形象…'
+    : savedIsAnimal
+      ? dirty
+        ? `现在用的是「${savedName}」，改完点「保存形象」就换过去。`
+        : `这就是你现在用的形象：${savedName}。`
+      : '你原来的头像还在。选一只保存，就会换掉它。'
+
   return (
     <div className="animal-studio">
+      {/* 预览：这一块是主角（大头像 + 名字 + 动作）。挑选器在下面，只是备选。 */}
       <div className="animal-studio-preview">
-        {/* 预览用同一套光照与壳：用户在这里看到的就是聊天气泡与右栏里的样子。 */}
         <span className="animal-studio-preview-face">
-          <Avatar3D avatarKey={avatar} name="你" seed="you" size={128} tilt breathing />
-          <span className="animal-studio-current">{currentName}</span>
+          <Avatar3D avatarKey={avatar} name="你" seed="you" size={144} tilt breathing />
+          <span className="animal-studio-current">{draftName}</span>
         </span>
         <div className="animal-studio-preview-side">
           <p className="animal-studio-title">我的形象</p>
-          <p className="me-note">选一只属于你的动物。形象会跟着对话走——助理们看到的是它，不是「你」。</p>
-          <p className="me-note animal-studio-hint-line">鼠标移到头像上，它会跟着转头。</p>
+          <p className="animal-studio-desc">选一只动物当你的形象，它会跟着你走进每一段对话。</p>
+          <p className="animal-studio-status">{statusText}</p>
           <div className="animal-studio-actions">
             <button
               type="button"
@@ -122,17 +163,18 @@ export function AnimalStudio({
               }}
             >
               {/* 服务端不支持改资料时不能写"已保存"——那是谎报：用户会以为存上了。 */}
-              {disabled ? '这个版本不能改形象' : dirty ? '保存形象' : '已保存'}
+              {saveLabel}
             </button>
             <button type="button" className="btn" onClick={onPickOther}>
               换别的头像
             </button>
           </div>
+          <p className="animal-studio-hint-line">鼠标停在头像上，它会跟着转头。</p>
         </div>
       </div>
 
       <fieldset className="animal-studio-group">
-        <legend>哪种动物</legend>
+        <legend>动物</legend>
         <div className="animal-studio-row" role="radiogroup" aria-label="选择动物">
           {ANIMALS.map((animal, index) => {
             const selected = draft.kind === animal.kind
@@ -166,17 +208,25 @@ export function AnimalStudio({
                   }
                 }}
               >
-                {src !== undefined && (
-                  <img
-                    className="animal-studio-art"
-                    src={src}
-                    style={{ filter: animalHueFilter(draft.kind, draft.hue) }}
-                    width={44}
-                    height={44}
-                    alt=""
-                    draggable={false}
-                  />
-                )}
+                <span className="animal-studio-pick-art">
+                  {src !== undefined && (
+                    <img
+                      className="animal-studio-art"
+                      src={src}
+                      style={{ filter: animalHueFilter(draft.kind, draft.hue) }}
+                      width={44}
+                      height={44}
+                      alt=""
+                      draggable={false}
+                    />
+                  )}
+                  {/* 选中标记：颜色之外的第二重信号（色觉障碍的用户也分得出哪一格被选中）。 */}
+                  {selected && (
+                    <span className="animal-studio-tick" aria-hidden="true">
+                      <Icon name="check" size={16} />
+                    </span>
+                  )}
+                </span>
                 <small>{animal.label}</small>
               </button>
             )
@@ -185,7 +235,7 @@ export function AnimalStudio({
       </fieldset>
 
       <fieldset className="animal-studio-group">
-        <legend>什么毛色</legend>
+        <legend>毛色</legend>
         <div className="animal-studio-row" role="radiogroup" aria-label="选择毛色">
           {ANIMAL_HUES.map((each, index) => {
             const selected = draft.hue === each.hue
@@ -220,17 +270,24 @@ export function AnimalStudio({
                   }
                 }}
               >
-                {src !== undefined && (
-                  <img
-                    className="animal-studio-art"
-                    src={src}
-                    style={{ filter: animalHueFilter(draft.kind, each.hue) }}
-                    width={36}
-                    height={36}
-                    alt=""
-                    draggable={false}
-                  />
-                )}
+                <span className="animal-studio-pick-art">
+                  {src !== undefined && (
+                    <img
+                      className="animal-studio-art"
+                      src={src}
+                      style={{ filter: animalHueFilter(draft.kind, each.hue) }}
+                      width={36}
+                      height={36}
+                      alt=""
+                      draggable={false}
+                    />
+                  )}
+                  {selected && (
+                    <span className="animal-studio-tick" aria-hidden="true">
+                      <Icon name="check" size={16} />
+                    </span>
+                  )}
+                </span>
                 <small>{each.label}</small>
               </button>
             )
@@ -239,7 +296,7 @@ export function AnimalStudio({
       </fieldset>
 
       <p className="animal-studio-hint">
-        <Icon name="brain" size={16} />
+        <Icon name="user" size={16} />
         形象存在本机，随对话一起告诉助理；换形象不会改你的名字或历史。
       </p>
     </div>

@@ -2,6 +2,13 @@
  * 供应商设置区块样式（MePage 的 ProviderSettings）。类名统一 provider- 前缀，
  * 全部吃既有设计 token（圆角 / 间距 / 字阶 / 阴影），与 MePage 其他区块同语言。
  *
+ * 这一页的视觉口径（与已认可的聊天页同一套语言）：
+ * · 暖奶油底 + 白卡片 + 1px 发丝描边 + 小圆角 + 极轻阴影；
+ * · 琥珀只出现在「用户该动手的地方」：主按钮、状态点、没测过/没配好的提示。
+ *   「内置」这类中性信息不挂琥珀——一屏扫下来，泛着琥珀的那一行才是真缺东西的；
+ * · 信息层级：区块标题 → 行标题 → 内容 → 弱化的次要信息。模型 id 与接口地址走
+ *   等宽字体（--font-mono）：它们是要照着抄的字符串，不是标题。
+ *
  * 注意：styles-product.css 里还留着旧版可展开供应商行的样式（.provider-row /
  * .provider-detail / .model-list）。已核对：这三个类在新版区块里全部无引用
  * （新版用的是 .provider-item / .provider-model-list），删除归样式线，不在本次改动里动。
@@ -10,9 +17,9 @@
 /* ---- 区块头：标题 + 右上「添加供应商」 ---- */
 .provider-section-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--space-3);
-  margin-bottom: var(--space-2);
+  margin-bottom: var(--space-3);
 }
 
 .provider-section-title {
@@ -20,44 +27,65 @@
   min-width: 0;
 }
 
-.provider-section-title .me-row-title {
-  font-size: var(--fs-base);
+/* 区块标题比正文大一档（16px），副行退到 12px：两行同字号时层级就平了。 */
+.provider-section-heading {
+  font-size: var(--fs-md);
   font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.35;
 }
 
-.provider-section-title .me-row-sub {
+.provider-section-desc {
+  margin-top: 2px;
   font-size: var(--fs-xs);
   color: var(--text-secondary);
 }
 
+/* 这一页唯一的主操作：琥珀实心。 */
 .provider-add-btn {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   flex-shrink: 0;
-  padding: 6px var(--space-3);
+  min-height: 32px;
+  padding: 0 var(--space-3);
   font-size: var(--fs-sm);
   border-radius: var(--radius-md);
 }
 
+/* 主按钮 hover 的底色由全局那条 `.btn-primary:hover:not(:disabled)` 兜住——此前
+   `.btn:hover`（0-2-0）压过 `.btn-primary`（0-1-0），琥珀底一碰就褪成灰。
+   全局已修，这一页不再自己补一份。 */
+
 /* ---- 分组 ---- */
+.provider-groups {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.provider-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
 .provider-group-label {
-  margin: var(--space-3) 0 var(--space-2);
-  color: var(--text-secondary);
+  margin: 0;
+  color: var(--text-tertiary);
   font-size: var(--fs-xs);
   font-weight: 600;
 }
 
-.provider-group:first-child .provider-group-label {
-  margin-top: 0;
-}
-
-/* ---- 供应商行：图标 + 名称徽标 + 状态 + 模型数 › ---- */
+/* ---- 供应商行：图标 + 名称 + 副行 + 状态 › ---- */
 .provider-item {
   background: var(--bg-surface);
-  border-radius: var(--radius-lg);
-  margin-bottom: var(--space-2);
+  /* 白卡压在暖奶油底上，阴影只表达「抬起来一点」，边缘归 --edge 描边。 */
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-md);
   box-shadow: var(--shadow-1);
+  /* 行头 hover 的底色要跟着卡片的圆角走，否则底角会漏出一块方角。 */
+  overflow: hidden;
 }
 
 .provider-head {
@@ -71,7 +99,6 @@
   font: inherit;
   color: inherit;
   text-align: left;
-  border-radius: var(--radius-lg);
   cursor: pointer;
   transition: background var(--dur-hover) var(--ease-out);
 }
@@ -87,7 +114,7 @@
 
 .provider-logo {
   flex-shrink: 0;
-  border-radius: 10px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
   /* 品牌方块与页面底色同深度时（暗色下 moonshot 的 #26292E、ollama 的 #1F2328 几乎
      就是 --bg-surface），那圈发丝描边是它唯一的轮廓。抬升仍只走阴影档，描边补的是
@@ -111,32 +138,55 @@
   display: flex;
   flex-direction: column;
   gap: 3px;
+  flex: 1;
   min-width: 0;
 }
 
 .provider-name {
-  font-size: var(--fs-base);
+  font-size: var(--fs-md);
   font-weight: 600;
+  color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* 副行：这一家是什么。协议、免 key、模型数都退成弱化的说明文字，中间用「·」分开。 */
 .provider-badges {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 0;
+  min-width: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
 }
 
-/* 协议 / 免 key 徽标：中性 chip，与 amber 的「内置/自定义」徽标拉开层级。 */
+/* 分隔点跟着后面的那一项走：第一项前面不会有多余的「·」。 */
+.provider-badges > * + *::before {
+  content: '·';
+  margin: 0 6px;
+  color: var(--text-disabled);
+}
+
+/* 唯一的一枚徽标：类型（内置 / 自定义）。它决定这家能不能删，所以留得住；
+   其余信息不必也做成药丸——一屏里药丸比信息多时，眼睛就不知道该看哪枚。 */
 .provider-chip {
-  background: var(--bg-app);
-  border: 1px solid var(--edge);
+  background: var(--bg-subtle);
   border-radius: var(--radius-pill);
   padding: 1px 8px;
   color: var(--text-secondary);
   font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.provider-tag {
+  color: var(--text-tertiary);
+}
+
+.provider-models-count {
+  color: var(--text-tertiary);
+  white-space: nowrap;
 }
 
 .provider-meta {
@@ -147,22 +197,42 @@
   flex-shrink: 0;
 }
 
+/* 状态：这一行唯一「现在是什么情况」的说法，就地站着，右对齐一列好扫。 */
 .provider-status {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   color: var(--text-secondary);
   font-size: var(--fs-xs);
-}
-
-.provider-models-count {
-  color: var(--text-tertiary);
-  font-size: var(--fs-xs);
   white-space: nowrap;
 }
 
+/* 该动手的一档才上琥珀（没配凭据 / 备好没验过 / 本地服务探不通）。 */
+.provider-status.is-warn {
+  color: var(--amber-text);
+}
+
+.provider-status.is-ok {
+  color: var(--success);
+}
+
+/* 展开箭头：给一枚小圆底，转起来看得出方向。24×24 也是它能点到的最小尺寸。 */
 .provider-chevron {
-  transition: transform var(--dur-hover) var(--ease-out);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-subtle);
+  color: var(--text-tertiary);
+  transition: transform var(--dur-hover) var(--ease-out), background var(--dur-hover) var(--ease-out),
+    color var(--dur-hover) var(--ease-out);
+}
+
+.provider-head:hover .provider-chevron {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
 }
 
 .provider-chevron.is-open {
@@ -171,16 +241,43 @@
 
 /* ---- 展开区 ---- */
 .provider-body {
-  padding: 0 var(--space-4) var(--space-3) calc(var(--space-4) + 36px + var(--space-3));
+  padding: var(--space-3) var(--space-4) var(--space-4) calc(var(--space-4) + 36px + var(--space-3));
+  /* 与行头之间一根发丝线：展开的部分要读得出「属于这一张卡」。 */
+  border-top: 1px solid var(--divider);
 }
 
+/* 接口地址：等宽 + 可选中复制，是这一行里唯一的「原样抄走」的东西。 */
 .provider-endpoint {
-  margin: 0 0 var(--space-2);
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+  font-size: var(--fs-xs);
+}
+
+.provider-endpoint-label {
+  flex: none;
   color: var(--text-tertiary);
+}
+
+.provider-endpoint-value {
+  min-width: 0;
+  color: var(--text-secondary);
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   word-break: break-all;
   user-select: text;
+}
+
+.provider-catalog {
+  margin-bottom: var(--space-3);
+}
+
+.provider-catalog-head {
+  margin: 0 0 var(--space-2);
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
 }
 
 .provider-model-list {
@@ -193,15 +290,73 @@
   font-size: var(--fs-sm);
 }
 
+.provider-model-list li {
+  min-width: 0;
+}
+
 .provider-model-list small {
   display: block;
   color: var(--text-tertiary);
   font-size: var(--fs-xs);
 }
 
+/* 目录里的一条模型：名字一行、id 一行（等宽）、上下文长度再一行。
+   三行分开而不是挤在一行：模型 id 常常又长又带斜杠，挤在一起就断了。 */
+.provider-model {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+}
+
+.provider-model-name {
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+/* 模型 id 是要照着抄的字符串，一律等宽；长了就断行，不撑破卡片。 */
+.provider-model-id {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+
+.provider-model-meta {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+/* 发现面板里勾中的那一行：整行上色，光看 16px 的方框扫不出自己勾了哪几个。 */
+.provider-pick-model label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 24px;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.provider-pick-model.is-picked label {
+  background: color-mix(in srgb, var(--amber-primary) 12%, transparent);
+}
+
+.provider-pick-model input[type='checkbox'] {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--amber-primary);
+}
+
 .provider-item-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
+  gap: var(--space-2);
   margin-top: var(--space-3);
 }
 
@@ -216,6 +371,16 @@
   color: var(--amber-text);
 }
 
+/* 「下一步做什么」：备好没验过这类状态，光说状态用户不知道该点哪儿。
+   琥珀只出现在这里和状态点上——这两处正是用户该动手的地方。 */
+.provider-note.provider-next {
+  margin-top: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--amber-primary) 10%, transparent);
+  color: var(--amber-text);
+}
+
 /* 保存失败时错误段落会被聚焦（tabindex=-1）：得画出焦点圈，
    否则键盘用户只看到光标消失在原地。 */
 .provider-form .apikey-error:focus-visible {
@@ -224,12 +389,80 @@
   border-radius: var(--radius-xs);
 }
 
+/* ---- 行内填 Key ---- */
+.provider-keyform {
+  margin-bottom: var(--space-3);
+}
+
+.provider-keyform .apikey-title {
+  margin: 0 0 var(--space-1);
+  font-size: var(--fs-base);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.provider-keyform .apikey-hint {
+  margin: 0 0 var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.provider-body .apikey-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.provider-body .apikey-row input {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  padding: 0 var(--space-3);
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+  box-shadow: var(--ring-edge);
+  font-size: var(--fs-base);
+  transition: box-shadow var(--dur-hover) var(--ease-out), background var(--dur-hover) var(--ease-out);
+}
+
+.provider-body .apikey-row input:focus {
+  outline: none;
+  background: var(--bg-surface);
+  box-shadow: inset 0 0 0 1px var(--amber-text), var(--focus-ring);
+}
+
+/* 「显示 / 隐藏」：粘贴进来的那串偶尔需要确认有没有多一个空格。24px 是它的热区下限。 */
+.provider-reveal {
+  flex: none;
+  min-height: 24px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  transition: color var(--dur-hover) var(--ease-out), border-color var(--dur-hover) var(--ease-out);
+}
+
+.provider-reveal:hover {
+  color: var(--text-primary);
+  border-color: var(--edge-strong);
+}
+
+.provider-reveal:focus-visible {
+  outline: 2px solid var(--focus-outline);
+  outline-offset: 2px;
+}
+
 /* ---- 添加向导：预设网格 ---- */
 .provider-preset-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   gap: var(--space-2);
-  margin-top: var(--space-2);
+  margin-top: var(--space-3);
 }
 
 .provider-preset-tile {
@@ -266,19 +499,24 @@
  */
 .provider-preset-tile.is-installed {
   cursor: not-allowed;
-  opacity: 0.55;
   background: var(--bg-app);
   border-style: dashed;
+  border-color: var(--divider);
 }
 
 .provider-preset-tile.is-installed:hover {
   background: var(--bg-app);
-  border-color: var(--edge);
+  border-color: var(--divider);
   box-shadow: none;
 }
 
 .provider-preset-tile.is-installed .provider-logo {
   filter: grayscale(1);
+  opacity: 0.55;
+}
+
+.provider-preset-tile.is-installed .provider-preset-name {
+  color: var(--text-tertiary);
 }
 
 .provider-preset-name {
@@ -296,11 +534,20 @@
    刻意**不**复用 .provider-preset-tile：那个 class 是添加向导里的格子，两处同名会让
    按 class 定位的测试与样式互相串味（向导在弹窗里，这张网格在页面上）。这里是另一
    套更轻的外观：图标 + 名字 + 一行副标题。 */
-.provider-picker { margin-bottom: var(--space-4); }
+.provider-picker {
+  margin-bottom: var(--space-4);
+}
+
+.provider-picker-title {
+  margin: 0 0 2px;
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
 
 .provider-picker-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(136px, 1fr));
   gap: var(--space-2);
   margin-top: var(--space-2);
 }
@@ -339,21 +586,54 @@
 }
 
 /* ---- 添加向导：表单 ---- */
+/* 走到第几步写在表单最上面：弹窗标题只有一句「添加 DeepSeek」，下面却是一屏字段。 */
+.provider-step {
+  display: inline-flex;
+  align-items: center;
+  margin: 0 0 var(--space-3);
+  padding: 2px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+/* 表单分组：一张表单塞着基本信息、模型、凭据三件事，不分组就只是一屏字段。 */
+.provider-form-group {
+  margin-top: var(--space-4);
+}
+
+.provider-form-group-title {
+  margin: 0 0 var(--space-1);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+/* 返回键：走两步的向导里，「上一步」得是一枚看得见的按钮，不是角落里一行灰字。 */
 .provider-back {
-  border: none;
-  background: none;
-  padding: 0;
-  margin-bottom: var(--space-1);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  margin-bottom: var(--space-2);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-pill);
+  background: var(--bg-surface);
   color: var(--text-secondary);
   font: inherit;
   font-size: var(--fs-sm);
   cursor: pointer;
-  border-radius: var(--radius-sm);
-  transition: color var(--dur-hover) var(--ease-out);
+  transition: color var(--dur-hover) var(--ease-out), border-color var(--dur-hover) var(--ease-out),
+    background var(--dur-hover) var(--ease-out);
 }
 
 .provider-back:hover {
   color: var(--text-primary);
+  border-color: var(--edge-strong);
+  background: var(--hover-bg);
 }
 
 .provider-back:focus-visible {
@@ -361,23 +641,47 @@
   outline-offset: 2px;
 }
 
+/* ---- 空态 ---- */
 /* 一个供应商都没读到时：说清是「服务端没起来 / 配置是空的」，别留一块空白。 */
 .provider-empty {
   margin: 0;
-  padding: var(--space-3) var(--space-4);
-  border-radius: var(--radius-lg);
+  padding: var(--space-5) var(--space-4);
+  border: 1px dashed var(--edge-strong);
+  border-radius: var(--radius-md);
   background: var(--bg-surface);
-  box-shadow: var(--shadow-1);
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.provider-empty-title {
+  margin: 0 0 var(--space-1);
+  color: var(--text-primary);
+  font-size: var(--fs-base);
+  font-weight: 600;
+}
+
+.provider-empty-hint {
+  margin: 0;
   color: var(--text-secondary);
   font-size: var(--fs-sm);
 }
 
+/* 窄窗：模型数先让位，状态与箭头留着。 */
 @media (max-width: 560px) {
-  .provider-preset-grid {
-    grid-template-columns: repeat(3, 1fr);
-  }
-
   .provider-models-count {
     display: none;
+  }
+
+  /* 展开区的左缩进是给行标题让位的；窄屏上这一点位置很贵。 */
+  .provider-body {
+    padding-left: var(--space-4);
+  }
+
+  .provider-head {
+    padding: var(--space-3);
+  }
+
+  .provider-preset-grid {
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
   }
 }

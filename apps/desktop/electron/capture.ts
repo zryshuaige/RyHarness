@@ -285,6 +285,17 @@ export async function runCapture(
       console.log(`[capture] saved ${pickerFile}（${shot.theme}）`)
     }
 
+    // 插件页：它此前一直没有实拍——一个真实的页面却没有画面，评审与文档都缺一块。
+    await gotoTab(window, '插件')
+    await new Promise((resolve) => {
+      return setTimeout(resolve, SETTLE_MS)
+    })
+    const pluginsImage = await window.webContents.capturePage()
+    const pluginsFile = shot.file.replace(/\.png$/, '-plugins.png')
+    writeFileSync(join(here, pluginsFile), pluginsImage.toPNG())
+    writeFileSync(join(docsDir, pluginsFile), pluginsImage.toPNG())
+    console.log(`[capture] saved ${pluginsFile}（${shot.theme}）`)
+
     // RyVibe：独立页面的样子（首屏就是一句话 + 一个开始）。
     await gotoTab(window, 'RyVibe')
     const vibeImage = await window.webContents.capturePage()

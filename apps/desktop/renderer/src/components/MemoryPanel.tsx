@@ -174,7 +174,7 @@ export function MemoryPanel({
           </span>
           {/* 复用消息气泡的就地编辑样式（bubble-edit*）：同一个「原地摊开输入框」
               的交互，不该为记忆面板再造一套视觉。 */}
-          <div className="bubble-edit" style={{ flex: 1, minWidth: 0 }}>
+          <div className="bubble-edit memory-edit-box">
             <textarea
               className="bubble-edit-input"
               value={draft}
@@ -216,38 +216,42 @@ export function MemoryPanel({
           {isShared ? ' · 共享' : ''}
         </span>
         <span className="memory-content">{memory.content}</span>
-        <span className="memory-meta">
-          {formatDate(memory.updatedAt)}
-          {memory.sourceConversationId !== undefined
-            ? ` · ${conversationTitles.get(memory.sourceConversationId) ?? '会话'}`
-            : ''}
+        {/* 时间、来源与两个动作落到第二行：第一行只留正文。
+            挤在一行时正文会被时间和按钮压成一条缝，读不出写了什么。 */}
+        <span className="memory-foot">
+          <span className="memory-meta">
+            {formatDate(memory.updatedAt)}
+            {memory.sourceConversationId !== undefined
+              ? ` · ${conversationTitles.get(memory.sourceConversationId) ?? '会话'}`
+              : ''}
+          </span>
+          <span className="memory-actions">
+            <button
+              type="button"
+              className="btn btn-mini memory-edit"
+              title="编辑这条记忆的内容"
+              aria-label={`编辑：${memory.content.slice(0, 20)}`}
+              disabled={deletingId === memory.id}
+              onClick={() => {
+                startEdit(memory)
+              }}
+            >
+              编辑
+            </button>
+            <button
+              type="button"
+              className="btn btn-mini memory-delete"
+              title="移入归档（可以撤销）"
+              aria-label={`移入归档：${memory.content.slice(0, 20)}`}
+              disabled={deletingId === memory.id}
+              onClick={() => {
+                void remove(memory.id)
+              }}
+            >
+              {deletingId === memory.id ? '归档中…' : '移入归档'}
+            </button>
+          </span>
         </span>
-        <button
-          type="button"
-          className="btn btn-mini"
-          style={{ width: 'auto', height: 'auto', padding: '2px 8px', whiteSpace: 'nowrap' }}
-          title="编辑这条记忆的内容"
-          aria-label={`编辑：${memory.content.slice(0, 20)}`}
-          disabled={deletingId === memory.id}
-          onClick={() => {
-            startEdit(memory)
-          }}
-        >
-          编辑
-        </button>
-        <button
-          type="button"
-          className="btn btn-mini memory-delete"
-          style={{ width: 'auto', height: 'auto', padding: '2px 8px', whiteSpace: 'nowrap' }}
-          title="移入归档（可以撤销）"
-          aria-label={`移入归档：${memory.content.slice(0, 20)}`}
-          disabled={deletingId === memory.id}
-          onClick={() => {
-            void remove(memory.id)
-          }}
-        >
-          {deletingId === memory.id ? '归档中…' : '移入归档'}
-        </button>
       </li>
     )
   }
@@ -319,17 +323,21 @@ export function MemoryPanel({
                       <li key={memory.id} className="memory-row is-archived">
                         <span className={`memory-kind kind-${memory.kind}`}>{KIND_LABELS[memory.kind]}</span>
                         <span className="memory-content">{memory.content}</span>
-                        <span className="memory-meta">{formatDate(memory.updatedAt)}</span>
-                        <button
-                          type="button"
-                          className="memory-restore"
-                          disabled={restoringId === memory.id}
-                          onClick={() => {
-                            void restore(memory.id)
-                          }}
-                        >
-                          {restoringId === memory.id ? '恢复中' : '恢复'}
-                        </button>
+                        <span className="memory-foot">
+                          <span className="memory-meta">{formatDate(memory.updatedAt)}</span>
+                          <span className="memory-actions">
+                            <button
+                              type="button"
+                              className="memory-restore"
+                              disabled={restoringId === memory.id}
+                              onClick={() => {
+                                void restore(memory.id)
+                              }}
+                            >
+                              {restoringId === memory.id ? '恢复中' : '恢复'}
+                            </button>
+                          </span>
+                        </span>
                       </li>
                     )
                   })}
@@ -522,6 +530,13 @@ export function MemoryHealth({
     return <p className="panel-empty">记忆健康度暂时读不到。</p>
   }
   const scoped = agentId !== undefined
+  // 一句话把这堆数字翻成人话：光给五个数，用户不知道该担心哪一个。
+  const summary = ((): string => {
+    if (ftsOnly) return '还没配向量模型，现在只能按关键词找记忆。'
+    if (missingVectors === undefined) return '服务端还没报缺向量的条数。'
+    if (missingVectors > 0) return `有 ${missingVectors} 条记忆还没生成向量，检索时找不到它们。`
+    return '每条记忆都有向量，检索能找到它们。'
+  })()
   return (
     <div className="memory-health">
       <p className="memory-health-title">
@@ -529,13 +544,30 @@ export function MemoryHealth({
         <span className="memory-health-scope">{scoped ? '该 agent 空间' : '全部空间'}</span>
       </p>
       <div className="memory-health-grid">
-        <div className="health-stat">
+        {/* 总数当头一个数：下面四格是它的补充，不是四个平级的数。 */}
+        <div className="health-stat is-lead">
           <span className="health-label">记忆总数</span>
-          <span className="health-value">{total === undefined ? '—' : `${total} 条`}</span>
+          <span className="health-value">
+            {total === undefined ? (
+              '—'
+            ) : (
+              <>
+                <span className="num">{total}</span> 条
+              </>
+            )}
+          </span>
         </div>
         <div className="health-stat">
           <span className="health-label">已归档</span>
-          <span className="health-value">{archived === undefined ? '—' : `${archived} 条`}</span>
+          <span className="health-value">
+            {archived === undefined ? (
+              '—'
+            ) : (
+              <>
+                <span className="num">{archived}</span> 条
+              </>
+            )}
+          </span>
         </div>
         <div
           className="health-stat"
@@ -549,13 +581,25 @@ export function MemoryHealth({
         >
           <span className="health-label">缺向量</span>
           <span className={missingVectors === undefined ? 'health-value' : 'health-value is-warn'}>
-            {missingVectors === undefined ? '—' : `${missingVectors} 条`}
+            {missingVectors === undefined ? (
+              '—'
+            ) : (
+              <>
+                <span className="num">{missingVectors}</span> 条
+              </>
+            )}
           </span>
         </div>
         <div className="health-stat" title={recall === undefined ? '本次运行还没有发生过召回' : undefined}>
           <span className="health-label">最近召回</span>
           <span className="health-value">
-            {recall === undefined ? '暂无' : `${recall.items} 条 · ${humanDuration(recall.ms)}`}
+            {recall === undefined ? (
+              '暂无'
+            ) : (
+              <>
+                <span className="num">{recall.items}</span> 条 · <span className="num">{humanDuration(recall.ms)}</span>
+              </>
+            )}
           </span>
         </div>
         <div
@@ -563,9 +607,12 @@ export function MemoryHealth({
           title={dbBytes === undefined ? '服务端尚未提供存储体积口径' : '记忆库文件大小（含 WAL）'}
         >
           <span className="health-label">存储体积</span>
-          <span className="health-value">{dbBytes === undefined ? '—' : formatBytes(dbBytes)}</span>
+          <span className="health-value">
+            {dbBytes === undefined ? '—' : <span className="num">{formatBytes(dbBytes)}</span>}
+          </span>
         </div>
       </div>
+      <p className="memory-health-summary">{summary}</p>
       <p className="memory-health-foot">
         {recall === undefined ? '本次运行还没有召回记录。' : `上次召回 ${formatRelative(recall.at)}。`}
         {ftsOnly ? '当前未配置 embedding，只能按关键词检索。' : ''}

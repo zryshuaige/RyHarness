@@ -1,0 +1,543 @@
+/*
+ * 插件页的样式。
+ *
+ * 单独成文件而不是并进 styles-product.css：那个文件是全页共用的，多人并行改时同一段
+ * CSS 会被互相覆盖。这一份只归「插件」这条线改。
+ *
+ * 放在最后 import，规则覆盖前面同名的旧规则；旧规则留着不删（回滚时还在）。
+ *
+ * 一条线走到底：暖奶油底 + 白卡片 + 1px 发丝描边 + 12px 小圆角 + 极轻阴影。
+ * 琥珀只出现在「用户该看的地方」——内置插件的图标、打开着的开关、跑不起来的提醒。
+ * 其余一律中性，靠字号和留白分层。
+ */
+
+/* ---- 页头 ---- */
+
+/* 页头两行字：一行讲「关掉会怎样」，一行讲「哪组不能关」。这两件事只在这里说一次，
+   卡片上再重复就成了噪音。 */
+.plugins-header {
+  align-items: flex-start;
+}
+
+.plugins-head-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.plugins-head-text h2 {
+  margin: 0;
+}
+
+.plugins-lede {
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+}
+
+/* 搜索结果数放在标题下面而不是搜索框旁边：搜索框窄，挤一行字进去会把它压扁。 */
+.plugins-result {
+  margin: 6px 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+.plugins-search {
+  width: min(280px, 36vw);
+  flex-shrink: 0;
+}
+
+.plugins-col {
+  max-width: 760px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+/* ---- 分组 ---- */
+
+.plugin-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* 分组标题比插件名重一档：先看「这是哪一组」，再看组里有哪些。
+   右边那根细线把两组分开，省得每组再画一条分隔线。 */
+.plugin-group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-1);
+}
+
+.plugin-group-head::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--divider);
+}
+
+.plugin-group-title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* 计数做成小药丸：一组里有几个，一眼扫过去就知道，不用逐个数卡片。 */
+.plugin-group-count {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-pill);
+  background: var(--bg-subtle);
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.plugin-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* ---- 插件卡 ---- */
+
+.plugin-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-1);
+  overflow: hidden;
+  transition:
+    border-color var(--dur-hover) var(--ease-out),
+    box-shadow var(--dur-hover) var(--ease-out);
+}
+
+.plugin-card:hover {
+  border-color: var(--edge-strong);
+  box-shadow: var(--shadow-2);
+}
+
+/* 展开中的卡片不再加琥珀边：琥珀留给开关和出错的提醒。一张卡片同时亮三种颜色，
+   就没有哪一种是「出事了」的意思了。 */
+.plugin-card.is-open {
+  border-color: var(--edge-strong);
+  box-shadow: var(--shadow-2);
+}
+
+.plugin-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
+}
+
+.plugin-card-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  border: none;
+  background: none;
+  padding: 0;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+/* 图标位：内置插件是实心琥珀（它是底座，跟别的不一样），其余一律中性底。
+   每张卡都铺一块琥珀底，这一页就没什么颜色可讲了。 */
+.plugin-icon {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: var(--radius-md);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+}
+
+.plugin-card[data-group='core'] .plugin-icon {
+  background: var(--amber-primary);
+  color: var(--amber-on-primary);
+}
+
+.plugin-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+/* 名字 14 / 描述 13 / 补充说明 12：三级各自一档，不靠颜色区分。 */
+.plugin-name {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: var(--fs-base);
+  font-weight: 600;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugin-desc {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+/* 内置插件的「为什么关不掉」：左边一道琥珀竖线标出「这条要看」，正文保持安静。
+   展开之后这行让位给展开区里的「为什么不可关闭」，同一句话不出现两遍。 */
+.plugin-core-note {
+  margin-top: 2px;
+  padding: 6px var(--space-2);
+  border-left: 2px solid var(--amber-primary);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+
+.plugin-card.is-open .plugin-core-note {
+  display: none;
+}
+
+/* 「开关开着但没跑」是真出了状况，用琥珀字 + 提示图标喊出来。 */
+.plugin-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 2px;
+  color: var(--amber-text);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+
+/* 图标组件自带 .icon 外壳（flex 排布里真正的那一格是它，不是里面的 svg）。 */
+.plugin-note .icon {
+  margin-top: 1px;
+}
+
+/* ---- 右侧：状态 / 开关 / 展开箭头 ---- */
+
+.plugin-side {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-shrink: 0;
+}
+
+/* 状态是信息，不抢戏：小圆点加两个字，没有底色药丸。 */
+.plugin-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.plugin-status-dot {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+
+/* 在跑 = 实心琥珀点；用户自己关掉的 = 灰点。 */
+.plugin-status.is-running {
+  color: var(--text-secondary);
+}
+
+.plugin-status.is-running .plugin-status-dot {
+  background: var(--amber-primary);
+}
+
+.plugin-status.is-error {
+  color: var(--danger);
+}
+
+.plugin-status.is-error .plugin-status-dot {
+  background: var(--danger);
+}
+
+/* 开着却没跑 = 空心环：颜色之外再加一层形状差别，色弱用户也分得出来。 */
+.plugin-status.is-stalled {
+  color: var(--amber-text);
+}
+
+.plugin-status.is-stalled .plugin-status-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--amber-primary);
+}
+
+/* 开关：画成真开关。滑块位置、轨道颜色、旁边那两个字一起变——
+   只换颜色的话，开和关在余光里是同一个东西。 */
+.plugin-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 30px;
+  padding: 0 var(--space-3) 0 var(--space-2);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-pill);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background var(--dur-hover) var(--ease-out),
+    border-color var(--dur-hover) var(--ease-out),
+    color var(--dur-hover) var(--ease-out);
+}
+
+.plugin-switch-track {
+  position: relative;
+  width: 34px;
+  height: 20px;
+  flex-shrink: 0;
+  border-radius: var(--radius-pill);
+  background: var(--bg-subtle);
+  box-shadow: var(--ring-edge);
+  transition:
+    background var(--dur-hover) var(--ease-out),
+    box-shadow var(--dur-hover) var(--ease-out);
+}
+
+.plugin-switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-1);
+  transition: transform var(--dur-hover) var(--ease-out);
+}
+
+.plugin-switch.is-on {
+  color: var(--amber-text);
+  border-color: color-mix(in srgb, var(--amber-text) 28%, var(--edge));
+}
+
+.plugin-switch.is-on .plugin-switch-track {
+  background: var(--amber-primary);
+  box-shadow: none;
+}
+
+.plugin-switch.is-on .plugin-switch-knob {
+  transform: translateX(14px);
+}
+
+.plugin-switch:hover:not(:disabled) {
+  border-color: var(--edge-strong);
+  background: var(--hover-bg);
+}
+
+.plugin-switch.is-on:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--amber-primary) 10%, var(--bg-surface));
+}
+
+/* 正在提交时开关是灰的：请求还没落地，不能先给一个「已经开了」的假象。 */
+.plugin-switch:disabled {
+  cursor: default;
+  color: var(--text-disabled);
+  background: var(--bg-subtle);
+  border-color: var(--edge);
+}
+
+.plugin-switch:disabled .plugin-switch-track {
+  background: var(--bg-subtle);
+}
+
+/* 展开箭头：32px 见方，比 WCAG 2.5.8 的 24px 下限宽裕，指头点得中。 */
+.plugin-chevron {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-tertiary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition:
+    background var(--dur-hover) var(--ease-out),
+    color var(--dur-hover) var(--ease-out);
+}
+
+.plugin-chevron:hover {
+  background: var(--hover-bg);
+  color: var(--amber-text);
+}
+
+.plugin-card.is-open .plugin-chevron {
+  color: var(--text-secondary);
+}
+
+.plugin-chevron-icon {
+  transition: transform var(--dur-hover) var(--ease-out);
+}
+
+.plugin-card.is-open .plugin-chevron-icon {
+  transform: rotate(90deg);
+}
+
+/* ---- 展开详情 ---- */
+
+/* 详情区是一块浅底：白卡片里再开一个小区块，工具/接口/影响三样分开看。 */
+.plugin-detail {
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-2) var(--space-4) var(--space-3);
+  border-top: 1px solid var(--divider);
+  background: var(--bg-subtle);
+  animation: fade-in var(--dur-in) var(--ease-out);
+}
+
+/* 左边一列标签、右边一列内容：标签对齐了，几行信息扫一遍就清楚，
+   不用从上往下读三段「标签 + 内容」。 */
+.plugin-detail-row {
+  display: grid;
+  grid-template-columns: 88px 1fr;
+  gap: 4px var(--space-3);
+  padding: var(--space-2) 0;
+  align-items: start;
+}
+
+.plugin-detail-row + .plugin-detail-row {
+  border-top: 1px solid var(--divider);
+}
+
+.plugin-detail-label {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  line-height: 1.7;
+}
+
+.plugin-detail-text {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+}
+
+.plugin-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* 胶囊在浅底上是白底加一根发丝边，跟详情区分得开又不吵。 */
+.plugin-chip {
+  padding: 3px 10px;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-pill);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+
+/* 胶囊上写的是人话（「读取待办清单」），不是 fs_read 这种标识，所以不用等宽字体：
+   等宽留给原值，原值在 title 里，排障时能对上。 */
+.plugin-chip.is-route {
+  font-family: inherit;
+}
+
+.plugin-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+}
+
+/* ---- 空态 ---- */
+
+.plugins-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-8) var(--space-4);
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.plugins-empty-icon {
+  width: 40px;
+  height: 40px;
+  margin-bottom: var(--space-1);
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-subtle);
+  color: var(--text-tertiary);
+}
+
+.plugins-empty h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--fs-md);
+}
+
+.plugins-empty p {
+  margin: 0;
+  max-width: 44ch;
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+}
+
+.plugins-empty .btn {
+  margin-top: var(--space-2);
+}
+
+.plugins-unsupported {
+  padding: var(--space-6) var(--space-4);
+}
+
+/* ---- 窄窗 ---- */
+
+@media (max-width: 720px) {
+  .plugins-header {
+    flex-wrap: wrap;
+  }
+
+  .plugins-search {
+    width: 100%;
+  }
+
+  /* 窄窗放不下两列，标签回到内容上方。 */
+  .plugin-detail-row {
+    grid-template-columns: 1fr;
+  }
+
+  /* 状态 / 开关 / 箭头整体挪到第二行，右侧对齐。 */
+  .plugin-side {
+    width: 100%;
+    justify-content: flex-end;
+    padding-top: var(--space-1);
+  }
+}

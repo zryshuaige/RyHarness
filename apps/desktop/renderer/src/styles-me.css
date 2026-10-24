@@ -1,0 +1,559 @@
+/*
+ * 「我的」页与立体动物形象工作室的样式。
+ *
+ * 单独成文件而不是并进 styles.css / styles-product.css：那几个文件是全页共用的，
+ * 多人并行改时同一段 CSS 会被互相覆盖。这一份只归「我的」这条线改。
+ *
+ * 放在最后 import，规则覆盖前面同名的旧规则；旧规则留着不删（回滚时还在）。
+ *
+ * 这一页的视觉口径（与已认可的聊天页同一套语言）：
+ * · 暖奶油底 + 白卡片 + 1px 发丝描边 + 小圆角（12px）+ 极轻阴影；
+ * · 琥珀只用在「该用户注意的地方」：主按钮、选中态、状态点；
+ * · 信息层级：页面标题 → 分组标题 → 行标题 → 内容 → 弱化的次要信息。
+ *
+ * 这一页改掉的四处旧写法（理由都写在下面那条规则上）：
+ * · .me-name 的字号：旧写法被 .me-inline-edit 的 font:inherit 顶掉，用户名其实
+ *   按正文大小显示（14px），名字和身份行一样重，层级是平的；
+ * · .me-row 不再一张张浮着的卡：同组的几行挤进一张卡（.me-list），行间一根发丝线；
+ * · .me-avatar-edit 不再只在悬停时才冒出来：换头像得一眼看得见；
+ * · .theme-toggle 选中的一档不再靠淡黄底色认，改成「浮起来的一块」。
+ */
+
+/* =====================================================================
+   1. 页面骨架
+   ===================================================================== */
+
+.me-page {
+  /* 顶部留白收一档：这一页区块多，省下的 8px 够多放一行。 */
+  padding-top: var(--space-5);
+}
+
+.me-section {
+  margin-top: var(--space-5);
+}
+
+/* 分组标题（「助理」「这台电脑」…）：比行标题大一档，比页面标题低一档。
+   页面标题在顶栏里，这里是内容区的第一个层级。 */
+.me-group-title {
+  margin: 0 0 var(--space-2);
+  color: var(--text-primary);
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+/* =====================================================================
+   2. 个人卡：头像在左，名字与身份在右
+   ===================================================================== */
+
+.me-usercard {
+  /* 旧写法是竖排（头像在上、名字在下），一屏只装得下半页。改成横排后，
+     头像、名字、两个改的动作一眼都在，余下的内容也上得去。 */
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: 100%;
+  max-width: 520px;
+  padding: var(--space-4) var(--space-5);
+  background: var(--bg-surface);
+  /* 白卡压在暖奶油底上只有 1.09:1，阴影量不出边，这 1px --edge 才是它的轮廓。 */
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-1);
+}
+
+.me-usercard-main {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.me-usercard-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.me-avatar {
+  width: 72px;
+  height: 72px;
+  flex-shrink: 0;
+  /* 圆盘自己会裁（.avatar-3d 内部就是圆的），这里放开是为了让角标能探出圆外。 */
+  overflow: visible;
+  box-shadow: var(--shadow-1);
+}
+
+/* 头像上的「改头像」角标常驻：旧写法是 opacity:0，只在鼠标悬停时才冒出来——
+   第一次来的人根本不知道这张脸可以点。静息时是白底描边的中性件，
+   鼠标压上去才变琥珀（那是「正要点它」的信号）。 */
+.me-avatar-edit {
+  right: -2px;
+  bottom: -2px;
+  width: 26px;
+  height: 26px;
+  opacity: 1;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  border: 1px solid var(--edge-strong);
+  box-shadow: var(--shadow-1);
+  transition:
+    opacity var(--dur-hover) var(--ease-out),
+    background var(--dur-hover) var(--ease-out),
+    color var(--dur-hover) var(--ease-out);
+}
+
+.me-avatar-btn:hover .me-avatar-edit,
+.me-avatar-btn:focus-visible .me-avatar-edit {
+  background: var(--amber-primary);
+  color: var(--amber-on-primary);
+  border-color: transparent;
+}
+
+/* 名字：旧写法被 .me-inline-edit 的 font:inherit 顶成了 14px 正文大小，
+   和下面的身份行一样重——「名字」这件事一点没被强调。字号在这里补回来，
+   同时给一个上限，长名字换行而不是把卡片撑破。 */
+.me-usercard .me-name {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 100%;
+  margin: 0;
+  padding: 2px 6px;
+  font-size: var(--fs-display);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+/* 名字旁的铅笔：旧写法是 --text-disabled（几乎看不见）。改成常驻的次要色，
+   鼠标压上去变琥珀。 */
+.me-pencil {
+  color: var(--text-tertiary);
+}
+
+/* 行内编辑的输入框：跟着名字一起变大，边框贴着名字的左边缘，
+   点开时看到的是「同一个名字在改」，不是「另一个小框」。 */
+.me-usercard .me-name-inline {
+  width: 100%;
+  max-width: 320px;
+  margin: -2px -6px;
+  padding: 2px 6px;
+  font-size: var(--fs-display);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+  text-align: left;
+  border-radius: var(--radius-sm);
+}
+
+.me-sub {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+/* 名字底下那句「改过的名字会告诉助理」：这件事跟名字有关，
+   放在名字边上；存储与隐私的口径另说（见卡片底部的 .me-note）。 */
+.me-hint {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+}
+
+/* 卡片底部那行说明：说的是这台机器而不是这个人，所以用一根发丝线与上面的
+   身份块分开，字号也压到最弱一档。 */
+.me-usercard .me-note {
+  max-width: none;
+  margin: 0;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--divider);
+}
+
+/* 行内编辑的触发点：按钮本体太小（不到 24px），按 WCAG 2.5.8 的下限垫高。 */
+.me-inline-edit {
+  min-height: 24px;
+}
+
+/* =====================================================================
+   3. 分组清单：几行挤在一张卡里
+   ===================================================================== */
+
+.me-list {
+  background: var(--bg-surface);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-1);
+  /* 行各自的首尾圆角要由这张卡裁掉，否则悬停底色会戳出卡片外面。 */
+  overflow: hidden;
+}
+
+/* 卡里的行不再是「一张张浮着的卡」：去掉各自的边与影，
+   行与行之间只留一根发丝线，一屏能多看几行。 */
+.me-list > .me-row {
+  margin-bottom: 0;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+  padding: var(--space-3) var(--space-4);
+}
+
+.me-list > .me-row + .me-row {
+  border-top: 1px solid var(--divider);
+}
+
+/* 可点的行：悬停有一层底色（写在这里，别被上面那条 transparent 顶掉）。 */
+.me-list > .me-row-btn:hover {
+  background: var(--hover-bg);
+}
+
+/* 内容多行的行（备份、账单、记忆健康度…）：内容从上往下长，
+   顶上对齐，不要和右侧的控件齐平。 */
+.me-row-block {
+  align-items: flex-start;
+}
+
+/* 行里的小字（加载中 / 空态 / 备份路径）。 */
+.me-row-note {
+  margin: var(--space-2) 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+/* 备份路径是一串要照着抄的字符：等宽字体 + 到处断行，别把卡片撑宽。 */
+.me-path {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+  word-break: break-all;
+  user-select: text;
+}
+
+/* 加载中的骨架条：跟卡片同一套底色，跟着主题翻面。 */
+.me-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.me-skeleton > .skeleton {
+  display: block;
+  border-radius: var(--radius-sm);
+}
+
+/* 箭头：旧写法是 --text-disabled（灰到看不见）。抬到第三级文字色。 */
+.me-chevron {
+  color: var(--text-tertiary);
+}
+
+/* 中性小标签：「内置」这类信息不该挂琥珀（琥珀留给该动手的地方）。 */
+.me-tag {
+  flex-shrink: 0;
+  padding: 1px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+/* =====================================================================
+   4. 开关与主题
+   ===================================================================== */
+
+/* 自动朗读：画成真开关。滑块位置、轨道颜色、旁边那两个字一起变——
+   只换颜色的话，开和关在余光里是同一个东西。 */
+.me-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+  height: 32px;
+  padding: 0 var(--space-3) 0 var(--space-2);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-pill);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background var(--dur-hover) var(--ease-out),
+    border-color var(--dur-hover) var(--ease-out),
+    color var(--dur-hover) var(--ease-out);
+}
+
+.me-switch-track {
+  position: relative;
+  width: 34px;
+  height: 20px;
+  flex-shrink: 0;
+  border-radius: var(--radius-pill);
+  background: var(--bg-subtle);
+  box-shadow: var(--ring-edge);
+  transition:
+    background var(--dur-hover) var(--ease-out),
+    box-shadow var(--dur-hover) var(--ease-out);
+}
+
+.me-switch-track::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-1);
+  transition:
+    transform var(--dur-hover) var(--ease-out),
+    background var(--dur-hover) var(--ease-out);
+}
+
+.me-switch[aria-checked='true'] {
+  color: var(--amber-text);
+  border-color: color-mix(in srgb, var(--amber-text) 28%, var(--edge));
+}
+
+.me-switch[aria-checked='true'] .me-switch-track {
+  background: var(--amber-primary);
+  box-shadow: none;
+}
+
+.me-switch[aria-checked='true'] .me-switch-track::after {
+  transform: translateX(14px);
+  background: var(--amber-on-primary);
+}
+
+.me-switch:hover:not(:disabled) {
+  border-color: var(--edge-strong);
+  background: var(--hover-bg);
+}
+
+/* 主题：选中的一档「浮起来」——白底 + 琥珀字 + 一层影。
+   旧写法是淡黄底色，两档只差一个色相，扫一眼分不出当前是哪个。 */
+.theme-toggle {
+  flex-shrink: 0;
+  gap: 2px;
+  padding: 3px;
+  overflow: visible;
+}
+
+.theme-toggle button {
+  min-height: 32px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-pill);
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.theme-toggle button.is-active {
+  background: var(--bg-elevated);
+  color: var(--amber-text);
+  font-weight: 700;
+  box-shadow: var(--shadow-1);
+}
+
+/* =====================================================================
+   5. 立体动物形象工作室
+   ===================================================================== */
+
+.animal-studio {
+  width: 100%;
+  max-width: 520px;
+  padding: var(--space-5);
+  gap: var(--space-5);
+  background: var(--bg-surface);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-1);
+}
+
+/* 预览：这一页的主角，抬到最上面。头像外圈那圈琥珀光环用的是既有的
+   .avatar-lg-ring（见 styles.css），跟全站其他地方是同一圈光。 */
+.animal-studio-preview {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+}
+
+.animal-studio-preview-face {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.animal-studio-current {
+  padding: 2px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.animal-studio-preview-side {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* 卡标题比页面标题低一档：旧写法跟页面标题一样大，两层的层级就平了。 */
+.animal-studio-title {
+  margin: 0;
+  font-size: var(--fs-md);
+  font-weight: 700;
+}
+
+.animal-studio-desc {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+}
+
+/* 状态行：说清「现在用的是哪个」和「改完会变成哪个」。 */
+.animal-studio-status {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+}
+
+.animal-studio-actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-top: var(--space-1);
+}
+
+/* 两组挑选器：legend 是分组标题，比卡标题低一档。 */
+.animal-studio-group legend {
+  padding: 0 0 var(--space-2);
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.animal-studio-row {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.animal-studio-pick,
+.animal-studio-hue {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  cursor: pointer;
+  transition:
+    border-color var(--dur-hover) var(--ease-out),
+    background var(--dur-hover) var(--ease-out);
+}
+
+.animal-studio-pick {
+  min-width: 60px;
+}
+
+.animal-studio-hue {
+  min-width: 50px;
+  padding: 4px 5px;
+}
+
+.animal-studio-pick:hover,
+.animal-studio-hue:hover {
+  border-color: var(--edge-strong);
+}
+
+/* 选中的那一格：描边转琥珀、底色转浅琥珀、字加粗，再加一枚小勾。
+   三处一起变，色觉障碍的用户也分得出来（不只靠颜色差）。 */
+.animal-studio-pick.is-selected,
+.animal-studio-hue.is-selected {
+  border-color: var(--amber-primary);
+  background: var(--amber-primary-soft);
+}
+
+.animal-studio-pick.is-selected small,
+.animal-studio-hue.is-selected small {
+  color: var(--amber-text);
+  font-weight: 700;
+}
+
+.animal-studio-pick small,
+.animal-studio-hue small {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+/* 缩略图外面套一层相对定位，好让「选中」的小勾挂在角上。 */
+.animal-studio-pick-art {
+  position: relative;
+  display: block;
+}
+
+.animal-studio-art {
+  display: block;
+  border-radius: 50%;
+  object-fit: contain;
+  background: var(--bg-subtle);
+}
+
+/* 选中标记：一枚琥珀小勾。颜色之外的第二重信号。 */
+.animal-studio-tick {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--amber-primary);
+  color: var(--amber-on-primary);
+  box-shadow: 0 0 0 2px var(--bg-elevated);
+}
+
+.animal-studio-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+}
+
+.animal-studio-hint-line {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+}
