@@ -17,12 +17,13 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
+import { Avatar } from '../renderer/src/components/avatars/Avatar.tsx'
+import { Avatar3D } from '../renderer/src/components/avatars/Avatar3D.tsx'
 import { MessageBubble } from '../renderer/src/components/MessageBubble.tsx'
 import {
   AVATAR_BREATHE_MIN_SIZE,
   AVATAR_MOTION_MIN_SIZE,
   avatarActionAllowed,
-  avatarActionClass,
   avatarMotionOf,
   avatarMotionScale,
   avatarTemperamentOf,
@@ -30,6 +31,9 @@ import {
 import type { UiMessage } from '../renderer/src/store.ts'
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '../renderer/src')
+
+/** 一套中性的性格：幅度与节奏的基准。 */
+const TEST_TEMPERAMENT = { extroversion: 50, rigor: 50, humor: 50 }
 
 const fileUrl = (name: string): string => {
   return `/api/files/${name}`
@@ -56,7 +60,7 @@ describe('头像动效：谁在动', () => {
         agent={{ id: 'ryen', name: 'Ryen', avatar: 'cat' }}
       />,
     )
-    expect(html).toContain('is-speaking')
+    expect(html).toContain('data-motion="speaking"')
   })
 
   it('说完的那一条：停下来（历史消息不该还在动）', () => {
@@ -67,7 +71,7 @@ describe('头像动效：谁在动', () => {
         agent={{ id: 'ryen', name: 'Ryen', avatar: 'cat' }}
       />,
     )
-    expect(html).not.toContain('is-speaking')
+    expect(html).not.toContain('data-motion')
   })
 
   it('用户自己那一侧不动：动的是"这位正在回话"，不是"有人在打字"', () => {
@@ -78,7 +82,7 @@ describe('头像动效：谁在动', () => {
         agent={{ id: 'ryen', name: 'Ryen', avatar: 'cat' }}
       />,
     )
-    expect(html).not.toContain('is-speaking')
+    expect(html).not.toContain('data-motion')
   })
 })
 
@@ -116,27 +120,35 @@ describe('头像动效：尺寸红线', () => {
 })
 
 describe('动作包：每个动作都有名字、有动画、有用法', () => {
-  it('五个动作各对应一个类名，静止时什么都不挂', () => {
-    expect(avatarActionClass('speaking')).toBe('is-speaking')
-    expect(avatarActionClass('pondering')).toBe('is-pondering')
-    expect(avatarActionClass('breathing')).toBe('is-breathing')
-    expect(avatarActionClass('listening')).toBe('is-listening')
-    expect(avatarActionClass('greeting')).toBe('is-greeting')
-    expect(avatarActionClass('idle')).toBe('')
+  it('五个动作各有各的标记，静止时什么都不挂', () => {
+    // 动效挂在 data-motion 上：普通立绘与立体动物挂的是同一种标记，两条路都吃。
+    const html = renderToStaticMarkup(
+      <Avatar avatarKey="dog" name="柴犬" size={56} action="speaking" temperament={TEST_TEMPERAMENT} />,
+    )
+    expect(html).toContain('data-motion="speaking"')
+    const idle = renderToStaticMarkup(<Avatar avatarKey="dog" name="柴犬" size={56} />)
+    expect(idle).not.toContain('data-motion')
   })
 
-  it('样式表里这五个类各自有动画，且都在「减少动态效果」时被关掉', () => {
+  it('样式表里这五个动作各自有动画，且都在「减少动态效果」时被关掉', () => {
     const css = readFileSync(resolve(SRC, 'styles-avatar-motion.css'), 'utf8')
-    for (const cls of ['is-breathing', 'is-speaking', 'is-pondering', 'is-listening', 'is-greeting']) {
-      // 要找的是**单类**规则：此前 `is-speaking` 只出现在 `.is-breathing.is-speaking`
-      // 这条组合规则里，而组件每次只挂一个动作类——「正在说」那张脸因此一直没动过。
-      const solo = new RegExp(`\\.avatar\\.${cls}\\s*\\{[^}]*animation`)
-      expect(css, `${cls} 得有自己的动画规则`).toMatch(solo)
+    for (const action of ['breathing', 'speaking', 'pondering', 'listening', 'greeting']) {
+      // 要找的是**这条动作自己**的规则：此前 `is-speaking` 只出现在
+      // `.avatar.is-breathing.is-speaking` 这条组合规则里，而组件每次只挂**一个**动作——
+      // 「正在说」那张脸因此一直没动过。
+      const solo = new RegExp(`\\[data-motion='${action}'\\]\\s*\\{[^}]*animation`)
+      expect(css, `${action} 得有自己的动画规则`).toMatch(solo)
     }
     const reduced = css.slice(css.indexOf('prefers-reduced-motion'))
-    for (const cls of ['is-breathing', 'is-speaking', 'is-pondering', 'is-listening', 'is-greeting']) {
-      expect(reduced, `减少动态效果时 ${cls} 也要被关掉`).toContain(`.avatar.${cls}`)
-    }
+    expect(reduced, '减少动态效果时所有动作都要被关掉').toContain('[data-motion]')
+  })
+
+  it('立体动物也接得上：那一支此前把动作整段丢了', () => {
+    // 用户自选立体动物是默认路径；动作没往下传，于是默认形象的头像全是静止的。
+    const html = renderToStaticMarkup(
+      <Avatar3D avatarKey="an3d:fox:30" name="柴犬" size={56} action="breathing" temperament={TEST_TEMPERAMENT} />,
+    )
+    expect(html).toContain('data-motion="breathing"')
   })
 
   it('24–40px 的头像也做动作，但幅度打折（24px 上同样的 1.5px 是整张脸在抖）', () => {

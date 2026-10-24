@@ -55,15 +55,15 @@ import type { StyleVars } from './stagger.ts'
  */
 export type AvatarAction = 'idle' | 'breathing' | 'speaking' | 'pondering' | 'listening' | 'greeting'
 
-/** 每个动作对应的类名（与 styles-avatar-motion.css 一一对应）。 */
-const ACTION_CLASS: Record<AvatarAction, string> = {
-  idle: '',
-  breathing: 'is-breathing',
-  speaking: 'is-speaking',
-  pondering: 'is-pondering',
-  listening: 'is-listening',
-  greeting: 'is-greeting',
-}
+/**
+ * 动作 → 挂在元素上的标记。
+ *
+ * **用 data 属性而不是 class**：动效要挂在两种东西上——普通头像（.avatar 那张图）与
+ * 立体动物（.avatar-3d-face 那几张叠起来的图）。后者不能带 .avatar 类（那会把圆角、
+ * 溢出裁剪等一并带过去，改掉布局），而 `.is-speaking` 这种通用类名又容易撞上别的
+ * 组件（.vibe-squad-row.is-speaking 就是一处）。data 属性两头都不沾。
+ */
+export const MOTION_ATTR = 'data-motion'
 
 /**
  * 小于此尺寸不给**说话/思考/在听**动效。
@@ -235,32 +235,42 @@ export function avatarMotionOf(avatarKey: string | undefined): AvatarMotion {
 /**
  * 性格 → 表演参数。
  *
- * - **呼吸周期**：严谨的慢（3.0s → 4.0s）。一个严谨的助理不该手忙脚乱。
+ * 底子来自**形象**（橘猫轻快 / 柴犬规整 / 灰狐从容），性格四维在底子上再乘一档：
+ *
+ * - **呼吸周期**：严谨的慢（3.0s → 4.0s），外向的快（最多 −0.4s）。一个严谨的助理
+ *   不该手忙脚乱。
  * - **说话幅度**：外向的大（位移 0.8 → 1.6px、摇摆 0.6° → 1.8°）。外向的助理说话时
  *   更爱动。
  * - **思考游走**：幽默的远（1.4 → 2.6px）。想得越不着边际，眼珠子转得越远。
+ *
+ * 此前这里取的是中性底（PROFILES.plain），**每套形象自己的节奏从头到尾没生效过**——
+ * 于是"橘猫轻快、柴犬规整、灰狐从容"这三个说法只写在注释里。
  */
-export function avatarTemperamentOf(temperament: AvatarTemperament | undefined): MotionProfile {
-  const base = PROFILES.plain
+export function avatarTemperamentOf(
+  temperament: AvatarTemperament | undefined,
+  motion: AvatarMotion = 'plain',
+): MotionProfile {
+  const base = PROFILES[motion]
   if (temperament === undefined) return base
   const extro = clamp01(temperament.extroversion)
   const rigor = clamp01(temperament.rigor)
   const humor = clamp01(temperament.humor)
-  const breatheMs = Math.round(3000 + rigor * 1000 - extro * 400)
+  /** 外向的说话幅度：底子 × (0.75 → 1.35)。 */
+  const loud = 0.75 + extro * 0.6
   return {
     breathe: base.breathe,
     // 呼吸周期：严谨的慢（rigor 越高越长，最多 +1.0s），外向的快（最多 −0.4s）。
     // 两者各让一步，别让一种性格把动画完全压死。
-    breatheMs,
-    lift: Number((0.8 + extro * 0.8).toFixed(2)),
-    sway: Number((0.6 + extro * 1.2).toFixed(2)),
-    scale: Number((1.01 + extro * 0.01).toFixed(3)),
-    speakMs: Math.round(1600 - extro * 700),
-    ponder: Number((1.4 + humor * 1.2).toFixed(2)),
-    ponderMs: Math.round(2400 - humor * 800),
+    breatheMs: Math.round(base.breatheMs + rigor * 1000 - extro * 400),
+    lift: Number((base.lift * loud).toFixed(2)),
+    sway: Number((base.sway * loud).toFixed(2)),
+    scale: Number((1 + (base.scale - 1) * (0.8 + extro * 0.6)).toFixed(4)),
+    speakMs: Math.round(base.speakMs * (1.3 - extro * 0.55)),
+    ponder: Number((base.ponder * (0.8 + humor * 0.5)).toFixed(2)),
+    ponderMs: Math.round(base.ponderMs * (1.25 - humor * 0.4)),
     // 在听：底噪级别——比呼吸更浅、周期更长。严谨的连"在听"都更沉得住。
     listen: Number((base.listen * (1.1 - extro * 0.3)).toFixed(2)),
-    listenMs: Math.round(breatheMs * 1.7),
+    listenMs: Math.round(base.breatheMs * 1.7),
     // 打招呼：外向的应得快，内向的慢半拍。
     greetMs: Math.round(base.greetMs - extro * 160),
   }
@@ -285,6 +295,20 @@ export function avatarActionAllowed(action: AvatarAction, size: number): boolean
  */
 export function avatarMotionAllowed(size: number): boolean {
   return size >= AVATAR_MOTION_MIN_SIZE
+}
+
+/** 动作 → 挂到元素上的属性（标记 + 参数）。尺寸不够时什么都不给。 */
+export function avatarMotionAttrs(
+  action: AvatarAction,
+  motion: AvatarMotion,
+  temperament: AvatarTemperament | undefined,
+  size: number,
+): { [MOTION_ATTR]?: string; style: StyleVars } {
+  if (action === 'idle' || !avatarActionAllowed(action, size)) return { style: {} }
+  return {
+    [MOTION_ATTR]: action,
+    style: avatarActionStyle(action, motion, temperament, size),
+  }
 }
 
 /**
@@ -313,7 +337,7 @@ export function avatarActionStyle(
   temperament: AvatarTemperament | undefined,
   size: number,
 ): StyleVars {
-  const profile = avatarTemperamentOf(temperament)
+  const profile = avatarTemperamentOf(temperament, motion)
   const k = avatarMotionScale(size)
   return {
     '--motion-breathe-scale': `${(1 + (profile.breathe * k) / 100).toFixed(4)}`,
@@ -329,9 +353,4 @@ export function avatarActionStyle(
     '--motion-greet-ms': `${profile.greetMs}ms`,
     '--motion-state': action,
   } as StyleVars
-}
-
-/** 动作 → 类名（见 styles-avatar-motion.css）。 */
-export function avatarActionClass(action: AvatarAction): string {
-  return ACTION_CLASS[action]
 }

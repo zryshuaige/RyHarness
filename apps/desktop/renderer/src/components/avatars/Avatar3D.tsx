@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import {
   ANIMAL_FACES,
   ANIMAL_IDLE_FACES,
@@ -8,7 +8,13 @@ import {
   animalHueFilter,
   parseAnimalAvatar,
 } from '../../lib/animal-3d.ts'
-import type { AvatarAction, AvatarTemperament } from '../../lib/avatar-motion.ts'
+import {
+  type AvatarAction,
+  type AvatarTemperament,
+  avatarMotionAttrs,
+  avatarMotionOf,
+} from '../../lib/avatar-motion.ts'
+import type { StyleVars } from '../../lib/stagger.ts'
 import { Avatar } from './Avatar.tsx'
 
 /**
@@ -182,6 +188,7 @@ function AnimalFaces({
   tilt,
   className,
   tiltRef,
+  motion,
 }: {
   kind: AnimalKind
   hue: number
@@ -190,6 +197,8 @@ function AnimalFaces({
   tilt: boolean
   className: string
   tiltRef: React.RefObject<HTMLSpanElement | null>
+  /** 动效：标记 + 参数，挂在**内层那张脸**上（外层的倾斜与换脸已经占满了 transform）。 */
+  motion: { 'data-motion'?: string; style: StyleVars }
 }) {
   const filter = animalHueFilter(kind, hue)
   // 大头像才把六张脸都挂上：列表里的小头像只留正面那一张，少下载五张。
@@ -213,7 +222,8 @@ function AnimalFaces({
               key={face}
               className={`avatar-3d-face avatar-3d-face-${face}`}
               src={src}
-              style={{ filter }}
+              style={{ filter, ...motion.style }}
+              {...(motion['data-motion'] === undefined ? {} : { 'data-motion': motion['data-motion'] })}
               width={size}
               height={size}
               alt=""
@@ -263,6 +273,16 @@ export function Avatar3D({
   // hook 必须无条件调用一次（头像字段会变，条件 hook 会让 React 拆掉这棵树）
   const ref = useTilt(tilt)
   const animal = parseAnimalAvatar(avatarKey)
+  /**
+   * 立体动物那支的动效参数。
+   *
+   * 这一支此前**整段丢掉了动作**：Avatar3D 收了 action 却没往下传，于是用户自选了
+   * 立体动物之后，资料页、身份卡、聊天流里的头像全是静止的——而默认形象恰恰就是
+   * 立体动物。参数挂在内层那张脸上（外层的倾斜与换脸已经占满了 transform）。
+   */
+  const motion = useMemo(() => {
+    return avatarMotionAttrs(action, avatarMotionOf(avatarKey), temperament, size)
+  }, [action, avatarKey, size, temperament])
   if (animal !== undefined) {
     return (
       <AnimalFaces
@@ -273,6 +293,7 @@ export function Avatar3D({
         tilt={tilt}
         className={className}
         tiltRef={ref}
+        motion={motion}
       />
     )
   }

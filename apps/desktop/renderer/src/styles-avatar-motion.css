@@ -4,7 +4,7 @@
  * 不动。会动的只有用户自选的"立体动物"通道，于是恰恰是用户第一眼看到的那几位
  * 最没有生气。
  *
- * 立绘只有一张图，做不了"换表情/转头"，能做的是整体运动。三条：
+ * 立绘只有一张图，做不了"换表情/转头"，能做的是整体运动。五种：
  *
  * - **呼吸**（闲置）：极轻微的缩放起伏，幅度压在 2% 以内——再大整个界面像在喘气。
  *   只给**单独出现**的头像（资料页、身份卡）；列表里的头像一律静态：同屏几十个一起
@@ -13,9 +13,18 @@
  *   用户看到的不是一张静止的图，是**这位正在回话**。全局同时只有这一位在动。
  * - **思考**（已发请求、等首 token）：视线左右游走。气泡还没出现，头像挂在
  *   "正在输入"那一行上。
+ * - **在听**（别人在说话时）：极浅的呼吸，底噪级别。
+ * - **打招呼**（指针停在卡片上）：一次性的点头。
  *
  * 每位助理一副脾性：节奏与幅度按性格四维走（见 lib/avatar-motion.ts），跟形象
  * 无关——同一个"柴犬"，严谨的和外向的动起来不一样。
+ *
+ * ## 动效挂在 data-motion 上，不挂 class
+ *
+ * 两种头像都要动：普通立绘（.avatar 那张图）与立体动物（.avatar-3d-face 那几张
+ * 叠起来的图）。后者不能带 .avatar 类（那会把圆角、溢出裁剪一并带过去，改掉布局），
+ * 而 `.is-speaking` 这种通用类名又容易撞上别的组件（.vibe-squad-row.is-speaking
+ * 就是一处）。data 属性两头都不沾。
  *
  * 性能：只动 transform（合成层），不触发布局与重绘，不加 will-change（滥用它反而
  * 更慢）。系统开了「减少动态效果」时全部关掉——不是"动得慢一点"，那仍然是动。
@@ -68,29 +77,6 @@
   }
 }
 
-/* 呼吸：默认没有——它由 JS 侧显式开（只有单独出现的头像才给）。 */
-.avatar.is-breathing {
-  animation: avatar-breathe var(--motion-breathe-ms, 3600ms) var(--ease-out) infinite;
-  transform-origin: center bottom;
-}
-
-/* 说话：正在流式输出（气泡里的署名头像）。
-   这一条此前**只有**下面那个组合规则（`.is-breathing.is-speaking`），而组件每次只挂
-   **一个**动作类——于是「正在说」那张脸其实一直没动过。 */
-.avatar.is-speaking {
-  animation: avatar-speak var(--motion-speak-ms, 1200ms) var(--ease-out) infinite;
-}
-
-/* 说话盖掉呼吸（两个动画抢同一个 transform 会互相打断，看起来是抽搐）。 */
-.avatar.is-breathing.is-speaking {
-  animation: avatar-speak var(--motion-speak-ms, 1200ms) var(--ease-out) infinite;
-}
-
-/* 思考：等首 token 时的视线游走。 */
-.avatar.is-pondering {
-  animation: avatar-ponder var(--motion-ponder-ms, 2000ms) var(--ease-out) infinite;
-}
-
 /* 在听：别人在说话时，这位在听。
    幅度是呼吸的三分之一、周期长一倍——**底噪级别**：它只说明"这一位还活着、正在听"，
    不该跟"正在说"抢注意力。同屏只许有一个在**大幅**动（说话/思考），在听的这几个
@@ -105,40 +91,42 @@
   }
 }
 
-.avatar.is-listening {
+/* 呼吸：默认没有——它由 JS 侧显式开（只有单独出现的头像才给）。 */
+[data-motion='breathing'] {
+  animation: avatar-breathe var(--motion-breathe-ms, 3600ms) var(--ease-out) infinite;
+  transform-origin: center bottom;
+}
+
+/* 说话：正在流式输出（气泡里的署名头像）。
+   这一条此前**只有**那条组合规则（`.avatar.is-breathing.is-speaking`），而组件每次
+   只挂**一个**动作——于是「正在说」那张脸其实一直没动过。 */
+[data-motion='speaking'] {
+  animation: avatar-speak var(--motion-speak-ms, 1200ms) var(--ease-out) infinite;
+}
+
+/* 思考：等首 token 时的视线游走。 */
+[data-motion='pondering'] {
+  animation: avatar-ponder var(--motion-ponder-ms, 2000ms) var(--ease-out) infinite;
+}
+
+/* 在听：别人说话时，这位在听。 */
+[data-motion='listening'] {
   animation: avatar-listen var(--motion-listen-ms, 6500ms) var(--ease-out) infinite;
   transform-origin: center bottom;
 }
 
-/* 打招呼：一次性的点头。指针停在卡片上时演一次——静态立绘做不了"换表情"，
-   轻点一下头就是"他看到你了"的全部。 */
-@keyframes avatar-greet {
-  0% {
-    transform: translateY(0) rotate(0deg) scale(1);
-  }
-  40% {
-    transform: translateY(var(--motion-lift, -1.2px)) rotate(var(--motion-sway, 1deg))
-      scale(var(--motion-scale, 1.015));
-  }
-  100% {
-    transform: translateY(0) rotate(0deg) scale(1);
-  }
-}
-
-.avatar.is-greeting {
+/* 打招呼：一次性的点头。 */
+[data-motion='greeting'] {
   animation: avatar-greet var(--motion-greet-ms, 720ms) var(--ease-out) 1;
   transform-origin: center bottom;
 }
 
-/* 减少动态效果：一条也不留。用户明确说过不要动，那就真的不要动。
-   这里按**单类**列：组合类（`.is-breathing.is-speaking`）不写——组件每次只挂一个
-   动作类，只有关掉单类才真的关得掉。 */
+/* 减少动态效果：一条也不留。用户明确说过不要动，那就真的不要动。 */
 @media (prefers-reduced-motion: reduce) {
-  .avatar.is-breathing,
-  .avatar.is-speaking,
-  .avatar.is-pondering,
-  .avatar.is-listening,
-  .avatar.is-greeting,
+  [data-motion] {
+    animation: none !important;
+    transform: none !important;
+  }
   .contact-card:hover .avatar {
     animation: none !important;
     transform: none !important;

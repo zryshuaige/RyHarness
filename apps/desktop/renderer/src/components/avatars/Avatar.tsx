@@ -3,9 +3,7 @@ import { animalAssetUrl, animalHueFilter, parseAnimalAvatar } from '../../lib/an
 import {
   type AvatarAction,
   type AvatarTemperament,
-  avatarActionAllowed,
-  avatarActionClass,
-  avatarActionStyle,
+  avatarMotionAttrs,
   avatarMotionOf,
 } from '../../lib/avatar-motion.ts'
 import { portraitOf, portraitSrc, portraitSrcSet } from '../../lib/brand-portraits.ts'
@@ -23,9 +21,9 @@ import {
 } from './avatars.tsx'
 import '../../styles-avatar-motion.css'
 
-/** 动效（类名 + CSS 变量）；不需要动效时给空对象。 */
+/** 动效（挂在根节点上的 data-motion 标记 + CSS 变量）；不需要动效时给空对象。 */
 interface AvatarMotion {
-  className: string
+  'data-motion'?: string
   style: StyleVars
 }
 
@@ -60,7 +58,7 @@ function AvatarShell({
 }) {
   return (
     <span
-      className={['avatar', variant, className, motion.className]
+      className={['avatar', variant, className]
         .filter((part) => {
           return part !== undefined && part !== ''
         })
@@ -71,6 +69,7 @@ function AvatarShell({
         ...(variantStyle?.fontSize === undefined ? {} : { fontSize: variantStyle.fontSize }),
         ...motion.style,
       }}
+      {...(motion['data-motion'] === undefined ? {} : { 'data-motion': motion['data-motion'] })}
       role="img"
       aria-label={label}
       aria-busy={busy}
@@ -116,20 +115,14 @@ export function Avatar({
   const initial = (name.trim().slice(0, 1) || '?').toUpperCase()
 
   /**
-   * 动效类名与参数。
+   * 动效标记与参数。
    *
-   * 一个动作一个类名：样式表里各写各的关键帧，参数（幅度、周期）走 CSS 变量。
-   * 尺寸不够时这个动作就不做——24px 的头像动起来是闪烁不是生命感。
+   * 一个动作一个标记（data-motion）：样式表里各写各的关键帧，参数（幅度、周期）走
+   * CSS 变量。尺寸不够时这个动作就不做——24px 的头像动起来是闪烁不是生命感。
    */
   const motion = useMemo<AvatarMotion>(() => {
     const kind = avatarMotionOf(avatarKey)
-    if (!avatarActionAllowed(action, size)) {
-      return { className: '', style: {} }
-    }
-    return {
-      className: avatarActionClass(action),
-      style: avatarActionStyle(action, kind, temperament, size),
-    }
+    return avatarMotionAttrs(action, kind, temperament, size)
   }, [action, avatarKey, size, temperament])
 
   const spec = useMemo(() => {

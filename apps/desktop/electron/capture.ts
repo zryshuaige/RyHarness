@@ -606,6 +606,18 @@ async function runUiAudit(window: BrowserWindow, here: string): Promise<void> {
   })()`)
   await tab('我的')
   await shoot('audit-me.png')
+  /**
+   * 动效到底有没有**真的跑起来**：类名在不算数——样式表里那条规则挂错了地方，
+   * 类名照样在、动画照样不动（"正在说"那张脸就一直是这么哑的）。得看浏览器
+   * 算出来的 animation-name 是不是真的那条。
+   */
+  const running = await window.webContents.executeJavaScript(
+    `(() => [...document.querySelectorAll('[data-motion]')].map((node) => {
+      const style = getComputedStyle(node)
+      return { cls: node.className, action: node.getAttribute('data-motion'), name: style.animationName, dur: style.animationDuration }
+    }).filter((row) => row.name && row.name !== 'none'))()`,
+  )
+  console.log(`[audit] 头像动效 = ${JSON.stringify(running)}`)
   // 把指针停在「我的形象」的大预览上：应当抬起爪子打招呼。
   await hoverAt('.animal-studio-preview .avatar-3d', 0.5)
   await shoot('audit-me-wave.png')

@@ -454,9 +454,9 @@ describe('RyVibe 页面', () => {
     expect(speaking).not.toBeNull()
     expect(speaking?.querySelector('.vibe-squad-state')?.textContent).toBe('正在说')
     // 动的是输出区那个署名头像——动效要落在正在长出来的内容旁边。
-    expect(container.querySelector('.bubble-avatar-gutter .avatar.is-speaking')).not.toBeNull()
+    expect(container.querySelector('.bubble-avatar-gutter .avatar[data-motion="speaking"]')).not.toBeNull()
     // 同屏只许有一个在动：工作台里的头像不跟着动（周边运动会抢注意力）。
-    expect(container.querySelectorAll('.avatar.is-speaking')).toHaveLength(1)
+    expect(container.querySelectorAll('.avatar[data-motion="speaking"]')).toHaveLength(1)
   })
 
   it('还在等首 token、正文一个字都还没出来时：动的是工作台里「正在想」的那一位', async () => {
@@ -467,8 +467,8 @@ describe('RyVibe 页面', () => {
     await settle()
     const row = container.querySelector('.vibe-squad-row')
     expect(row?.querySelector('.vibe-squad-state')?.textContent).toBe('正在想')
-    expect(row?.querySelector('.avatar.is-pondering')).not.toBeNull()
-    expect(container.querySelectorAll('.avatar.is-speaking')).toHaveLength(0)
+    expect(row?.querySelector('.avatar[data-motion="pondering"]')).not.toBeNull()
+    expect(container.querySelectorAll('.avatar[data-motion="speaking"]')).toHaveLength(0)
   })
 
   it('等的时候能喊停：不用干等上一两分钟', async () => {
