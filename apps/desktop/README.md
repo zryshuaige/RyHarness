@@ -220,11 +220,13 @@ Toast、骨架屏、ChatStore 事件折叠、REST/WS 客户端。由**仓库根*
 - `redesign4-03-create-agent.png`：模板建 Agent（人设/模型/工具白名单）。
 - `redesign4-04-group.png`：群聊（接力链、成员网格、调度轨迹，根 README 头图取本页）。
 - `capture-contacts.png`：通讯录（**照片级 3D 渲染的动物形象**——球面光照 + 厚度，鼠标移上去会跟着转头）。
+- `capture-chat.png`：**真正有对话的那一屏**（气泡、工具行、输入区）——此前 docs 里只有首页，
+  聊起来是什么样一直没有像素证据。
 - `capture-me.png`：「我的」页（用户自己的立体形象 + 动物 × 毛色定制面板）。
 - `capture-providers.png`：模型供应商的「先挑一家」网格（厂商由用户挑，不替他定）。
 - `capture-plugins.png`：插件页（分组、内置插件的说明、开关与展开详情）。
 - `review-studio.png`：「我的形象」定制面板全貌（动物 × 毛色两个选择器；巡检模式 `RYHARNESS_REVIEW=1` 拍的）。
-- `dark-capture-contacts.png` / `dark-capture-me.png` / `dark-capture-plugins.png`：上面几页的暗色版。
+- `dark-capture-contacts.png` / `dark-capture-me.png` / `dark-capture-plugins.png` / `dark-capture-chat.png`：上面几页的暗色版。
 
 重新截取请用 `scripts/capture-window.ps1`（只截窗口矩形，抓到纯色废帧会 exit 1），
 或 `pnpm --filter @ryharness/desktop capture`（Electron 内部 `capturePage`，窗口内画面）。

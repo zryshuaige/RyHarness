@@ -239,6 +239,28 @@ export async function runCapture(
     writeFileSync(join(docsDir, shot.file), image.toPNG())
     console.log(`[capture] saved ${shot.file}（${shot.theme}）`)
 
+    // 真正有对话的那一屏：气泡、工具行、输入区。
+    // 此前 docs 里只有**首页**——这个产品最要紧的一屏（聊起来是什么样）反而没有
+    // 像素证据，评审与文档都只能对着首页想象对话长什么样。
+    const opened = await window.webContents.executeJavaScript(
+      `(() => {
+        const item = document.querySelector('.conversation-item-main')
+        if (!item) return false
+        item.click()
+        return true
+      })()`,
+    )
+    if (opened === true) {
+      await new Promise((resolve) => {
+        return setTimeout(resolve, SETTLE_MS)
+      })
+      const chatImage = await window.webContents.capturePage()
+      const chatFile = shot.file.replace(/\.png$/, '-chat.png')
+      writeFileSync(join(here, chatFile), chatImage.toPNG())
+      writeFileSync(join(docsDir, chatFile), chatImage.toPNG())
+      console.log(`[capture] saved ${chatFile}（${shot.theme}）`)
+    }
+
     // 切到通讯录：按**名字**点页签，不按下标。
     // 下标会随页签增减而错位——RyVibe 插进聊天下面那一次，就把「我的」拍成了插件页，
     // 而图上看不出错（插件页也挺好看的），只有对着清单才发现少了一屏。

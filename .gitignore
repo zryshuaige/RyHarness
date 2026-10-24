@@ -14,18 +14,10 @@ dist/
 apps/desktop/main/
 # 截图模式的一次性产物：每次跑都变，入库即腐烂。入库的正式画面在
 # apps/desktop/docs/（那里是 redesign4-*.png 这类被 README 引用的地方）。
-apps/desktop/capture.png
-apps/desktop/capture-contacts.png
-apps/desktop/capture-me.png
-apps/desktop/capture-vibe.png
-apps/desktop/capture-project.png
-apps/desktop/capture-providers.png
-apps/desktop/dark-capture.png
-apps/desktop/dark-capture-contacts.png
-apps/desktop/dark-capture-me.png
-apps/desktop/dark-capture-vibe.png
-apps/desktop/dark-capture-project.png
-apps/desktop/dark-capture-providers.png
+# 用通配而不是逐个列名字：逐个列过一次，capture-plugins.png / capture-chat.png
+# 这类新加的就被漏在规则外，随一次 `git add -A` 混进了仓库。
+apps/desktop/capture*.png
+apps/desktop/dark-capture*.png
 # @提及名片的排障证据：同样是一次性产物（正式画面在 docs/）。
 apps/desktop/mention-card.png
 # 交互巡检（RYHARNESS_REVIEW=1）拍的过程截图：每次跑都变，入库即腐烂。
