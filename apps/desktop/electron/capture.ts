@@ -206,21 +206,21 @@ export async function runCapture(
       models: ['hang'],
       apiKey: 'screenshot',
     })
-    const hangingAgent = await post('/api/agents', {
-      // 不挂模板：模板把 provider/model 写死成它自己那一家（截图模式下没有凭据），
-      // 挂模板的话这位的路由就换不成那个不回答的服务。
-      // 名字就叫「打字实拍」：单聊会话的标题取的是助理名，用同一个词，列表里才找得到。
-      name: '打字实拍',
-      avatar: 'an3d:dog:30',
-      systemPrompt: '你是负责敲键盘的那位。',
-      provider: (hangingProvider.provider as { id: string }).id,
-      model: 'hang',
+    const providerId = (hangingProvider.provider as { id: string }).id
+    // 把演示里那只柴犬的路由换成那个不回答的服务：不新建助理——新建的那位在
+    // 客户端的清单里还没有头像，打字行里会渲染成一块首字母色块。
+    await fetch(`${server.url}/api/agents/${coder.id}`, {
+      method: 'PATCH',
+      headers: {
+        'content-type': 'application/json',
+        ...(server.apiToken === undefined ? {} : { authorization: `Bearer ${server.apiToken}` }),
+      },
+      body: JSON.stringify({ provider: providerId, model: 'hang' }),
     })
     await post('/api/conversations', {
       // 单聊：接口要的是 agentId（不是 memberAgentIds）。
-      // 群里不 @人时调度器会挑别人（Ryen 没有路由，那一轮立刻就失败了，打字行一闪就没）。
       kind: 'direct',
-      agentId: (hangingAgent.agent as { id: string }).id,
+      agentId: coder.id,
       title: '打字实拍',
     })
   } catch (error) {
