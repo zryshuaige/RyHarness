@@ -633,32 +633,54 @@ describe('够不着的东西必须还在：窄窗口下操作条不被裁掉', (
   const base = sheet('styles.css')
   const tokens = themeTokens(base)
 
-  it('操作条通道随消息列自适应，不再是写死的 118px', () => {
+  /**
+   * 一条消息上最多同时挂几枚操作按钮。
+   *
+   * 从组件里数出来（用户行的「编辑并重发」与 agent 行的「重新生成」「分支」不同时出现，
+   * 所以同屏最多是总数减一）。这个数是通道宽度的**输入**：按钮多了而通道没跟着长，
+   * 整条操作条就会压回正文上——真机上就是这样压住了「MiniMax-M3.1-Flash」那一段。
+   */
+  const actionButtons = (): number => {
+    const source = readFileSync(resolve(SRC, 'components', 'MessageBubble.tsx'), 'utf8')
+    // 按钮的类名是 bubble-action，容器是 bubble-actions（复数）——负向断言把容器剔掉。
+    const total = (source.match(/bubble-action(?!s)/g) ?? []).length
+    // 用户行的「编辑并重发」与 agent 行的「重新生成」「分支」不同时出现，
+    // 所以同屏最多是总数减一。
+    return Math.max(1, total - 1)
+  }
+
+  it('操作条通道随消息列自适应，且放得下它自己那一排按钮', () => {
     const gutter = tokens.get('--action-gutter') ?? ''
     expect(gutter.startsWith('clamp(')).toBe(true)
-    // 3 枚按钮 + 2 道间隙 + 8px 呼吸 = 通道下限；改了按钮尺寸却不同步改下限，
-    // 通道就会短一截，按钮重新被裁——所以这条下限从按钮几何算出来。
+    // 按钮宽度 + 间隙 + 8px 边距 = 通道下限；改了按钮尺寸或数量却不同步改下限，
+    // 通道就会短一截，按钮重新压到正文上——所以这条下限从按钮几何算出来。
     const barWidth = Number(/width:\s*(\d+)px/.exec(ruleBody(base, '.bubble-action'))?.[1] ?? 0)
     const barGap = Number(/gap:\s*(\d+)px/.exec(ruleBody(base, '.bubble-actions'))?.[1] ?? 0)
+    const count = actionButtons()
     const [lo, middle, hi] = gutter
       .slice('clamp('.length, -1)
       .split(',')
       .map((part) => {
         return part.trim()
       })
-    expect(Number.parseFloat(lo ?? '')).toBe(barWidth * 3 + barGap * 2 + 8)
+    expect(Number.parseFloat(lo ?? '')).toBe(barWidth * count + barGap * (count - 1) + 8)
     // 自变量必须是消息列宽（cqw）：同一窗口下收起右栏与否，列宽能差一倍
     expect(middle).toContain('cqw')
-    // 上限仍是当初那条 118px 的通道
-    expect(Number.parseFloat(hi ?? '')).toBe(118)
+    // 上限不能小于下限（否则宽列上通道反而比窄列窄）
+    expect(Number.parseFloat(hi ?? '')).toBeGreaterThanOrEqual(Number.parseFloat(lo ?? ''))
   })
 
   it('窄列断点就是外置通道排不下的那一条（几何自洽，不是拍脑袋的数）', () => {
     const breakpoint = Number(/@container \(max-width: (\d+)px\)/.exec(base)?.[1])
     expect(Number.isFinite(breakpoint)).toBe(true)
-    // 气泡最宽 75% 列宽；agent 行左侧还占 40px 头像 + 8px 间隙 ⇒ 右侧只剩
-    // 25%W - 48px，加 8px 呼吸；通道要 100px：100 ≤ 25%W - 40 ⟺ W ≥ 560px。
-    expect(breakpoint).toBe((100 + 40) * 4)
+    // 气泡最宽 75% 列宽；一侧还占 48px 头像与间隙 ⇒ 另一侧只剩 25%W - 48px。
+    // 通道要装下操作条（N 枚按钮 + N-1 道间隙 + 8px 边距）：
+    // 通道 ≤ 25%W - 48 ⟺ W ≥ 4 × (通道 + 48)。
+    const barWidth = Number(/width:\s*(\d+)px/.exec(ruleBody(base, '.bubble-action'))?.[1] ?? 0)
+    const barGap = Number(/gap:\s*(\d+)px/.exec(ruleBody(base, '.bubble-actions'))?.[1] ?? 0)
+    const count = actionButtons()
+    const need = barWidth * count + barGap * (count - 1) + 8
+    expect(breakpoint).toBe((need + 48) * 4 - 1)
   })
 
   it('窄列里操作条贴气泡下沿内侧并常显（窄栏没有 hover 的余裕）', () => {

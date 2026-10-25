@@ -454,6 +454,7 @@ export async function runCapture(
   // 中间状态**实拍**下来。截图是证据——上一轮"立体动物"就是靠实拍才发现
   // 兔子的耳朵戳出了圆盘（光看代码不会发现）。
   await runTypingAnimationShot(window, here)
+  await runActionBarCheck(window)
   await runPanelPreviewShot(window, here)
   await runScrollHistoryShot(window, here)
   if (process.env.RYHARNESS_REVIEW === '1') {
@@ -714,6 +715,56 @@ async function runScrollHistoryShot(window: BrowserWindow, here: string): Promis
   const image = await window.webContents.capturePage()
   writeFileSync(join(here, 'scroll-history.png'), image.toPNG())
   console.log('[scroll] saved scroll-history.png')
+}
+
+/**
+ * 气泡操作条不许压在正文上。
+ *
+ * 这条是用户点出来的：读长文时那排动作键（朗读/复制/赞/踩/重新生成）横在正文中间，
+ * 把「MiniMax-M3.1-Flash」那一段压住了。
+ *
+ * 根因是操作条要外置到气泡外侧那条通道里，而通道的宽度当初按**三枚**按钮算
+ * （118px），按钮长到五枚（156px）之后通道装不下，整条就压回正文上。
+ *
+ * 这里量一次两个矩形：操作条与气泡**不许相交**。宽窗下它落在通道里，窄窗下落在
+ * 气泡下沿——两种都不许压到正文。
+ */
+async function runActionBarCheck(window: BrowserWindow): Promise<void> {
+  const probe = await window.webContents.executeJavaScript(
+    `(() => {
+      const bubble = document.querySelector('.bubble-bubble')
+      const bar = document.querySelector('.bubble-actions')
+      if (!bubble || !bar) return { error: '没找到气泡或操作条' }
+      const a = bubble.getBoundingClientRect()
+      const b = bar.getBoundingClientRect()
+      const overlap = b.left < a.right - 1 && b.right > a.left + 1 && b.top < a.bottom - 1 && b.bottom > a.top + 1
+      return {
+        overlap,
+        气泡宽: Math.round(a.width),
+        条宽: Math.round(b.width),
+        条左: Math.round(b.left),
+        泡右: Math.round(a.right),
+        条在泡下: b.top >= a.bottom - 1,
+      }
+    })()`,
+  )
+  const result = probe as {
+    error?: string
+    overlap?: boolean
+    气泡宽?: number
+    条宽?: number
+    条左?: number
+    泡右?: number
+    条在泡下?: boolean
+  }
+  if (result.error !== undefined) {
+    console.warn(`[actions] ${result.error}`)
+    return
+  }
+  console.log(
+    `[actions] 气泡 ${result.气泡宽}px · 操作条 ${result.条宽}px · ${result.条在泡下 === true ? '落在气泡下沿' : `贴在气泡右侧（${result.条左} vs ${result.泡右}）`} · ` +
+      `${result.overlap === true ? '压到正文了 ✗' : '没压正文 ✓'}`,
+  )
 }
 
 /**
