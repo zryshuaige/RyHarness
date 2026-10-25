@@ -2187,6 +2187,9 @@ export function ChatView({
                         // 起来几乎看不出来——而这恰恰是"正在想"最该被看见的几秒。
                         size={32}
                         action="pondering"
+                        // 正在写：这位还没开始说话，正趴在键盘上敲——所以演的是
+                        // 「打字」那一套，不是「托腮想」。
+                        frameState="typing"
                         {...(bubble.temperament === undefined ? {} : { temperament: bubble.temperament })}
                       />
                     )

@@ -53,14 +53,24 @@ function agentMessage(done: boolean): UiMessage {
 
 describe('头像动效：谁在动', () => {
   it('正在流式输出的那一条：头像跟着动', () => {
-    const html = renderToStaticMarkup(
+    // 有帧的形象走**逐帧动画**（动物真的在说话），没有帧的走 CSS 微动效。两条路都得动。
+    const framed = renderToStaticMarkup(
       <MessageBubble
         message={agentMessage(false)}
         fileUrl={fileUrl}
         agent={{ id: 'ryen', name: 'Ryen', avatar: 'cat' }}
       />,
     )
-    expect(html).toContain('data-motion="speaking"')
+    expect(framed).toContain('avatar-frames')
+    expect(framed).toContain('brand-talking')
+    const plain = renderToStaticMarkup(
+      <MessageBubble
+        message={agentMessage(false)}
+        fileUrl={fileUrl}
+        agent={{ id: 'ryen', name: 'Ryen', avatar: 'mask' }}
+      />,
+    )
+    expect(plain).toContain('data-motion="speaking"')
   })
 
   it('说完的那一条：停下来（历史消息不该还在动）', () => {
@@ -72,6 +82,7 @@ describe('头像动效：谁在动', () => {
       />,
     )
     expect(html).not.toContain('data-motion')
+    expect(html).not.toContain('avatar-frames')
   })
 
   it('用户自己那一侧不动：动的是"这位正在回话"，不是"有人在打字"', () => {
@@ -83,6 +94,7 @@ describe('头像动效：谁在动', () => {
       />,
     )
     expect(html).not.toContain('data-motion')
+    expect(html).not.toContain('avatar-frames')
   })
 })
 
@@ -122,12 +134,22 @@ describe('头像动效：尺寸红线', () => {
 describe('动作包：每个动作都有名字、有动画、有用法', () => {
   it('五个动作各有各的标记，静止时什么都不挂', () => {
     // 动效挂在 data-motion 上：普通立绘与立体动物挂的是同一种标记，两条路都吃。
+    // 这里用**没有帧素材**的形象（剪影）验这条：它走的是 CSS 微动效那条路。
+    const html = renderToStaticMarkup(
+      <Avatar avatarKey="mask" name="剪影" size={56} action="speaking" temperament={TEST_TEMPERAMENT} />,
+    )
+    expect(html).toContain('data-motion="speaking"')
+    const idle = renderToStaticMarkup(<Avatar avatarKey="mask" name="剪影" size={56} />)
+    expect(idle).not.toContain('data-motion')
+  })
+
+  it('有帧的形象走逐帧动画，CSS 微动效不叠加（叠上去就是「一边演一边抖」）', () => {
     const html = renderToStaticMarkup(
       <Avatar avatarKey="dog" name="柴犬" size={56} action="speaking" temperament={TEST_TEMPERAMENT} />,
     )
-    expect(html).toContain('data-motion="speaking"')
-    const idle = renderToStaticMarkup(<Avatar avatarKey="dog" name="柴犬" size={56} />)
-    expect(idle).not.toContain('data-motion')
+    expect(html).toContain('avatar-frames')
+    expect(html).toContain('dog-talking')
+    expect(html).not.toContain('data-motion')
   })
 
   it('样式表里这五个动作各自有动画，且都在「减少动态效果」时被关掉', () => {

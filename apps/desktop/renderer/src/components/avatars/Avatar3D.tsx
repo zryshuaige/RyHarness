@@ -8,14 +8,18 @@ import {
   animalHueFilter,
   parseAnimalAvatar,
 } from '../../lib/animal-3d.ts'
+import type { AvatarFrameState } from '../../lib/avatar-frames.ts'
+import { frameAllowed, frameSetOf, frameSheetStyle, frameSheetUrl, frameStateOf } from '../../lib/avatar-frames.ts'
 import {
   type AvatarAction,
   type AvatarTemperament,
   avatarMotionAttrs,
   avatarMotionOf,
+  avatarTemperamentOf,
 } from '../../lib/avatar-motion.ts'
 import type { StyleVars } from '../../lib/stagger.ts'
 import { Avatar } from './Avatar.tsx'
+import '../../styles-avatar-frames.css'
 
 /**
  * 立体头像外壳。
@@ -258,6 +262,7 @@ export function Avatar3D({
   className = '',
   action = 'idle',
   temperament,
+  frameState,
 }: {
   avatarKey?: string
   name: string
@@ -269,6 +274,8 @@ export function Avatar3D({
   action?: AvatarAction
   /** 性格三维：决定动效的幅度与节奏（见 lib/avatar-motion.ts）。 */
   temperament?: AvatarTemperament
+  /** 指定播哪一套动作帧；不给就按 `action` 推。 */
+  frameState?: AvatarFrameState
 }) {
   // hook 必须无条件调用一次（头像字段会变，条件 hook 会让 React 拆掉这棵树）
   const ref = useTilt(tilt)
@@ -284,6 +291,42 @@ export function Avatar3D({
     return avatarMotionAttrs(action, avatarMotionOf(avatarKey), temperament, size)
   }, [action, avatarKey, size, temperament])
   if (animal !== undefined) {
+    /**
+     * 逐帧动画优先。
+     *
+     * 立体动物有真的动作帧（敲键盘 / 托腮想 / 说话），正在动的时候播帧；闲下来
+     * 才回到三视图换脸那一套。两者不叠加：帧动画有自己的构图（带爪子与键盘），
+     * 再叠一层转头倾斜会打架。
+     */
+    const set = frameSetOf(avatarKey)
+    const state = frameState ?? frameStateOf(action)
+    const url = set === undefined || state === undefined ? undefined : frameSheetUrl(set, state)
+    if (set !== undefined && state !== undefined && url !== undefined && frameAllowed(size)) {
+      const profile = avatarTemperamentOf(temperament, avatarMotionOf(avatarKey))
+      return (
+        <span
+          className={`avatar-3d avatar-3d-animal${className.length > 0 ? ` ${className}` : ''}`}
+          style={{ width: size, height: size }}
+          role="img"
+          aria-label={name}
+        >
+          <span className="avatar-3d-stage">
+            <span className="avatar-frames" style={frameSheetStyle(set, state, profile)} aria-hidden="true">
+              <img
+                className="avatar-frames-sheet"
+                src={url}
+                alt=""
+                draggable={false}
+                decoding="async"
+                style={{ filter: animalHueFilter(animal.kind, animal.hue) }}
+              />
+            </span>
+          </span>
+          <span className="avatar-3d-light" aria-hidden="true" />
+          <span className="avatar-3d-rim" aria-hidden="true" />
+        </span>
+      )
+    }
     return (
       <AnimalFaces
         kind={animal.kind}

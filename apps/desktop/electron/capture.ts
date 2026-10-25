@@ -19,6 +19,8 @@
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:http'
+import type { Socket } from 'node:net'
 import { join } from 'node:path'
 import type { RyHarnessServer } from '@ryharness/server'
 import type { BrowserWindow } from 'electron'
@@ -188,6 +190,43 @@ export async function runCapture(
   }
   await patch('/api/profile', { name: '你', avatar: 'an3d:rabbit:158' })
 
+  /**
+   * 「正在敲键盘」那张实拍要用的会话：接一个**永远不回答**的模型服务，
+   * 这一轮就会一直挂在处理中，打字行一直亮着——那正是动物在敲键盘的那几秒。
+   *
+   * 这一段失败**不许**拖垮整个截图流程：它只是额外交付的一张排障图，
+   * 而截图一断，docs/ 里的正式画面就停在上一轮。
+   */
+  const hanging = await startHangingModel()
+  try {
+    const hangingProvider = await post('/api/providers', {
+      displayName: '截图用（不回答）',
+      protocol: 'openai',
+      baseUrl: hanging.baseUrl,
+      models: ['hang'],
+      apiKey: 'screenshot',
+    })
+    const hangingAgent = await post('/api/agents', {
+      // 不挂模板：模板把 provider/model 写死成它自己那一家（截图模式下没有凭据），
+      // 挂模板的话这位的路由就换不成那个不回答的服务。
+      // 名字就叫「打字实拍」：单聊会话的标题取的是助理名，用同一个词，列表里才找得到。
+      name: '打字实拍',
+      avatar: 'an3d:dog:30',
+      systemPrompt: '你是负责敲键盘的那位。',
+      provider: (hangingProvider.provider as { id: string }).id,
+      model: 'hang',
+    })
+    await post('/api/conversations', {
+      // 单聊：接口要的是 agentId（不是 memberAgentIds）。
+      // 群里不 @人时调度器会挑别人（Ryen 没有路由，那一轮立刻就失败了，打字行一闪就没）。
+      kind: 'direct',
+      agentId: (hangingAgent.agent as { id: string }).id,
+      title: '打字实拍',
+    })
+  } catch (error) {
+    console.warn('[capture] 那个不回答的服务没搭起来：', String(error).slice(0, 200))
+  }
+
   // 落盘目录：docs/ 是入库的正式画面位置，根目录的 capture.png 是 gitignore 掉的
   // 一次性产物。两边都写：前者给评审看，后者给 README 的首屏图。
   const docsDir = join(here, 'docs')
@@ -349,6 +388,7 @@ export async function runCapture(
   // 交互巡检：把"鼠标移到头像不同位置""点了哪只动物""选了哪种毛色"这些
   // 中间状态**实拍**下来。截图是证据——上一轮"立体动物"就是靠实拍才发现
   // 兔子的耳朵戳出了圆盘（光看代码不会发现）。
+  await runTypingAnimationShot(window, here)
   if (process.env.RYHARNESS_REVIEW === '1') {
     await runInteractionReview(window, here, docsDir)
   }
@@ -360,6 +400,8 @@ export async function runCapture(
   }
 
   await window.close()
+  // 那个不回答的服务要收掉：它还开着，Electron 就退不出去
+  await hanging.close()
 }
 
 /**
@@ -388,6 +430,170 @@ async function runMentionCardShot(window: BrowserWindow, here: string): Promise<
   const image = await window.webContents.capturePage()
   writeFileSync(join(here, 'mention-card.png'), image.toPNG())
   console.log('[mention] saved mention-card.png')
+}
+
+/**
+ * 一个**永远不回答**的本地模型服务。
+ *
+ * 「正在敲键盘」那几秒是这一轮里最该被看见的——但它只有模型真的在跑的时候才存在。
+ * 截图模式没有配 key 的供应商，一发消息就报错，那行字一闪就没了。
+ *
+ * 这里起一个只收不回的服务：请求发过去就一直挂着，这一轮就一直「在处理中」，
+ * 打字行就一直亮着——拍得到真机上动物在敲键盘的样子。
+ *
+ * @returns baseUrl 与一个收尾函数
+ */
+function startHangingModel(): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+  const sockets = new Set<Socket>()
+  const server = createServer((request) => {
+    // 收下请求，但不回任何东西——请求就一直挂着
+    request.on('data', () => {})
+  })
+  server.on('connection', (socket) => {
+    sockets.add(socket)
+    socket.on('close', () => {
+      sockets.delete(socket)
+    })
+  })
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      const port = typeof address === 'object' && address !== null ? address.port : 0
+      resolve({
+        baseUrl: `http://127.0.0.1:${port}/v1`,
+        close: async () => {
+          for (const socket of sockets) socket.destroy()
+          sockets.clear()
+          await new Promise<void>((done) => {
+            server.close(() => {
+              return done()
+            })
+          })
+        },
+      })
+    })
+  })
+}
+
+/**
+ * 「正在敲键盘」实拍：动物动作帧在真机上跑起来的样子。
+ *
+ * 静态截图拍不出"在动"——一张图上永远只有一帧。所以这里做两件事：
+ *
+ * 1. **真的发一条消息**（走输入框那条真实路径，不改状态），等聊天页下方那行
+ *    「正在敲键盘」出现——那一位的头像这时正在播打字帧。
+ * 2. **连拍两张**（隔一会儿），并把两张图里那行头像区域的像素差异算出来。
+ *    差异为 0 就说明它没在动（帧没接上、被 `prefers-reduced-motion` 关了、
+ *    或者根本没播帧），截图看着正常也说明不了问题——只有数字能说明。
+ *
+ * 没有这一行出现（模型没接上、这一轮直接失败）时**只记一条警告**，不硬凑一张图。
+ *
+ * @param window - 应用窗口
+ * @param here - 一次性产物的落盘目录
+ */
+async function runTypingAnimationShot(window: BrowserWindow, here: string): Promise<void> {
+  try {
+    await typingAnimationShot(window, here)
+  } catch (error) {
+    // 这一步只是**额外交付**一张排障图：它失败不许拖垮整个截图流程
+    // （截图一断，docs/ 里的正式画面就停在上一轮，verify-shots-fresh 会跟着红）。
+    console.warn('[typing] 这张没拍成：', String(error).slice(0, 200))
+  }
+}
+
+/** 「正在敲键盘」实拍：动物动作帧在真机上跑起来的样子。 */
+async function typingAnimationShot(window: BrowserWindow, here: string): Promise<void> {
+  // 先点开那个会话（打字行在聊天页里）
+  const opened = await window.webContents.executeJavaScript(
+    `(() => {
+      const item = [...document.querySelectorAll('.conversation-item-main')].find((node) => {
+        return (node.textContent ?? '').includes('打字实拍')
+      })
+      if (!item) return { ok: false, list: [...document.querySelectorAll('.conversation-item-main')].map((node) => (node.textContent ?? '').slice(0, 12)) }
+      item.click()
+      return { ok: true, list: [] }
+    })()`,
+  )
+  const openedInfo = opened as { ok: boolean; list: string[] }
+  if (openedInfo.ok !== true) {
+    console.warn('[typing] 列表里没有那个会话：', JSON.stringify(openedInfo.list))
+    return
+  }
+  await new Promise((resolve) => {
+    return setTimeout(resolve, 900)
+  })
+  const sent = await window.webContents.executeJavaScript(
+    `(() => {
+      const box = document.querySelector('.chat-input-box textarea')
+      if (!box) return false
+      // React 接管了输入框的值：直接赋值它不会触发 onChange，得走原生 setter。
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
+      setter.call(box, '来段测试：看看这位是不是在敲键盘')
+      box.dispatchEvent(new Event('input', { bubbles: true }))
+      box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+      return true
+    })()`,
+  )
+  if (sent !== true) {
+    console.warn('[typing] 没找到输入框，跳过')
+    return
+  }
+  // 等那行「正在敲键盘」冒出来
+  let shown = false
+  for (let i = 0; i < 40 && !shown; i++) {
+    await new Promise((resolve) => {
+      return setTimeout(resolve, 60)
+    })
+    shown = await window.webContents.executeJavaScript(
+      `(() => document.querySelectorAll('.typing-thinking-avatars .avatar-frames').length > 0)()`,
+    )
+  }
+  if (shown !== true) {
+    const diag = await window.webContents.executeJavaScript(
+      `(() => ({
+        打字行: document.querySelectorAll('.typing-thinking-avatars').length,
+        帧: document.querySelectorAll('.typing-thinking-avatars .avatar-frames').length,
+        动作: document.querySelectorAll('.typing-thinking-avatars [data-motion]').length,
+        气泡: document.querySelectorAll('.bubble-row').length,
+        输入框: (document.querySelector('.chat-input-box textarea')?.value ?? '').slice(0, 12),
+        内容: (document.querySelector('.typing-thinking-avatars')?.innerHTML ?? '').slice(0, 260),
+      }))()`,
+    )
+    console.warn('[typing] 这一轮没进入「正在敲键盘」状态：', JSON.stringify(diag))
+    return
+  }
+  /**
+   * 硬证据：读**浏览器算出来的** transform。
+   *
+   * 样式表里写了动画不等于浏览器在跑（`prefers-reduced-motion` 会把它关掉；
+   * 帧没接上也一样）。同一个元素隔一会儿取两次 transform，取值不同才说明
+   * 帧真的在推进——截图看着正常是说明不了问题的，只有数字能说明。
+   */
+  const readTransform = async (): Promise<{ transform: string; animationName: string } | null> => {
+    return (await window.webContents.executeJavaScript(
+      `(() => {
+        const node = document.querySelector('.typing-thinking-avatars .avatar-frames-sheet')
+        if (!node) return null
+        const style = getComputedStyle(node)
+        return { transform: style.transform, animationName: style.animationName }
+      })()`,
+    )) as { transform: string; animationName: string } | null
+  }
+  const before = await readTransform()
+  await new Promise((resolve) => {
+    return setTimeout(resolve, 220)
+  })
+  const second = await window.webContents.capturePage()
+  const after = await readTransform()
+  writeFileSync(join(here, 'typing-animation.png'), second.toPNG())
+  if (before === null || after === null) {
+    console.warn('[typing] 没找到在播的帧')
+    return
+  }
+  const moved = before.transform !== after.transform
+  console.log(
+    `[typing] saved typing-animation.png · 动画名 ${after.animationName} · transform ${before.transform} → ${after.transform} · ${moved ? '帧在推进 ✓' : '帧没动 ✗'}`,
+  )
 }
 
 /**

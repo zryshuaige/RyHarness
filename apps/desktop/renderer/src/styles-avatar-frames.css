@@ -1,0 +1,122 @@
+/**
+ * 动物形象的逐帧动画：播放样式。
+ *
+ * 一套形象一张精灵图（4 列 4 行 = 16 帧，每格 256px），播放时把精灵图**平移**一格。
+ *
+ * ## 为什么是平移而不是 background-position
+ *
+ * 最初用的是 `background-position` + `background-size: 400% 400%`：切格靠的是
+ * 「百分比相对（容器 − 图片）」这条换算。实测 Chromium 里算出来的偏移不是格子的整数倍，
+ * 画面卡在两格中间——一只狗被劈成两半（见本文件的历史）。百分比这套换算在不同引擎
+ * 上还有别的分歧（有的按图片宽算、有的按容器宽算）。
+ *
+ * `transform: translate()` 的百分比是**相对元素自身边框盒**算的，没有歧义：
+ * 精灵图本身是容器的 4 倍宽，`translate(-25%)` 就是整整一格。
+ *
+ * ## 结构
+ *
+ *   .avatar-frames         裁切窗口（头像那么大）
+ *     .avatar-frames-sheet 精灵图（400% × 400%，逐格平移）
+ */
+
+/* 裁切窗口：头像画布那么大，超出的一律切掉。 */
+.avatar-frames {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background-color: var(--avatar-frame-plate, transparent);
+}
+
+/**
+ * 精灵图：宽高都是容器的四倍，于是每一格正好是一个头像那么大。
+ *
+ * `step-end` 让每一帧停满它自己的那一份时间——16 个关键帧各占一轮的十六分之一。
+ */
+.avatar-frames-sheet {
+  display: block;
+  width: 400%;
+  height: 400%;
+  /*
+   * 用 longhand，不用 `animation` 简写：简写里带 var() 时，浏览器要先代换再解析，
+   * 一旦代换后的值哪里不对，整条简写（包括步进函数）会一起作废——表现就是动画在跑，
+   * 却是**逐帧插值**的，窗口卡在两格中间。
+   */
+  animation-name: avatar-frames-play;
+  animation-duration: var(--avatar-frame-cycle-ms, 1200ms);
+  animation-timing-function: step-end;
+  animation-iteration-count: infinite;
+}
+
+/**
+ * 16 帧一行一行地走：第 index 帧在第 index/4 行、第 index%4 列。
+ *
+ * 平移量按格子算：-25% 是整张图的四分之一，也就是一格。
+ */
+@keyframes avatar-frames-play {
+  0% {
+    transform: translate(0%, 0%);
+  }
+  6.25% {
+    transform: translate(-25%, 0%);
+  }
+  12.5% {
+    transform: translate(-50%, 0%);
+  }
+  18.75% {
+    transform: translate(-75%, 0%);
+  }
+  25% {
+    transform: translate(0%, -25%);
+  }
+  31.25% {
+    transform: translate(-25%, -25%);
+  }
+  37.5% {
+    transform: translate(-50%, -25%);
+  }
+  43.75% {
+    transform: translate(-75%, -25%);
+  }
+  50% {
+    transform: translate(0%, -50%);
+  }
+  56.25% {
+    transform: translate(-25%, -50%);
+  }
+  62.5% {
+    transform: translate(-50%, -50%);
+  }
+  68.75% {
+    transform: translate(-75%, -50%);
+  }
+  75% {
+    transform: translate(0%, -75%);
+  }
+  81.25% {
+    transform: translate(-25%, -75%);
+  }
+  87.5% {
+    transform: translate(-50%, -75%);
+  }
+  93.75% {
+    transform: translate(-75%, -75%);
+  }
+  100% {
+    transform: translate(-75%, -75%);
+  }
+}
+
+/**
+ * 减少动态效果：停在一帧。
+ *
+ * 不是「不播」而是「停在第一帧」——帧图本身就是完整的静态形象（比静态立绘还多
+ * 一双搭在键盘上的爪子），停住仍然读得出是谁在干活。
+ */
+@media (prefers-reduced-motion: reduce) {
+  .avatar-frames-sheet {
+    animation: none;
+    transform: translate(0%, 0%);
+  }
+}

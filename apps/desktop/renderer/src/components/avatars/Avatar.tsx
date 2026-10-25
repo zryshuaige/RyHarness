@@ -1,10 +1,19 @@
 import { type ReactNode, useEffect, useMemo, useState } from 'react'
 import { animalAssetUrl, animalHueFilter, parseAnimalAvatar } from '../../lib/animal-3d.ts'
 import {
+  type AvatarFrameState,
+  frameAllowed,
+  frameSetOf,
+  frameSheetStyle,
+  frameSheetUrl,
+  frameStateOf,
+} from '../../lib/avatar-frames.ts'
+import {
   type AvatarAction,
   type AvatarTemperament,
   avatarMotionAttrs,
   avatarMotionOf,
+  avatarTemperamentOf,
 } from '../../lib/avatar-motion.ts'
 import { portraitOf, portraitSrc, portraitSrcSet } from '../../lib/brand-portraits.ts'
 import type { StyleVars } from '../../lib/stagger.ts'
@@ -20,6 +29,7 @@ import {
   parseAvatarSpec,
 } from './avatars.tsx'
 import '../../styles-avatar-motion.css'
+import '../../styles-avatar-frames.css'
 
 /** 动效（挂在根节点上的 data-motion 标记 + CSS 变量）；不需要动效时给空对象。 */
 interface AvatarMotion {
@@ -100,6 +110,7 @@ export function Avatar({
   className = '',
   action = 'idle',
   temperament,
+  frameState,
 }: {
   avatarKey?: string
   name: string
@@ -111,6 +122,14 @@ export function Avatar({
   action?: AvatarAction
   /** 性格三维：决定动效的幅度与节奏（见 lib/avatar-motion.ts）。 */
   temperament?: AvatarTemperament
+  /**
+   * 指定播哪一套动作帧；不给就按 `action` 推（思考 → 托腮，说话 → 张嘴）。
+   *
+   * 打字那一套要显式点名：默认那条路是"谁在说话谁张嘴"，而**打字行**里的那位
+   * 还没开始说话、正趴在键盘上写——同一个 `pondering` 动作，在两个场景里该演
+   * 的不是同一出戏。
+   */
+  frameState?: AvatarFrameState
 }) {
   const initial = (name.trim().slice(0, 1) || '?').toUpperCase()
 
@@ -168,6 +187,50 @@ export function Avatar({
     if (spec === null || !ready) return null
     return dicebearSvg(spec.styleKey, spec.seed)
   }, [spec, ready])
+
+  /**
+   * 逐帧动画：这位此刻有"真动作"要演时，播对应的精灵图。
+   *
+   * 与 CSS 微动效是**二选一**，不是叠加：帧动画本身就是完整的表演，再叠一层位移
+   * 摇摆，整只动物会一边演一边晃——那正是"头像在抖"的由来。
+   */
+  const frames = useMemo(() => {
+    if (!frameAllowed(size)) return undefined
+    const set = frameSetOf(avatarKey)
+    if (set === undefined) return undefined
+    const state = frameState ?? frameStateOf(action)
+    if (state === undefined) return undefined
+    const url = frameSheetUrl(set, state)
+    if (url === undefined) return undefined
+    const profile = avatarTemperamentOf(temperament, avatarMotionOf(avatarKey))
+    return { set, url, style: frameSheetStyle(set, state, profile) }
+  }, [action, avatarKey, frameState, size, temperament])
+
+  if (frames !== undefined) {
+    // 立体动物要跟静态那版一样染色，否则用户选的毛色在动画里就丢了。
+    const animal = parseAnimalAvatar(avatarKey)
+    const filter = animal === undefined ? undefined : animalHueFilter(animal.kind, animal.hue)
+    const variant = frames.set.startsWith('an3d-')
+      ? 'avatar-animal'
+      : frames.set === 'brand'
+        ? 'avatar-cat'
+        : 'avatar-portrait'
+    return (
+      <AvatarShell size={size} variant={variant} className={className} label={name} motion={{ style: {} }}>
+        <span className="avatar-frames" style={frames.style} aria-hidden="true">
+          {/* 染色只挂在精灵图上：挂在容器上会把底板（暖奶油）一起转色相。 */}
+          <img
+            className="avatar-frames-sheet"
+            src={frames.url}
+            alt=""
+            draggable={false}
+            decoding="async"
+            {...(filter === undefined ? {} : { style: { filter } })}
+          />
+        </span>
+      </AvatarShell>
+    )
+  }
 
   if (avatarKey === BRAND_AVATAR) {
     return (
