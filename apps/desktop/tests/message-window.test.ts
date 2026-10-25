@@ -9,12 +9,54 @@ import {
   BUBBLE_ESTIMATE_PX,
   chatWindowOf,
   createUserScrollGate,
+  measuredTurnHeight,
   PAGE_SIZE,
   TURN_ESTIMATE_PX,
   turnEstimateOf,
   USER_SCROLL_MS,
   WINDOW_MIN_TURNS,
 } from '../renderer/src/lib/message-window.ts'
+
+describe('measuredTurnHeight：量已渲染轮次的真实间距', () => {
+  it('按已渲染的那几块算，哨兵不算在内', () => {
+    // 真实的量法：offsetTop 是相对滚动容器的，哨兵在第一块之前，把它减掉。
+    // 这一组模拟「上哨兵 3000px + 三块轮次，间距 200px」：
+    const blocks = [
+      { top: 3000, height: 180 },
+      { top: 3200, height: 180 },
+      { top: 3400, height: 180 },
+    ]
+    expect(measuredTurnHeight(blocks)).toBe(200)
+  })
+
+  it('量的是轮次间距（顶到顶），不是内容高', () => {
+    // 窗口的映射按「轮号 × 间距 = 那一轮顶端的像素位置」算，所以要间距。
+    const blocks = [
+      { top: 0, height: 180 },
+      { top: 220, height: 180 },
+    ]
+    expect(measuredTurnHeight(blocks)).toBe(220)
+  })
+
+  it('只有一块时用那块自己的高度', () => {
+    expect(measuredTurnHeight([{ top: 120, height: 260 }])).toBe(260)
+  })
+
+  it('量不出来时给 0（调用方据此放弃这一轮，而不是用 0 继续算）', () => {
+    expect(measuredTurnHeight([])).toBe(0)
+    expect(measuredTurnHeight([{ top: 0, height: 0 }])).toBe(0)
+  })
+
+  it('只用已渲染的块数做分母——不是总轮数', () => {
+    // 这一条是根因：此前量的是容器的 scrollHeight（含上下哨兵）÷ **总**轮数，
+    // 算出来还是那个估算值，真实高度从来没被学到，窗口映射差着近两倍。
+    const blocks = [
+      { top: 0, height: 300 },
+      { top: 300, height: 300 },
+    ]
+    expect(measuredTurnHeight(blocks)).toBe(300)
+  })
+})
 
 describe('turnEstimateOf：轮次高度估算', () => {
   it('空历史回落到单轮下限', () => {

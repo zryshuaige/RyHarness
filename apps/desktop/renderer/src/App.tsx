@@ -3,7 +3,6 @@ import { matchShortcut, SEARCH_FOCUS_EVENT } from '../../shared/shortcuts.ts'
 import type { AgentDef, AgentTemplate, Conversation, ProviderInfo, ProviderPreset } from './api.ts'
 import { ApiClient } from './api.ts'
 import type { ArtifactTarget } from './components/ArtifactPreview.tsx'
-import { ArtifactPreview } from './components/ArtifactPreview.tsx'
 import { Cat } from './components/Cat.tsx'
 import { ChatView } from './components/ChatView.tsx'
 import { ConfirmDialog } from './components/ConfirmDialog.tsx'
@@ -262,8 +261,17 @@ export function App() {
   const [modal, setModal] = useState<'agent' | 'group' | undefined>(undefined)
   /** 正在预览的产物。气泡里的文件卡与右栏的产物行共用这一个出口。 */
   const [preview, setPreview] = useState<ArtifactTarget | undefined>(undefined)
+  /**
+   * 开预览：文件在**右栏**里看，不弹居中的模态框。
+   *
+   * 模态框把整个聊天区盖住，用户想边看文件边接着聊就没法了——预览文件这件事本身
+   * 就发生在对话里，把它挪到对话旁边才对。右栏此刻若收着，就把它展开（预览藏在
+   * 收起态里等于没有这个功能）。
+   */
   const openPreview = useCallback((file: ArtifactTarget) => {
     setPreview(file)
+    setPanelCollapsed(false)
+    setDrawerOpen(true)
   }, [])
   /** 正在改设置的群（群设置弹窗）；建群走 modal='group'。 */
   const [editingGroup, setEditingGroup] = useState<Conversation | undefined>(undefined)
@@ -1186,6 +1194,10 @@ export function App() {
           overlay={narrow}
           open={narrow ? drawerOpen : !panelCollapsed}
           onPreview={openPreview}
+          preview={preview}
+          onClosePreview={() => {
+            setPreview(undefined)
+          }}
           onToggle={narrow ? toggleDrawer : togglePanel}
           onOpenPlugins={() => {
             setTab('plugins')
@@ -1291,15 +1303,8 @@ export function App() {
           }}
         />
       )}
-      {preview !== undefined && (
-        <ArtifactPreview
-          api={api}
-          target={preview}
-          onClose={() => {
-            setPreview(undefined)
-          }}
-        />
-      )}
+      {/* 产物预览不再走居中的模态框：它开在右栏里（见 RightPanel 的 preview），
+          模态框会把整个聊天区盖住，边看文件边接着聊就没法了。 */}
       {/* toast 宿主：会话打开时由 ChatView 挂在输入区上沿（composer 变高不会压住发送键），
           其余页面（欢迎页 / 通讯录 / 插件 / 我的）由这里兜底——保存、删除的反馈不能只有
           聊天页看得见。任何时刻只有一个宿主在屏上。 */}

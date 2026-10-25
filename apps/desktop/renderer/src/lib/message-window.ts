@@ -87,6 +87,31 @@ export function chatWindowOf<T>(input: ChatWindowInput<T>): WindowedSlice<T> {
 }
 
 /**
+ * 已渲染的那几轮，**轮次间距**是多少像素。
+ *
+ * 要的是间距（一个轮次块的顶 → 下一个轮次块的顶），不是内容高：窗口的映射按
+ * 「轮号 × 间距 = 那一轮顶端的像素位置」算，间距才对得上这条式子。
+ *
+ * 只量**已渲染的那几轮**：容器的 scrollHeight 里含上下哨兵（它们按估算高度撑出来的），
+ * 除以总轮数算出来还是那个估算值——真实高度从头到尾没被学到，窗口的映射就一直差着
+ * 两倍，滚轮往上一滚内容就换掉，看着像滚不动。
+ *
+ * @param blocks - 已渲染轮次块的顶与高（px）
+ * @returns 每轮的间距（px）；量不出来时返回 0
+ */
+export function measuredTurnHeight(blocks: readonly { top: number; height: number }[]): number {
+  const first = blocks[0]
+  const last = blocks[blocks.length - 1]
+  if (first === undefined || last === undefined) return 0
+  if (blocks.length === 1) {
+    return first.height > 0 ? first.height : 0
+  }
+  const span = last.top - first.top
+  if (!Number.isFinite(span) || span <= 0) return 0
+  return span / (blocks.length - 1)
+}
+
+/**
  * 用户滚动时间窗：mark 之后 {@link USER_SCROLL_MS} 内的滚动算「用户在驱动」。
  *
  * 做成工厂而不是常量判断，是为了测试能注入时钟；组件里仍是一个 ref 持有到期

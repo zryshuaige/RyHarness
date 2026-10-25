@@ -126,6 +126,40 @@ interface Scroller {
 
 let scroller: Scroller
 
+/**
+ * jsdom 没有布局：`offsetTop` / `offsetHeight` 恒为 0。
+ *
+ * 组件现在靠这两个量「每轮的真实间距」（只量已渲染的那几轮，不含哨兵），所以这里按
+ * 同一套结构把它们算出来：哨兵按它自己的高度、轮次块按 TURN_BLOCK_PX，一块一块
+ * 往上累加。量到的值与滚动桩算出来的 scrollHeight 是同一套几何——测试因此仍在测
+ * 真实浏览器那条路，而不是一个假的高度。
+ */
+function turnBlockTop(element: HTMLElement): number {
+  const col = element.parentElement
+  if (col === null) return 0
+  let y = 0
+  for (const child of Array.from(col.children)) {
+    if (child === element) return y
+    const el = child as HTMLElement
+    if (el.getAttribute('aria-hidden') === 'true') y += Number.parseFloat(el.style.height || '0')
+    else if (el.classList.contains('turn-block')) y += TURN_BLOCK_PX
+  }
+  return y
+}
+
+Object.defineProperty(HTMLElement.prototype, 'offsetTop', {
+  configurable: true,
+  get(this: HTMLElement) {
+    return this.classList.contains('turn-block') ? turnBlockTop(this) : 0
+  },
+})
+Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+  configurable: true,
+  get(this: HTMLElement) {
+    return this.classList.contains('turn-block') ? TURN_BLOCK_PX : 0
+  },
+})
+
 function installScroller(node: HTMLElement): Scroller {
   let scrollTop = 0
   let extra = 0

@@ -21,7 +21,7 @@ import type {
   ProviderInfo,
 } from '../renderer/src/api.ts'
 import { ApiClient, ApiRequestError } from '../renderer/src/api.ts'
-import { ArtifactPreview } from '../renderer/src/components/ArtifactPreview.tsx'
+import { ArtifactPreviewContent } from '../renderer/src/components/ArtifactPreview.tsx'
 import { ChatView, fromHistory, parseStoredFailure } from '../renderer/src/components/ChatView.tsx'
 import { ContactsPage, CreateAgentModal } from '../renderer/src/components/ContactsPage.tsx'
 import { ConversationList } from '../renderer/src/components/ConversationList.tsx'
@@ -813,7 +813,8 @@ describe('REST 失败：原文不上屏', () => {
     await act(async () => {
       root = createRoot(container)
       root.render(
-        <ArtifactPreview
+        <ArtifactPreviewContent
+          variant="panel"
           api={api}
           target={{
             name: '方案.docx',
@@ -848,7 +849,8 @@ describe('REST 失败：原文不上屏', () => {
     await act(async () => {
       root = createRoot(container)
       root.render(
-        <ArtifactPreview
+        <ArtifactPreviewContent
+          variant="panel"
           api={api}
           target={{
             name: '报告.docx',

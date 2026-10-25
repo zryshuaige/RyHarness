@@ -11,7 +11,7 @@
  * 绝对路径来自 GET /api/files/:name/info（服务端算好的），渲染层不猜路径——
  * 它连工作区根目录都不知道。
  */
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { ApiClient, ArtifactInfo } from '../api.ts'
 import { copyText, openInFileManager } from '../lib/desktop.ts'
 import { errorDetail, humanError } from '../lib/error-text.ts'
@@ -35,8 +35,6 @@ type Load =
   // 超上限的 HTML：不读正文（读进来就已经卡住了），只把体积说清楚。
   | { status: 'toobig'; info: ArtifactInfo }
   | { status: 'ready'; info: ArtifactInfo; text: string }
-
-const FOCUSABLE = 'button, [href], iframe, [tabindex]:not([tabindex="-1"])'
 
 /** 预览框里的四个动作。PDF 靠 iframe 内嵌，Office 靠第一个动作——两者都要留着。 */
 function PreviewActions({
@@ -200,17 +198,27 @@ function PreviewBody({
   return <pre className="attach-preview-code">{text}</pre>
 }
 
-export function ArtifactPreview({
+/**
+ * 预览的正文：文件名 + 动作 + 内容。
+ *
+ * 开在**右栏**里（见 RightPanel 的 preview）：模态框会把整个聊天区盖住，用户想边看
+ * 文件边接着聊就没法了——预览文件这件事本身发生在对话里，把它挪到对话旁边才对。
+ *
+ * 少了模态框那套 Esc 焦点陷阱：它不是模态的（聊天区还在旁边，能打字），框住焦点
+ * 反而碍事。Esc 仍然能关掉预览。
+ */
+export function ArtifactPreviewContent({
   api,
   target,
   onClose,
+  variant,
 }: {
   api: ApiClient
   target: ArtifactTarget
   onClose: () => void
+  variant: 'modal' | 'panel'
 }) {
   const kind = previewKindOf(target.name, target.mime)
-  const dialogRef = useRef<HTMLDivElement>(null)
   const [load, setLoad] = useState<Load>({ status: 'loading' })
   const [hint, setHint] = useState<string | undefined>(undefined)
   const [retry, setRetry] = useState(0)
@@ -245,34 +253,12 @@ export function ArtifactPreview({
     }
   }, [api, target.name, kind, retry])
 
+  // Esc 关掉预览：预览不是模态框，但它盖着聊天区的一半，Esc 是最顺手的出口。
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') {
-        onClose()
-        return
-      }
-      if (event.key !== 'Tab') return
-      const dialog = dialogRef.current
-      if (dialog === null) return
-      // 框是模态的，Tab 就得在框里绕：焦点能跑到被遮住的聊天区去，键盘用户
-      // 于是能在一块看得见的界面后面继续编辑消息。
-      const items = [...dialog.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => {
-        return !el.hasAttribute('disabled')
-      })
-      if (items.length === 0) return
-      const first = items[0] as HTMLElement
-      const last = items[items.length - 1] as HTMLElement
-      const active = document.activeElement
-      if (!event.shiftKey && active === last) {
-        event.preventDefault()
-        first.focus()
-      } else if (event.shiftKey && (active === first || !dialog.contains(active))) {
-        event.preventDefault()
-        last.focus()
-      }
+      if (event.key === 'Escape') onClose()
     }
     document.addEventListener('keydown', onKeyDown)
-    dialogRef.current?.focus()
     return () => {
       document.removeEventListener('keydown', onKeyDown)
     }
@@ -280,73 +266,62 @@ export function ArtifactPreview({
 
   const info = load.status === 'ready' || load.status === 'toobig' ? load.info : undefined
   return (
-    // biome-ignore lint/a11y/useKeyWithClickEvents: 遮罩点击关闭（Esc 由上面的全局 keydown 处理，它就是这条路径的键盘等价物）
-    <div
-      className="attach-preview-mask"
-      role="dialog"
-      aria-modal="true"
-      aria-label={`预览 ${target.name}`}
-      onClick={(event) => {
-        // 点遮罩关闭；只认事件本身落在遮罩上，从框里冒泡出来的点击不算。
-        if (event.target === event.currentTarget) onClose()
-      }}
-    >
-      <div className="attach-preview" ref={dialogRef} tabIndex={-1}>
-        <div className="attach-preview-head">
-          <span className="attach-preview-title">
-            <strong title={target.name}>{target.name}</strong>
-            {/* MIME 是分派用的单位（application/vnd.openxmlformats-…），说「Word 文档」，
-                原值留在 title 上给排障的人。 */}
-            <small title={info?.mime}>
-              {formatSize(info?.size ?? target.size)}
-              {info === undefined ? '' : ` · ${humanMime(info.mime)}`}
-            </small>
-          </span>
-          <PreviewActions api={api} target={target} info={info} onHint={setHint} />
-          <button type="button" className="attach-preview-close" aria-label="关闭预览" onClick={onClose}>
-            <Icon name="x" size={16} />
-          </button>
-        </div>
-        {hint !== undefined && (
-          <p className="attach-preview-hint" role="status">
-            {hint}
-          </p>
-        )}
-        <div className="attach-preview-body">
-          {load.status === 'loading' && <p className="attach-preview-none">正在读取…</p>}
-          {load.status === 'error' && (
-            // div 而不是 p：折叠的「详情」不能塞在 <p> 里（details 不能是 p 的后代）。
-            <div className="attach-preview-none" role="alert">
-              {load.message}
-              <button
-                type="button"
-                onClick={() => {
-                  setRetry((n) => {
-                    return n + 1
-                  })
-                }}
-              >
-                重试
-              </button>
-              {load.detail !== undefined && (
-                <details>
-                  <summary style={{ cursor: 'pointer', fontSize: 'var(--fs-xs)' }}>详情</summary>
-                  <code>{load.detail}</code>
-                </details>
-              )}
-            </div>
-          )}
-          {load.status === 'toobig' && (
-            <div className="attach-preview-none" role="alert">
-              <p>这份 HTML 有 {formatSize(load.info.size)}，太大了，内嵌预览会卡住界面。</p>
-              <p>用「在新窗口打开」或「下载」看它。</p>
-            </div>
-          )}
-          {load.status === 'ready' && (
-            <PreviewBody kind={kind} name={target.name} rawUrl={api.fileRawUrl(target.name)} text={load.text} />
-          )}
-        </div>
+    <>
+      {' '}
+      <div className="attach-preview-head">
+        <span className="attach-preview-title">
+          <strong title={target.name}>{target.name}</strong>
+          {/* MIME 是分派用的单位（application/vnd.openxmlformats-…），说「Word 文档」，
+              原值留在 title 上给排障的人。 */}
+          <small title={info?.mime}>
+            {formatSize(info?.size ?? target.size)}
+            {info === undefined ? '' : ` · ${humanMime(info.mime)}`}
+          </small>
+        </span>
+        <PreviewActions api={api} target={target} info={info} onHint={setHint} />
+        <button type="button" className="attach-preview-close" aria-label="关闭预览" onClick={onClose}>
+          <Icon name="x" size={16} />
+        </button>
       </div>
-    </div>
+      {hint !== undefined && (
+        <p className="attach-preview-hint" role="status">
+          {hint}
+        </p>
+      )}
+      <div className="attach-preview-body" data-variant={variant}>
+        {load.status === 'loading' && <p className="attach-preview-none">正在读取…</p>}
+        {load.status === 'error' && (
+          // div 而不是 p：折叠的「详情」不能塞在 <p> 里（details 不能是 p 的后代）。
+          <div className="attach-preview-none" role="alert">
+            {load.message}
+            <button
+              type="button"
+              onClick={() => {
+                setRetry((n) => {
+                  return n + 1
+                })
+              }}
+            >
+              重试
+            </button>
+            {load.detail !== undefined && (
+              <details>
+                <summary style={{ cursor: 'pointer', fontSize: 'var(--fs-xs)' }}>详情</summary>
+                <code>{load.detail}</code>
+              </details>
+            )}
+          </div>
+        )}
+        {load.status === 'toobig' && (
+          <div className="attach-preview-none" role="alert">
+            <p>这份 HTML 有 {formatSize(load.info.size)}，太大了，内嵌预览会卡住界面。</p>
+            <p>用「在新窗口打开」或「下载」看它。</p>
+          </div>
+        )}
+        {load.status === 'ready' && (
+          <PreviewBody kind={kind} name={target.name} rawUrl={api.fileRawUrl(target.name)} text={load.text} />
+        )}
+      </div>
+    </>
   )
 }

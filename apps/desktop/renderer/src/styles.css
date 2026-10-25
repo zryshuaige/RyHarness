@@ -1305,6 +1305,36 @@ button.tool-row:disabled { cursor: default; }
   transition: visibility 0s linear var(--dur-in);
 }
 .panel-body h4 { margin: var(--space-5) 0 var(--space-2); font-size: var(--fs-sm); color: var(--text-secondary); font-weight: 600; }
+/* 预览态：右栏这一栏整个变成"文件预览"，宽度放宽。
+ *
+ * 文件预览挤在 280px 的常驻栏里太窄（PDF 几乎没法看），所以预览期间把它放宽到
+ * 480px——它仍然**占位列**（不是浮在聊天区上面）：浮着就会盖住消息列的右半边，
+ * 聊天气泡被切掉一截，比没有预览还糟。占列则是聊天区窄一点，消息照旧完整。
+ *
+ * 这一段必须排在上面那段窄窗规则之后：同优先级（0,1,0）时靠源码顺序取胜。
+ * 窄窗下右栏本来就走抽屉（浮在聊天区上、还带遮罩），那时预览也就跟着当抽屉用。 */
+.right-panel.is-previewing {
+  width: min(480px, 76vw);
+  border-left: 1px solid var(--divider);
+  /* 预览头里那四个动作键一行要 600 多像素：不压住最小宽度，面板会被内容撑到 700
+   * 上下，聊天区就被挤得只剩 400 出头。压住之后动作键换行，栏宽就按 480 走。 */
+  min-width: 0;
+}
+/* 预览内容在栏里怎么摆：整栏就是预览框，头固定、正文自己滚。 */
+.right-panel.is-previewing .panel-body { overflow: hidden; padding: 0; }
+.panel-preview { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+/* 头在栏里排两行：文件名一行、四个动作一行。挤在一行时文件名只剩「预…」三个字，
+   用户连自己在看哪个文件都看不出来。 */
+.panel-preview .attach-preview-head {
+  flex-direction: column; align-items: stretch;
+  gap: var(--space-2); padding: var(--space-3) var(--space-4);
+}
+.panel-preview .attach-preview-actions { justify-content: flex-start; }
+.panel-preview .attach-preview-head { padding: var(--space-3) var(--space-4); flex-wrap: wrap; row-gap: var(--space-2); }
+.panel-preview .attach-preview-body { padding: var(--space-4); }
+/* PDF 与 HTML 那一支在栏里占满正文区，不留 60vh 的空档。 */
+.panel-preview .attach-preview-pdf,
+.panel-preview .attach-preview-frame { height: 100%; min-height: 0; }
 .panel-empty { color: var(--text-secondary); font-size: var(--fs-sm); }
 .profile-head { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); text-align: center; }
 .profile-head h3 { margin: 0; font-size: var(--fs-title); }

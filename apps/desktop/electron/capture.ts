@@ -92,6 +92,52 @@ export async function runCapture(
   // 评审才看得出这是**一整套**形象，而不是某一张图。
   await post('/api/agents', { templateKey: 'coding', name: '阿狐', avatar: 'an3d:fox:200' })
   await post('/api/agents', { templateKey: 'writing', name: '团子', avatar: 'an3d:panda:30' })
+
+  /**
+   * 下面这两个会话是给**实拍**用的（打字那一屏、滚轮翻历史那一屏）。
+   *
+   * 它们必须**先于**演示会话建：会话列表按 updatedAt 排，最新的在最上面——
+   * 演示会话要是排在后面，docs/ 里那张聊天实拍打开的就是这两个人造会话了。
+   *
+   * 那个「永远不回答」的模型服务是**正式截图拍完之后**才搭的（见 runTypingShot）：
+   * 一旦有一个配了凭据的供应商，设置页那张「先挑一家」的网格就不会出现，
+   * docs/capture-providers.png 便永远停在上一轮，截图门禁直接红。
+   */
+  await post('/api/conversations', {
+    // 单聊：接口要的是 agentId（不是 memberAgentIds）。
+    kind: 'direct',
+    agentId: coder.id,
+    title: '打字实拍',
+  })
+
+  /**
+   * 造一个 100 轮的长会话（滚轮实拍用）。
+   *
+   * 窗口化在 30 轮以上才启用，而首屏只加载 50 条（25 轮）——所以要先把历史翻够，
+   * 滚轮那条才真的走在被窗口化的那条路上。
+   */
+  const longConv = await post('/api/conversations', {
+    kind: 'direct',
+    agentId: coder.id,
+    title: '滚轮实拍',
+  })
+  const longId = (longConv.conversation as { id: string }).id
+  for (let turn = 0; turn < 100; turn++) {
+    server.store.appendMessage({
+      conversationId: longId,
+      senderType: 'user',
+      contentBlocks: [{ type: 'text', text: `第 ${turn + 1} 轮的问题：看看滚轮能不能翻到这里。` }],
+      turnIndex: turn,
+    })
+    server.store.appendMessage({
+      conversationId: longId,
+      senderType: 'agent',
+      senderId: coder.id,
+      contentBlocks: [{ type: 'text', text: `第 ${turn + 1} 轮的回答。` }],
+      turnIndex: turn,
+    })
+  }
+
   const conv = await post('/api/conversations', {
     kind: 'group',
     memberAgentIds: ['ryen', coder.id],
@@ -174,6 +220,31 @@ export async function runCapture(
     )
     console.log('[capture] project scaffolded')
   }
+  /**
+   * 造一个产物：右栏的产物行点「预览」，预览就该在这一栏里打开。
+   *
+   * 文件真写进工作区的产物目录——预览读的是真文件（体积、类型、正文都从它来）。
+   */
+  const previewName = '预览示例.md'
+  const artifactsDir = join(server.workspaceRoot, '.ryharness-artifacts')
+  mkdirSync(artifactsDir, { recursive: true })
+  const previewBody = '# 预览示例\n\n这一行字是在**右栏**里看到的——预览没有弹模态框把聊天区盖住。\n'
+  writeFileSync(join(artifactsDir, previewName), previewBody, 'utf8')
+  server.store.appendMessage({
+    conversationId: conversation.id,
+    senderType: 'agent',
+    senderId: 'ryen',
+    contentBlocks: [{ type: 'text', text: '这是刚才那份文件，点开看看。' }],
+    turnIndex: 1,
+    artifacts: [
+      {
+        callId: 'preview-demo',
+        name: previewName,
+        size: Buffer.byteLength(previewBody),
+        mime: 'text/markdown',
+      },
+    ],
+  })
   console.log('[capture] seed done')
 
   // 演示数据里给用户一个**立体动物**形象：「我的」页那张定制面板要拍出它长什么样。
@@ -189,43 +260,6 @@ export async function runCapture(
     if (!response.ok) console.log('[capture] profile patch failed', response.status)
   }
   await patch('/api/profile', { name: '你', avatar: 'an3d:rabbit:158' })
-
-  /**
-   * 「正在敲键盘」那张实拍要用的会话：接一个**永远不回答**的模型服务，
-   * 这一轮就会一直挂在处理中，打字行一直亮着——那正是动物在敲键盘的那几秒。
-   *
-   * 这一段失败**不许**拖垮整个截图流程：它只是额外交付的一张排障图，
-   * 而截图一断，docs/ 里的正式画面就停在上一轮。
-   */
-  const hanging = await startHangingModel()
-  try {
-    const hangingProvider = await post('/api/providers', {
-      displayName: '截图用（不回答）',
-      protocol: 'openai',
-      baseUrl: hanging.baseUrl,
-      models: ['hang'],
-      apiKey: 'screenshot',
-    })
-    const providerId = (hangingProvider.provider as { id: string }).id
-    // 把演示里那只柴犬的路由换成那个不回答的服务：不新建助理——新建的那位在
-    // 客户端的清单里还没有头像，打字行里会渲染成一块首字母色块。
-    await fetch(`${server.url}/api/agents/${coder.id}`, {
-      method: 'PATCH',
-      headers: {
-        'content-type': 'application/json',
-        ...(server.apiToken === undefined ? {} : { authorization: `Bearer ${server.apiToken}` }),
-      },
-      body: JSON.stringify({ provider: providerId, model: 'hang' }),
-    })
-    await post('/api/conversations', {
-      // 单聊：接口要的是 agentId（不是 memberAgentIds）。
-      kind: 'direct',
-      agentId: coder.id,
-      title: '打字实拍',
-    })
-  } catch (error) {
-    console.warn('[capture] 那个不回答的服务没搭起来：', String(error).slice(0, 200))
-  }
 
   // 落盘目录：docs/ 是入库的正式画面位置，根目录的 capture.png 是 gitignore 掉的
   // 一次性产物。两边都写：前者给评审看，后者给 README 的首屏图。
@@ -385,10 +419,43 @@ export async function runCapture(
     await gotoTab(window, '聊天')
   }
 
+  /**
+   * 「正在敲键盘」那张实拍需要一个**永远不回答**的模型服务：这一轮一直挂在处理中，
+   * 打字行就一直亮着。
+   *
+   * 搭在正式截图**之后**：一旦有了配了凭据的供应商，设置页那张「先挑一家」的网格
+   * 就不出现了，docs/capture-providers.png 停在上一轮，截图门禁直接红。
+   */
+  const hanging = await startHangingModel()
+  try {
+    const hangingProvider = await post('/api/providers', {
+      displayName: '截图用（不回答）',
+      protocol: 'openai',
+      baseUrl: hanging.baseUrl,
+      models: ['hang'],
+      apiKey: 'screenshot',
+    })
+    const providerId = (hangingProvider.provider as { id: string }).id
+    // 把演示里那只柴犬的路由换成那个不回答的服务：不新建助理——新建的那位在
+    // 客户端的清单里还没有头像，打字行里会渲染成一块首字母色块。
+    await fetch(`${server.url}/api/agents/${coder.id}`, {
+      method: 'PATCH',
+      headers: {
+        'content-type': 'application/json',
+        ...(server.apiToken === undefined ? {} : { authorization: `Bearer ${server.apiToken}` }),
+      },
+      body: JSON.stringify({ provider: providerId, model: 'hang' }),
+    })
+  } catch (error) {
+    console.warn('[capture] 那个不回答的服务没搭起来：', String(error).slice(0, 200))
+  }
+
   // 交互巡检：把"鼠标移到头像不同位置""点了哪只动物""选了哪种毛色"这些
   // 中间状态**实拍**下来。截图是证据——上一轮"立体动物"就是靠实拍才发现
   // 兔子的耳朵戳出了圆盘（光看代码不会发现）。
   await runTypingAnimationShot(window, here)
+  await runPanelPreviewShot(window, here)
+  await runScrollHistoryShot(window, here)
   if (process.env.RYHARNESS_REVIEW === '1') {
     await runInteractionReview(window, here, docsDir)
   }
@@ -473,6 +540,180 @@ function startHangingModel(): Promise<{ baseUrl: string; close: () => Promise<vo
       })
     })
   })
+}
+
+/**
+ * 文件预览在右栏里的实拍。
+ *
+ * 点右栏产物行的「预览」，预览就该在**这一栏**里打开——不是弹一个盖住整个聊天区的
+ * 模态框。证据有三样：栏的类名进了预览态、预览框的标题是那个文件名、平常的内容
+ * （资料卡）收起来了。
+ */
+async function runPanelPreviewShot(window: BrowserWindow, here: string): Promise<void> {
+  /**
+   * 把窗口拉宽再拍这一屏。
+   *
+   * 宽窗下右栏是**占位列**，预览在聊天区右边并排（消息完整）；窄窗下右栏是抽屉，
+   * 预览会盖住聊天区——那是窄窗该有的样子，但这张要说明的是"预览在右边那块地上，
+   * 聊天照旧能看"，得在宽窗下拍。
+   */
+  window.setSize(1440, 900)
+  await new Promise((resolve) => {
+    return setTimeout(resolve, 900)
+  })
+  // 先切到演示会话（产物挂在那条会话上）
+  await window.webContents.executeJavaScript(
+    `(() => {
+      const item = [...document.querySelectorAll('.conversation-item-main')].find((node) => {
+        return (node.textContent ?? '').includes('产品三人组')
+      })
+      if (!item) return false
+      item.click()
+      return true
+    })()`,
+  )
+  await new Promise((resolve) => {
+    return setTimeout(resolve, 1000)
+  })
+  const opened = await window.webContents.executeJavaScript(
+    `(() => {
+      // 找**气泡里**那张文件卡的「预览」：右栏的产物列表只收实时事件，历史消息带来的
+      // 文件卡在气泡里——而这正是用户在对话里点的那一个。
+      const button = [...document.querySelectorAll('.chat-scroll button')].find((b) => {
+        return (b.textContent ?? '').trim() === '预览'
+      })
+      if (!button) return false
+      button.click()
+      return true
+    })()`,
+  )
+  if (opened !== true) {
+    console.warn('[preview] 右栏里没有可预览的产物')
+    return
+  }
+  await new Promise((resolve) => {
+    return setTimeout(resolve, 1200)
+  })
+  const state = await window.webContents.executeJavaScript(
+    `(() => ({
+      预览态: (document.querySelector('.right-panel')?.className ?? '').includes('is-previewing'),
+      标题: document.querySelector('.panel-preview .attach-preview-title strong')?.textContent ?? '',
+      预览框: document.querySelectorAll('.panel-preview .attach-preview-body').length,
+      资料卡: document.querySelectorAll('.profile-head').length,
+      栏宽: Math.round(document.querySelector('.right-panel')?.getBoundingClientRect().width ?? 0),
+      聊天宽: Math.round(document.querySelector('.chat-scroll')?.getBoundingClientRect().width ?? 0),
+    }))()`,
+  )
+  console.log(`[preview] ${JSON.stringify(state)}`)
+  const image = await window.webContents.capturePage()
+  writeFileSync(join(here, 'panel-preview.png'), image.toPNG())
+  console.log('[preview] saved panel-preview.png')
+}
+
+/**
+ * 「滚轮翻历史」实拍：往上一滚，**位置得留在那儿**、**内容得跟着走**。
+ *
+ * 这一条曾经修过两轮都没修好，所以这里不靠"看着顺不顺"判断，直接取数：
+ *
+ * 1. 造一个 100 轮的长会话（窗口化在 30 轮以上才启用，所以要先把历史翻够）。
+ * 2. 往上一滚 1500px，等两帧。
+ * 3. 看两件事：
+ *    - **scrollTop 留在那儿了吗**（被拽回底部 = 位置被抢回去了）；
+ *    - **视口顶端那一轮换了吗**（没换 = 视口里的内容被换掉了，看着就是"滚不动"）。
+ *
+ * 只有"位置留住 + 顶端那一轮换成更早的那轮"同时成立，滚轮才算真的能翻历史。
+ */
+async function runScrollHistoryShot(window: BrowserWindow, here: string): Promise<void> {
+  const opened = await window.webContents.executeJavaScript(
+    `(() => {
+      const item = [...document.querySelectorAll('.conversation-item-main')].find((node) => {
+        return (node.textContent ?? '').includes('滚轮实拍')
+      })
+      if (!item) return false
+      item.click()
+      return true
+    })()`,
+  )
+  if (opened !== true) {
+    console.warn('[scroll] 列表里没有那个长会话')
+    return
+  }
+  await new Promise((resolve) => {
+    return setTimeout(resolve, 1200)
+  })
+  const probe = await window.webContents.executeJavaScript(`(async () => {
+    const node = document.querySelector('.chat-scroll')
+    if (!node) return { error: '没有滚动容器' }
+    // 把历史翻够：窗口化在 30 轮以上才启用
+    for (let i = 0; i < 4; i++) {
+      const button = document.querySelector('.load-earlier')
+      if (!button) break
+      button.click()
+      await new Promise((r) => setTimeout(r, 500))
+    }
+    await new Promise((r) => setTimeout(r, 400))
+    const topTurn = () => {
+      const rect = node.getBoundingClientRect()
+      const blocks = [...node.querySelectorAll('.turn-block')]
+      const at = blocks.find((b) => { return b.getBoundingClientRect().bottom > rect.top + 4 })
+      return at ? (at.textContent ?? '').trim().slice(0, 14) : ''
+    }
+    /** 视口顶端那一轮的轮号（演示消息里写着「第 N 轮」）。 */
+    const topIndex = () => {
+      const match = /第\\s*(\\d+)\\s*轮/.exec(topTurn())
+      return match === null ? undefined : Number(match[1])
+    }
+    /** 每轮的真实间距：从两块轮次块的顶量出来。 */
+    const pitch = () => {
+      const blocks = [...node.querySelectorAll('.turn-block')]
+      if (blocks.length < 2) return 0
+      return (blocks[blocks.length - 1].getBoundingClientRect().top - blocks[0].getBoundingClientRect().top) / (blocks.length - 1)
+    }
+    const before = { top: node.scrollTop, height: node.scrollHeight, turn: topTurn(), index: topIndex() }
+    const target = Math.max(0, node.scrollTop - 1500)
+    // **先发 wheel 再改 scrollTop**：真实滚轮是先有 wheel（打上"用户正在驱动"的
+    // 标记）、再有 scroll。只发 scroll 的话，组件认为没人驱动，就会按"贴底"处理，
+    // 把位置按回底部——那测的就不是滚轮这条路。
+    node.dispatchEvent(new WheelEvent('wheel', { deltaY: -1500, bubbles: true, cancelable: true }))
+    node.scrollTop = target
+    node.dispatchEvent(new Event('scroll'))
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+    await new Promise((r) => setTimeout(r, 500))
+    const after = { top: node.scrollTop, height: node.scrollHeight, turn: topTurn(), index: topIndex() }
+    return { before, after, target, blocks: node.querySelectorAll('.turn-block').length, pitch: pitch() }
+  })()`)
+  const result = probe as {
+    error?: string
+    before?: { top: number; height: number; turn: string; index?: number }
+    after?: { top: number; height: number; turn: string; index?: number }
+    target?: number
+    blocks?: number
+    pitch?: number
+  }
+  if (result.error !== undefined || result.before === undefined || result.after === undefined) {
+    console.warn('[scroll] 没测成：', JSON.stringify(result).slice(0, 200))
+    return
+  }
+  const held = Math.abs(result.after.top - (result.target ?? 0)) < 80
+  const moved = result.after.turn !== result.before.turn
+  /**
+   * 映射准不准：往上滚 1500px，顶端那一轮应该正好退过 1500/每轮间距 轮。
+   * 位置留住、顶端那一轮也换了，但退过的轮数对不上——那就是窗口的映射还差着
+   * （此前用估算高度映射，差着近两倍：内容被换掉，看着就是"滚不动"）。
+   */
+  const pitch = result.pitch ?? 0
+  const expected =
+    result.before.index === undefined ? undefined : result.before.index - Math.round(1500 / Math.max(1, pitch))
+  const mapped = expected === undefined ? true : result.after.index === expected
+  console.log(
+    `[scroll] scrollTop ${Math.round(result.before.top)} → ${Math.round(result.after.top)}（目标 ${Math.round(result.target ?? 0)}）· ` +
+      `顶端那一轮「${result.before.turn}」→「${result.after.turn}」· 每轮 ${Math.round(pitch)}px · 渲染 ${result.blocks} 轮 · ` +
+      `${held ? '位置留住了 ✓' : '位置被拽走了 ✗'} ${moved ? '内容跟上了 ✓' : '内容没跟上 ✗'} ` +
+      `${mapped ? '映射准 ✓' : `映射不准 ✗（应退到第 ${expected} 轮）`}`,
+  )
+  const image = await window.webContents.capturePage()
+  writeFileSync(join(here, 'scroll-history.png'), image.toPNG())
+  console.log('[scroll] saved scroll-history.png')
 }
 
 /**

@@ -10,7 +10,7 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiClient } from '../renderer/src/api.ts'
-import { ArtifactPreview } from '../renderer/src/components/ArtifactPreview.tsx'
+import { ArtifactPreviewContent } from '../renderer/src/components/ArtifactPreview.tsx'
 import { MessageBubble } from '../renderer/src/components/MessageBubble.tsx'
 import { RightPanel } from '../renderer/src/components/RightPanel.tsx'
 import { HTML_PREVIEW_MAX_BYTES, previewKindOf } from '../renderer/src/lib/preview.ts'
@@ -93,7 +93,9 @@ afterEach(() => {
 
 async function mountPreview(stub: Stub, name: string, mime: string, size: number): Promise<void> {
   await act(async () => {
-    root.render(<ArtifactPreview api={stub.api} target={{ name, mime, size }} onClose={() => {}} />)
+    root.render(
+      <ArtifactPreviewContent variant="panel" api={stub.api} target={{ name, mime, size }} onClose={() => {}} />,
+    )
   })
 }
 
@@ -205,7 +207,12 @@ describe('产物预览框', () => {
 
     await act(async () => {
       root.render(
-        <ArtifactPreview api={stub.api} target={{ name: 'b.html', mime: 'text/html', size: 8 }} onClose={() => {}} />,
+        <ArtifactPreviewContent
+          variant="panel"
+          api={stub.api}
+          target={{ name: 'b.html', mime: 'text/html', size: 8 }}
+          onClose={() => {}}
+        />,
       )
     })
     // 切产物：上一份的 URL 必须先被 revoke，否则它一直挂在文档上直到销毁。
@@ -264,7 +271,8 @@ describe('产物预览框', () => {
     const stub = stubApi('a.txt', 'text/plain', 1, 'x')
     await act(async () => {
       root.render(
-        <ArtifactPreview
+        <ArtifactPreviewContent
+          variant="panel"
           api={stub.api}
           target={{ name: 'a.txt', mime: 'text/plain', size: 1 }}
           onClose={() => {
@@ -368,5 +376,79 @@ describe('产物卡的入口', () => {
       preview[0]?.click()
     })
     expect(opened).toEqual(['report.md'])
+  })
+})
+
+describe('预览开在右栏里，不弹居中的模态框', () => {
+  it('给了 preview 就在这一栏里渲染预览，平常的内容收起来', async () => {
+    const stub = stubApi('report.md', 'text/markdown', 2048)
+    const store = new ChatStore()
+    await act(async () => {
+      root.render(
+        <RightPanel
+          api={stub.api}
+          store={store}
+          conversation={{
+            id: 'c1',
+            kind: 'direct',
+            title: 'Ryen',
+            memberAgentIds: ['ryen'],
+            lastReadSeq: 1,
+            createdAt: 1,
+            updatedAt: 1,
+          }}
+          agents={[
+            { id: 'ryen', name: 'Ryen', systemPrompt: '', provider: 'p', model: 'm', tools: [], isBuiltin: true },
+          ]}
+          conversations={[]}
+          fileUrl={(n) => {
+            return `/api/files/${n}`
+          }}
+          collapsed={false}
+          onToggle={() => {}}
+          preview={{ name: 'report.md', mime: 'text/markdown', size: 2048 }}
+          onClosePreview={() => {}}
+        />,
+      )
+    })
+    const panel = container.querySelector('.right-panel')
+    // 预览态浮在聊天区上面：宽一点，但不占常驻的那一列（占列会把消息挤窄、列整个跳位）
+    expect(panel?.className).toContain('is-previewing')
+    expect(container.querySelector('.panel-preview')).not.toBeNull()
+    expect(container.querySelector('.attach-preview-title strong')?.textContent).toBe('report.md')
+    // 平常的内容先收起来：预览时底下压着别的，只会让人以为预览没打开
+    expect(container.querySelector('.profile-head')).toBeNull()
+  })
+
+  it('关掉预览的那一枚键在预览态是"关掉预览"', async () => {
+    const stub = stubApi('report.md', 'text/markdown', 2048)
+    const store = new ChatStore()
+    let closed = 0
+    await act(async () => {
+      root.render(
+        <RightPanel
+          api={stub.api}
+          store={store}
+          conversation={undefined}
+          agents={[]}
+          conversations={[]}
+          fileUrl={(n) => {
+            return `/api/files/${n}`
+          }}
+          collapsed={false}
+          onToggle={() => {}}
+          preview={{ name: 'report.md', mime: 'text/markdown', size: 2048 }}
+          onClosePreview={() => {
+            closed += 1
+          }}
+        />,
+      )
+    })
+    const button = container.querySelector<HTMLButtonElement>('.panel-expand-btn')
+    expect(button?.getAttribute('aria-label')).toBe('关掉预览')
+    await act(async () => {
+      button?.click()
+    })
+    expect(closed).toBe(1)
   })
 })

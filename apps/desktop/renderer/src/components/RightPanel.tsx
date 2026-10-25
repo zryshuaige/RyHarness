@@ -11,6 +11,7 @@ import { toast } from '../lib/toast.ts'
 import { toolLabel } from '../lib/tool-labels.ts'
 import type { ChatStore, RelayItem } from '../store.ts'
 import { panelSliceOf, useChatSlice } from '../store.ts'
+import { ArtifactPreviewContent, type ArtifactTarget } from './ArtifactPreview.tsx'
 import { Avatar } from './avatars/Avatar.tsx'
 import { Cat } from './Cat.tsx'
 import { ConfirmDialog } from './ConfirmDialog.tsx'
@@ -48,6 +49,8 @@ export function RightPanel({
   onToggle,
   onOpenPlugins,
   onPreview,
+  preview,
+  onClosePreview,
 }: {
   api: ApiClient
   store: ChatStore
@@ -70,6 +73,16 @@ export function RightPanel({
   onOpenPlugins?: () => void
   /** 打开产物内嵌预览；缺省时产物行退回「新窗口打开」。 */
   onPreview?: (file: { name: string; mime: string; size: number }) => void
+  /**
+   * 正在预览的文件。
+   *
+   * 预览**在这一栏里**开，不弹居中的模态框：模态框把聊天区整个盖住，用户想边看
+   * 文件边接着聊就没法了。文件预览挤在 280px 的常驻栏里又太窄，所以预览期间这一栏
+   * 浮到聊天区上面、宽度放宽——浮在上面就不会把聊天区挤窄（消息列不跳位）。
+   */
+  preview?: ArtifactTarget
+  /** 关掉预览（回到这一栏平常的内容）。 */
+  onClosePreview?: () => void
 }) {
   const [memoryFor, setMemoryFor] = useState<AgentDef | undefined>(undefined)
   const [playbookFor, setPlaybookFor] = useState<AgentDef | undefined>(undefined)
@@ -89,8 +102,12 @@ export function RightPanel({
   // 硬切；而宽度归零时展开键跟着被 overflow:hidden 裁掉，右栏就再也展不开。
   //
   // 覆盖态（窄窗抽屉）不看 collapsed：抽屉的开关由壳掌握，宽度过渡换成位移过渡。
-  const panelClass =
-    overlay === true
+  // 预览态：宽窗时它**占位列**（聊天区窄一点，消息完整）；窄窗时跟着当抽屉用
+  // （浮在聊天区上、还带遮罩）。
+  const previewing = preview !== undefined
+  const panelClass = previewing
+    ? `right-panel is-previewing${overlay === true ? ' is-overlay is-overlay-open' : ''}`
+    : overlay === true
       ? `right-panel is-overlay${open === true ? ' is-overlay-open' : ''}`
       : collapsed
         ? 'right-panel is-collapsed'
@@ -99,8 +116,21 @@ export function RightPanel({
     <aside className={panelClass}>
       <span className="panel-banner" aria-hidden="true" />
       {/* 收起键与展开键在同一角上互换，面板本体始终在场。
-          覆盖态下这两枚键都换成"关掉抽屉"，因为它此刻盖在聊天区上面。 */}
-      {overlay === true ? (
+          覆盖态下这两枚键都换成"关掉抽屉"，因为它此刻盖在聊天区上面。
+          预览态更直接：那一枚键关掉的是**预览**（回到这一栏平常的内容）。 */}
+      {previewing ? (
+        <button
+          type="button"
+          className="panel-expand-btn"
+          title="关掉预览"
+          aria-label="关掉预览"
+          onClick={() => {
+            onClosePreview?.()
+          }}
+        >
+          <Icon name="chevron-right" size={16} />
+        </button>
+      ) : overlay === true ? (
         <button
           type="button"
           className="panel-expand-btn"
@@ -132,47 +162,68 @@ export function RightPanel({
         </button>
       )}
       <div className="panel-body">
-        {/* 待办排在**最前**：它是这一栏里唯一能动手的东西（能勾、能清空），
+        {/**
+         * 预览态：这一栏整个让给文件预览。
+         *
+         * 平常的内容（待办、资料卡、产物）先收起来——预览时用户要看的是文件，
+         * 底下压着一堆别的只会让人以为预览没打开。
+         */}
+        {previewing && preview !== undefined ? (
+          <div className="panel-preview">
+            <ArtifactPreviewContent
+              api={api}
+              target={preview}
+              onClose={() => {
+                onClosePreview?.()
+              }}
+              variant="panel"
+            />
+          </div>
+        ) : (
+          <>
+            {/* 待办排在**最前**：它是这一栏里唯一能动手的东西（能勾、能清空），
             而下面那些全是参考资料——助理是谁、这场群里有谁、产出过哪些文件。
             用户点开右栏，多半就是为了勾掉一件事；把它压在资料卡后面，等于把
             唯一可操作的清单塞到首屏之外。 */}
-        {conversation !== undefined && (
-          <TodoSection
-            api={api}
-            conversationId={conversation.id}
-            updatedAt={conversation.updatedAt}
-            onOpenPlugins={onOpenPlugins}
-          />
-        )}
-        {conversation === undefined ? (
-          <p className="panel-empty">选择一个会话查看详情</p>
-        ) : conversation.kind === 'direct' ? (
-          <DirectProfile
-            agentId={conversation.memberAgentIds[0]}
-            agents={agents}
-            artifacts={artifacts}
-            fileUrl={fileUrl}
-            onPreview={onPreview}
-            onShowMemories={setMemoryFor}
-            onShowPlaybook={setPlaybookFor}
-          />
-        ) : (
-          <GroupInfo
-            conversation={conversation}
-            agents={agents}
-            relays={relays}
-            artifacts={artifacts}
-            fileUrl={fileUrl}
-            onPreview={onPreview}
-            onShowMemories={setMemoryFor}
-            onShowPlaybook={setPlaybookFor}
-          />
-        )}
-        {/* 用量一行带过：GET /api/conversations/:id 早就把 usage 算好送回来了，
+            {conversation !== undefined && (
+              <TodoSection
+                api={api}
+                conversationId={conversation.id}
+                updatedAt={conversation.updatedAt}
+                onOpenPlugins={onOpenPlugins}
+              />
+            )}
+            {conversation === undefined ? (
+              <p className="panel-empty">选择一个会话查看详情</p>
+            ) : conversation.kind === 'direct' ? (
+              <DirectProfile
+                agentId={conversation.memberAgentIds[0]}
+                agents={agents}
+                artifacts={artifacts}
+                fileUrl={fileUrl}
+                onPreview={onPreview}
+                onShowMemories={setMemoryFor}
+                onShowPlaybook={setPlaybookFor}
+              />
+            ) : (
+              <GroupInfo
+                conversation={conversation}
+                agents={agents}
+                relays={relays}
+                artifacts={artifacts}
+                fileUrl={fileUrl}
+                onPreview={onPreview}
+                onShowMemories={setMemoryFor}
+                onShowPlaybook={setPlaybookFor}
+              />
+            )}
+            {/* 用量一行带过：GET /api/conversations/:id 早就把 usage 算好送回来了，
             此前整个界面没有任何地方消费它——聊了多久、花了多少只有服务端知道。
             刻意排在最后、只占一行，统计不该盖过内容本身。 */}
-        {conversation !== undefined && (
-          <ConversationUsage api={api} conversationId={conversation.id} updatedAt={conversation.updatedAt} />
+            {conversation !== undefined && (
+              <ConversationUsage api={api} conversationId={conversation.id} updatedAt={conversation.updatedAt} />
+            )}
+          </>
         )}
       </div>
       {playbookFor !== undefined && (

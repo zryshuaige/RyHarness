@@ -12,6 +12,7 @@ import {
   chatWindowOf,
   createUserScrollGate,
   GAP_BRIDGE_PAGES,
+  measuredTurnHeight,
   PAGE_SIZE,
   REVEAL_LEAD_TURNS,
   turnEstimateOf,
@@ -1042,8 +1043,6 @@ export function ChatView({
   const [measuredTurnPx, setMeasuredTurnPx] = useState<number | undefined>(undefined)
   /** 上一次量过的窗口区间：窗口没挪就不重量（见下面的量测 effect）。 */
   const measuredRangeRef = useRef('')
-  /** 容器上下内边距（px）：量内容总高时要扣掉。量一次就够，它不会变。 */
-  const paddingCache = useRef<number | undefined>(undefined)
 
   const turnEstimate = useMemo(() => {
     // 量到的优先；还没量到（首帧 / 没有窗口化）就用猜的。
@@ -1059,8 +1058,11 @@ export function ChatView({
   /**
    * 量一次已渲染轮次的真实高度。
    *
-   * 量法：容器里的内容总高（去掉内边距）÷ 轮数 —— 那是「每轮真实高度」。用
-   * scrollHeight 而不是逐块量 offsetHeight：前者是一次布局读，后者是 N 次。
+   * 量法：只量**已渲染的那几轮**（第一块的顶 → 最后一块的底），与上下哨兵无关。
+   *
+   * 此前量的是容器的 scrollHeight——那里面**含哨兵**（哨兵按估算高度撑出来的），
+   * 除以总轮数算出来还是那个估算值，真实高度从来没被学到：窗口的映射差着近两倍，
+   * 用户往上一滚，视口里的内容就被换成另一段，看着像滚不动。
    *
    * 用 layout effect：React 会在**首次绘制之前**同步重渲，修正后的版面对用户是看不见的
    * （否则一开对话就整体跳一下）。5% 的死区是防抖：窗口挪动时渲染的那几轮换了，平均
@@ -1074,18 +1076,11 @@ export function ChatView({
     const key = `${chatWindow.start}:${chatWindow.end}`
     if (key === measuredRangeRef.current) return
     measuredRangeRef.current = key
-    const count = turns.length
-    if (count === 0) return
-    let padding = paddingCache.current
-    if (padding === undefined) {
-      const style = getComputedStyle(node)
-      const top = Number.parseFloat(style.paddingTop)
-      const bottom = Number.parseFloat(style.paddingBottom)
-      padding = (Number.isFinite(top) ? top : 0) + (Number.isFinite(bottom) ? bottom : 0)
-      paddingCache.current = padding
-    }
-    const perTurn = (node.scrollHeight - padding) / count
-    if (!Number.isFinite(perTurn) || perTurn <= 0) return
+    const blocks = [...node.querySelectorAll<HTMLElement>('.turn-block')].map((block) => {
+      return { top: block.offsetTop, height: block.offsetHeight }
+    })
+    const perTurn = measuredTurnHeight(blocks)
+    if (perTurn <= 0) return
     setMeasuredTurnPx((prev) => {
       if (prev !== undefined && Math.abs(perTurn - prev) <= prev * 0.05) return prev
       return perTurn
