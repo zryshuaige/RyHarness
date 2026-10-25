@@ -75,6 +75,21 @@ try {
     try { taskkill /PID $proc.Id /T /F | Out-Null } catch { }
   }
   Start-Sleep -Seconds 2
+  # 兜底：解出来的 RyHarness.exe 有可能不在壳的进程树上（taskkill /T 只杀得到壳自己），
+  # 漏下来的会占着 32100/32101，下一次冒烟连上去是个 token 不匹配的旧实例，
+  # 报错还长得像"包坏了"。按路径收尾：只动临时目录下这几个，不碰用户开着的开发实例。
+  Get-Process -ErrorAction SilentlyContinue |
+    Where-Object {
+      $_.ProcessName -like 'RyHarness*' -and $null -ne $_.Path -and
+      $_.Path.StartsWith($env:TEMP, [System.StringComparison]::OrdinalIgnoreCase)
+    } |
+    ForEach-Object { try { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue } catch { } }
+  Start-Sleep -Seconds 1
+  $left = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+    $_.ProcessName -like 'RyHarness*' -and $null -ne $_.Path -and
+    $_.Path.StartsWith($env:TEMP, [System.StringComparison]::OrdinalIgnoreCase)
+  })
+  Write-Output "[smoke] 收尾后残留进程 = $($left.Count)（必须为 0）"
   Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 }
 Write-Output '[smoke] done'

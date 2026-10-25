@@ -70,6 +70,28 @@ try {
     try { taskkill /PID $proc.Id /T /F | Out-Null } catch { }
   }
   Start-Sleep -Seconds 2
+  # 兜底：portable.exe 是自解压壳，它把真正的 RyHarness.exe 解到临时目录后**独立启动**，
+  # 那个进程不在壳的进程树上，taskkill /T 只杀得到壳自己。漏下来的那几个会一直占着
+  # 发布目录里的 RyHarness-portable.exe 文件锁——下一次打包就在复制这一步 EBUSY 失败
+  # （真踩过：package:release 跑到最后一个产物才炸）。
+  # 这里按路径收尾：只动临时目录下的 RyHarness.exe 和本次那个 exe 本身，
+  # 用户自己开着跑在项目目录里的开发实例不在此列。
+  Get-Process -ErrorAction SilentlyContinue |
+    Where-Object {
+      $_.ProcessName -like 'RyHarness*' -and $null -ne $_.Path -and (
+        $_.Path.StartsWith($env:TEMP, [System.StringComparison]::OrdinalIgnoreCase) -or
+        $_.Path -eq $exe
+      )
+    } |
+    ForEach-Object { try { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue } catch { } }
+  Start-Sleep -Seconds 1
+  $left = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+    $_.ProcessName -like 'RyHarness*' -and $null -ne $_.Path -and (
+      $_.Path.StartsWith($env:TEMP, [System.StringComparison]::OrdinalIgnoreCase) -or
+      $_.Path -eq $exe
+    )
+  })
+  Write-Output "[portable] 收尾后残留进程 = $($left.Count)（必须为 0，否则下回打包会被文件锁卡住）"
   Remove-Item -LiteralPath $data -Recurse -Force -ErrorAction SilentlyContinue
 }
 Write-Output '[portable] done'
