@@ -13,7 +13,7 @@
       "!vendor",
       "!docs",
       "!.zcode",
-      "!.tmp-icons",
+      "!.tmp-*",
       "!.zwork",
       "!RyHarness-release",
       "!**/data",
