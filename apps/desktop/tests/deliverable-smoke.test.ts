@@ -1,8 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { DeliverableWindow } from '../electron/deliverable-smoke.ts'
 import { verifyGeneratedApp } from '../electron/deliverable-smoke.ts'
 
-function windowWith(results: unknown[]): DeliverableWindow & { hide: ReturnType<typeof vi.fn> } {
+function windowWith(results: unknown[]) {
   const executeJavaScript = vi.fn()
   for (const result of results) executeJavaScript.mockResolvedValueOnce(result)
   return {

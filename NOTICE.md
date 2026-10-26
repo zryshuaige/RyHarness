@@ -132,8 +132,8 @@ electron-builder 按依赖图收集的也算。
 
 | 组件 | 版本 | License | 许可文本在安装包的哪 |
 |---|---|---|---|
-| Electron | <!-- notice:platform.electron -->44.7.2<!-- /notice -->（钉版，见 `apps/desktop/package.json`） | MIT | `$INSTDIR\LICENSE.electron.txt` |
-| Chromium / Blink / V8 / ANGLE / Node.js 等第三方部分 | 随 Electron <!-- notice:platform.electron -->44.7.2<!-- /notice --> | 以各上游为准（Chromium、V8、Node.js 为 BSD-3-Clause / MIT 系） | `$INSTDIR\LICENSES.chromium.html`（Chromium 第三方许可汇总，含 V8 与 Node.js 条目） |
+| Electron | <!-- notice:platform.electron -->44.9.1<!-- /notice -->（钉版，见 `apps/desktop/package.json`） | MIT | `$INSTDIR\LICENSE.electron.txt` |
+| Chromium / Blink / V8 / ANGLE / Node.js 等第三方部分 | 随 Electron <!-- notice:platform.electron -->44.9.1<!-- /notice --> | 以各上游为准（Chromium、V8、Node.js 为 BSD-3-Clause / MIT 系） | `$INSTDIR\LICENSES.chromium.html`（Chromium 第三方许可汇总，含 V8 与 Node.js 条目） |
 
 这两份文件不是我方 `extraResources` 投的，是 electron-builder 自己保留的。已核对
 `app-builder-lib@26.17.0 out/electron/ElectronFramework.js`（`cleanupAfterUnpack` →

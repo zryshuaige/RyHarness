@@ -1,9 +1,10 @@
+import type { ClearStorageDataOptions } from 'electron'
 import { BrowserWindow } from 'electron'
 
 export interface DeliverableWindow {
   webContents: {
     session: {
-      clearStorageData(options: { storages: string[] }): Promise<void>
+      clearStorageData(options: ClearStorageDataOptions): Promise<void>
     }
     loadFile(path: string): Promise<void>
     executeJavaScript(script: string): Promise<unknown>
