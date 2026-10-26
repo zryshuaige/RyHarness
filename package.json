@@ -1,6 +1,6 @@
 {
   "name": "ryharness-root",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "description": "RyHarness：单机多 Agent 即时通讯桌面应用（Electron + React + cordis 内核）",

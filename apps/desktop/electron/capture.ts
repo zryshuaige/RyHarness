@@ -24,6 +24,7 @@ import type { Socket } from 'node:net'
 import { join } from 'node:path'
 import type { RyHarnessServer } from '@ryharness/server'
 import type { BrowserWindow } from 'electron'
+import { verifyGeneratedApp } from './deliverable-smoke.ts'
 
 /**
  * 要拍的几套：主题 × 落盘文件名。
@@ -197,20 +198,27 @@ export async function runCapture(
   })
   await server.vibeStore.setStatus(vibeSession.id, 'asking')
   /**
-   * 再落一个项目骨架：让那张 RyVibe 实拍里能同时看到「问答卡 + 项目已落盘 +
+   * 再落一个通过验收的产物：让那张 RyVibe 实拍里能同时看到「问答卡 + 验收结果 +
    * 任务清单」——这三块正是这一页现在承诺的东西（说一句话 → 点几下 → 拿到一个
-   * 能打开的项目）。
+   * 能用的项目）。
    *
    * 这里是截图模式的**演示数据**：真机上这一步由小队调用落盘工具完成，这里直接
    * 调同一个工具，走的是同一段代码路径与同一份存储。
    */
   const scaffold = server.tools.get('vibe_scaffold')
   if (scaffold !== undefined) {
-    await scaffold.execute(
+    const landed = await scaffold.execute(
       {
         name: '记账工具',
         summary: '给独立开发者做一个记账工具，能分类、能看趋势',
         tasks: ['搭数据表与记账接口', '做收支流水页', '做分类与预算页', '做趋势图'],
+        page: `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>记账工具</title></head><body>
+          <h1>记账工具</h1><input id="amount" type="number" placeholder="金额"><button id="add">记一笔</button>
+          <ul id="items"></ul><output id="total">0</output><script>
+          const rows = JSON.parse(localStorage.getItem('rows') || '[]');
+          const render = () => { document.querySelector('#total').textContent = rows.reduce((sum, row) => sum + row.amount, 0); };
+          document.querySelector('#add').onclick = () => { rows.push({ amount: Number(document.querySelector('#amount').value) }); localStorage.setItem('rows', JSON.stringify(rows)); render(); };
+          render();</script></body></html>`,
       },
       {
         workspaceRoot: server.workspaceRoot,
@@ -218,6 +226,12 @@ export async function runCapture(
         agentId: 'ryen',
       },
     )
+    if (landed.isError === true) throw new Error(`截图产物没有通过验收：${landed.content}`)
+    const entry = server.vibeStore.get(vibeSession.id)?.project?.files.find((file) => {
+      return file.name === 'index.html'
+    })
+    if (entry === undefined) throw new Error('截图产物缺少 index.html')
+    await verifyGeneratedApp(entry.path)
     console.log('[capture] project scaffolded')
   }
   /**

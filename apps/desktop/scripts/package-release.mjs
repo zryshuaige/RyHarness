@@ -15,7 +15,7 @@
  * 与之不同。
  */
 import { spawnSync } from 'node:child_process'
-import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -58,6 +58,7 @@ try {
   // 版本号直接读文件：起子进程去 require package.json，在 Windows 上会被 shell 的
   // 引号规则吃掉，输出空串，JSON.parse 当场炸。
   const pkg = JSON.parse(readFileSync(join(here, 'package.json'), 'utf8'))
+  mkdirSync(outDir, { recursive: true })
 
   const artifacts = [
     {

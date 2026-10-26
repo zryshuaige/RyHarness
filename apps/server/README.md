@@ -98,12 +98,13 @@ agent 每天至多主动说一次：把**确实发生过**的变化（手册新�
 | `GET /api/files/:name/info` | 产物预览的元数据 `{name, path, size, mime}`；`path` 是工作区内的**绝对路径**，渲染层靠它做「用系统程序打开 / 复制路径」。只允许叶子文件名，另走 fs 工具那一份 `resolveTarget`（工作区里的符号链接指到外面回 **403**）。 |
 | `GET /api/files/:name/raw` | 产物预览的原始字节，`Content-Disposition: inline`（`?download=1` 改成 attachment）。给内嵌预览的 `<img src>` / `<iframe src>` 直接消费；超过 32MB 回 **413**（整份拒，不截断——截断出来的 PDF 看起来正常、其实缺内容）。边界校验同 `/info`。 |
 | `POST /api/conversations/:id/files` | 上传附件：body `{name, mime?, data(base64)}` → `{name, size, mime}`。字节与消息体走同一条 JSON 通路，解码后落进工作区产物目录（与 `file_produce` 的产物同一份）；同名自动加 `-2`/`-3` 后缀不覆盖，上限 20MB（超限 **413**），base64 必须规范，文件名只放行叶子名。 |
-| `POST /api/vibe` | 开一次 RyVibe：body `{ requirement }`（≤500 字）→ **201** `{ session }`。服务端建一个群会话并给它挂上「盘问与落地」这套方法（skill）与两个工具：盘问（每题必带选项）与落盘（把方案写成项目骨架）。需求为空或超长回 **400**；通讯录里没有助理回 **409**。 |
+| `POST /api/vibe` | 开一次 RyVibe：body `{ requirement }`（≤500 字）→ **201** `{ session }`。服务端建一个群会话并给它挂上「盘问与落地」这套方法（skill）与两个工具：盘问（每题必带选项）与落盘（把方案写成产物）。需求为空或超长回 **400**；通讯录里没有助理回 **409**。 |
 | `GET /api/vibe/:id` | 这次 RyVibe 的当前状态：`{ session, questions[], output[], todos[] }`。`output` 只回 `?after=<seq>` 之后的新产出（增量轮询，别把整份方案重发一遍）；`questions` 含已答的（答完折成一行留在页面上，用户要能核对「AI 到底问过我什么」）；`todos` 是落盘时写进待办的那几条任务。未知 id 回 **404**。 |
-| `GET /api/vibe/:id/file?name=<文件名>` | 读项目骨架里的一个文件 → `{ name, size, content }`。**只认落盘时记下的那份文件清单**：目录名与文件名都来自模型，这条路不能变成任意文件读取的口子（清单外的名字回 **404**），超过 512KB 回 **413**。 |
+| `GET /api/vibe/:id/file?name=<文件名>` | 读产物里的一个文件 → `{ name, size, content }`。**只认落盘时记下的那份文件清单**：目录名与文件名都来自模型，这条路不能变成任意文件读取的口子（清单外的名字回 **404**），超过 512KB 回 **413**。 |
 | `POST /api/vibe/:id/answer` | 回答盘问：body `{ answers: [{questionId, selected[]}], skipped? }` → **200** `{ session }`。**一次交上整张卡**（分四次请求会让小队跑两遍），答案写进小队共同看到的那条正文里——问是全队一起问的，答案也得全队一起看见。题 id 不属于这次 RyVibe 回 **404**。 |
 | `POST /api/vibe/:id/retry` | 重来一次：带着已经答过的答案重新排队一轮 → **202** `{ session }`。失败之后用户最需要的就是这条。 |
-| `GET /api/vibe` | 最近几次 RyVibe（新→旧，最多 10 条）：`{ sessions[] }`，给页面挂载时「回到上次」用。 |
+| `POST /api/vibe/:id/restore` | 恢复产物版本：body `{ versionId }` → **200** `{ session }`。每次验收通过都会保存独立文件快照，恢复会把快照内容写回当前项目，不是只改元数据。未知任务或版本回 **404**。 |
+| `GET /api/vibe` | 最近几次 RyVibe（新→旧，最多 10 条）：`{ sessions[] }`，给页面挂载时「回到上次」用。`session.stage` 是持久阶段（clarify/plan/execute/verify/deliver/failed），`project.validation` 是验收报告，`versions` 是可恢复版本；没有通过的验收报告不能进入 done。 |
 
 ## WebSocket 事件契约（M4b 按此开发）
 

@@ -104,8 +104,8 @@ electron-builder 按依赖图收集的也算。
 | @dicebear/core | <!-- notice:runtime.dicebearCore -->9.4.3<!-- /notice --> | MIT | `vendor-avatar-*.js`：头像 SVG 生成器 |
 | @dicebear/collection | <!-- notice:runtime.dicebearCollection -->9.4.2<!-- /notice --> | MIT（框架） | 同上；其中 dylan / mascot 两族风格另受 CC BY 4.0 约束，见上一节 |
 | ws | <!-- notice:runtime.ws -->8.22.0<!-- /notice --> | MIT | 主进程订阅后端 WS（`@ryharness/server` 的生产依赖，electron-builder 一并收集） |
-| @ryharness/*（<!-- notice:runtime.workspaceNonVendorCount -->17<!-- /notice --> 个非 vendor 工作区包） | <!-- notice:runtime.workspaceVersion -->0.1.0<!-- /notice --> | <!-- notice:runtime.workspaceLicense -->MIT<!-- /notice -->（本项目） | 主进程以 `external` 引入、运行时经 node_modules 解析；许可同本项目根 LICENSE |
-| 我方重命名的 vendor（<!-- notice:runtime.vendorShipped -->@ryharness/cordis · @ryharness/cosmokit<!-- /notice -->） | <!-- notice:runtime.workspaceVersion -->0.1.0<!-- /notice --> | <!-- notice:runtime.workspaceLicense -->MIT<!-- /notice -->（本项目重命名自 dsh vendor） | 内核地基（DI / 工具库）。上游作者 Shigma 的 MIT 法条随包保留在各 vendor 目录的 `LICENSE` 里 |
+| @ryharness/*（<!-- notice:runtime.workspaceNonVendorCount -->17<!-- /notice --> 个非 vendor 工作区包） | <!-- notice:runtime.workspaceVersion -->0.1.2<!-- /notice --> | <!-- notice:runtime.workspaceLicense -->MIT<!-- /notice -->（本项目） | 主进程以 `external` 引入、运行时经 node_modules 解析；许可同本项目根 LICENSE |
+| 我方重命名的 vendor（<!-- notice:runtime.vendorShipped -->@ryharness/cordis · @ryharness/cosmokit<!-- /notice -->） | <!-- notice:runtime.workspaceVersion -->0.1.2<!-- /notice --> | <!-- notice:runtime.workspaceLicense -->MIT<!-- /notice -->（本项目重命名自 dsh vendor） | 内核地基（DI / 工具库）。上游作者 Shigma 的 MIT 法条随包保留在各 vendor 目录的 `LICENSE` 里 |
 | `node:sqlite` | 随 Node 22.19+/24 | MIT | 会话持久化；Node 内置模块，其许可随 Electron 交付（见下节） |
 
 随包交付的工作区包是**依赖闭包**，不是「packages 目录下有几个」：桌面应用声明的工作区

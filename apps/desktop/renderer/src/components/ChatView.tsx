@@ -503,6 +503,7 @@ export function ChatView({
   onPendingSendDone,
   onAffinityChange,
   onPreview,
+  onOpenVibe,
   onSwitchConversation,
   commands,
   voice,
@@ -557,6 +558,8 @@ export function ChatView({
   onAffinityChange?: () => void
   /** 打开产物内嵌预览；缺省时气泡里的文件卡退回「新窗口打开」。 */
   onPreview?: (file: { name: string; mime: string; size: number }) => void
+  /** 这条会话关联的 RyVibe 工作台；不存在任务时按钮不会出现。 */
+  onOpenVibe?: (conversationId: string) => void
   /**
    * 待发送的首条消息（欢迎页：先把会话切过来、WS 订阅建好，再发出去）。
    * 见挂载 effect 里的发送时机——顺序反了这条消息就落在订阅之前。
@@ -587,6 +590,27 @@ export function ChatView({
   const { history, hasMore, loaded: historyLoaded, historyError, draft, conn, connDismissed, stopped } = view
   const store = bucket.store
   const snapshot = useChat(store)
+  const [hasVibeTask, setHasVibeTask] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    setHasVibeTask(false)
+    void api
+      .vibeSessions?.()
+      .then(({ sessions }) => {
+        if (cancelled) return
+        setHasVibeTask(
+          sessions.some((item) => {
+            return item.conversationId === conversation.id
+          }),
+        )
+      })
+      .catch(() => {
+        // 工作台入口是增强能力；列表失败不影响聊天。
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [api, conversation.id])
   /**
    * 朗读播放器：按 API 地址共享（单例队列），测试可以注入假实现。
    * 播放状态只在开始/结束/换条时变化，不参与每个 token 的重渲染。
@@ -1966,6 +1990,19 @@ export function ChatView({
           <span className="chip" title={bond.title} style={{ marginLeft: 'auto' }}>
             {bond.label}
           </span>
+        )}
+        {hasVibeTask && onOpenVibe !== undefined && (
+          <button
+            type="button"
+            className="panel-drawer-btn chat-task-btn"
+            title="打开任务与产物"
+            aria-label="打开任务与产物"
+            onClick={() => {
+              onOpenVibe(conversation.id)
+            }}
+          >
+            <Icon name="sparkles" size={16} />
+          </button>
         )}
         {/* 窄窗抽屉的入口：宽窗时右栏就在旁边，不需要这枚按钮（那时壳不传这个回调）。 */}
         {onTogglePanel !== undefined && (

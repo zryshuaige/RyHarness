@@ -126,6 +126,7 @@ export type {
   VibeQuestionView,
   VibeSessionView,
   VibeSquadMemberView,
+  VibeVersionView,
 } from './routes/vibe.ts'
 export { MAX_SQUAD_SIZE, outputOf, pickSquad, registerVibeRoutes } from './routes/vibe.ts'
 export type { AgentTemplate } from './seed.ts'
@@ -133,5 +134,8 @@ export { AGENT_TEMPLATES, ensureSeedAgents, instantiateTemplate } from './seed.t
 export type { TelemetrySnapshot, TurnTiming } from './telemetry.ts'
 export type { VibeProject, VibeProjectFile } from './vibe/project.ts'
 export { DELIVERABLE_KINDS, type DeliverableKind } from './vibe/project.ts'
-export type { VibeSession, VibeStatus } from './vibe/store.ts'
+export type { VibeSession, VibeStage, VibeStageEvent, VibeStatus } from './vibe/store.ts'
 export { MAX_QUESTIONS_PER_ROUND, MAX_REQUIREMENT_LENGTH, MAX_ROUNDS, VibeError, VibeStore } from './vibe/store.ts'
+export type { VibeValidationCheck, VibeValidationReport } from './vibe/validation.ts'
+export { parseCsv, validateVibeProject } from './vibe/validation.ts'
+export type { VibeProjectVersion } from './vibe/versions.ts'

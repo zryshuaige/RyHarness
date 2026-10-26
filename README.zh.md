@@ -56,7 +56,7 @@ MiniMax / OpenRouter / OpenAI / Ollama），挑完再填那家的 API Key——�
 说清你想要什么。小队第一件问的就是**你最后到底要个什么**——一个能打开的小程序、一份文档、
 一张表，还是一个以后每次照着做的流程。剩下的都是选项卡，不是表单：选项写的是**你会怎么
 回答**（「手机上」「就我自己」「发给别人一个链接」），不写实现细节（「几屏」「网页还是桌面」）。
-然后结果落成文件——项目目录、文档、表格、流程——任务同时进你的待办。
+然后结果落成文件——项目目录、文档、表格、流程——任务同时进你的待办。产物要通过实际验收才会标成完成；每次成功交付保存独立文件快照，可以预览、继续修改或回到上一版。共同完成的作品也会进入共享记忆。
 
 <img src="apps/desktop/docs/capture-project.png" width="900" alt="RyVibe：项目已落盘" />
 
@@ -87,7 +87,7 @@ vendor/*          cordis、schemastery、cosmokit
 ```sh
 pnpm build                                  # 构建全部包
 pnpm --filter @ryharness/desktop dev        # 带热重载的桌面端
-pnpm test                                   # 198 个测试文件
+pnpm test                                   # 213 个测试文件
 pnpm lint                                   # biome，告警数有冻结基线
 pnpm verify                                 # 五道发布门禁
 ```

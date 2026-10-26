@@ -30,10 +30,12 @@ const session: VibeSessionView = {
   ],
   createdAt: 0,
   status: 'asking',
+  stage: 'clarify',
   busy: false,
   pendingAnswers: 1,
   round: 0,
   maxRounds: 4,
+  versions: [],
 }
 
 /**
@@ -100,6 +102,13 @@ const project: VibeProjectView = {
     { name: 'TODO.md', size: 80 },
     { name: 'index.html', size: 900 },
   ],
+  validation: {
+    ok: true,
+    kind: 'app',
+    checks: [],
+    summary: '通过 4 项交付验收',
+    validatedAt: 0,
+  },
   createdAt: 0,
 }
 
@@ -124,6 +133,7 @@ function stub(overrides: StubOptions = {}): {
   >
   vibeSessions: Mock<() => Promise<{ sessions: VibeSessionView[] }>>
   retryVibe: Mock<(id: string) => Promise<{ session: VibeSessionView }>>
+  restoreVibeVersion: Mock<(id: string, versionId: string) => Promise<{ session: VibeSessionView }>>
   setTodoDone: Mock<(conversationId: string, id: string, done: boolean) => Promise<unknown>>
   vibeProjectFile: Mock<(id: string, name: string) => Promise<{ name: string; size: number; content: string }>>
 } {
@@ -152,6 +162,9 @@ function stub(overrides: StubOptions = {}): {
     retryVibe: vi.fn(async (_id: string) => {
       return { session: current }
     }),
+    restoreVibeVersion: vi.fn(async (_id: string, _versionId: string) => {
+      return { session: current }
+    }),
     setTodoDone: vi.fn(async (_conversationId: string, _id: string, _done: boolean) => {
       return undefined
     }),
@@ -168,10 +181,13 @@ function stub(overrides: StubOptions = {}): {
   }
 }
 
-function render(api: ReturnType<typeof stub>): void {
+function render(
+  api: ReturnType<typeof stub>,
+  props: { sessionId?: string; onSessionChange?: (sessionId: string | undefined) => void } = {},
+): void {
   act(() => {
     root = createRoot(container)
-    root.render(<RyVibePage api={api} />)
+    root.render(<RyVibePage api={api} {...props} />)
   })
 }
 
@@ -213,6 +229,17 @@ describe('RyVibe 页面', () => {
     expect(container.querySelector('.vibe-input')).not.toBeNull()
     expect(container.querySelector('.vibe-start')).not.toBeNull()
     expect(container.textContent).toContain('说一句你想要的东西')
+  })
+
+  it('从聊天进入时恢复指定任务，不被最近任务顶替', async () => {
+    const requested: VibeSessionView = { ...session, id: 'v2', conversationId: 'c2', requirement: '指定任务' }
+    const onSessionChange = vi.fn()
+    const api = stub({ session: requested, sessions: [session, requested] })
+    render(api, { sessionId: 'v2', onSessionChange })
+    await settle()
+    expect(container.textContent).toContain('指定任务')
+    expect(container.textContent).not.toContain(session.requirement)
+    expect(onSessionChange).toHaveBeenCalledWith('v2')
   })
 
   it('说了才让开始；点了开始就把这句话交出去', async () => {
@@ -498,8 +525,8 @@ describe('RyVibe 页面', () => {
     expect(container.textContent).toContain('已停下')
   })
 
-  it('方案落成了项目：目录、文件清单、预览都在', async () => {
-    const withProject: VibeSessionView = { ...session, status: 'done', project }
+  it('产物通过验收：结果摘要、文件清单和预览都在，完整路径不占主视图', async () => {
+    const withProject: VibeSessionView = { ...session, status: 'done', stage: 'deliver', project }
     const api = stub({
       session: withProject,
       sessions: [withProject],
@@ -509,8 +536,9 @@ describe('RyVibe 页面', () => {
     await settle()
     expect(container.querySelector('.vibe-project')).not.toBeNull()
     expect(container.textContent).toContain('记账工具')
-    // 目录路径是原样给的：用户要能自己去文件管理器里找
-    expect(container.textContent).toContain('projects\\记账工具')
+    expect(container.textContent).toContain('通过 4 项交付验收')
+    expect(container.textContent).not.toContain('projects\\记账工具')
+    expect(container.querySelector('.vibe-open-folder')?.getAttribute('title')).toContain('projects\\记账工具')
     expect(container.querySelectorAll('.vibe-file')).toHaveLength(4)
     // 点一个文件 → 内容就地展开
     await act(async () => {
@@ -519,6 +547,43 @@ describe('RyVibe 页面', () => {
     await settle()
     // Markdown 渲染成文档，而不是把 `# 记账工具` 这行源码倒出来。
     expect(container.querySelector('.vibe-preview-doc h1')?.textContent).toBe('记账工具')
+  })
+
+  it('历史版本能从产物卡恢复', async () => {
+    const validation = must(project.validation, '项目验收报告')
+    const withVersions: VibeSessionView = {
+      ...session,
+      status: 'done',
+      stage: 'deliver',
+      project,
+      versions: [
+        {
+          id: 'version-1',
+          name: project.name,
+          kind: project.kind,
+          summary: '第一版',
+          createdAt: 1,
+          validation,
+        },
+        {
+          id: 'version-2',
+          name: project.name,
+          kind: project.kind,
+          summary: '第二版',
+          createdAt: 2,
+          validation,
+        },
+      ],
+    }
+    const api = stub({ session: withVersions, sessions: [withVersions] })
+    render(api)
+    await settle()
+    const buttons = container.querySelectorAll<HTMLButtonElement>('.vibe-version')
+    expect(buttons).toHaveLength(2)
+    await act(async () => {
+      buttons[1]?.click()
+    })
+    expect(api.restoreVibeVersion).toHaveBeenCalledWith('v1', 'version-1')
   })
 
   it('表形态：预览摆成表格，形态也写在项目名旁边', async () => {

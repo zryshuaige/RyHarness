@@ -242,6 +242,7 @@ export function App() {
   const apiBase = useApiBase()
   const [api, setApi] = useState<ApiClient | undefined>(undefined)
   const [tab, setTab] = useState<Tab>('chats')
+  const [vibeSessionId, setVibeSessionId] = useState<string | undefined>(undefined)
   const [theme, setTheme] = useState<Theme>(loadTheme)
   const [agents, setAgents] = useState<AgentDef[]>([])
   const [templates, setTemplates] = useState<AgentTemplate[]>([])
@@ -1043,6 +1044,21 @@ export function App() {
                 scheduleRefresh()
               }}
               onPreview={openPreview}
+              onOpenVibe={(conversationId) => {
+                void (async () => {
+                  try {
+                    const { sessions } = await api.vibeSessions()
+                    const target = sessions.find((item) => {
+                      return item.conversationId === conversationId
+                    })
+                    if (target === undefined) return
+                    setVibeSessionId(target.id)
+                    setTab('vibe')
+                  } catch {
+                    toast.error('任务工作台暂时打不开，请从 RyVibe 页签重试')
+                  }
+                })()
+              }}
               commands={commands}
               {...(narrow
                 ? {
@@ -1109,12 +1125,13 @@ export function App() {
             </section>
           )
         ) : tab === 'vibe' ? (
-          // RyVibe 是独立页面：它不开在聊天页里（那会让人以为这就是一条会话），
-          // 但结果落在真实的群会话里——「在聊天里继续」就能跳过去接着追问。
+          // 工作台与聊天是同一任务会话的两种视图，可以双向跳转并恢复指定任务。
           <section className="chat-view">
             <div className="chat-scroll">
               <RyVibePage
                 api={api}
+                sessionId={vibeSessionId}
+                onSessionChange={setVibeSessionId}
                 providers={providers}
                 providersLoading={listLoading}
                 onOpenConversation={(id) => {

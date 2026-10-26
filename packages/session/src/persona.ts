@@ -283,8 +283,10 @@ export function affinityTurnGain(affinity: number): number {
 export const AFFINITY_LIKE_GAIN = 5
 /** 用户点踩（👎）掉的亲密度。 */
 export const AFFINITY_DISLIKE_LOSS = 4
+/** 一次共同交付涨的亲密度；只有验收通过才记，不以计划或骨架充数。 */
+export const AFFINITY_COMPLETION_GAIN = 6
 
-/** 一次互动事件（轮次与点赞可同时出现）。 */
+/** 一次互动事件（轮次、反馈与共同交付可同时出现）。 */
 export interface AffinityEvent {
   /** 新完成的对话轮数。 */
   turns?: number
@@ -292,10 +294,12 @@ export interface AffinityEvent {
   likes?: number
   /** 点踩数。 */
   dislikes?: number
+  /** 共同通过验收的产物数。 */
+  completions?: number
 }
 
 /**
- * 亲密度增长：轮次与点赞累加，点踩扣分，结果夹在 0-100。
+ * 亲密度增长：轮次、点赞与共同交付累加，点踩扣分，结果夹在 0-100。
  *
  * 纯函数（不读时钟、不查库）：协调器在每轮发言落库后按轮次加，点赞/点踩由
  * POST /api/feedback 传入同一套规则（接受反馈后内联 bump）——「聊得越多越熟」这条规律
@@ -304,7 +308,8 @@ export interface AffinityEvent {
 export function nextAffinity(affinity: number, event: AffinityEvent): number {
   const delta =
     (event.turns ?? 0) * affinityTurnGain(affinity) +
-    (event.likes ?? 0) * AFFINITY_LIKE_GAIN -
+    (event.likes ?? 0) * AFFINITY_LIKE_GAIN +
+    (event.completions ?? 0) * AFFINITY_COMPLETION_GAIN -
     (event.dislikes ?? 0) * AFFINITY_DISLIKE_LOSS
   return clampTrait(affinity + delta)
 }

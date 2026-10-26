@@ -787,6 +787,7 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
 .panel-drawer-btn:hover { background: var(--hover-bg); color: var(--amber-text); }
 /* 亲密度徽标与这枚按钮抢同一行的右端：徽标在左、按钮在右，各让一步。 */
 .chat-header .chip + .panel-drawer-btn { margin-left: var(--space-2); }
+.chat-task-btn + .panel-drawer-btn { margin-left: 0; }
 
 /* 消息列与输入卡共用的左右留白。两者必须取同一个 --gutter-x：一边 32px 一边 20px
    时，未触到 max-width 的窄窗上整列差出 12px，输入卡还比消息列宽 24px。 */

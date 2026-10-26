@@ -903,3 +903,55 @@ describe('向量索引重建', () => {
     service.close()
   })
 })
+
+describe('共同经历', () => {
+  it('交付作品进入共享记忆，另一位助理在新会话也能召回', async () => {
+    const service = new MemoryService({ dbPath: dbPath(), embeddings: new NullEmbeddings() })
+    await service.recordAchievement({
+      conversationId: 'vibe-1',
+      name: '记账工具',
+      summary: '能记录收支并在刷新后保留数据',
+      version: 1,
+    })
+    const shared = service.store.listActiveForAgent(SHARED_SPACE)
+    expect(shared).toHaveLength(1)
+    expect(shared[0]).toMatchObject({ kind: 'event', sourceConversationId: 'vibe-1' })
+    const recalled = service.recallSync('another-agent', '我们之前做的记账工具')
+    expect(recalled).toContain('共同完成了《记账工具》')
+    expect(recalled).toContain('刷新后保留数据')
+    service.close()
+  })
+
+  it('有向量时也记录向量身份，召回语义通道可用', async () => {
+    const service = new MemoryService({ dbPath: dbPath(), embeddings: new HashEmbeddings() })
+    const row = await service.recordAchievement({
+      conversationId: 'vibe-2',
+      name: '周报',
+      summary: '可以直接发送',
+      version: 2,
+    })
+    expect(row.embedding).not.toBeNull()
+    expect(row.embeddingModel).toBe('hash:test')
+    service.close()
+  })
+
+  it('向量服务失败只降级，不阻断共同经历落库', async () => {
+    const broken: EmbeddingProvider = {
+      label: 'broken',
+      available: true,
+      embed: async () => {
+        throw new Error('embedding down')
+      },
+    }
+    const service = new MemoryService({ dbPath: dbPath(), embeddings: broken })
+    const row = await service.recordAchievement({
+      conversationId: 'vibe-3',
+      name: '开支表',
+      summary: '金额可计算',
+      version: 1,
+    })
+    expect(row.embedding).toBeNull()
+    expect(row.content).toContain('开支表')
+    service.close()
+  })
+})

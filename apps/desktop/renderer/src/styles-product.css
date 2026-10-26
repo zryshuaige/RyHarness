@@ -2405,11 +2405,10 @@
 
 .vibe-project-meta { min-width: 0; }
 
-.vibe-project-path {
+.vibe-project-validation {
   margin: 2px 0 0;
-  color: var(--text-tertiary);
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
   overflow-wrap: anywhere;
 }
 
@@ -2438,6 +2437,16 @@
 }
 
 .vibe-file:hover { background: var(--amber-primary-soft); color: var(--amber-text); }
+
+.vibe-versions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
 
 /* 预览区：文件内容就地展开，不跳走。 */
 .vibe-preview {

@@ -3,7 +3,7 @@
 # （便携版是自解压的：每次启动都把运行时解到临时目录，这一下启动成本必须量出来）。
 
 $ErrorActionPreference = 'Stop'
-$exe = 'F:\AgenticResearch\RyAgent\apps\desktop\ryharness-release\RyHarness-portable.exe'
+$exe = Join-Path $PSScriptRoot '..\ryharness-release\RyHarness-portable.exe'
 if (-not (Test-Path $exe)) { throw "找不到 $exe" }
 
 $data = Join-Path $env:TEMP ('ryharness-portable-data-' + [guid]::NewGuid().ToString('N').Substring(0, 6))

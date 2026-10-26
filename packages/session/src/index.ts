@@ -37,6 +37,7 @@ export type {
   VoicePreset,
 } from './persona.ts'
 export {
+  AFFINITY_COMPLETION_GAIN,
   AFFINITY_DISLIKE_LOSS,
   AFFINITY_LIKE_GAIN,
   AFFINITY_TIERS,

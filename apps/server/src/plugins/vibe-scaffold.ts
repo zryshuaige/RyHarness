@@ -1,5 +1,5 @@
 /**
- * 内置插件：把方案落成项目骨架（RyVibe 的第二步）。
+ * 内置插件：产物落盘、验收与版本快照（RyVibe 的交付闸）。
  *
  * 这个工具是「一句话做出完整产品」这句话能兑现的那一步：小队出完方案，如果只
  * 停在 Markdown 上，用户手上拿到的仍然是一段**描述**——点不开、没法接着改、也没
@@ -26,6 +26,7 @@ import {
   scaffoldProject,
 } from '../vibe/project.ts'
 import type { VibeStore } from '../vibe/store.ts'
+import { validateVibeProject } from '../vibe/validation.ts'
 import { SCAFFOLD_TOOL_NAME } from './skills.ts'
 import type { TodoStore } from './todo-store.ts'
 
@@ -83,7 +84,7 @@ export function createScaffoldTool(deps: {
   return {
     name: SCAFFOLD_TOOL_NAME,
     description: [
-      '把定稿的结果落成文件：',
+      '把实际产物落成文件并验收；骨架、空章节、TODO 展示页和无效表格会被退回：',
       '先看用户要的到底是什么形态，再按形态给字段——**填错字段会被挡回来，不会被悄悄丢掉**：',
       '· app（一个能打开的小程序）：readme / plan（方案正文）/ page（那个 HTML 页面）；',
       '· doc（一份文档：方案、报告、邮件）：content 放正文，artifactName 给文件名；',
@@ -206,6 +207,9 @@ export function createScaffoldTool(deps: {
         if (content !== undefined && content.length > 0) {
           return failure('app 形态不收 content：那个 HTML 页面放 page，方案正文放 plan。')
         }
+        if (page === undefined || page.length === 0) {
+          return failure('app 形态要给出实现核心交互的完整 page HTML；只给方案或 TODO 展示页不算交付。')
+        }
       } else {
         if ((page !== undefined && page.length > 0) || (plan !== undefined && plan.length > 0)) {
           return failure(`${kind} 形态不写页面和方案：正文放 content，文件名放 artifactName。`)
@@ -226,7 +230,13 @@ export function createScaffoldTool(deps: {
         ...(plan === undefined || plan.length === 0 ? {} : { plan }),
         ...(page === undefined || page.length === 0 ? {} : { page }),
       })
-      await deps.vibe.setProject(session.id, project)
+      await deps.vibe.setStage(session.id, 'verify')
+      const validation = validateVibeProject(project)
+      if (!validation.ok) {
+        await deps.vibe.setStage(session.id, 'execute', validation.summary)
+        return failure(`产物还没有通过验收：${validation.summary}。请修正实际内容后重新调用本工具，不要只解释原因。`)
+      }
+      await deps.vibe.setProject(session.id, project, validation)
       // 任务清单进待办：同一句话已经在清单里就不重复加（模型重出一版时会再调一次）。
       const existing = deps.todos.list(conversationId)
       let added = 0

@@ -13,7 +13,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync }
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Context } from '@ryharness/cordis'
-import type { GenerateOptions, StreamChunk } from '@ryharness/llm'
+import type { GenerateOptions, StreamChunk, ToolCallId } from '@ryharness/llm'
 import { LlmAdapter } from '@ryharness/llm'
 import {
   createGrillTool,
@@ -36,6 +36,13 @@ import type { StoredMessage } from '@ryharness/session'
 import { afterEach, describe, expect, it } from 'vitest'
 
 const tmpDirs: string[] = []
+
+const VALID_APP_PAGE = `<!doctype html><html><body><h1>记账工具</h1>
+<input id="amount" type="number"><button id="add">记账</button><output id="total"></output>
+<script>
+const rows = JSON.parse(localStorage.getItem('rows') || '[]');
+document.querySelector('#add').onclick = () => { rows.push({ amount: 1 }); localStorage.setItem('rows', JSON.stringify(rows)); };
+</script></body></html>`
 
 function tempDir(prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), `ryharness-vibe-${prefix}-`))
@@ -75,6 +82,59 @@ class RecordingAdapter extends LlmAdapter {
       { type: 'block-end', index: 0, block: { type: 'text', text } },
       { type: 'finish', reason: { kind: 'stop' } },
     ]
+    return (async function* (): AsyncGenerator<StreamChunk> {
+      yield* chunks
+    })()
+  }
+}
+
+class RepairingAdapter extends LlmAdapter {
+  calls = 0
+
+  override providerInfo(provider: string) {
+    return { id: provider, name: 'Mock' }
+  }
+
+  stream(_options: GenerateOptions): AsyncIterable<StreamChunk> {
+    this.calls++
+    const callId = `scaffold-${this.calls}` as ToolCallId
+    const chunks: StreamChunk[] =
+      this.calls <= 2
+        ? [
+            {
+              type: 'tool-call-delta',
+              index: 0,
+              id: callId,
+              name: SCAFFOLD_TOOL_NAME,
+              argumentsDelta: JSON.stringify({
+                name: '记账工具',
+                summary: '记账并保存数据',
+                tasks: ['做记账交互'],
+                ...(this.calls === 2 ? { page: VALID_APP_PAGE } : {}),
+              }),
+            },
+            {
+              type: 'block-end',
+              index: 0,
+              block: {
+                type: 'tool-call',
+                id: callId,
+                name: SCAFFOLD_TOOL_NAME,
+                arguments: JSON.stringify({
+                  name: '记账工具',
+                  summary: '记账并保存数据',
+                  tasks: ['做记账交互'],
+                  ...(this.calls === 2 ? { page: VALID_APP_PAGE } : {}),
+                }),
+              },
+            },
+            { type: 'finish', reason: { kind: 'tool-calls' } },
+          ]
+        : [
+            { type: 'text-delta', index: 0, text: '已修好并通过验收。' },
+            { type: 'block-end', index: 0, block: { type: 'text', text: '已修好并通过验收。' } },
+            { type: 'finish', reason: { kind: 'stop' } },
+          ]
     return (async function* (): AsyncGenerator<StreamChunk> {
       yield* chunks
     })()
@@ -251,8 +311,16 @@ describe('VibeStore', () => {
       skillId: 'grill-me',
       memberAgentIds: ['a1'],
     })
+    await store.setStatus(session.id, 'failed', '模型暂时不可用')
+    await store.setStage(session.id, 'execute', '从失败处继续')
     const reopened = new VibeStore(dir)
-    expect(reopened.get(session.id)).toMatchObject({ conversationId: 'c1', requirement: '做个记账工具' })
+    expect(reopened.get(session.id)).toMatchObject({
+      conversationId: 'c1',
+      requirement: '做个记账工具',
+      status: 'failed',
+      stage: 'execute',
+    })
+    expect(reopened.get(session.id)?.stageHistory.map((entry) => entry.stage)).toEqual(['clarify', 'failed', 'execute'])
     expect(reopened.byConversation('c1')?.id).toBe(session.id)
   })
 })
@@ -519,6 +587,31 @@ describe('RyVibe 路由', () => {
     }
   })
 
+  it('完整 AgentLoop：第一次骨架验收失败，模型修正后才进入 done', async () => {
+    const dataDir = tempDir('repair-loop')
+    const adapter = new RepairingAdapter()
+    const server = await startServer(dataDir, adapter)
+    try {
+      seedMockSquad(server)
+      const ryenBefore = server.store.getAgent('ryen')?.persona.affinity ?? 0
+      const coderBefore = server.store.getAgent('ryen-team-coding')?.persona.affinity ?? 0
+      const created = await postJson(server, '/api/vibe', { requirement: '做个记账工具' })
+      const session = created.body.session as Record<string, unknown>
+      const sessionId = session.id as string
+      await waitUntil(() => {
+        return server.vibeStore.get(sessionId)?.status === 'done'
+      })
+      expect(adapter.calls).toBe(3)
+      expect(server.vibeStore.get(sessionId)?.validation?.ok).toBe(true)
+      expect(server.vibeStore.get(sessionId)?.stage).toBe('deliver')
+      expect(server.vibeStore.get(sessionId)?.versions).toHaveLength(1)
+      expect(server.store.getAgent('ryen')?.persona.affinity).toBe(ryenBefore + 18)
+      expect(server.store.getAgent('ryen-team-coding')?.persona.affinity).toBe(coderBefore + 6)
+    } finally {
+      await server.close()
+    }
+  })
+
   it('一轮失败之后：状态是 failed，不是「方案好了」', async () => {
     const dataDir = tempDir('failed')
     const adapter = new FailingAdapter()
@@ -562,7 +655,7 @@ describe('RyVibe 路由', () => {
       const scaffold = server.tools.get(SCAFFOLD_TOOL_NAME)
       if (scaffold === undefined) throw new Error('落盘工具没有注册')
       const landed = await scaffold.execute(
-        { name: '记账工具', summary: '给独立开发者记账', tasks: ['建数据表', '做分类页'] },
+        { name: '记账工具', summary: '给独立开发者记账', tasks: ['建数据表', '做分类页'], page: VALID_APP_PAGE },
         { workspaceRoot: server.workspaceRoot, conversationId, agentId: 'ryen' },
       )
       expect(landed.isError).not.toBe(true)
@@ -627,7 +720,7 @@ describe('vibe_scaffold 工具：方案落成项目骨架', () => {
       memberAgentIds: ['a1'],
     })
     const result = await tool.execute(
-      { name: '记账工具', summary: '给独立开发者记账', tasks: ['建数据表', '做分类页'] },
+      { name: '记账工具', summary: '给独立开发者记账', tasks: ['建数据表', '做分类页'], page: VALID_APP_PAGE },
       { workspaceRoot, conversationId: 'c1', agentId: 'a1' },
     )
     expect(result.isError).not.toBe(true)
@@ -635,10 +728,11 @@ describe('vibe_scaffold 工具：方案落成项目骨架', () => {
     for (const name of ['README.md', 'PLAN.md', 'TODO.md', 'index.html']) {
       expect(existsSync(join(dir, name))).toBe(true)
     }
-    // 首个页面是真能打开的：里面有产品名与任务清单
+    // 首个页面有真实交互和本地持久化，不只是项目名与任务清单。
     const page = readFileSync(join(dir, 'index.html'), 'utf8')
     expect(page).toContain('记账工具')
-    expect(page).toContain('建数据表')
+    expect(page).toContain('localStorage')
+    expect(vibe.get(session.id)?.validation?.ok).toBe(true)
     // 任务清单进了待办
     expect(
       todos.list('c1').items.map((item) => {
@@ -700,7 +794,10 @@ describe('vibe_scaffold 工具：方案落成项目骨架', () => {
     })
     const context = { workspaceRoot, conversationId: 'c1', agentId: 'a1' }
     const dir = join(workspaceRoot, 'projects', '开支')
-    await tool.execute({ name: '开支', summary: '列出来', tasks: ['抄进表里'], deliverable: 'app' }, context)
+    await tool.execute(
+      { name: '开支', summary: '列出来', tasks: ['抄进表里'], deliverable: 'app', page: VALID_APP_PAGE },
+      context,
+    )
     expect(readdirSync(dir).sort()).toEqual(['PLAN.md', 'README.md', 'TODO.md', 'index.html'])
     await tool.execute(
       {
@@ -765,7 +862,12 @@ describe('vibe_scaffold 工具：方案落成项目骨架', () => {
       skillId: 'grill-me',
       memberAgentIds: ['a1'],
     })
-    const args = { name: '记账工具', summary: '给独立开发者记账', tasks: ['建数据表', '做分类页'] }
+    const args = {
+      name: '记账工具',
+      summary: '给独立开发者记账',
+      tasks: ['建数据表', '做分类页'],
+      page: VALID_APP_PAGE,
+    }
     const context = { workspaceRoot, conversationId: 'c1', agentId: 'a1' }
     await tool.execute(args, context)
     const again = await tool.execute(args, context)
@@ -782,7 +884,7 @@ describe('vibe_scaffold 工具：方案落成项目骨架', () => {
       memberAgentIds: ['a1'],
     })
     const result = await tool.execute(
-      { name: '../../etc', summary: '逃逸测试', tasks: ['建数据表'] },
+      { name: '../../etc', summary: '逃逸测试', tasks: ['建数据表'], page: VALID_APP_PAGE },
       { workspaceRoot, conversationId: 'c1', agentId: 'a1' },
     )
     expect(result.isError).not.toBe(true)
@@ -806,5 +908,62 @@ describe('vibe_scaffold 工具：方案落成项目骨架', () => {
     expect((await tool.execute({ name: '记账工具', summary: 'x', tasks: many }, context)).isError).toBe(true)
     expect((await tool.execute({ name: '', summary: 'x', tasks: ['a'] }, context)).isError).toBe(true)
     expect(vibe.get(vibe.list()[0]?.id as string)?.project).toBeUndefined()
+  })
+
+  it('骨架不作为完成品登记：验证错误回到模型，修正后才通过', async () => {
+    const { vibe, workspaceRoot, tool } = scaffoldSetup('scaffold-validation')
+    const session = await vibe.create({
+      conversationId: 'c1',
+      requirement: '做个记账工具',
+      skillId: 'grill-me',
+      memberAgentIds: ['a1'],
+    })
+    const context = { workspaceRoot, conversationId: 'c1', agentId: 'a1' }
+    const skeleton = await tool.execute(
+      {
+        name: '记账工具',
+        summary: '记账并保存数据',
+        tasks: ['做记账交互'],
+        page: '<html><body><h1>记账工具</h1></body></html>',
+      },
+      context,
+    )
+    expect(skeleton.isError).toBe(true)
+    expect(skeleton.content).toContain('不要只解释原因')
+    expect(vibe.get(session.id)?.project).toBeUndefined()
+
+    const repaired = await tool.execute(
+      { name: '记账工具', summary: '记账并保存数据', tasks: ['做记账交互'], page: VALID_APP_PAGE },
+      context,
+    )
+    expect(repaired.isError).not.toBe(true)
+    expect(vibe.get(session.id)?.validation?.ok).toBe(true)
+    const reopened = new VibeStore(join(workspaceRoot, '..'))
+    expect(reopened.get(session.id)?.validation?.ok).toBe(true)
+  })
+
+  it('版本保存真实文件快照：第二版覆盖后仍能回到第一版', async () => {
+    const { vibe, workspaceRoot, tool } = scaffoldSetup('scaffold-versions')
+    const session = await vibe.create({
+      conversationId: 'c1',
+      requirement: '做个记账工具',
+      skillId: 'grill-me',
+      memberAgentIds: ['a1'],
+    })
+    const context = { workspaceRoot, conversationId: 'c1', agentId: 'a1' }
+    const input = { name: '记账工具', summary: '记账并保存数据', tasks: ['做记账交互'] }
+    await tool.execute({ ...input, page: VALID_APP_PAGE }, context)
+    const firstId = vibe.get(session.id)?.versions[0]?.id as string
+    await tool.execute({ ...input, page: VALID_APP_PAGE.replace('<h1>记账工具</h1>', '<h1>第二版</h1>') }, context)
+    const currentPath = vibe.get(session.id)?.project?.files.find((file) => file.name === 'index.html')?.path as string
+    expect(readFileSync(currentPath, 'utf8')).toContain('第二版')
+    expect(vibe.get(session.id)?.versions).toHaveLength(2)
+
+    await vibe.restoreVersion(session.id, firstId)
+    const restoredPath = vibe.get(session.id)?.project?.files.find((file) => file.name === 'index.html')?.path as string
+    expect(readFileSync(restoredPath, 'utf8')).toContain('<h1>记账工具</h1>')
+    expect(vibe.get(session.id)?.status).toBe('done')
+    const reopened = new VibeStore(join(workspaceRoot, '..'))
+    expect(reopened.get(session.id)?.versions).toHaveLength(2)
   })
 })

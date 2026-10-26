@@ -183,7 +183,7 @@ export function grillMePlugin(deps: GrillMePluginDeps): PluginEntry {
     id: GRILL_ME_PLUGIN_ID,
     name: '盘问与落地（RyVibe）',
     description:
-      '给助理一套 RyVibe 的工作法：需求不够清楚时用带选项的问题问清楚再动手，方案定了就落成一个能打开的项目骨架。',
+      '给助理一套 RyVibe 的工作法：需求不够清楚时用带选项的问题问清楚再动手，实际产物落盘并通过验收才算完成。',
     group: 'feature',
     capabilities: {
       tools: [GRILL_TOOL_NAME, SCAFFOLD_TOOL_NAME],

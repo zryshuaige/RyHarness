@@ -530,6 +530,26 @@ export class MemoryService implements AgentMemory, MemoryRecallMany {
     }
   }
 
+  /** 把一次真实交付记成共享经历，让新会话也能召回共同完成的作品。 */
+  async recordAchievement(input: {
+    conversationId: string
+    name: string
+    summary: string
+    version: number
+  }): Promise<MemoryRow> {
+    const content = `用户与小队共同完成了《${input.name}》第 ${input.version} 版：${input.summary}`
+    const embedding = await this.embedCached(content).catch(() => null)
+    return this.store.insert({
+      agentId: SHARED_SPACE,
+      kind: 'event',
+      content,
+      embedding,
+      ...(embedding === null ? {} : { embeddingModel: this.embeddingModel }),
+      sourceConversationId: input.conversationId,
+      importance: 2,
+    })
+  }
+
   /**
    * 用户反馈回灌：👍 / 👎 落到该 agent 空间最近一轮注入的记忆上。
    *

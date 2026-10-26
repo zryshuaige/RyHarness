@@ -7,7 +7,7 @@ English | [中文](README.zh.md)
 [![pnpm](https://img.shields.io/badge/pnpm-11-F69220.svg)](https://pnpm.io)
 [![Electron](https://img.shields.io/badge/Electron-44-47848F.svg)](https://electronjs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-6-3178C6.svg)](https://www.typescriptlang.org)
-[![tests](https://img.shields.io/badge/tests-210%20files-brightgreen)](https://github.com/zryshuaige/RyHarness/actions)
+[![tests](https://img.shields.io/badge/tests-213%20files-brightgreen)](https://github.com/zryshuaige/RyHarness/actions)
 
 RyHarness is a desktop app for AI agents that live on your own machine. You keep a
 small team of them — each with its own personality, its own memory, its own tools —
@@ -71,7 +71,7 @@ each time. The rest are multiple-choice cards, not a form: the options are writt
 the way you'd answer them ("on my phone", "just me", "a link to send people"),
 never in implementation terms ("how many screens", "web or desktop"). Then the
 result lands on disk — a project folder, a document, a sheet, a flow — and the
-tasks go into your todo list.
+tasks go into your todo list. Deliverables must pass validation before they are marked done. Every successful delivery keeps a real file snapshot, so you can preview, iterate, or roll back. Finished work also becomes shared memory.
 
 <img src="apps/desktop/docs/capture-project.png" width="900" alt="RyVibe with a project on disk" />
 

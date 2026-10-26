@@ -826,6 +826,7 @@ export class RyHarnessServer {
       telemetry,
       workspaceRoot,
       vibeStore,
+      ...(memoryService === undefined ? {} : { memory: memoryService }),
       questionStore,
       approvals,
     })

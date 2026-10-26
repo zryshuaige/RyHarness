@@ -57,6 +57,8 @@ export interface VibeProject {
    * 知道上一形态是什么、该清掉哪些残留。
    */
   kind: DeliverableKind
+  /** 一句话说明这个产物做什么。 */
+  summary: string
   /** 项目目录的绝对路径。 */
   dir: string
   /** 写出去的文件。 */
@@ -373,6 +375,7 @@ export function scaffoldProject(input: ScaffoldInput): VibeProject {
     name: input.name.trim(),
     slug,
     kind,
+    summary: input.summary.trim(),
     dir,
     files,
     createdAt: Date.now(),

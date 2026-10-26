@@ -65,6 +65,12 @@ describe('亲密度节奏', () => {
     const afterTurn = nextAffinity(0, { turns: 1 })
     expect(nextAffinity(afterTurn, { likes: 1 })).toBe(afterTurn + 5)
     expect(nextAffinity(afterTurn, { dislikes: 1 })).toBe(afterTurn - 4)
+    expect(nextAffinity(afterTurn, { completions: 1 })).toBe(afterTurn + 6)
     expect(nextAffinity(0, {})).toBe(0)
+  })
+
+  it('共同交付与聊天轮次是两种关系事件', () => {
+    expect(nextAffinity(20, { completions: 1 })).toBe(26)
+    expect(nextAffinity(20, { turns: 0, completions: 0 })).toBe(20)
   })
 })

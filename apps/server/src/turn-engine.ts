@@ -11,6 +11,7 @@
  * @module @ryharness/server/turn-engine
  */
 
+import type { MemoryService } from '@ryharness/memory'
 import type { RunContext, SessionCoordinator, SessionStore } from '@ryharness/session'
 import type { ApprovalBroker } from './approvals.ts'
 import type { EventHub } from './bus.ts'
@@ -74,6 +75,8 @@ export interface TurnEngineOptions {
   readonly workspaceRoot: string
   /** RyVibe 会话存储：runTurn 开跑置 building、收工按结局置 done/asking/failed。 */
   readonly vibeStore: VibeStore
+  /** 共同交付写入共享记忆；记忆关闭时不影响交付。 */
+  readonly memory?: MemoryService
   /** 提问存储：RyVibe 终态看「还有没有待答题」。 */
   readonly questionStore: QuestionStore
   /** 工具执行审批桥：取消/顶掉轮次时把挂起的审批一起收口（只调用，不改它）。 */
@@ -523,12 +526,32 @@ export class TurnEngine {
       if (this.activeTurns.get(conversation.id) === active) {
         this.activeTurns.delete(conversation.id)
       }
-      // RyVibe 的终态：这一轮要么把方案做出来了，要么失败——失败也是一个**看得见**
-      // 的状态（页面据此显示原因和「重试」），不能悄悄变成"方案好了"。
+      // RyVibe 的终态由验收报告决定：模型说完、文件落盘都不等于完成。
+      // 失败也是一个看得见的状态，不能悄悄变成"方案好了"。
       if (vibeSession !== undefined) {
         if (translation.status === 'ok') {
           const pending = this.options.questionStore.list(conversation.id, 'pending').length
-          await this.options.vibeStore.setStatus(vibeSession.id, pending > 0 ? 'asking' : 'done')
+          const latest = this.options.vibeStore.get(vibeSession.id)
+          if (pending > 0) {
+            await this.options.vibeStore.setStatus(vibeSession.id, 'asking')
+          } else if (latest?.project !== undefined && latest.validation?.ok === true) {
+            await this.options.vibeStore.setStatus(vibeSession.id, 'done')
+            for (const agentId of latest.memberAgentIds) store.bumpAgentAffinity(agentId, { completions: 1 })
+            void this.options.memory
+              ?.recordAchievement({
+                conversationId: conversation.id,
+                name: latest.project.name,
+                summary: latest.project.summary,
+                version: latest.versions.length,
+              })
+              .catch(() => undefined)
+          } else {
+            await this.options.vibeStore.setStatus(
+              vibeSession.id,
+              'failed',
+              latest?.validation?.summary ?? '这一轮结束了，但还没有通过验收的产物。请继续修改或重试。',
+            )
+          }
         } else {
           await this.options.vibeStore.setStatus(
             vibeSession.id,

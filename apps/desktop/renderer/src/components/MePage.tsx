@@ -857,7 +857,7 @@ export function AboutContent() {
   return (
     <div className="about-body">
       <p>
-        <strong>RyHarness</strong> v0.1.0 · 单机多 Agent 即时通讯桌面应用
+        <strong>RyHarness</strong> v0.1.2 · 单机多 Agent 即时通讯桌面应用
       </p>
       <p>
         本体以 <strong>MIT License</strong> 发布（见仓库 LICENSE）。

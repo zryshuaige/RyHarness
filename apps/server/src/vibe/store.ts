@@ -18,6 +18,9 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { DeliverableKind, VibeProject, VibeProjectFile } from './project.ts'
+import type { VibeValidationReport } from './validation.ts'
+import type { VibeProjectVersion } from './versions.ts'
+import { removeProjectVersion, restoreProject, snapshotProject } from './versions.ts'
 
 /**
  * 一次 RyVibe 的状态。
@@ -27,6 +30,13 @@ import type { DeliverableKind, VibeProject, VibeProjectFile } from './project.ts
  * 「方案好了」而下面空空如也。失败必须是一个能被看见的状态。
  */
 export type VibeStatus = 'asking' | 'building' | 'done' | 'failed'
+export type VibeStage = 'clarify' | 'plan' | 'execute' | 'verify' | 'deliver' | 'failed'
+
+export interface VibeStageEvent {
+  stage: VibeStage
+  at: number
+  detail?: string
+}
 
 /** 一次 RyVibe 会话的记录。 */
 export interface VibeSession {
@@ -62,15 +72,21 @@ export interface VibeSession {
    */
   lastSummary?: string
   status: VibeStatus
+  stage: VibeStage
+  stageHistory: VibeStageEvent[]
   /** 失败时的一句人话原因（给界面看的，不给日志看）。 */
   failure?: string
   /**
-   * 落盘的项目骨架（方案 → 产品的那一步）。
+   * 落盘的产物（方案 → 产品的那一步）。
    *
    * 没有它，这次 RyVibe 就只产出了一段文字：用户手上没有能打开的东西，也没有
    * 下一步的清单。落盘由工具做，这里只存结果，页面据此显示"项目已生成"。
    */
   project?: VibeProject
+  /** 最后一次交付验收；只有通过的报告才允许进入 done。 */
+  validation?: VibeValidationReport
+  /** 每次成功交付的独立文件快照，最新的一版在最后。 */
+  versions: VibeProjectVersion[]
 }
 
 /**
@@ -126,6 +142,51 @@ function stringArray(value: unknown): string[] {
   })
 }
 
+function parseValidation(value: unknown): VibeValidationReport | undefined {
+  if (!isRecord(value) || typeof value.ok !== 'boolean' || typeof value.summary !== 'string') return undefined
+  if (value.kind !== 'app' && value.kind !== 'doc' && value.kind !== 'sheet' && value.kind !== 'flow') return undefined
+  if (typeof value.validatedAt !== 'number' || !Number.isFinite(value.validatedAt) || !Array.isArray(value.checks)) {
+    return undefined
+  }
+  const checks = []
+  for (const raw of value.checks) {
+    if (!isRecord(raw)) return undefined
+    if (
+      typeof raw.id !== 'string' ||
+      typeof raw.label !== 'string' ||
+      typeof raw.ok !== 'boolean' ||
+      typeof raw.detail !== 'string'
+    ) {
+      return undefined
+    }
+    checks.push({ id: raw.id, label: raw.label, ok: raw.ok, detail: raw.detail })
+  }
+  return { ok: value.ok, kind: value.kind, checks, summary: value.summary, validatedAt: value.validatedAt }
+}
+
+function parseStage(value: unknown): VibeStage | undefined {
+  return value === 'clarify' ||
+    value === 'plan' ||
+    value === 'execute' ||
+    value === 'verify' ||
+    value === 'deliver' ||
+    value === 'failed'
+    ? value
+    : undefined
+}
+
+function parseStageHistory(value: unknown): VibeStageEvent[] {
+  if (!Array.isArray(value)) return []
+  const history: VibeStageEvent[] = []
+  for (const raw of value) {
+    if (!isRecord(raw) || typeof raw.at !== 'number' || !Number.isFinite(raw.at)) continue
+    const stage = parseStage(raw.stage)
+    if (stage === undefined) continue
+    history.push({ stage, at: raw.at, ...(typeof raw.detail === 'string' ? { detail: raw.detail } : {}) })
+  }
+  return history
+}
+
 function parseSession(value: unknown): VibeSession | undefined {
   if (!isRecord(value)) return undefined
   const { id, conversationId, requirement, skillId, createdAt } = value
@@ -134,8 +195,15 @@ function parseSession(value: unknown): VibeSession | undefined {
   if (typeof requirement !== 'string') return undefined
   if (typeof skillId !== 'string' || skillId.length === 0) return undefined
   if (typeof createdAt !== 'number' || !Number.isFinite(createdAt)) return undefined
-  const status: VibeStatus = value.status === 'done' || value.status === 'building' ? value.status : 'asking'
+  const status: VibeStatus =
+    value.status === 'done' || value.status === 'building' || value.status === 'failed' ? value.status : 'asking'
   const project = parseProject(value.project)
+  const validation = parseValidation(value.validation)
+  const fallbackStage: VibeStage =
+    status === 'done' ? 'deliver' : status === 'failed' ? 'failed' : status === 'building' ? 'execute' : 'clarify'
+  const stage = parseStage(value.stage) ?? fallbackStage
+  const parsedHistory = parseStageHistory(value.stageHistory)
+  const versions = parseVersions(value.versions)
   return {
     id,
     conversationId,
@@ -151,11 +219,15 @@ function parseSession(value: unknown): VibeSession | undefined {
     ...(typeof value.lastSummary === 'string' ? { lastSummary: value.lastSummary } : {}),
     ...(typeof value.failure === 'string' ? { failure: value.failure } : {}),
     ...(project === undefined ? {} : { project }),
+    ...(validation === undefined ? {} : { validation }),
     status,
+    stage,
+    stageHistory: parsedHistory.length > 0 ? parsedHistory : [{ stage, at: createdAt }],
+    versions,
   }
 }
 
-/** 读回来的项目骨架；字段缺一个就当没有（骨架是产物，不是存档）。 */
+/** 读回来的产物；字段缺一个就当没有（骨架是产物，不是存档）。 */
 function parseProject(value: unknown): VibeProject | undefined {
   if (!isRecord(value)) return undefined
   const { name, slug, dir, files, createdAt } = value
@@ -176,7 +248,28 @@ function parseProject(value: unknown): VibeProject | undefined {
     if (typeof size !== 'number' || !Number.isFinite(size)) continue
     parsed.push({ name: fileName, path, size })
   }
-  return { name, slug, kind, dir, files: parsed, createdAt }
+  return {
+    name,
+    slug,
+    kind,
+    summary: typeof value.summary === 'string' ? value.summary : name,
+    dir,
+    files: parsed,
+    createdAt,
+  }
+}
+
+function parseVersions(value: unknown): VibeProjectVersion[] {
+  if (!Array.isArray(value)) return []
+  const versions: VibeProjectVersion[] = []
+  for (const raw of value) {
+    if (!isRecord(raw) || typeof raw.id !== 'string' || raw.id.length === 0) continue
+    const project = parseProject(raw.project)
+    const validation = parseValidation(raw.validation)
+    if (project === undefined || validation === undefined) continue
+    versions.push({ id: raw.id, project, validation })
+  }
+  return versions
 }
 
 /** 临时文件名序号：同一毫秒内两次写也要落在不同文件上。 */
@@ -267,17 +360,21 @@ export class VibeStore {
     memberAgentIds: readonly string[]
   }): Promise<VibeSession> {
     return this.enqueue(() => {
+      const createdAt = Date.now()
       const session: VibeSession = {
         id: randomUUID(),
         conversationId: input.conversationId,
         requirement: input.requirement,
         skillId: input.skillId,
         memberAgentIds: [...input.memberAgentIds],
-        createdAt: Date.now(),
+        createdAt,
         round: 0,
         askedInRound: 0,
         questionIds: [],
         status: 'asking',
+        stage: 'clarify',
+        stageHistory: [{ stage: 'clarify', at: createdAt }],
+        versions: [],
       }
       this.sessions.set(session.id, session)
       this.save()
@@ -374,12 +471,35 @@ export class VibeStore {
     })
   }
 
-  /** 改状态（出方案了 / 失败了 / 还在问）。 */
+  private transition(session: VibeSession, stage: VibeStage, detail?: string): void {
+    if (session.stage === stage) return
+    session.stage = stage
+    session.stageHistory.push({ stage, at: Date.now(), ...(detail === undefined ? {} : { detail }) })
+    if (session.stageHistory.length > 100) session.stageHistory.splice(0, session.stageHistory.length - 100)
+  }
+
+  async setStage(sessionId: string, stage: VibeStage, detail?: string): Promise<VibeSession> {
+    return this.enqueue(() => {
+      const session = this.sessions.get(sessionId)
+      if (session === undefined) throw new VibeError('NOT_FOUND', `没有这次 RyVibe：${sessionId}`)
+      this.transition(session, stage, detail)
+      this.save()
+      return session
+    })
+  }
+
+  /** 改状态；没有通过验收的产物时，done 在存储层也不允许成立。 */
   async setStatus(sessionId: string, status: VibeStatus, failure?: string): Promise<VibeSession> {
     return this.enqueue(() => {
       const session = this.sessions.get(sessionId)
       if (session === undefined) throw new VibeError('NOT_FOUND', `没有这次 RyVibe：${sessionId}`)
+      if (status === 'done' && (session.project === undefined || session.validation?.ok !== true)) {
+        throw new Error('没有通过验收的产物，不能把 RyVibe 标成完成')
+      }
       session.status = status
+      const stage: VibeStage =
+        status === 'asking' ? 'clarify' : status === 'building' ? 'plan' : status === 'done' ? 'deliver' : 'failed'
+      this.transition(session, stage, failure)
       if (failure === undefined) delete session.failure
       else session.failure = failure
       this.save()
@@ -388,16 +508,43 @@ export class VibeStore {
   }
 
   /**
-   * 记下落盘的项目骨架。
+   * 记下落盘的产物。
    *
    * 重复落盘会覆盖上一次的记录：用户改了主意让小队重出一版，页面上要显示的
    * 应该是**现在这一个**项目，而不是第一次那个。
    */
-  async setProject(sessionId: string, project: VibeProject): Promise<VibeSession> {
+  async setProject(sessionId: string, project: VibeProject, validation: VibeValidationReport): Promise<VibeSession> {
     return this.enqueue(() => {
       const session = this.sessions.get(sessionId)
       if (session === undefined) throw new VibeError('NOT_FOUND', `没有这次 RyVibe：${sessionId}`)
+      const version = snapshotProject(this.dataDir, sessionId, project, validation)
       session.project = project
+      session.validation = validation
+      session.versions.push(version)
+      while (session.versions.length > 10) {
+        const removed = session.versions.shift()
+        if (removed !== undefined) removeProjectVersion(this.dataDir, sessionId, removed.id)
+      }
+      this.save()
+      return session
+    })
+  }
+
+  async restoreVersion(sessionId: string, versionId: string): Promise<VibeSession> {
+    return this.enqueue(() => {
+      const session = this.sessions.get(sessionId)
+      if (session === undefined) throw new VibeError('NOT_FOUND', `没有这次 RyVibe：${sessionId}`)
+      const version = session.versions.find((candidate) => {
+        return candidate.id === versionId
+      })
+      if (version === undefined || session.project === undefined) {
+        throw new VibeError('NOT_FOUND', `没有这份产物版本：${versionId}`)
+      }
+      session.project = restoreProject(version, session.project.dir)
+      session.validation = version.validation
+      session.status = 'done'
+      delete session.failure
+      this.transition(session, 'deliver', `回到版本 ${versionId}`)
       this.save()
       return session
     })

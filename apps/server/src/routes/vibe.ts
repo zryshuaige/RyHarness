@@ -1,5 +1,5 @@
 /**
- * RyVibe 路由：一句话进，一份完整产品方案出。
+ * RyVibe 路由：一句话进，一个通过验收的产物出。
  *
  * 这一页背后的流程：
  * 1. 用户说一句话（"给独立开发者做个记账工具"）。
@@ -28,9 +28,11 @@ import {
   MAX_ROUNDS,
   VibeError,
   type VibeSession,
+  type VibeStage,
   type VibeStatus,
   type VibeStore,
 } from '../vibe/store.ts'
+import type { VibeValidationReport } from '../vibe/validation.ts'
 import type { TurnConversation } from './conversations.ts'
 
 /** 小队最多几个人：再多人就成群聊了，用户会看到一堆头像在抢着说话。 */
@@ -55,7 +57,7 @@ export interface VibeRoutesDeps {
   isTurnActive: (conversationId: string) => boolean
 }
 
-/** 落盘的项目骨架（页面据此显示形态、预览文件）。 */
+/** 落盘的产物（页面据此显示形态、预览文件）。 */
 export interface VibeProjectView {
   name: string
   /** 目录名（slug）。 */
@@ -66,7 +68,18 @@ export interface VibeProjectView {
   dir: string
   /** 写出去的文件。 */
   files: { name: string; size: number }[]
+  /** 只有通过验收的项目才应该出现在完成态。 */
+  validation?: VibeValidationReport
   createdAt: number
+}
+
+export interface VibeVersionView {
+  id: string
+  name: string
+  kind: DeliverableKind
+  summary: string
+  createdAt: number
+  validation: VibeValidationReport
 }
 
 /** 页面看到的一次 RyVibe。 */
@@ -80,6 +93,7 @@ export interface VibeSessionView {
   createdAt: number
   /** 现在到哪一步了。 */
   status: VibeStatus
+  stage: VibeStage
   /** 这一轮还有没有在跑（小队还在说话）。页面据此决定轮询快慢。 */
   busy: boolean
   /** 这一轮还差几个答案。 */
@@ -90,8 +104,9 @@ export interface VibeSessionView {
   maxRounds: number
   /** 失败时的一句人话原因。 */
   error?: string
-  /** 落盘的项目骨架；没有就是还没落盘。 */
+  /** 落盘的产物；没有就是还没落盘。 */
   project?: VibeProjectView
+  versions: VibeVersionView[]
 }
 
 /**
@@ -347,6 +362,7 @@ export function registerVibeRoutes(router: Router, deps: VibeRoutesDeps): void {
       squad,
       createdAt: session.createdAt,
       status,
+      stage: session.stage,
       busy,
       pendingAnswers: pending,
       round: session.round,
@@ -363,9 +379,20 @@ export function registerVibeRoutes(router: Router, deps: VibeRoutesDeps): void {
               files: session.project.files.map((file) => {
                 return { name: file.name, size: file.size }
               }),
+              ...(session.validation === undefined ? {} : { validation: session.validation }),
               createdAt: session.project.createdAt,
             },
           }),
+      versions: session.versions.map((version) => {
+        return {
+          id: version.id,
+          name: version.project.name,
+          kind: version.project.kind,
+          summary: version.project.summary,
+          createdAt: version.project.createdAt,
+          validation: version.validation,
+        }
+      }),
     }
   }
 
@@ -465,7 +492,7 @@ export function registerVibeRoutes(router: Router, deps: VibeRoutesDeps): void {
   })
 
   /**
-   * 读项目骨架里的一个文件。
+   * 读产物里的一个文件。
    *
    * 只认落盘时记下的那份文件清单（白名单）：目录名与文件名都来自模型，让请求随便
    * 传一个路径进来，就等于开了一条任意文件读取的口子。
@@ -500,6 +527,17 @@ export function registerVibeRoutes(router: Router, deps: VibeRoutesDeps): void {
       return
     }
     json(res, 200, { name: file.name, size, content: readFileSync(file.path, 'utf8') })
+  })
+
+  router.post('/api/vibe/:id/restore', async (req, res) => {
+    const id = req.params.id ?? ''
+    const body = await req.body()
+    const versionId = strField(isRecord(body) ? body : {}, 'versionId')
+    if (versionId === undefined || versionId.length === 0) {
+      throw new HttpRequestError(400, '选一个要恢复的版本', 'VIBE_BAD_VERSION')
+    }
+    const session = await vibe.restoreVersion(id, versionId)
+    json(res, 200, { session: viewOf(session, questions.list(session.conversationId, 'pending').length) })
   })
 
   /**

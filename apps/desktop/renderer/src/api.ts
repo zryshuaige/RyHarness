@@ -26,6 +26,7 @@ import type {
   VibeQuestionView,
   VibeSessionView,
   VibeSquadMemberView,
+  VibeVersionView,
   WsEvent,
 } from '@ryharness/server'
 /**
@@ -86,6 +87,7 @@ export type {
   VibeQuestionView,
   VibeSessionView,
   VibeSquadMemberView,
+  VibeVersionView,
   WsEvent,
 }
 
@@ -588,7 +590,7 @@ export class ApiClient {
   }
 
   /**
-   * 读项目骨架里的一个文件。
+   * 读产物里的一个文件。
    *
    * 只认服务端记下的那份文件清单：目录名与文件名都来自模型，这条路不能变成
    * 任意文件读取的口子。
@@ -621,6 +623,13 @@ export class ApiClient {
   /** 失败后重来一次：把这一轮重新排一遍。 */
   retryVibe(id: string): Promise<{ session: VibeSessionView }> {
     return this.request(`/api/vibe/${encodeURIComponent(id)}/retry`, { method: 'POST', body: '{}' })
+  }
+
+  restoreVibeVersion(id: string, versionId: string): Promise<{ session: VibeSessionView }> {
+    return this.request(`/api/vibe/${encodeURIComponent(id)}/restore`, {
+      method: 'POST',
+      body: JSON.stringify({ versionId }),
+    })
   }
 
   /**

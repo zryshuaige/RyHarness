@@ -26,6 +26,7 @@ import type {
   VibeQuestionView,
   VibeSessionView,
   VibeSquadMemberView,
+  VibeVersionView,
 } from '../api.ts'
 import { openInFileManager } from '../lib/desktop.ts'
 import { humanError } from '../lib/error-text.ts'
@@ -59,7 +60,7 @@ const POLL_IDLE_MS = 4000
  *
  * 措辞不绑形态：「拆功能」「写方案」是软件的话，用户要一份邮件时这三步就没意义了。
  */
-const STEPS = ['读需求', '想清楚', '做出来'] as const
+const STEPS = ['读需求', '定方案', '动手做', '验收', '交付'] as const
 
 /** 页面需要的 api 形状（测试可以只给这几个方法）。 */
 export interface RyVibeApi {
@@ -81,6 +82,7 @@ export interface RyVibeApi {
   vibeSessions(): Promise<{ sessions: VibeSessionView[] }>
   /** 失败后重来一次。 */
   retryVibe(id: string): Promise<{ session: VibeSessionView }>
+  restoreVibeVersion?(id: string, versionId: string): Promise<{ session: VibeSessionView }>
   /** 勾一条任务；没有它就只显示清单不让勾。 */
   setTodoDone?: (conversationId: string, id: string, done: boolean) => Promise<unknown>
   /** 读项目骨架里的一个文件（预览用）。 */
@@ -102,6 +104,9 @@ export interface RyVibeApi {
 
 export interface RyVibePageProps {
   api: RyVibeApi
+  /** 从聊天反向打开时，恢复这个任务而不是最近任务。 */
+  sessionId?: string
+  onSessionChange?: (sessionId: string | undefined) => void
   /**
    * 模型供应商清单：开工前的可用性闸门（与欢迎页同一份判定，lib/provider-health.ts）。
    * 不传（旧宿主/测试）就不拦——这页不该比宿主还急着下结论。
@@ -407,25 +412,23 @@ const KIND_LABEL: Record<VibeProjectView['kind'], string> = {
   flow: '流程',
 }
 
-/**
- * 项目区块：方案落成的那个目录。
- *
- * 这是 RyVibe 从「写了一段介绍」变成「做出一个东西」的那一步。页面上要让用户
- * 看见三件事：落在哪、里面有什么、点一下就能看。**目录路径是原样给的**：用户要
- * 能自己打开文件管理器找过去，而不是只能通过应用去看。
- */
+/** 已通过验收的产物；完整路径留在“打开文件夹”的提示里，不抢占结果摘要。 */
 function ProjectCard({
   project,
+  versions,
   preview,
   onOpenFile,
   onClosePreview,
   onOpenFolder,
+  onRestore,
 }: {
   project: VibeProjectView
+  versions: readonly VibeVersionView[]
   preview: ProjectPreview | undefined
   onOpenFile: (name: string) => void
   onClosePreview: () => void
   onOpenFolder: () => void
+  onRestore?: (versionId: string) => void
 }) {
   return (
     <section className="vibe-project">
@@ -435,11 +438,11 @@ function ProjectCard({
             {project.name}
             <span className="vibe-project-kind">{KIND_LABEL[project.kind]}</span>
           </h2>
-          <p className="vibe-project-path" title={project.dir}>
-            {project.dir}
+          <p className="vibe-project-validation">
+            {project.validation?.ok === true ? project.validation.summary : '这版产物还没有验收报告'}
           </p>
         </div>
-        <button type="button" className="btn btn-mini vibe-open-folder" onClick={onOpenFolder}>
+        <button type="button" className="btn btn-mini vibe-open-folder" title={project.dir} onClick={onOpenFolder}>
           打开文件夹
         </button>
       </div>
@@ -460,6 +463,25 @@ function ProjectCard({
           )
         })}
       </ul>
+      {onRestore !== undefined && versions.length > 1 && (
+        <div className="vibe-versions">
+          <span>历史版本</span>
+          {[...versions].reverse().map((version, index) => {
+            return (
+              <button
+                type="button"
+                className="btn btn-mini vibe-version"
+                key={version.id}
+                onClick={() => {
+                  onRestore(version.id)
+                }}
+              >
+                {index === 0 ? '最新版' : `上一版 ${index}`}
+              </button>
+            )
+          })}
+        </div>
+      )}
       {preview !== undefined && (
         <div className="vibe-preview">
           <div className="vibe-preview-head">
@@ -523,28 +545,33 @@ function TaskList({
 
 /** 状态一句话：用户最想知道的是「还要等多久 / 我要做什么」。 */
 function statusLine(session: VibeSessionView): string {
-  if (session.status === 'failed') return '没做出来'
+  if (session.status === 'failed') return '这次还没通过验收'
   if (session.status === 'asking') {
     if (session.pendingAnswers <= 0) return '小队正在整理你的选择…'
-    // 一次只问一题：「一件事」比「1 件事」像人话。
     return session.pendingAnswers === 1
       ? '小队问你一件事，选完就接着往下走'
       : `小队想先问清楚 ${session.pendingAnswers} 件事，选完就开工`
   }
+  if (session.stage === 'verify') return '正在验收产物…'
+  if (session.stage === 'execute') return '正在动手做…'
+  if (session.stage === 'plan') return '正在确定做法…'
   if (session.status === 'building') return '小队正在做…'
-  return '做好了'
+  return '已验收，可以用了'
 }
 
-/** 小队走到第几步了。 */
-function stepOf(session: VibeSessionView, outputCount: number): number {
+function stepOf(session: VibeSessionView, _outputCount: number): number {
   if (session.status === 'done') return STEPS.length
   if (session.status === 'failed') return 0
-  if (session.status === 'asking') return 1
-  return outputCount > 0 ? 2 : 1
+  if (session.stage === 'verify') return 3
+  if (session.stage === 'execute') return 2
+  if (session.stage === 'plan') return 1
+  return 0
 }
 
 export function RyVibePage({
   api,
+  sessionId,
+  onSessionChange,
   providers,
   providersLoading,
   onOpenConversation,
@@ -643,9 +670,15 @@ export function RyVibePage({
         const live = sessions.find((item) => {
           return item.status !== 'done'
         })
-        const target = live ?? sessions[0]
+        const target =
+          sessionId === undefined
+            ? (live ?? sessions[0])
+            : sessions.find((item) => {
+                return item.id === sessionId
+              })
         if (target === undefined) return
         setSession(target)
+        onSessionChange?.(target.id)
         await refresh(target.id)
       } catch {
         // 找不回来就当没有上次：用户自己再开一次，不该看到一句报错。
@@ -654,7 +687,7 @@ export function RyVibePage({
     return () => {
       cancelled = true
     }
-  }, [api, refresh])
+  }, [api, onSessionChange, refresh, sessionId])
 
   /**
    * 首屏的"谁会来帮你"：拉一次通讯录，把这一轮会参与的人摆出来。
@@ -745,6 +778,7 @@ export function RyVibePage({
     try {
       const created = await api.startVibe(text)
       setSession(created.session)
+      onSessionChange?.(created.session.id)
       setQuestions([])
       setOutput([])
       setPicks({})
@@ -846,6 +880,7 @@ export function RyVibePage({
 
   const reset = (): void => {
     setSession(undefined)
+    onSessionChange?.(undefined)
     setQuestions([])
     setOutput([])
     setPicks({})
@@ -901,7 +936,20 @@ export function RyVibePage({
     if (dir === undefined) return
     void (async () => {
       const opened = await openInFileManager(dir)
-      if (!opened) toast.error('打不开这个目录，把上面的路径复制到文件管理器里就行')
+      if (!opened) toast.error('打不开这个目录，请从系统文件管理器手动打开')
+    })()
+  }
+
+  const restoreVersion = (versionId: string): void => {
+    if (session === undefined || api.restoreVibeVersion === undefined) return
+    setPreview(undefined)
+    void (async () => {
+      try {
+        await api.restoreVibeVersion?.(session.id, versionId)
+        await refresh(session.id)
+      } catch (err) {
+        toast.error(humanError(err, '没能回到这一版，再试一次'))
+      }
     })()
   }
 
@@ -1391,12 +1439,14 @@ export function RyVibePage({
       {session.project !== undefined && (
         <ProjectCard
           project={session.project}
+          versions={session.versions}
           preview={preview}
           onOpenFile={openFile}
           onClosePreview={() => {
             setPreview(undefined)
           }}
           onOpenFolder={openFolder}
+          onRestore={api.restoreVibeVersion === undefined ? undefined : restoreVersion}
         />
       )}
 

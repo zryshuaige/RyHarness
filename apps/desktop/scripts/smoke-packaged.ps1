@@ -2,7 +2,7 @@
 # 断言三件事：页面能开且防嵌套头在、无 token 调 API 被拒、新一轮的 RyVibe 路由与界面都在包里。
 
 $ErrorActionPreference = 'Stop'
-$zip = 'F:\AgenticResearch\RyAgent\apps\desktop\ryharness-release\RyHarness-win-x64.zip'
+$zip = Join-Path $PSScriptRoot '..\ryharness-release\RyHarness-win-x64.zip'
 $work = Join-Path $env:TEMP ('ryharness-smoke-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 $data = Join-Path $work 'data'
 New-Item -ItemType Directory -Force -Path $work, $data | Out-Null
