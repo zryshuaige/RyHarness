@@ -113,6 +113,8 @@ interface PluginRow {
   description: string
   group?: string
   capabilities?: { tools?: string[]; routes?: string[] }
+  /** 声明里有、运行时却查不到的能力。 */
+  missing?: string[]
   impact?: string
   enabled: boolean
   core: boolean
@@ -124,6 +126,44 @@ function rows(body: Record<string, unknown>): PluginRow[] {
 }
 
 describe('插件装配', () => {
+  it('能力声明与运行时事实对不上时，差集如实列出', async () => {
+    // 声明是给人看的，注册表才是事实。两者对不上时把差的那几项点出来，而不是
+    // 照着声明显示一个其实并不存在的能力。
+    const server = await start({
+      plugins: [
+        {
+          id: 'liar',
+          name: '说谎的插件',
+          description: '声明了它其实没有的工具与路由',
+          capabilities: { tools: ['probe_here', 'probe_gone'], routes: ['GET /api/nope'] },
+          inject: ['tools'],
+          apply: (ctx: Context) => {
+            ctx.tools.register(probeTool('here'))
+          },
+        },
+      ],
+    })
+    try {
+      const view = rows((await getJson(server, '/api/plugins')).body).find((row) => {
+        return row.id === 'liar'
+      })
+      expect(view?.missing).toContain('probe_gone')
+      expect(view?.missing).toContain('GET /api/nope')
+      // 真的注册上了的那个不算差。
+      expect(view?.missing).not.toContain('probe_here')
+
+      // 关掉的插件工具本就不在注册表里——那不是「声明错了」，不该报差集。
+      const off = await patchJson(server, '/api/plugins/liar', { enabled: false })
+      expect(off.status).toBe(200)
+      const stopped = rows((await getJson(server, '/api/plugins')).body).find((row) => {
+        return row.id === 'liar'
+      })
+      expect(stopped?.missing).toBeUndefined()
+    } finally {
+      await server.close()
+    }
+  })
+
   it('内置 core-tools 注册四个工具，llm-openai 装载默认供应商路由', async () => {
     const server = await start({
       providersConfig: {
@@ -145,7 +185,17 @@ describe('插件装配', () => {
         list.map((row) => {
           return row.id
         }),
-      ).toEqual(['core-tools', 'llm-openai', 'voice', 'voice-piper', 'todo', 'ask-user', 'grill-me', 'web-read'])
+      ).toEqual([
+        'core-tools',
+        'llm-openai',
+        'voice',
+        'voice-piper',
+        'voice-minimax',
+        'todo',
+        'ask-user',
+        'grill-me',
+        'web-read',
+      ])
       // 两个 core 恒开；其余是非 core，默认开着但可以在设置里关。
       expect(
         list
@@ -164,25 +214,25 @@ describe('插件装配', () => {
           .map((row) => {
             return row.id
           }),
-      ).toEqual(['voice', 'voice-piper', 'todo', 'ask-user', 'grill-me', 'web-read'])
+      ).toEqual(['voice', 'voice-piper', 'voice-minimax', 'todo', 'ask-user', 'grill-me', 'web-read'])
       expect(list.every((row) => row.enabled && row.status === 'running')).toBe(true)
     } finally {
       await server.close()
     }
   })
 
-  it('GET /api/plugins 返回分组、能力清单与关闭影响，八个内置插件齐全', async () => {
+  it('GET /api/plugins 返回分组、能力清单与关闭影响，九个内置插件齐全', async () => {
     const server = await start({})
     try {
       const { status, body } = await getJson(server, '/api/plugins')
       expect(status).toBe(200)
       const list = rows(body)
-      expect(list).toHaveLength(8)
+      expect(list).toHaveLength(9)
       expect(
         list.map((row) => {
           return row.group
         }),
-      ).toEqual(['core', 'core', 'voice', 'voice', 'feature', 'feature', 'feature', 'tool'])
+      ).toEqual(['core', 'core', 'voice', 'voice', 'voice', 'feature', 'feature', 'feature', 'tool'])
       expect(
         list.every((row) => {
           return typeof row.impact === 'string' && row.impact.length > 0

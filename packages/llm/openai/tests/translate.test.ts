@@ -48,7 +48,11 @@ describe('translateChunks', () => {
           reasoningTokens: 2,
         },
       },
-      { type: 'finish', reason: { kind: 'stop' } },
+      {
+        type: 'finish',
+        reason: { kind: 'stop' },
+        replayState: { response: { id: '1' } },
+      },
     ])
   })
 
@@ -61,8 +65,42 @@ describe('translateChunks', () => {
       { type: 'block-start', index: 0, blockType: 'text' },
       { type: 'text-delta', index: 0, text: 'Hi' },
       { type: 'block-end', index: 0, block: { type: 'text', text: 'Hi' } },
-      { type: 'finish', reason: { kind: 'stop' } },
+      { type: 'finish', reason: { kind: 'stop' }, replayState: { response: { id: '1' } } },
     ])
+  })
+
+  it('成功的响应带上 replay 元数据（响应 id / 模型），失败的那次没有', async () => {
+    // 这份元数据是「换成另一个供应商继续对话」时唯一丢不掉的东西：内容块在装配层
+    // 已经成型，但这条 id 能追溯到供应商侧的那次响应。适配器从前从不产出它，
+    // 于是装配层的 replay 分支在生产链路上一直是死的。
+    const ok = await collect([
+      chunk({ id: 'resp-1', model: 'demo-model', created: 1700, choices: [{ index: 0, delta: { content: 'Hi' } }] }),
+      chunk({
+        id: 'resp-1',
+        model: 'demo-model',
+        created: 1700,
+        choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+      }),
+    ])
+    const finish = ok.find((chunk) => {
+      return chunk.type === 'finish'
+    })
+    expect(finish).toEqual({
+      type: 'finish',
+      reason: { kind: 'stop' },
+      replayState: { response: { id: 'resp-1', created: 1700, model: 'demo-model' } },
+    })
+
+    // 供应商连 id 都没给时不产出一个空壳 envelope。
+    const bare = await collect([
+      chunk({ choices: [{ index: 0, delta: { content: 'Hi' } }] }),
+      chunk({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }),
+    ])
+    expect(
+      bare.find((chunk) => {
+        return chunk.type === 'finish'
+      }),
+    ).toEqual({ type: 'finish', reason: { kind: 'stop' } })
   })
 
   it('assembles reasoning_content into a reasoning block ahead of visible text', async () => {

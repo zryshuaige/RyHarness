@@ -251,7 +251,13 @@ export function RightPanel({
   )
 }
 
-/** 待办区依赖的三条接口（与 ApiClient 上的可选属性同形）。 */
+/**
+ * 待办区依赖的三条接口（与 ApiClient 上的方法同形）。
+ *
+ * 能力探测用 `typeof` 而不是 `=== undefined`：客户端类型上这几个方法是必填的
+ * （生产环境一定在），但组件测试里的最小替身可能整块没有——那属于运行期事实，
+ * 不该靠类型说谎来表达。
+ */
 interface TodoClient {
   listTodos(conversationId: string): Promise<TodoGroup>
   setTodoDone(conversationId: string, id: string, done: boolean): Promise<TodoGroup>
@@ -262,12 +268,14 @@ interface TodoClient {
 
 function todoClientOf(api: ApiClient): TodoClient | undefined {
   const { listTodos, setTodoDone, clearTodos, restoreTodos } = api
-  if (listTodos === undefined || setTodoDone === undefined || clearTodos === undefined) return undefined
+  if (typeof listTodos !== 'function' || typeof setTodoDone !== 'function' || typeof clearTodos !== 'function') {
+    return undefined
+  }
   return {
     listTodos,
     setTodoDone,
     clearTodos,
-    ...(restoreTodos === undefined ? {} : { restoreTodos }),
+    ...(typeof restoreTodos === 'function' ? { restoreTodos } : {}),
   }
 }
 

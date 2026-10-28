@@ -15,7 +15,7 @@ pnpm dev          # 等价于 tsx src/main.ts（在 apps/server 目录）
 
 ## HTTP API
 
-统一约定：JSON；错误为 `{ "error": string }`；`content-type: application/json; charset=utf-8`。非法 JSON body 与非法 URL 编码回 **400**（客户端错误），不污染 500。
+统一约定：JSON；错误为 `{ "error": string, "code": string }`（`code` 是机器可读的分类，调用方按它分支，不去解析 `error` 文本；没有显式给码时按状态码回落到标准名）；`content-type: application/json; charset=utf-8`。非法 JSON body 与非法 URL 编码回 **400**（客户端错误），不污染 500。
 
 ### Agents
 
@@ -26,6 +26,8 @@ pnpm dev          # 等价于 tsx src/main.ts（在 apps/server 目录）
 | `PATCH /api/agents/:id` | 合并更新：与 POST 同款字段白名单校验（类型错误回 **400**，未知键丢弃；`isBuiltin` 不可变）。 |
 | `DELETE /api/agents/:id` | 删除；builtin 返回 **409**；同时把该 agent 从所有会话的成员/调度员列表摘除。 |
 | `GET /api/agent-templates` | 内置模板清单：`general`(通用助理 Ryen) / `coding` / `writing` / `translation` / `file-organizer`，各含 `suggestedSystemPrompt`、`defaultTools`、`defaultModel`。 |
+| `GET /api/agent-voices` | **遗留接口**：旧的音色清单。新界面走 `GET /api/voice/catalog`（插件提供），这个只为兼容旧客户端保留。 |
+| `POST /api/agents/:id/affinity` | 手动调亲密度：`{ event }`。常规路径不走它——👍/👎 反馈经 `POST /api/feedback` 内联 bump；这个接口供手动调参与外部脚本使用。 |
 
 ### Conversations
 
@@ -34,11 +36,21 @@ pnpm dev          # 等价于 tsx src/main.ts（在 apps/server 目录）
 | `GET /api/conversations` | 按 updatedAt 倒序；每项附 `lastMessagePreview`（前 120 字符）与 `unreadCount`（seq > lastReadSeq 且非用户发送、含文本块的消息条数）。有主动消息落过的会话另附 `proactive:true`（列表行的"主动"角标，见「主动消息」一节）。 |
 | `POST /api/conversations` | `{"kind":"direct","agentId"}` 或 `{"kind":"group","memberAgentIds":[...],"dispatcherAgentId?","title?"}`（dispatcher 默认 `ryen`；成员须已存在，且**dispatcher 必须在 memberAgentIds 里**，否则 **400** 不建群）。 |
 | `GET /api/conversations/:id` | 详情。 |
+| `PATCH /api/conversations/:id` | 改会话：`{ pinned?, muted?, title?, memberAgentIds?, dispatcherAgentId? }`。置顶/静音/改名/群成员覆盖。 |
 | `DELETE /api/conversations/:id` | 删除；消息与调度事件级联清除。 |
+| `POST /api/conversations/:id/restore` | 恢复被软删的会话（`deleted_at` 清空即回到列表）。 |
+| `POST /api/conversations/:id/cancel` | 取消当前正在跑的一轮：已收到的文本固化落库，以 `ABORTED` 收尾，挂在该轮上的审批卡一并撤掉。 |
+| `POST /api/conversations/:id/read` | 标记已读（推进 `last_read_seq`），未读徽标与角标随之清零。 |
+| `POST /api/conversations/:id/approvals/:approvalId` | 工具审批决议：body `{ decision: 'allow'\|'deny' }` → **200**。审批卡由 `approval-request` 事件推给界面；决议后广播 `approval-resolved`。未知审批 id 回 **404**。 |
+| `GET /api/conversations/:id/dispatch` | 群聊调度轨迹：`{ events: [{fromAgent?, toAgent, reason, turnIndex}] }`，按写入顺序返回（`reason` 与 WS 的 `dispatch` 事件同口径）。 |
+| `GET /api/search?q=<关键词>&conversationId=<id>?` | 全库消息全文检索（FTS5 + 中文 bigram）：`{ results: [{messageId, conversationId, seq, senderType, senderId?, createdAt, text, score}] }`，按 BM25 相关度升序（越小越相关）。`conversationId` 缺省搜全库。 |
 | `GET /api/conversations/:id/messages?before=<seq>&limit=<n>` | 游标分页：`before` 为 seq 游标（向过去翻页），默认取最新 50 条（上限 200），seq 升序返回。 |
 | `GET /api/conversations/:id/messages?since=<seq>&limit=<n>` | 增量补齐：只回 seq **大于** `since` 的消息（断线重连按 seq 缺口回拉），seq 升序、取最新 `limit` 条；`since` 不是数字回 **400**（悄悄当 0 会把整段历史当增量发过去）。与 `before` 互斥，`since` 优先。 |
 | `GET /api/conversations/:id/stream-seq` | 该会话当前的事件序号（WS 握手前取基线用）。 |
 | `POST /api/conversations/:id/messages` | body `{ "text": "..." }` → **202** `{accepted:true, conversationId, streamSeq}`；处理异步进行，过程经 WS 推送。 |
+| `POST /api/conversations/:id/messages/:seq/edit` | 改写一条用户消息（其后消息一并截断重来）。只允许改纯文本用户消息。 |
+| `POST /api/conversations/:id/messages/:seq/regenerate` | 从某条消息重新生成（丢掉它之后的发言重来）。 |
+| `POST /api/conversations/:id/branch` | 从某条消息分叉出一个新会话：body `{ atSeq, title? }` → `{ conversation }`。原会话不动。 |
 
 消息行结构（StoredMessage）：`{ id, seq, conversationId, senderType: 'user'|'agent'|'system', senderId?, contentBlocks, mentions, toolCallId?, turnIndex, usage?, createdAt }`。`contentBlocks` 为 @ryharness/llm 的 ContentBlock JSON；`usage` 只挂在模型调用产出的 assistant 消息上（`{inputTokens, outputTokens, totalTokens?, …}`），`GET /api/usage` 的账单就是从这里聚合出来的。
 
@@ -51,6 +63,8 @@ pnpm dev          # 等价于 tsx src/main.ts（在 apps/server 目录）
 | `GET /api/memory/archived` | 已归档（巩固判定长期零访问、status=inactive）的记忆，**全量**返回 `{ items }`，由调用方按 agentId 过滤。记忆系统关闭时回 `{ items: [] }`（面板每次打开都会拉，不该因此报错）。 |
 | `POST /api/memory/restore` | body `{id}`：把一条归档记忆拉回 active（重新入检索与 FTS 索引）。不存在回 **404**，非归档状态回 **409**（软删不能靠 id 复活），记忆系统关闭回 **409**。 |
 | `POST /api/memory/reembed` | 重建向量索引：为存量记忆回填当前 embedding 模型的向量（换模型后旧向量会被检索侧排除，不回填等于旧记忆静默退化成只走 BM25），返回 `{reembedded: n}`。无 embedding 凭据（纯 FTS5）或记忆系统关闭回 **409**——不假装"重建成功 0 条"。 |
+| `POST /api/memory/embedding` | 指定向量模型：body `{ providerId, model }` → **200** `{embedding:{providerId, model}}`。写 `providers.json` 并**热替换**记忆服务里的向量来源（不必重启）。供应商不存在回 **400**；供应商没配凭据（非 Ollama）回 **400**；缺参数回 **400**。换模型等于换向量空间：旧向量与新模型不同维也不同义，检索侧按模型 id 过滤，存量向量要靠 `/api/memory/reembed` 回填。 |
+| `DELETE /api/memory/embedding` | 撤掉显式配置，回到「跟随供应商自动判定」（自动判定只认 SiliconFlow 的默认向量模型——其余家猜一个模型 id 就会让整库向量静默塌成 -1，所以这里不给"自动"留幻觉）。 |
 | `GET /api/memory/stats` | 记忆统计 + embedding 可用性 + `recentLearned`（近 24h 新增）+ `consolidation`（周期与上次巩固时间）。 |
 | `GET /api/memory/health` | 记忆库整体健康度（一次请求给全，不用再去拼 stats / archived / telemetry 三条）：`{ enabled:true, total, archived, missingVectors, bySpace, dbBytes, embeddings:{label,model,dim?}, lastRecall? }`。`total` 含归档与软删链（口径同 `/api/memory/stats`），`missingVectors` 只数 active + inactive 中缺**当前** embedding 模型向量的条目，`dim` 在一条向量都没有时缺省而不猜；`lastRecall` 取遥测环形缓冲里最近一轮真的注入了记忆的轮次（`{conversationId, items, ms, at}`，只存在于本次运行内）。`dbBytes` 是 `<dataDir>` 下库文件（含 WAL）的总字节——记忆与会话/进化共用同一个 `ryharness.db`，这是"数据一共多大"而非"记忆独占多少"。记忆系统关闭回 **200** `{enabled:false}`，未知查询参数回 **400**。 |
 | `POST /api/feedback` | `{conversationId, agentId, signal: thumb_up\|thumb_down, messageId?}`——👎 即时反思 + 归因 harmful；👍 归因 helpful。亲密度 bump 内联在这里做（反馈被接受才涨），回包带更新后的 `agent`。带 `messageId` 时按 messageId+signal 防刷去重：同一消息同一信号重复提交幂等返回 `{recorded:false, duplicate:true}`，不动亲密度、不进进化通道；换信号算改主意，照常接受。进化系统关闭回 **409**。 |
@@ -90,8 +104,18 @@ agent 每天至多主动说一次：把**确实发生过**的变化（手册新�
 | `POST /api/providers` | 新增供应商：body `{ displayName, protocol, baseUrl, models[], apiKey?, presetId? }` → **201** `{provider: ProviderInfo}`。路由写 `providers.json`，明文 key 写 `api-keys.json`（0600）；随后**热注册**适配器，不重启。校验失败（缺 displayName / 非法 protocol / 非 http(s) baseUrl / 空 models / 未知 presetId）回 **400**。`protocol: 'ollama'` 允许不填 key；其余也允许先留空（缺 key 的路由指向预留环境变量 `RYHARNESS_API_KEY_<ID>`，真正用到时以"缺凭据"在本地失败，而不是发假 token 换回 401）。id 取未占用的 `presetId`，否则 `custom-<8位>`。 |
 | `DELETE /api/providers/:id` | 删除用户添加的供应商（路由 + 其 key 一起清掉并热摘适配器）；内置条目回 **409**，未知 id 回 **404**。 |
 | `POST /api/settings/api-key` | `{providerId, apiKey}`：写 `api-keys.json`（0600）并热更新适配器配置；未知 provider 回 **404**。 |
-| `GET /api/plugins` | 插件清单：`{ plugins:[{ id, name, description, group?, capabilities?:{tools?,routes?}, impact?, enabled, core, status, error? }] }`。`group` 给设置页分组（`core`/`feature`/`voice`/`tool`），`capabilities` 声明该插件提供的工具名与 HTTP 路由，`impact` 是关闭后果的一句人话；`status` 是运行态（`running`/`stopped`/`error`），不是配置文件里的愿望值。 |
-| `PATCH /api/plugins/:id` | body `{ enabled: boolean }` → **200** `{plugin}`。切换会**真实卸载/重挂**该插件的 cordis fiber（注册表里的工具与模型路由同时增减），不是只写配置；`core` 插件（`core-tools`、`llm-openai`）回 **403** `CORE_PLUGIN`，未知 id 回 **404**。开关落盘在 `<dataDir>/config/plugins.json`（缺省=启用）。 |
+| `GET /api/plugins` | 插件清单：`{ plugins:[{ id, name, description, group?, capabilities?:{tools?,routes?}, impact?, enabled, core, status, error?, missing? }] }`。`group` 给设置页分组（`core`/`feature`/`voice`/`tool`），`capabilities` 声明该插件提供的工具名与 HTTP 路由，`impact` 是关闭后果的一句人话；`status` 是运行态（`running`/`stopped`/`error`），不是配置文件里的愿望值。`missing` 列出**声明里有、运行时却查不到**的能力（只核对已挂载的插件；关掉的插件工具本就不在注册表里，那不算声明错了）。 |
+| `PATCH /api/plugins/:id` | body `{ enabled: boolean }` → **200** `{plugin}`。切换会**真实卸载/重挂**该插件的 cordis fiber（注册表里的工具与模型路由同时增减），不是只写配置；`core` 插件（`core-tools`、`llm-openai`）回 **403** `CORE_PLUGIN`，未知 id 回 **404**。开关落盘在 `<dataDir>/config/plugins.json`（缺省=启用）。开关本来就是开着的插件再 PATCH 一次 `enabled:true`，服务端会**重新挂载**它——这就是设置页「重试」按钮背后那一步。 |
+| `GET /api/todos?conversationId=<id>` | 待办清单（`todo` 插件的路由）：`{ items }`。插件关闭时这条路由不存在（404）。 |
+| `PATCH /api/todos/:id` | 勾选/取消一条待办：body `{ conversationId, done }`。 |
+| `DELETE /api/todos?conversationId=<id>` | 清空这个会话的待办。 |
+| `POST /api/todos/restore` | 撤销清空：body `{ conversationId, items }`，把被清掉的那批原样写回（id 与勾选状态都不变）。 |
+| `GET /api/voice/catalog` | 音色目录（`voice` 插件的路由）：系统音色、云端音色与插件注册进来的音色。未安装/未配置的引擎连同原因一起给，不等用户点了才失败。 |
+| `POST /api/voice/speak` | 合成一段语音：body `{ text, voiceId, … }` → 音频。 |
+| `GET /api/voice/engines/piper/status` | 离线 Piper 引擎的安装状态（`voice-piper` 插件的路由）。 |
+| `POST /api/voice/engines/piper/install` | 下载并安装离线 Piper 引擎（`voice-piper` 插件的路由）。二进制与模型不随安装包分发，用户点了才从公开镜像下载。 |
+| `GET /api/workspace` | 工具工作区路径（`<dataDir>/workspace`）。 |
+| `POST /api/backup` | 备份：把会话库与配置打成一个包，回下载链接。 |
 | `GET /api/questions?conversationId=<id>&status=pending` | `ask_user` 的问题列表：`{ questions:[{ id, conversationId, agentId?, question, options?, multiple?, askedAt, answer?, selected?, answeredAt?, deliveredAt? }] }`。`status` 取 `pending`/`answered`/`all`（缺省 all）；会话不存在回 **404**。 |
 | `POST /api/questions/:id/answer` | body `{ text, selected?: string[] }` → **200** 问题对象。`text` 非空；回答写入 `<dataDir>/questions.json`，下一轮用户消息会把它注入发起提问的 agent。未知 id 回 **404**。 |
 | `GET /api/files/:name` | 下载 `workspace/.ryharness-artifacts/` 下的产物文件；只允许叶子文件名（含 `/`、`\` 返回 **400**），MIME 按扩展名推断。 |
@@ -114,13 +138,16 @@ agent 每天至多主动说一次：把**确实发生过**的变化（手册新�
 
 | 事件 | 字段 | 时机 |
 |---|---|---|
-| `message-start` | `conversationId, senderId, senderName, turnIndex` | 一条消息开始：用户消息提交时（senderId=`user`）以及每个 agent 开始生成时（senderId=agent id）。 |
+| `message-start` | `conversationId, senderId, senderName, turnIndex, proactive?` | 一条消息开始：用户消息提交时（senderId=`user`）以及每个 agent 开始生成时（senderId=agent id）。`proactive` 为 true 时表示这条是主动消息（每日回顾），界面据此给「Ryen 主动找你」的标识。 |
 | `text-delta` | `conversationId, senderId, text` | 流式文本增量。 |
 | `tool-call-start` | `conversationId, senderId, callId, name, arguments` | 模型发起工具调用（arguments 为原始 JSON 字符串）。 |
 | `tool-result` | `conversationId, senderId, callId, name, isError, content` | 工具执行完成。 |
 | `produce-card` | `conversationId, senderId, callId, card: { path, name, size, mime }` | file_produce 等产物元数据；UI 据此渲染文件消息，`path` 可直接喂给 `GET /api/files/:name`。 |
 | `dispatch` | `conversationId, fromAgent?, toAgent, reason, turnIndex` | 群聊调度决策：`user-mention` / `default-dispatcher` / `relay @名字` / `loop-guard` / `max-turns`。 |
-| `message-done` | `conversationId, senderId, turnIndex` | 一条消息完整落库（agent 发言组装完成）。 |
+| `message-done` | `conversationId, senderId, turnIndex, usage?` | 一条消息完整落库（agent 发言组装完成）。`usage` 是这次模型调用的 token 开销（`{inputTokens, outputTokens, …}`），账单聚合用的就是它。 |
+| `queued` | `conversationId, position?` | 这一轮被排进队列（同一会话内的轮次串行执行）。 |
+| `approval-request` | `conversationId, approvalId, toolName, arguments` | 工具要用户点头（`shell_exec` 这类有副作用的工具）。界面据此弹审批卡并停住这一轮。 |
+| `approval-resolved` | `conversationId, approvalId, decision` | 审批有结果了：`allow` / `deny` / `timeout` / `cancelled`。 |
 | `error` | `conversationId, message, code` | 一轮中的失败（LLM 错误、内部错误）；已完成的发言保留并已落库。 |
 
 一轮的典型顺序（群聊接力）：`message-start(user)` → `dispatch` → `message-start(agentA)` → `text-delta…` → `message-done(A)` → `dispatch(relay)` → `message-start(agentB)` → `text-delta…` → `message-done(B)`。
@@ -129,7 +156,7 @@ agent 每天至多主动说一次：把**确实发生过**的变化（手册新�
 
 `RyHarnessServer.create(options)`：
 - `mountLlm(ctx)`：替换默认 OpenAI 适配器挂载（测试注入 mock）；
-- `plugins`：在全部内置插件之后追加的插件清单（`core-tools`、`llm-openai`、`voice`、`voice-piper`、`todo`、`ask-user`、`web-read`），用于测试注入与预留的用户插件位；
+- `plugins`：在全部内置插件之后追加的插件清单（`core-tools`、`llm-openai`、`voice`、`voice-piper`、`voice-minimax`、`todo`、`ask-user`、`grill-me`、`web-read`），用于测试注入与预留的用户插件位；
 - `providersConfig`：内存覆盖 providers.json；
 - `llm`（只读）：`LlmRuntime`，用于查已注册的供应商路由与模型目录；
 - `tools`（只读）：`ToolRegistry`，当前注册的工具（按 agent 白名单逐轮解析）；

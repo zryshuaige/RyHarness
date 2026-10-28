@@ -166,7 +166,7 @@ describe('GET /api/voice/catalog', () => {
         body.engines.map((engine) => {
           return engine.id
         }),
-      ).toEqual(['system', 'siliconflow', 'piper'])
+      ).toEqual(['system', 'siliconflow', 'piper', 'minimax'])
       // 系统音色不依赖任何配置，恒可用；没设 SILICONFLOW_API_KEY 时云端不可用。
       expect(body.engines.find((engine) => engine.id === 'system')?.available).toBe(true)
       expect(body.engines.find((engine) => engine.id === 'siliconflow')?.available).toBe(false)
@@ -174,9 +174,15 @@ describe('GET /api/voice/catalog', () => {
       const piper = body.engines.find((engine) => engine.id === 'piper')
       expect(piper?.available).toBe(false)
       expect(piper?.reason).toContain('离线语音包还没下载')
-      // 三类音色都在，且云端那组的 voice 带模型前缀（端点只认这种写法）。
+      // 声线文件那条（猫猫音）同理：没配 MiniMax 的 key 就说清楚为什么不能念。
+      const minimax = body.engines.find((engine) => engine.id === 'minimax')
+      expect(minimax?.available).toBe(false)
+      expect(minimax?.reason).toContain('API Key')
+      // 几类音色都在，且云端那组的 voice 带模型前缀（端点只认这种写法）。
       expect(body.profiles.some((profile) => profile.engine === 'system')).toBe(true)
       expect(body.profiles.some((profile) => profile.engine === 'piper')).toBe(true)
+      // 声线文件里的猫猫音也在目录里：改文件即改念法，用户要能在下拉里挑到它。
+      expect(body.profiles.some((profile) => profile.id === 'ryen-cat')).toBe(true)
       expect(body.profiles.some((profile) => profile.voice.includes(':'))).toBe(true)
       for (const profile of body.profiles) {
         expect(profile.sampleText.length).toBeGreaterThan(0)

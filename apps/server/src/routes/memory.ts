@@ -27,6 +27,21 @@ export interface MemoryRoutes {
   dataDir: string
   /** 运行时计量（"最近一次召回"取自轮次计量）。 */
   telemetry: Telemetry
+  /**
+   * 向量模型配置：读当前值、改成新值（写盘 + 热替换记忆服务里的 embeddings）。
+   *
+   * 缺省时路由不提供这个能力（POST /api/memory/embedding 回 404）：记忆系统
+   * 关闭或这套装配没有供应商配置时，没什么可改的。
+   */
+  embedding?: {
+    /** 当前配置；缺省表示「跟随供应商自动判定」。 */
+    current(): { providerId: string; model: string } | undefined
+    /**
+     * 写入新的向量模型；`undefined` 表示撤掉显式配置、回到自动判定。
+     * 校验不过时返回 ok:false 与一句中文原因。
+     */
+    apply(next: { providerId: string; model: string } | undefined): { ok: true } | { ok: false; error: string }
+  }
 }
 
 /** 最近一次召回（GET /api/memory/health 的 lastRecall）。 */
@@ -349,5 +364,56 @@ export function registerMemoryRoutes(router: Router, deps: MemoryRoutes): void {
       return
     }
     json(res, 200, { reembedded: await service.reembedAll() })
+  })
+
+  /**
+   * 换向量模型：让语义召回能用上用户真正在用的那家供应商。
+   *
+   * 此前向量模型只能手改 `providers.json`：换一家供应商（非 SiliconFlow）就
+   * 静默退回纯 FTS5，界面上只留一句「未配置 embedding」，用户既不知道为什么，
+   * 也没有办法在应用里改。写完立刻热替换，不用重启。
+   *
+   * 换模型等于换向量空间：旧向量与新模型不同维也不同义，检索侧按模型过滤，
+   * 旧记忆要靠 POST /api/memory/reembed 回填。
+   */
+  router.post('/api/memory/embedding', async (req, res) => {
+    const embedding = deps.embedding
+    if (embedding === undefined) {
+      json(res, 404, { error: 'embedding configuration is not available' })
+      return
+    }
+    const body = await req.body()
+    const providerId = strField(body, 'providerId')
+    const model = strField(body, 'model')
+    if (providerId === undefined || model === undefined) {
+      json(res, 400, { error: 'providerId and model are required' })
+      return
+    }
+    const result = embedding.apply({ providerId, model })
+    if (!result.ok) {
+      json(res, 400, { error: result.error })
+      return
+    }
+    json(res, 200, { embedding: { providerId, model } })
+  })
+
+  /**
+   * 撤掉显式的向量模型配置，回到「跟随供应商自动判定」。
+   *
+   * 自动判定只认 SiliconFlow（它的默认向量模型已核对过官方文档），其余供应商
+   * 猜一个模型 id 就会让整库向量静默塌成 -1——所以这里不给"自动"留幻觉。
+   */
+  router.delete('/api/memory/embedding', async (_req, res) => {
+    const embedding = deps.embedding
+    if (embedding === undefined) {
+      json(res, 404, { error: 'embedding configuration is not available' })
+      return
+    }
+    const result = embedding.apply(undefined)
+    if (!result.ok) {
+      json(res, 400, { error: result.error })
+      return
+    }
+    json(res, 200, { embedding: undefined })
   })
 }

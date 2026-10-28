@@ -198,7 +198,7 @@ export interface MemoryServiceOptions {
 
 export class MemoryService implements AgentMemory, MemoryRecallMany {
   readonly store: MemoryStore
-  private readonly embeddings: EmbeddingProvider
+  private embeddings: EmbeddingProvider
   private readonly llm: MemoryLlm | undefined
   private readonly topN: number
   private readonly log: (message: string) => void
@@ -271,6 +271,26 @@ export class MemoryService implements AgentMemory, MemoryRecallMany {
   /** 当前 embedding 模型标识（向量身份；检索时按它过滤，避免跨模型混库）。 */
   get embeddingModel(): string {
     return embeddingModelOf(this.embeddings)
+  }
+
+  /**
+   * 热替换向量模型。
+   *
+   * 用户换了供应商或向量模型后不必重启：检索与抽取立刻按新模型走。
+   * 换模型等于换向量空间——旧向量与新模型不同维也不同义，混在一起算余弦会得到
+   * 没有意义的高分，所以向量身份变了之后旧向量**不算数**：召回按
+   * {@link embeddingModel} 过滤（不同模型的记忆不参与打分），需要回填时由
+   * `/api/memory/reembed` 重建。
+   *
+   * 在途的 embedding 请求一并作废：它们是按旧模型发的，回来后属于另一个向量
+   * 空间，落进缓存就是脏数据。
+   * @param provider - 新的向量来源；传 `NullEmbeddings` 等价于退回纯 FTS5。
+   */
+  setEmbeddings(provider: EmbeddingProvider): void {
+    this.embeddings = provider
+    this.inflightEmbeddings.clear()
+    this.carriedSemantic.clear()
+    this.syncSharedScored.clear()
   }
 
   close(): void {

@@ -1,9 +1,9 @@
 {
   "name": "ryharness-root",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "RyHarness：单机多 Agent 即时通讯桌面应用（Electron + React + cordis 内核）",
+  "description": "RyHarness：带人格的多 Agent 桌面工作台（Electron + React + cordis 内核）",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -20,7 +20,7 @@
   "scripts": {
     "typecheck": "pnpm -r --filter \"./vendor/**\" run build && tsc -p tsconfig.typecheck.json",
     "lint": "biome check .",
-    "verify": "node scripts/verify-no-unknown-casts.mjs && node scripts/verify-package-deps.mjs && node scripts/verify-duplication.mjs && node scripts/verify-biome-budget.mjs && node scripts/verify-notice.mjs",
+    "verify": "node scripts/verify-no-unknown-casts.mjs && node scripts/verify-package-deps.mjs && node scripts/verify-duplication.mjs && node scripts/verify-biome-budget.mjs && node scripts/verify-notice.mjs && node scripts/verify-shots-fresh.mjs",
     "verify:notice": "node scripts/verify-notice.mjs",
     "verify:casts": "node scripts/verify-no-unknown-casts.mjs",
     "verify:deps": "node scripts/verify-package-deps.mjs",
@@ -37,7 +37,9 @@
     "smoke:siliconflow": "tsx scripts/smoke-provider.ts",
     "demo:agent": "tsx scripts/demo-agent.ts",
     "demo:group": "tsx scripts/demo-group.ts",
-    "demo:server": "tsx scripts/demo-server.ts"
+    "demo:server": "tsx scripts/demo-server.ts",
+    "voice:speak": "tsx scripts/voice/speak.ts",
+    "voice:demo": "tsx scripts/voice/demo-server.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.15",

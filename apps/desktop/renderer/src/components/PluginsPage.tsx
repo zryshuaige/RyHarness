@@ -122,12 +122,14 @@ function PluginCard({
   busy,
   onToggleOpen,
   onToggleEnabled,
+  onRetry,
 }: {
   plugin: PluginView
   open: boolean
   busy: boolean
   onToggleOpen: () => void
   onToggleEnabled: () => void
+  onRetry: () => void
 }) {
   const group = groupOf(plugin)
   const status = statusOf(plugin)
@@ -135,6 +137,7 @@ function PluginCard({
   const stalled = isStalled(plugin)
   const tools = capabilityList(plugin.capabilities?.tools)
   const routes = capabilityList(plugin.capabilities?.routes)
+  const missing = capabilityList(plugin.missing)
   const panelId = `plugin-detail-${plugin.id}`
   return (
     <article className={`plugin-card${open ? ' is-open' : ''}`} data-plugin-id={plugin.id} data-group={group}>
@@ -245,6 +248,31 @@ function PluginCard({
             <div className="plugin-detail-row">
               <span className="plugin-detail-label">失败原因</span>
               <p className="plugin-error">{humanError(plugin.error, '服务端没有留下失败原因。')}</p>
+            </div>
+          )}
+          {missing.length > 0 && (
+            // 声明与事实对不上：插件说自己提供这些能力，运行时却查不到。
+            // 与其照着声明显示一个其实不存在的能力，不如把差的那几项点出来。
+            <div className="plugin-detail-row">
+              <span className="plugin-detail-label">声明与实际不符</span>
+              <p className="plugin-error">
+                声明里有、运行时却找不到：{missing.join('、')}。这多半是插件的声明没跟上代码。
+              </p>
+            </div>
+          )}
+          {(status === 'error' || stalled) && (
+            // 失败或「开关开着却没跑」都要给一条出路：重新挂一次。服务端在开关仍为
+            // 开启时会重新 apply 这个插件，所以这个按钮就是重试。
+            <div className="plugin-detail-row">
+              <span className="plugin-detail-label">重新挂载</span>
+              <p className="plugin-detail-text">
+                {status === 'error'
+                  ? '刚才是挂载失败（多半是它依赖的插件没开）。可以重试一次。'
+                  : '开关是开的，但它没跑起来。重试会重新挂载一次。'}
+              </p>
+              <button type="button" className="btn" disabled={busy} onClick={onRetry}>
+                {busy ? '重试中…' : '重试'}
+              </button>
             </div>
           )}
         </div>
@@ -368,6 +396,22 @@ export function PluginsPage({ api }: { api: PluginsApi }) {
     void enable(plugin)
   }
 
+  /**
+   * 重新挂载一个没跑起来的插件。
+   *
+   * 开关本来就是开着的，所以不能再走「切换」那条路（那会把开关拨成关）。服务端
+   * 在开关仍为开启、而插件没有 fiber 时会重新 apply 一次——这正是重试要的动作。
+   */
+  const retry = async (plugin: PluginView): Promise<void> => {
+    const updated = await patch(plugin, true)
+    if (updated === undefined) return
+    if (updated.status === 'error') {
+      toast.error(`「${updated.name}」还是没能挂上：${humanError(updated.error, '原因未知')}`)
+      return
+    }
+    toast.success(`「${updated.name}」已经重新挂上`)
+  }
+
   const toggleExpanded = (id: string): void => {
     setExpanded((current) => {
       const next = new Set(current)
@@ -486,6 +530,9 @@ export function PluginsPage({ api }: { api: PluginsApi }) {
                             }}
                             onToggleEnabled={() => {
                               requestToggle(plugin)
+                            }}
+                            onRetry={() => {
+                              void retry(plugin)
                             }}
                           />
                         )

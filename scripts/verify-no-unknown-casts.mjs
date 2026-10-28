@@ -150,6 +150,10 @@ allowCounts(
     'packages/session/tests/history-read.test.ts': 2,
     'packages/session/tests/store-transaction.test.ts': 2,
     'packages/session/tests/tool-history.test.ts': 1,
+    // MiniMax 语音这一轮新增的两份用例：替身里的假 fetch 要断言上游请求体，
+    // 而 fetch 的重载签名与 vi.fn 的 mock 类型对不上，只能双重断言一次。
+    'apps/server/tests/voice-minimax.test.ts': 3,
+    'packages/voice/tests/minimax.test.ts': 4,
   },
   REASON_TEST_DOUBLE,
 )

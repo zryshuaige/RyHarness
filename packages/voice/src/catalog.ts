@@ -147,16 +147,80 @@ const SILICONFLOW_PROFILES: readonly VoiceProfile[] = CLOUD_MODELS.flatMap((entr
  */
 export const VOICE_PROFILES: readonly VoiceProfile[] = [...SYSTEM_PROFILES, ...SILICONFLOW_PROFILES]
 
-/** 按 id 取音色；未知 id 返回 undefined（调用方据此回 VOICE_PROFILE_NOT_FOUND）。 */
-export function voiceProfile(id: string): VoiceProfile | undefined {
-  return VOICE_PROFILES.find((profile) => {
+/**
+ * 运行时注册的音色。
+ *
+ * 静态目录之外的东西——插件从声线文件里读出来的猫猫音、离线 Piper 那条——也得能被
+ * `voiceProfile()` 认下：人格保存时 `normalizeVoiceId` 只放行目录里有的 id，动态
+ * 音色会被洗成「不朗读」。用户在下拉里挑了这条、点试听也确实有声音，存下来却变成
+ * "不朗读"——那不是"没这条音色"，那是功能坏了。
+ */
+const runtimeProfiles = new Map<string, VoiceProfile>()
+
+/**
+ * 声线文件声明过的 id。
+ *
+ * 与 {@link runtimeProfiles} 分开记，是因为两件事的寿命不一样：条目随插件装载/卸载
+ * 来去，**id 却是永久的**——用户挑过一次的声音，装载状态变了也不该被抹掉（插件关掉
+ * 时界面显示"已下架的旧音色"，插件回来它又能用了）。
+ */
+const declaredVoiceIds = new Set<string>()
+
+/**
+ * 声明一个合法的音色 id（哪怕它此刻还没有对应的条目）。
+ *
+ * 声线文件的默认清单在模块加载时就声明一遍：这样"人格里存着 ryen-cat"这件事在
+ * 插件装载之前就已经成立，种子数据不会因为装载顺序被洗成「不朗读」。
+ * @param id - 音色 id。
+ */
+export function declareVoiceId(id: string): void {
+  declaredVoiceIds.add(id)
+}
+
+/** 这个 id 是不是一条合法的音色 id（不管它此刻能不能合成）。 */
+export function isKnownVoiceId(id: string): boolean {
+  if (declaredVoiceIds.has(id)) return true
+  return VOICE_PROFILES.some((profile) => {
     return profile.id === id
   })
 }
 
+/**
+ * 注册一条运行时音色，返回精确注销函数（重复调用幂等）。
+ *
+ * 同 id 重复注册直接覆盖：插件热重载时新的一份应当取代旧的一份，而不是报错把启动
+ * 打断——上一份已经不在目录里了，用户看到的就是新的那份。
+ * @param profile - 要进目录的音色。
+ * @returns 注销这一次注册的函数。
+ */
+export function registerVoiceProfile(profile: VoiceProfile): () => void {
+  runtimeProfiles.set(profile.id, profile)
+  declareVoiceId(profile.id)
+  let disposed = false
+  return () => {
+    if (disposed) return
+    disposed = true
+    if (runtimeProfiles.get(profile.id) === profile) runtimeProfiles.delete(profile.id)
+  }
+}
+
+/** 静态目录 + 运行时注册的全部音色（注册的在后面）。 */
+export function allVoiceProfiles(): VoiceProfile[] {
+  return [...VOICE_PROFILES, ...runtimeProfiles.values()]
+}
+
+/** 按 id 取音色；未知 id 返回 undefined（调用方据此回 VOICE_PROFILE_NOT_FOUND）。 */
+export function voiceProfile(id: string): VoiceProfile | undefined {
+  const builtin = VOICE_PROFILES.find((profile) => {
+    return profile.id === id
+  })
+  if (builtin !== undefined) return builtin
+  return runtimeProfiles.get(id)
+}
+
 /** 某个引擎下的全部音色。 */
 export function voiceProfilesForEngine(engine: VoiceEngineId): VoiceProfile[] {
-  return VOICE_PROFILES.filter((profile) => {
+  return allVoiceProfiles().filter((profile) => {
     return profile.engine === engine
   })
 }

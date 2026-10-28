@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { ApiClient, MemoryHealthReport, MemoryRow, MemoryStats, TelemetrySnapshot } from '../api.ts'
+import type { ApiClient, MemoryHealthReport, MemoryRow, MemoryStats, ProviderInfo, TelemetrySnapshot } from '../api.ts'
 import { errorDetail, humanError } from '../lib/error-text.ts'
 import { humanDuration } from '../lib/humanize.ts'
 import { toast } from '../lib/toast.ts'
@@ -388,6 +388,17 @@ export interface MemoryHealthApi {
   memoryStats?(): Promise<MemoryStats>
   telemetry?(limit?: number): Promise<TelemetrySnapshot>
   listArchivedMemories?(): Promise<{ items: MemoryRow[] }>
+  /**
+   * 供应商清单（选向量模型时用）。
+   *
+   * 没有它就不显示「配置向量模型」的入口——旧服务端没有这条路由，按钮会点不通。
+   */
+  providers?(): Promise<{ providers: ProviderInfo[] }>
+  /** 指定向量模型；缺省表示这版服务端不支持，入口不出现。 */
+  setEmbedding?(input: {
+    providerId: string
+    model: string
+  }): Promise<{ embedding: { providerId: string; model: string } }>
 }
 
 /** 遥测环形缓冲默认 50 条；翻这么多条足够找出"最近一次召回"。 */
@@ -450,6 +461,14 @@ export function MemoryHealth({
   const [telemetry, setTelemetry] = useState<TelemetrySnapshot | undefined>(undefined)
   const [archived, setArchived] = useState<number | undefined>(undefined)
   const [loading, setLoading] = useState(true)
+  /** 向量模型配置表单：默认收起，用户点了才展开。 */
+  const [editingEmbedding, setEditingEmbedding] = useState(false)
+  const [embeddingProviders, setEmbeddingProviders] = useState<ProviderInfo[] | undefined>(undefined)
+  /** 供应商清单读不到：表单要说明白，而不是留一个空下拉框让人干瞪眼。 */
+  const [embeddingProvidersFailed, setEmbeddingProvidersFailed] = useState(false)
+  const [embeddingProviderId, setEmbeddingProviderId] = useState('')
+  const [embeddingModel, setEmbeddingModel] = useState('')
+  const [savingEmbedding, setSavingEmbedding] = useState(false)
 
   useEffect(() => {
     let alive = true
@@ -530,6 +549,45 @@ export function MemoryHealth({
     return <p className="panel-empty">记忆健康度暂时读不到。</p>
   }
   const scoped = agentId !== undefined
+
+  /**
+   * 展开向量模型配置：先拉供应商清单，让用户从自己已经配好的那家里选。
+   *
+   * 拉不到清单要说清楚，而不是留一个空下拉框——那条下拉只有一项「选一家供应商…」，
+   * 保存按钮在没选中之前是禁用的，用户会以为界面坏了。
+   */
+  const openEmbeddingForm = async (): Promise<void> => {
+    setEditingEmbedding(true)
+    if (embeddingProviders !== undefined) return
+    const list = await api.providers?.().catch(fail)
+    if (list === undefined) {
+      setEmbeddingProvidersFailed(true)
+      return
+    }
+    setEmbeddingProviders(list.providers)
+    const first = list.providers[0]
+    if (first !== undefined) {
+      setEmbeddingProviderId((current) => {
+        return current === '' ? first.id : current
+      })
+    }
+  }
+
+  /** 保存向量模型：服务端写盘并热替换，这里顺带提示要重建索引。 */
+  const saveEmbedding = async (): Promise<void> => {
+    if (api.setEmbedding === undefined) return
+    setSavingEmbedding(true)
+    try {
+      await api.setEmbedding({ providerId: embeddingProviderId, model: embeddingModel.trim() })
+      toast.success('向量模型已配好，接下来重建一次索引，老记忆就能被语义检索找到了')
+      setEditingEmbedding(false)
+    } catch (error) {
+      toast.error(humanError(error, '向量模型没能保存，再试一次'))
+    } finally {
+      setSavingEmbedding(false)
+    }
+  }
+
   // 一句话把这堆数字翻成人话：光给五个数，用户不知道该担心哪一个。
   const summary = ((): string => {
     if (ftsOnly) return '还没配向量模型，现在只能按关键词找记忆。'
@@ -613,6 +671,91 @@ export function MemoryHealth({
         </div>
       </div>
       <p className="memory-health-summary">{summary}</p>
+      {ftsOnly && api.setEmbedding !== undefined && (
+        // 语义召回关着时给一条出路：当场指定用哪家的哪个向量模型。此前这件事只能
+        // 手改 providers.json，界面上只留一句「未配置 embedding」——用户既不知道
+        // 为什么检索变弱了，也没有办法在应用里改。
+        <div className="memory-embedding">
+          {editingEmbedding ? (
+            <div className="memory-embedding-form">
+              <label className="memory-embedding-label" htmlFor="memory-embedding-provider">
+                用哪家的向量模型
+              </label>
+              <select
+                id="memory-embedding-provider"
+                className="memory-embedding-select"
+                value={embeddingProviderId}
+                disabled={embeddingProvidersFailed}
+                onChange={(event) => {
+                  setEmbeddingProviderId(event.target.value)
+                }}
+              >
+                <option value="">选一家供应商…</option>
+                {(embeddingProviders ?? []).map((provider) => {
+                  return (
+                    <option key={provider.id} value={provider.id}>
+                      {provider.displayName}
+                    </option>
+                  )
+                })}
+              </select>
+              {embeddingProvidersFailed && (
+                <p className="memory-embedding-hint">
+                  读不到供应商清单。去「模型供应商」页确认有一家已经配好凭据的供应商，再回来试一次。
+                </p>
+              )}
+              <label className="memory-embedding-label" htmlFor="memory-embedding-model">
+                模型 id
+              </label>
+              <input
+                id="memory-embedding-model"
+                className="memory-embedding-input"
+                value={embeddingModel}
+                placeholder="例如 Qwen/Qwen3-Embedding-0.6B"
+                onChange={(event) => {
+                  setEmbeddingModel(event.target.value)
+                }}
+              />
+              <p className="memory-embedding-hint">
+                模型 id 要照这家供应商的文档填。填错不会报错，只是检索不出东西——向量模型不通用，
+                换个模型等于换一套坐标系。
+              </p>
+              <div className="memory-embedding-actions">
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={savingEmbedding || embeddingProviderId === '' || embeddingModel.trim() === ''}
+                  onClick={() => {
+                    void saveEmbedding()
+                  }}
+                >
+                  {savingEmbedding ? '保存中…' : '保存'}
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={savingEmbedding}
+                  onClick={() => {
+                    setEditingEmbedding(false)
+                  }}
+                >
+                  取消
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="btn memory-embedding-open"
+              onClick={() => {
+                void openEmbeddingForm()
+              }}
+            >
+              配置向量模型
+            </button>
+          )}
+        </div>
+      )}
       <p className="memory-health-foot">
         {recall === undefined ? '本次运行还没有召回记录。' : `上次召回 ${formatRelative(recall.at)}。`}
         {ftsOnly ? '当前未配置 embedding，只能按关键词检索。' : ''}

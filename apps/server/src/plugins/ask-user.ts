@@ -132,7 +132,7 @@ export function askUserPlugin(deps: AskUserPluginDeps): PluginEntry {
       tools: ['ask_user'],
       routes: ['GET /api/questions', 'POST /api/questions/:id/answer'],
     },
-    impact: '关闭后助理将无法向你提问，已有的问题记录保留；重新打开后恢复。',
+    impact: '关闭后助理将无法向你提问，待回答的旧问题也不会再回到它手里，已有的问题记录保留；重新打开后恢复。',
     inject: ['tools', 'routes'],
     apply: (ctx: Context) => {
       ctx.tools.register(createAskUserTool(deps.store))

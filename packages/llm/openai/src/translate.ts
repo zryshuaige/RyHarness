@@ -12,7 +12,7 @@
  * @module @ryharness/llm-openai/translate
  */
 
-import type { FinishReason, StreamChunk, TokenUsage, ToolCallId } from '@ryharness/llm'
+import type { FinishReason, ReplayEnvelope, StreamChunk, TokenUsage, ToolCallId } from '@ryharness/llm'
 import { EMPTY_RESPONSE_CODE, LlmError } from '@ryharness/llm'
 import type { OpenAiStreamChunk, OpenAiWireUsage } from './wire.ts'
 
@@ -21,6 +21,21 @@ type BlockState =
   | { readonly kind: 'text'; text: string }
   | { readonly kind: 'reasoning'; text: string }
   | { readonly kind: 'tool-call'; id: ToolCallId; name: string; nameSent: boolean; arguments: string }
+
+/**
+ * 成功响应的 replay 元数据。
+ *
+ * 只带响应级的东西（响应 id / 创建时间 / 模型）：OpenAI 的每块内容都能从装配好
+ * 的 block 里还原（工具 id、名字、参数都在块里），所以**不声明** `blocks`——
+ * 装配层允许「元数据与块结构无关」的适配器省略这一项，于是这份 envelope 在
+ * 装配时原样透传。
+ * @param meta - 本次流里见过的响应级元数据。
+ * @returns envelope；什么都没见到时返回 undefined（不必产出一个空壳）。
+ */
+function replayStateOf(meta: { id?: string; created?: number; model?: string }): ReplayEnvelope | undefined {
+  if (meta.id === undefined && meta.created === undefined && meta.model === undefined) return undefined
+  return { response: { ...meta } }
+}
 
 /** Map one wire usage object to the disjoint harness token accounting. */
 export function mapUsage(usage: OpenAiWireUsage): TokenUsage {
@@ -74,6 +89,14 @@ export async function* translateChunks(events: AsyncIterable<string>, model: str
   let finished = false
   /** Usage from the terminal chunk; emitted after block-end, before finish. */
   let pendingUsage: TokenUsage | undefined
+  /**
+   * 供应商回传的响应级元数据（响应 id / 模型 / 创建时间）。
+   *
+   * 这是「换成另一个供应商继续对话」时唯一丢不掉的东西：内容块在装配层已经
+   * 成型，但这条 id 能让人追溯到供应商侧的那次响应。之前适配器从不产出
+   * replayState，于是装配层的 replay 分支在生产链路上一直是死的。
+   */
+  let responseMeta: { id?: string; created?: number; model?: string } = {}
 
   /** Emit `block-end` for every block, in block order. */
   const closeAllBlocks = (): StreamChunk[] => {
@@ -109,6 +132,10 @@ export async function* translateChunks(events: AsyncIterable<string>, model: str
     if (chunk.usage !== undefined && chunk.usage !== null) {
       pendingUsage = mapUsage(chunk.usage)
     }
+    // 响应级元数据：取最后一次见到的（后续 chunk 会重复带上同样的值）。
+    if (typeof chunk.id === 'string') responseMeta = { ...responseMeta, id: chunk.id }
+    if (typeof chunk.created === 'number') responseMeta = { ...responseMeta, created: chunk.created }
+    if (typeof chunk.model === 'string') responseMeta = { ...responseMeta, model: chunk.model }
 
     for (const choice of chunk.choices) {
       // Requests never set `n`, so only choice 0 exists; a stray other index
@@ -198,7 +225,12 @@ export async function* translateChunks(events: AsyncIterable<string>, model: str
         }
         for (const end of closeAllBlocks()) yield end
         if (pendingUsage !== undefined) yield { type: 'usage', usage: pendingUsage }
-        yield { type: 'finish', reason: mapFinishReason(choice.finish_reason) }
+        yield {
+          type: 'finish',
+          reason: mapFinishReason(choice.finish_reason),
+          // 成功才有 replayState：失败的那次尝试没有可重放的东西。
+          ...(replayStateOf(responseMeta) === undefined ? {} : { replayState: replayStateOf(responseMeta) }),
+        }
         finished = true
       }
     }

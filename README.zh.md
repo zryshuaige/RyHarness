@@ -87,7 +87,7 @@ vendor/*          cordis、schemastery、cosmokit
 ```sh
 pnpm build                                  # 构建全部包
 pnpm --filter @ryharness/desktop dev        # 带热重载的桌面端
-pnpm test                                   # 213 个测试文件
+pnpm test                                   # 212 个测试文件
 pnpm lint                                   # biome，告警数有冻结基线
 pnpm verify                                 # 五道发布门禁
 ```

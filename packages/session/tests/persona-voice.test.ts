@@ -29,6 +29,14 @@ describe('音色 id 归一', () => {
     expect(normalizeVoiceId(42)).toBe(NO_VOICE_ID)
   })
 
+  it('动态注册的声线 id 也得留住：用户挑过的音色不能被洗成「不朗读」', () => {
+    // 声线文件里的猫猫音与离线 Piper 都是插件运行时才注册进来的。它们此刻能不能
+    // 合成，与"这个 id 是不是合法的音色 id"是两件事——拿后者判，用户挑过的声音
+    // 会在存盘时消失。
+    expect(normalizeVoiceId('ryen-cat')).toBe('ryen-cat')
+    expect(normalizePersona({ voiceId: 'ryen-cat' }).voiceId).toBe('ryen-cat')
+  })
+
   it('normalizePersona 走同一条迁移，且旧值不会让整份人格失败', () => {
     const persona = normalizePersona({ voiceId: 'siliconflow:warm-female' })
     expect(persona.voiceId).toBe('sf-cosyvoice2-claire')

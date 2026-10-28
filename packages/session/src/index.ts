@@ -46,6 +46,8 @@ export {
   clampTrait,
   composePersonaPrompt,
   NO_VOICE_ID,
+  nextAffinity,
+  normalizeBirthday,
   normalizePersona,
   normalizeVoiceId,
   PERSONA_DEFAULTS,
@@ -56,6 +58,7 @@ export {
   TRAIT_META,
   traitBand,
   traitMeta,
+  traitPromptLine,
   VOICE_PRESETS,
   voiceName,
 } from './persona.ts'

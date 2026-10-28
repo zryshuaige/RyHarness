@@ -646,24 +646,26 @@ export class ApiClient {
   /**
    * 当前会话的待办清单（`todo` 插件的路由）。
    *
-   * 声明成「函数或 undefined」而不是普通方法：待办由插件提供，旧版服务端或组件
-   * 测试的最小替身没有这组接口时，右栏据 `=== undefined` 整块跳过，而不是在
-   * 运行时对着一个不存在的函数调用。
+   * 这几个方法**始终存在**：待办插件可以关，但接口本身是客户端的一部分，
+   * 关掉后请求会回 404，由界面按错误处理。此前把它们声明成可选属性
+   * （`… | undefined`），是为了迁就测试里的最小替身——可那些替身本来就在
+   * 用 `as unknown as ApiClient` 绕过类型，于是「生产一定有」这件事反而被
+   * 类型说成了「可能没有」，调用方到处写 `=== undefined` 分支。
+   *
+   * 写成**箭头函数类属性**而不是原型方法：右栏会把它们从实例上解构出来
+   * 单独传（`todoClientOf`），原型方法解构后 `this` 就不是客户端了
+   * （`this.request is not a function`），箭头函数把 `this` 绑在实例上。
    */
-  listTodos: ((conversationId: string) => Promise<TodoGroup>) | undefined = (conversationId) => {
+  listTodos = (conversationId: string): Promise<TodoGroup> => {
     return this.request(`/api/todos?conversationId=${encodeURIComponent(conversationId)}`)
   }
-  setTodoDone: ((conversationId: string, id: string, done: boolean) => Promise<TodoGroup>) | undefined = (
-    conversationId,
-    id,
-    done,
-  ) => {
+  setTodoDone = (conversationId: string, id: string, done: boolean): Promise<TodoGroup> => {
     return this.request(`/api/todos/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       body: JSON.stringify({ conversationId, done }),
     })
   }
-  clearTodos: ((conversationId: string) => Promise<TodoGroup>) | undefined = (conversationId) => {
+  clearTodos = (conversationId: string): Promise<TodoGroup> => {
     return this.request(`/api/todos?conversationId=${encodeURIComponent(conversationId)}`, { method: 'DELETE' })
   }
 
@@ -672,10 +674,7 @@ export class ApiClient {
    *
    * 服务端未实现该路由时回 404 + { error: 'not found: POST /api/todos/restore' }。
    */
-  restoreTodos: ((conversationId: string, items: TodoItem[]) => Promise<TodoGroup>) | undefined = (
-    conversationId,
-    items,
-  ) => {
+  restoreTodos = (conversationId: string, items: TodoItem[]): Promise<TodoGroup> => {
     return this.request('/api/todos/restore', {
       method: 'POST',
       body: JSON.stringify({ conversationId, items }),
@@ -884,6 +883,25 @@ export class ApiClient {
   /** 重建向量索引：embedding 模型变更后为存量记忆回填向量。 */
   reembedMemories(): Promise<{ reembedded: number }> {
     return this.request('/api/memory/reembed', { method: 'POST' })
+  }
+
+  /**
+   * 指定向量模型（哪家的、哪个模型 id）。
+   *
+   * 此前向量模型只能手改 providers.json：换一家非 SiliconFlow 的供应商，语义
+   * 召回就静默退化成纯 FTS5，界面上只留一句「未配置 embedding」。现在能在应用里
+   * 直接配，写完服务端立刻热替换，不用重启。
+   */
+  setEmbedding(input: {
+    providerId: string
+    model: string
+  }): Promise<{ embedding: { providerId: string; model: string } }> {
+    return this.request('/api/memory/embedding', { method: 'POST', body: JSON.stringify(input) })
+  }
+
+  /** 撤掉显式配置，回到「跟随供应商自动判定」。 */
+  clearEmbedding(): Promise<{ embedding?: undefined }> {
+    return this.request('/api/memory/embedding', { method: 'DELETE' })
   }
 
   /**

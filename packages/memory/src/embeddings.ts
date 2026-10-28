@@ -40,9 +40,16 @@ export class OpenAiCompatibleEmbeddings implements EmbeddingProvider {
       baseURL: string
       model: string
       fetchImpl?: typeof fetch
+      /**
+       * 免鉴权端点（Ollama 这类本机服务）。
+       *
+       * 默认 false：没有 key 就当不可用，免得拿空 Bearer 去打要鉴权的端点、
+       * 每次都吃一个 401 才发现。只有确认端点不校验凭据时才打开。
+       */
+      allowAnonymous?: boolean
     },
   ) {
-    this.available = config.apiKey.length > 0
+    this.available = config.apiKey.length > 0 || config.allowAnonymous === true
     this.model = config.model
   }
 
@@ -59,7 +66,9 @@ export class OpenAiCompatibleEmbeddings implements EmbeddingProvider {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          authorization: `Bearer ${this.config.apiKey}`,
+          // 免鉴权端点不发 Authorization：带上空 Bearer 反而会让本机服务当成
+          // 「提供了错误凭据」而拒绝。
+          ...(this.config.apiKey.length === 0 ? {} : { authorization: `Bearer ${this.config.apiKey}` }),
         },
         body: JSON.stringify({ model: this.config.model, input: [...texts] }),
         signal: AbortSignal.timeout(10_000),

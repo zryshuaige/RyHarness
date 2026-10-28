@@ -404,6 +404,72 @@ describe('提问 HTTP 与插件生命周期', () => {
     }
   })
 
+  it('插件关掉后，已回答的旧问题不再注入模型', async () => {
+    // 此前问答注入不看插件开关：关掉插件后工具与路由下线了，那段「已回答的问题」
+    // 却还回到模型手里——而模型已经没有 ask_user 可用，只能拿着一份没人能再回答
+    // 的答案继续走。skill 注入看开关、问答注入不看，是同一件事的两半口径。
+    const dataDir = tempDir('off-inject')
+    const adapter = new RecordingAdapter()
+    const server = await startServer(dataDir, adapter)
+    const agentId = 'asker'
+    try {
+      server.store.upsertAgent({
+        id: agentId,
+        name: '提问者',
+        systemPrompt: '你是测试 agent。',
+        provider: 'mock',
+        model: 'mock-model',
+        tools: ['ask_user'],
+      })
+      const conversation = server.store.createConversation({
+        kind: 'direct',
+        title: '关闭后不注入',
+        memberAgentIds: [agentId],
+      })
+
+      // 先问后答：待注入列表里有内容。
+      const asked = await server.questionStore.ask({
+        conversationId: conversation.id,
+        agentId,
+        question: '关掉插件之后还会注入吗？',
+      })
+      await server.questionStore.answer(asked.id, { text: '不该被注入' })
+
+      // 关掉插件：工具与路由一起下线。
+      const off = await patchJson(server, '/api/plugins/ask-user', { enabled: false })
+      expect(off.status).toBe(200)
+      expect(server.tools.get('ask_user')).toBeUndefined()
+
+      // 再问再答：存储在组合根里，插件关掉也不清——但这一段不该再进模型。
+      const asked2 = await server.questionStore.ask({
+        conversationId: conversation.id,
+        agentId,
+        question: '第二个问题',
+      })
+      await server.questionStore.answer(asked2.id, { text: '第二个答案' })
+
+      const replyCount = (): number => {
+        return server.store.listMessages(conversation.id).filter((row) => {
+          return row.senderType === 'agent'
+        }).length
+      }
+      expect(
+        (
+          await postJson(server, `/api/conversations/${conversation.id}/messages`, {
+            text: '继续吧',
+          })
+        ).status,
+      ).toBe(202)
+      await waitUntil(() => {
+        return replyCount() === 1
+      })
+      expect(adapter.systems[0]).not.toContain('你此前问过')
+      expect(adapter.systems[0]).not.toContain('用户回答')
+    } finally {
+      await server.close()
+    }
+  })
+
   it('群聊：回答只注入发起提问的成员，没发言的成员不被标记送达', async () => {
     const dataDir = tempDir('group')
     const adapter = new RecordingAdapter()

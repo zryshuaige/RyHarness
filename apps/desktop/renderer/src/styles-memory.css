@@ -16,6 +16,21 @@
 .health-value.is-warn { color: var(--amber-text); }
 .memory-health-foot { margin: var(--space-3) 0 0; color: var(--text-tertiary); font-size: var(--fs-xs); line-height: 1.5; }
 
+/* 向量模型配置：语义召回关着时给一条出路（当场指定用哪家的哪个模型）。
+   此前这件事只能手改 providers.json，界面上只留一句说明。 */
+.memory-embedding { margin-top: var(--space-3); }
+.memory-embedding-open { width: 100%; justify-content: center; }
+.memory-embedding-form { display: flex; flex-direction: column; gap: var(--space-2); }
+.memory-embedding-label { color: var(--text-tertiary); font-size: var(--fs-xs); }
+.memory-embedding-select,
+.memory-embedding-input {
+  width: 100%; padding: var(--space-2);
+  border: 1px solid var(--divider); border-radius: var(--radius-sm);
+  background: var(--bg-surface); color: var(--text-primary); font-size: var(--fs-sm);
+}
+.memory-embedding-hint { margin: 0; color: var(--text-tertiary); font-size: var(--fs-xs); line-height: 1.5; }
+.memory-embedding-actions { display: flex; gap: var(--space-2); }
+
 .memory-archived { margin-top: var(--space-4); padding-top: var(--space-2); border-top: 1px solid var(--divider); }
 .memory-archived-toggle {
   display: inline-flex; align-items: center; gap: 6px;

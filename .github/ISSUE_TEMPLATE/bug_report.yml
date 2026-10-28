@@ -7,7 +7,7 @@ body:
     attributes:
       value: |
         提交前请先搜一遍已有 issue。**涉及凭据泄漏、本机文件越权访问的问题不要开公开 issue**，
-        走 [SECURITY.md](https://github.com/ryharness/ryharness/blob/master/SECURITY.md) 的私密通道。
+        走 [SECURITY.md](https://github.com/zryshuaige/RyHarness/blob/master/SECURITY.md) 的私密通道。
 
   - type: textarea
     id: what-happened

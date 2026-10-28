@@ -311,13 +311,60 @@ section{padding:clamp(72px,9vw,128px) 0}
 .voice-list .vplay{margin-left:auto;font-size:12px;font-weight:600;color:var(--amber-700);white-space:nowrap}
 .voice-list li.sys{background:var(--amber-wash);border-color:var(--amber-tint)}
 .pet-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
-.pet{position:relative;width:62px;height:62px;display:block;cursor:pointer}
-.pet img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;transition:opacity .3s ease,transform .3s cubic-bezier(.2,.8,.3,1)}
-.pet .p-side{opacity:0;transform:translateX(-8px) scale(.9)}
-.pet:hover .p-front{opacity:0;transform:translateX(8px) scale(.9)}
+.pet{width:62px;height:62px;border-radius:50%;overflow:hidden;background:var(--bg-subtle);border:1px solid var(--line-soft);display:block}
+.pet img{width:100%;height:100%;object-fit:contain}
 .pcard .hues{margin:14px 0 0;gap:7px}
 .pcard .hues i{width:20px;height:20px}
-.pet:hover .p-side{opacity:1;transform:none}
+
+/* ---------- motion：逐帧动作演示 ---------- */
+.demo{border:1px solid var(--line);border-radius:18px;background:var(--bg-elev);box-shadow:var(--shadow-md);padding:26px 28px}
+.demo-head{display:flex;flex-wrap:wrap;align-items:center;gap:14px;justify-content:space-between}
+.states{display:flex;gap:4px;padding:4px;background:var(--bg-subtle);border:1px solid var(--line);border-radius:11px}
+.state{padding:6px 16px;border-radius:8px;font-size:13.5px;font-weight:600;color:var(--ink-3);transition:background .2s ease,color .2s ease,box-shadow .2s ease}
+.state:hover{color:var(--ink)}
+.state.on{background:var(--bg-elev);color:var(--ink);box-shadow:var(--shadow-sm)}
+.demo-note{font-size:12.5px;color:var(--ink-3)}
+.demo-row{display:flex;flex-wrap:wrap;gap:16px;margin-top:24px}
+.demo-pet{position:relative;width:78px;height:78px;overflow:hidden;border-radius:50%;background:var(--bg-subtle);display:block}
+.demo-pet img{
+  position:absolute;top:0;left:0;width:400%;height:400%;max-width:none;
+  animation-name:frame-play;animation-duration:var(--cyc,1200ms);
+  animation-timing-function:step-end;animation-iteration-count:infinite;
+}
+@keyframes frame-play{
+  0%{transform:translate(0%,0%)}
+  6.25%{transform:translate(-25%,0%)}
+  12.5%{transform:translate(-50%,0%)}
+  18.75%{transform:translate(-75%,0%)}
+  25%{transform:translate(0%,-25%)}
+  31.25%{transform:translate(-25%,-25%)}
+  37.5%{transform:translate(-50%,-25%)}
+  43.75%{transform:translate(-75%,-25%)}
+  50%{transform:translate(0%,-50%)}
+  56.25%{transform:translate(-25%,-50%)}
+  62.5%{transform:translate(-50%,-50%)}
+  68.75%{transform:translate(-75%,-50%)}
+  75%{transform:translate(0%,-75%)}
+  81.25%{transform:translate(-25%,-75%)}
+  87.5%{transform:translate(-50%,-75%)}
+  93.75%{transform:translate(-75%,-75%)}
+  100%{transform:translate(-75%,-75%)}
+}
+@media (prefers-reduced-motion:reduce){
+  .demo-pet img{animation:none;transform:translate(0%,0%)}
+}
+.fact-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:clamp(24px,3vw,36px)}
+@media (max-width:900px){.fact-grid{grid-template-columns:repeat(2,1fr)}}
+@media (max-width:520px){.fact-grid{grid-template-columns:1fr}}
+.fact{padding:20px 22px;border:1px solid var(--line);border-radius:14px;background:var(--bg-elev)}
+.fact .fn{font-size:21px;font-weight:800;letter-spacing:-.025em;color:var(--amber-700)}
+.fact .fl{margin-top:4px;font-size:14.5px;font-weight:700}
+.fact .fs{margin-top:7px;font-size:12.5px;color:var(--ink-3);line-height:1.6}
+.imm-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin-top:clamp(22px,2.6vw,34px)}
+@media (max-width:760px){.imm-grid{grid-template-columns:1fr}}
+.imm{padding:22px 24px;border:1px solid var(--line);border-radius:14px;background:var(--bg-elev)}
+.imm h4{font-size:15.5px;font-weight:700;margin-bottom:8px}
+.imm p{font-size:13.5px;color:var(--ink-2);line-height:1.7}
 
 .ladder{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:clamp(32px,4vw,56px)}
 @media (max-width:820px){.ladder{grid-template-columns:repeat(2,1fr)}}
@@ -661,8 +708,8 @@ html.js-reveal .reveal.in{opacity:1;transform:none}
         </span>
         <h1>一群会跟你<span class="accent">熟起来</span>的<br />AI 助理</h1>
         <p class="lead">
-          现在的 Agent 大多是一个助手、一个输入框。RyHarness 是一群助理：性格能调，
-          声音不一样，长得也不一样。聊得久了他们会认得你——像微信里的联系人，也像同事。
+          现在的 Agent 大多是一个助手、一个输入框。RyHarness 是一群助理：性格能调，声音不一样，
+          长得也不一样——打字的时候爪子是真的落在键盘上的。聊得久了他们会认得你，像微信里的联系人，也像同事。
         </p>
         <div class="hero-cta">
           <a class="btn btn-primary btn-lg" href="#get">
@@ -680,7 +727,7 @@ html.js-reveal .reveal.in{opacity:1;transform:none}
           <span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>MIT 开源</span>
           <span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg>16 个音色，每个助理一把</span>
           <span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18"/></svg>48 种形象</span>
-          <span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>数据留在本机</span>
+          <span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l2-5 3 10 2-5h7"/></svg>30 张逐帧动作</span>
         </div>
       </div>
 
@@ -719,8 +766,8 @@ html.js-reveal .reveal.in{opacity:1;transform:none}
         <div class="stat"><div class="n">4<small>维</small></div><div class="l">性格滑杆</div><div class="s">外向 / 严谨 / 幽默 / 主动</div></div>
         <div class="stat"><div class="n">16</div><div class="l">个云端音色</div><div class="s">跨语种，粤语也行</div></div>
         <div class="stat"><div class="n">48</div><div class="l">种形象组合</div><div class="s">6 只动物 × 8 种毛色</div></div>
-        <div class="stat"><div class="n">198</div><div class="l">测试文件</div><div class="s">vitest 全量通过</div></div>
-        <div class="stat"><div class="n">4.52<small>MB</small></div><div class="l">安装包 asar 体积</div><div class="s">较早期 16.37 MB 降 72.4%</div></div>
+        <div class="stat"><div class="n">30</div><div class="l">张动作帧素材</div><div class="s">10 套形象 × 打字/思考/说话</div></div>
+        <div class="stat"><div class="n">210</div><div class="l">测试文件</div><div class="s">vitest 全量通过</div></div>
       </div>
     </div>
   </section>
@@ -786,21 +833,14 @@ html.js-reveal .reveal.in{opacity:1;transform:none}
 
         <div class="pcard reveal">
           <div class="pc-title">形象 <em>Avatar</em></div>
-          <div class="pc-note">一只 3D 渲染的小动物，指针移上去会转头</div>
-          <div class="pet-row">
-            <span class="pet"><img class="p-front" src="assets/animal-bear.webp" alt="熊" /><img class="p-side" src="assets/animal-bear-right.webp" alt="" aria-hidden="true" /></span>
-            <span class="pet"><img class="p-front" src="assets/animal-dog.webp" alt="柴犬" /><img class="p-side" src="assets/animal-dog-right.webp" alt="" aria-hidden="true" /></span>
-            <span class="pet"><img class="p-front" src="assets/animal-fox.webp" alt="狐狸" /><img class="p-side" src="assets/animal-fox-right.webp" alt="" aria-hidden="true" /></span>
-            <span class="pet"><img class="p-front" src="assets/animal-mouse.webp" alt="老鼠" /><img class="p-side" src="assets/animal-mouse-right.webp" alt="" aria-hidden="true" /></span>
-            <span class="pet"><img class="p-front" src="assets/animal-panda.webp" alt="熊猫" /><img class="p-side" src="assets/animal-panda-right.webp" alt="" aria-hidden="true" /></span>
-            <span class="pet"><img class="p-front" src="assets/animal-rabbit.webp" alt="兔子" /><img class="p-side" src="assets/animal-rabbit-right.webp" alt="" aria-hidden="true" /></span>
-          </div>
+          <div class="pc-note">一只 3D 渲染的小动物</div>
+PET_ROW
           <div class="hues">
             <i style="background:#F59E0B"></i><i style="background:#EF4444"></i><i style="background:#EC4899"></i>
             <i style="background:#A855F7"></i><i style="background:#3B82F6"></i><i style="background:#10B981"></i>
             <i style="background:#F97316"></i><i style="background:#6B7280"></i>
           </div>
-          <p class="pc-foot">6 种动物 × 8 种毛色 = 48 种组合。染色跑在 GPU 上，实时可切；闲置时偶尔眨一下眼或者笑一下，指针停上去会抬爪打招呼。</p>
+          <p class="pc-foot">6 种动物 × 8 种毛色 = 48 种组合。染色跑在 GPU 上，实时可切。闲置时偶尔眨一下眼或者笑一下；它动起来是什么样，见下一节。</p>
         </div>
       </div>
 
@@ -813,6 +853,66 @@ html.js-reveal .reveal.in{opacity:1;transform:none}
       <p class="note reveal" style="text-align:center;margin-top:20px">
         亲密度是聊天轮次和 👍 / 👎 攒出来的。我们没做「好感度 +5」那种数值游戏——档位靠你们之间真实发生的事跨过去。生日和首次相遇也都记着。
       </p>
+    </div>
+  </section>
+
+  <!-- ============ MOTION ============ -->
+  <section id="motion">
+    <div class="wrap">
+      <div class="sec-head center reveal">
+        <span class="eyebrow">Immersion</span>
+        <h2>他们真的在动</h2>
+        <p>不是 CSS 抖一抖。每个形象配了一套真的动作帧——AI 生成 4×4 帧表，构建期抠图、统一比例，切成 1024×1024 的精灵图，运行时逐格平移播放。打字时爪子落在键盘上，思考时头会偏一点。</p>
+      </div>
+
+      <div class="demo reveal">
+        <div class="demo-head">
+          <div class="states" role="tablist">
+            <button class="state on" data-state="typing">打字</button>
+            <button class="state" data-state="thinking">思考</button>
+            <button class="state" data-state="talking">说话</button>
+          </div>
+          <div class="demo-note">下面这六只是真的在播帧，不是 GIF</div>
+        </div>
+        <div class="demo-row">
+            <span class="demo-pet" data-set="an3d-bear"><img src="assets/frames/an3d-bear-typing.webp" alt="熊，正在打字" /></span>
+            <span class="demo-pet" data-set="an3d-dog"><img src="assets/frames/an3d-dog-typing.webp" alt="柴犬，正在打字" /></span>
+            <span class="demo-pet" data-set="an3d-fox"><img src="assets/frames/an3d-fox-typing.webp" alt="狐狸，正在打字" /></span>
+            <span class="demo-pet" data-set="an3d-mouse"><img src="assets/frames/an3d-mouse-typing.webp" alt="老鼠，正在打字" /></span>
+            <span class="demo-pet" data-set="an3d-panda"><img src="assets/frames/an3d-panda-typing.webp" alt="熊猫，正在打字" /></span>
+            <span class="demo-pet" data-set="an3d-rabbit"><img src="assets/frames/an3d-rabbit-typing.webp" alt="兔子，正在打字" /></span>
+        </div>
+      </div>
+
+      <div class="fact-grid">
+        <div class="fact"><div class="fn">30</div><div class="fl">张精灵图</div><div class="fs">10 套形象 × 3 种状态</div></div>
+        <div class="fact"><div class="fn">16</div><div class="fl">帧一张</div><div class="fs">4×4 帧表，一轮 8–20fps</div></div>
+        <div class="fact"><div class="fn">随性格</div><div class="fl">走节奏</div><div class="fs">外向的说话快，严谨的思考慢</div></div>
+        <div class="fact"><div class="fn">各就各位</div><div class="fl">按状态播</div><div class="fs">正在输出播说话帧，打字行播打字帧，思考中播思考帧</div></div>
+      </div>
+
+      <p class="note reveal" style="text-align:center;margin-top:20px">
+        闲置时是静态图；剪影和 DiceBear 没有帧素材，仍走 CSS 微动效，两条路不叠加。系统开了「减少动态效果」就停在第一帧——那一帧本身就是完整的形象，停住仍然读得出是谁在干活。
+      </p>
+
+      <div class="imm-grid">
+        <div class="imm">
+          <h4>滚轮真的能翻历史</h4>
+          <p>长会话走窗口化，哨兵高度过去是猜的，滚动位置却是真实像素，两者一偏，你刚往上滚就被拽回最下面。现在量一次已渲染轮次的真实高度，哨兵与窗口用同一个高度，映射自洽。</p>
+        </div>
+        <div class="imm">
+          <h4>文件预览开在右栏</h4>
+          <p>产物点开不再另开一层。文件预览、记忆、经验手册、调度轨迹共用右栏，一条都不挤。</p>
+        </div>
+        <div class="imm">
+          <h4>操作条不再压正文</h4>
+          <p>窄列时气泡落到操作条下沿，通道宽度按真实按钮数算，不再凭空占一截把正文盖住。</p>
+        </div>
+        <div class="imm">
+          <h4>窄窗右栏不再白占一列</h4>
+          <p>窗口再窄一点时，右栏收成覆盖式抽屉，聊天区原来会被硬挤掉 280px。</p>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -835,6 +935,11 @@ html.js-reveal .reveal.in{opacity:1;transform:none}
           <div class="cmp-k">关系</div>
           <div class="cmp-alt">一个助手，性格写在 system prompt 里</div>
           <div class="cmp-us"><b>一群助理</b>，性格、声音、形象、亲密度都是结构化数据——能改、能试听、能换脸，可编辑、可 fork</div>
+        </div>
+        <div class="cmp-row">
+          <div class="cmp-k">动作</div>
+          <div class="cmp-alt">一张静止的头偶尔抖一抖</div>
+          <div class="cmp-us"><b>逐帧动作</b>——打字 / 思考 / 说话各一套帧，节奏跟着性格走</div>
         </div>
         <div class="cmp-row">
           <div class="cmp-k">协作</div>
@@ -922,14 +1027,33 @@ html.js-reveal .reveal.in{opacity:1;transform:none}
       </div>
 
       <div class="tabs reveal" role="tablist">
-        <button class="tab on" data-tab="t1">群聊接力</button>
+        <button class="tab on" data-tab="t1">聊天</button>
+        <button class="tab" data-tab="t6">群聊接力</button>
         <button class="tab" data-tab="t2">通讯录</button>
+        <button class="tab" data-tab="t7">插件</button>
         <button class="tab" data-tab="t3">形象定制</button>
         <button class="tab" data-tab="t5">RyVibe</button>
         <button class="tab" data-tab="t4">首屏</button>
       </div>
 
       <div class="panel on" id="t1">
+        <div class="panel-grid">
+          <div>
+            <h3>聊起来就像真有人在</h3>
+            <p class="pd">正在输出的那位会真的动起来。气泡下沿是朗读、复制、点赞、点踩、引用、展开——窄列时它落到气泡下沿，不压正文。</p>
+            <ul>
+              <li>回复里的 <code>@</code> 是一枚琥珀标签，跟正文里的网址一眼分得开</li>
+              <li>产物落成卡片：文件名、大小、预览、下载</li>
+              <li>长会话往回滚，滚轮真的能翻历史</li>
+            </ul>
+          </div>
+          <div class="shot-frame">
+            <img src="assets/shot-chat.png" alt="聊天界面：助理回复、动作条与产物卡片" />
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" id="t6">
         <div class="panel-grid">
           <div>
             <h3>一句话，多个助理接力做完</h3>
@@ -942,6 +1066,23 @@ html.js-reveal .reveal.in{opacity:1;transform:none}
           </div>
           <div class="shot-frame">
             <img src="assets/shot-group.png" alt="群聊界面：助理之间接力，右栏显示成员与调度轨迹" />
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" id="t7">
+        <div class="panel-grid">
+          <div>
+            <h3>关掉一个，它的工具就真的没了</h3>
+            <p class="pd">插件页把每一件东西摊开给你看：它在做什么、关掉会怎样。</p>
+            <ul>
+              <li>内置工具：读写工作区文件、执行命令、把结果落成文件卡片</li>
+              <li>功能：待办清单、向你提问、RyVibe</li>
+              <li>「内置」那组是助理的地盘，不能关</li>
+            </ul>
+          </div>
+          <div class="shot-frame">
+            <img src="assets/shot-plugins.png" alt="插件页：内置与功能分组，带开关与影响说明" />
           </div>
         </div>
       </div>
@@ -1367,6 +1508,25 @@ html.js-reveal .reveal.in{opacity:1;transform:none}
     window.addEventListener("scroll", closeMenu, { passive: true });
     window.addEventListener("resize", function () {
       if (window.innerWidth > 880) closeMenu();
+    });
+  }
+
+  /* ---- 逐帧动作演示：换状态就换精灵图 ---- */
+  var states = document.querySelectorAll(".state");
+  var pets = document.querySelectorAll(".demo-pet");
+  if (states.length && pets.length) {
+    var CYCLES = { typing: 900, thinking: 1500, talking: 1050 };
+    Array.prototype.forEach.call(states, function (btn) {
+      btn.addEventListener("click", function () {
+        Array.prototype.forEach.call(states, function (x) { x.classList.remove("on"); });
+        btn.classList.add("on");
+        var st = btn.getAttribute("data-state");
+        Array.prototype.forEach.call(pets, function (p) {
+          var img = p.querySelector("img");
+          if (img) img.setAttribute("src", "assets/frames/" + p.getAttribute("data-set") + "-" + st + ".webp");
+          p.style.setProperty("--cyc", CYCLES[st] + "ms");
+        });
+      });
     });
   }
 

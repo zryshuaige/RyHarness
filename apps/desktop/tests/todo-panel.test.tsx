@@ -182,9 +182,10 @@ describe('右栏待办区', () => {
 
   it('服务端没有待办接口时整块不渲染（旧版/精简替身不报错）', async () => {
     const api = panelApi()
-    api.listTodos = undefined
-    api.setTodoDone = undefined
-    api.clearTodos = undefined
+    // 模拟「压根没有这三个方法」（不是调用失败）。类型上它们是必填方法——生产
+    // 环境的客户端一定带着它们——所以这里用 Object.assign 把它们抹掉，而不是
+    // 直接赋值 undefined（那会与类型冲突，也说清了这不是「方法返回 undefined」）。
+    Object.assign(api, { listTodos: undefined, setTodoDone: undefined, clearTodos: undefined })
     await renderPanel(api)
     expect(container.textContent).not.toContain('还没有待办')
     expect(container.querySelectorAll('input[type="checkbox"]')).toHaveLength(0)

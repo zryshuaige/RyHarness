@@ -62,6 +62,16 @@ export { TodoError, TodoStore } from './plugins/todo.ts'
 export { createScaffoldTool } from './plugins/vibe-scaffold.ts'
 export type { VoiceEngineStatus, VoiceProvider, VoiceProviderDeps } from './plugins/voice.ts'
 export { VOICE_PLUGIN_ID, VoiceRegistry, voicePlugin } from './plugins/voice.ts'
+export type { MinimaxProviderOptions, MinimaxVoicePluginOptions } from './plugins/voice-minimax.ts'
+export {
+  createMinimaxProvider,
+  loadVoiceFiles,
+  MINIMAX_ENGINE,
+  seedVoiceFiles,
+  VOICE_FILES_DIR,
+  VOICE_MINIMAX_PLUGIN_ID,
+  voiceMinimaxPlugin,
+} from './plugins/voice-minimax.ts'
 export type {
   PiperChild,
   PiperExtract,

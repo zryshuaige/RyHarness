@@ -238,10 +238,14 @@ export function MePage({
                   tilt
                   action="breathing"
                 />
-                {/* 角标常驻：只靠悬停才冒出来的话，第一次来的人不知道这张脸可以点。 */}
-                <span className="me-avatar-edit" aria-hidden="true">
-                  <Icon name="pencil" size={14} />
-                </span>
+                {/* 角标常驻：只靠悬停才冒出来的话，第一次来的人不知道这张脸可以点。
+                    服务端不支持改头像时**不画这个角标**——一个点不动的铅笔角标比没有更让人
+                    以为这功能坏了（按钮本身已经 disabled）。 */}
+                {editable && (
+                  <span className="me-avatar-edit" aria-hidden="true">
+                    <Icon name="pencil" size={14} />
+                  </span>
+                )}
               </button>
               <div className="me-usercard-body">
                 {editingUser ? (
@@ -274,7 +278,8 @@ export function MePage({
                       setEditingUser(true)
                     }}
                   >
-                    {profile?.name ?? '你'} <Icon name="pencil" size={16} className="me-pencil" />
+                    {profile?.name ?? '你'}
+                    {editable && <Icon name="pencil" size={16} className="me-pencil" />}
                   </button>
                 )}
                 <p className="me-sub">这台电脑上的使用者</p>
@@ -857,7 +862,7 @@ export function AboutContent() {
   return (
     <div className="about-body">
       <p>
-        <strong>RyHarness</strong> v0.1.2 · 单机多 Agent 即时通讯桌面应用
+        <strong>RyHarness</strong> v0.2.0 · 带人格的多 Agent 桌面工作台
       </p>
       <p>
         本体以 <strong>MIT License</strong> 发布（见仓库 LICENSE）。

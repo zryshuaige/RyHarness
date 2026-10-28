@@ -7,7 +7,7 @@
  * @module @ryharness/session/persona
  */
 
-import { VOICE_PROFILES, voiceProfile } from '@ryharness/voice'
+import { isKnownVoiceId, VOICE_PROFILES, voiceProfile } from '@ryharness/voice'
 
 /** 性格四维的键，顺序即展示与拼接顺序。 */
 export const TRAIT_KEYS = ['extroversion', 'rigor', 'humor', 'initiative'] as const
@@ -176,21 +176,27 @@ export const VOICE_PRESETS: readonly VoicePreset[] = [
  * 旧值优先走 {@link LEGACY_VOICE_IDS}；目录里没有、映射里也没有的一律回落到
  * {@link NO_VOICE_ID}。这个函数**绝不抛错**——它守着「旧库里的值不能让助理保存
  * 失败」这条底线。
+ *
+ * 「目录里没有」判的是**这个 id 是不是合法的音色 id**，而不是「这个 id 此刻能不能
+ * 合成」：声线文件里的猫猫音、离线 Piper 那条，都是插件运行时才注册进来的，但用户
+ * 挑过它、它就该留在人格里——插件关掉时界面显示「已下架的旧音色」，插件回来它又能用。
+ * 拿「此刻能不能合成」当合法性判据，会把用户挑过的音色悄悄洗成「不朗读」。
  */
 export function normalizeVoiceId(value: unknown): string {
   const id = typeof value === 'string' ? value.trim() : ''
   if (id === NO_VOICE_ID) return NO_VOICE_ID
-  if (voiceProfile(id) !== undefined) return id
+  if (isKnownVoiceId(id)) return id
   return LEGACY_VOICE_IDS[id] ?? NO_VOICE_ID
 }
 
 /** 音色显示名；未知 id 回落到"未知音色"而不是静默显示空串。 */
 export function voiceName(voiceId: string): string {
-  return (
-    VOICE_PRESETS.find((preset) => {
-      return preset.id === voiceId
-    })?.name ?? '未知音色'
-  )
+  const preset = VOICE_PRESETS.find((entry) => {
+    return entry.id === voiceId
+  })
+  if (preset !== undefined) return preset.name
+  // 运行时注册进来的（声线文件那条）不在静态清单里，但目录里有它的名字。
+  return voiceProfile(voiceId)?.name ?? '未知音色'
 }
 
 /** 人格字段的默认值：旧 agent（无 persona 列）读出来就是这一份。 */

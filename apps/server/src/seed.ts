@@ -7,8 +7,50 @@
 import { randomUUID } from 'node:crypto'
 import type { AgentDefinition } from '@ryharness/agent'
 import { RYEN_TEMPLATE } from '@ryharness/agent'
-import type { AgentPersona } from '@ryharness/session'
+import type { AgentPersona, SessionStore } from '@ryharness/session'
 import { normalizePersona } from '@ryharness/session'
+
+/**
+ * Ryen 换声线之前用的那条音色（CosyVoice2 的温柔女声）。
+ *
+ * 留着它是为了迁移：存量安装里 Ryen 的人格还指着这个 id，而它已经不是"默认"了。
+ */
+const LEGACY_RYEN_VOICE_ID = 'sf-cosyvoice2-claire'
+
+/** Ryen 现在的声线 id（对应声线文件 `ryen-cat.json`）。 */
+const RYEN_CAT_VOICE_ID = 'ryen-cat'
+
+/**
+ * 把内置 Ryen 的旧默认音色换成猫猫音。
+ *
+ * 只在它**还停在旧默认**时才动：用户手动挑过的音色是他的选择，模板升级不该替他改
+ * 回去。判据是音色 id 本身——除了 Ryen，别的内置助理没用过这个 id。
+ *
+ * 种子只补"库里没有的"那条（见 {@link ensureSeedAgents}），所以存量安装不迁移的话，
+ * Ryen 会一直用旧音色——"以后每次软件里都复用这个声音"这句就落空了一半。
+ * @param store - 会话存储（改的是 agents 表）。
+ * @returns 换了音色的助理名；没换时是 undefined。
+ */
+export function migrateBuiltinVoice(store: SessionStore): string | undefined {
+  const agent = store.getAgent(RYEN_TEMPLATE.id)
+  if (agent === undefined) return undefined
+  if (agent.persona.voiceId !== LEGACY_RYEN_VOICE_ID) return undefined
+  store.upsertAgent({
+    id: agent.id,
+    name: agent.name,
+    ...(agent.avatar === undefined ? {} : { avatar: agent.avatar }),
+    systemPrompt: agent.systemPrompt,
+    provider: agent.provider,
+    model: agent.model,
+    ...(agent.temperature === undefined ? {} : { temperature: agent.temperature }),
+    ...(agent.reasoningEffort === undefined ? {} : { reasoningEffort: agent.reasoningEffort }),
+    tools: [...agent.tools],
+    persona: { ...agent.persona, voiceId: RYEN_CAT_VOICE_ID },
+    isBuiltin: true,
+    ...(agent.routeLocked === undefined ? {} : { routeLocked: agent.routeLocked }),
+  })
+  return agent.name
+}
 
 /** 一个可实例化的 agent 模板。 */
 export interface AgentTemplate {
@@ -67,7 +109,9 @@ export const AGENT_TEMPLATES: Readonly<Record<string, AgentTemplate>> = {
       birthday: '03-14',
       catchphrase: '这事我来安排。',
       affinity: 10,
-      voiceId: 'sf-cosyvoice2-claire',
+      // Ryen 是那只橘猫，所以它有自己的一条声线：声线文件 ryen-cat.json 里写着
+      // 上游说话人与语速音高，改文件就换一种念法（不必改代码、不必重新出包）。
+      voiceId: 'ryen-cat',
       appearance: '一只橘色虎斑猫，永远端坐在窗台，尾巴卷着一只保温杯。',
     },
   },

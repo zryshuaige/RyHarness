@@ -353,6 +353,10 @@ export function createLlmSummarizer(
       provider: route.provider,
       model: route.model,
       system: '你是一个对话压缩器。',
+      // 这是**辅助调用**，不是用户对话：适配器可以据此走不同的生成策略，遥测
+      // 也能把它与普通轮次分开算。此前这个字段无人设置，压缩调用在供应商侧
+      // 与普通对话完全同形。
+      purpose: 'compaction',
       messages: [
         ...messages,
         createUserMessage({ content: [{ type: 'text', text: SUMMARY_INSTRUCTION }], source: { kind: 'user' } }),

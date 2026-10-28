@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>猫猫音 demo</title>
+    <style>
+      :root {
+        --amber: #d97706;
+        --amber-light: #fbbf24;
+        --ink: #2b2118;
+        --muted: #8a7a68;
+        --line: #eadfce;
+        --paper: #fffdf9;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 32px 20px 56px;
+        background: #f7f1e7;
+        color: var(--ink);
+        font: 15px/1.6 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+      }
+      main {
+        max-width: 760px;
+        margin: 0 auto;
+      }
+      h1 {
+        margin: 0 0 4px;
+        font-size: 22px;
+        letter-spacing: 0.5px;
+      }
+      .sub {
+        margin: 0 0 24px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .card {
+        background: var(--paper);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 18px 18px 20px;
+        margin-bottom: 16px;
+      }
+      .row {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      textarea {
+        width: 100%;
+        min-height: 96px;
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #fff;
+        color: inherit;
+        font: inherit;
+        resize: vertical;
+      }
+      textarea:focus {
+        outline: 2px solid var(--amber-light);
+        outline-offset: 1px;
+      }
+      button {
+        padding: 10px 22px;
+        border: 0;
+        border-radius: 999px;
+        background: linear-gradient(135deg, var(--amber-light), var(--amber));
+        color: #fff;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.55;
+        cursor: progress;
+      }
+      .hint {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      audio {
+        width: 100%;
+        margin-top: 14px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 14px;
+      }
+      th,
+      td {
+        padding: 7px 4px;
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+        font-weight: normal;
+      }
+      th {
+        color: var(--muted);
+        font-size: 12px;
+        width: 42%;
+      }
+      td {
+        font-variant-numeric: tabular-nums;
+      }
+      .live {
+        font-size: 13px;
+      }
+      .live b {
+        font-variant-numeric: tabular-nums;
+      }
+      .err {
+        margin-top: 12px;
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: #fdecec;
+        color: #a12b2b;
+        font-size: 13px;
+      }
+      .file {
+        margin-top: 10px;
+        font-size: 12px;
+        color: var(--muted);
+        word-break: break-all;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>猫猫音 demo</h1>
+      <p class="sub">输入一句话，点按钮，听 Ryen 念出来，同时看这一次占用了多少 CPU 与内存。</p>
+
+      <section class="card">
+        <textarea id="text" placeholder="要念的话…">你好，我是 Ryen。这事我来安排，今天也一起把事情做完吧。</textarea>
+        <div class="row" style="margin-top: 12px">
+          <button id="speak">念出来</button>
+          <span class="hint" id="status">声线：ryen-cat</span>
+        </div>
+        <audio id="player" controls></audio>
+        <div id="error" class="err" hidden></div>
+        <div class="file" id="voiceFile"></div>
+      </section>
+
+      <section class="card">
+        <table>
+          <tbody>
+            <tr><th>这一次耗时</th><td id="mWall">—</td></tr>
+            <tr><th>CPU 时间</th><td id="mCpu">—</td></tr>
+            <tr><th>占单核比例</th><td id="mCore">—</td></tr>
+            <tr><th>常驻内存</th><td id="mRss">—</td></tr>
+            <tr><th>堆内存</th><td id="mHeap">—</td></tr>
+            <tr><th>音频</th><td id="mAudio">—</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="card live">
+        <table>
+          <tbody>
+            <tr><th>此刻常驻内存</th><td id="lRss">—</td></tr>
+            <tr><th>此刻堆内存</th><td id="lHeap">—</td></tr>
+            <tr><th>进程已跑</th><td id="lUp">—</td></tr>
+            <tr><th>累计 CPU</th><td id="lCpu">—</td></tr>
+          </tbody>
+        </table>
+      </section>
+    </main>
+
+    <script>
+      const $ = (id) => document.getElementById(id)
+      let audioUrl = null
+
+      function fmtBytes(bytes) {
+        if (bytes < 1024) return `${bytes} B`
+        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+        return `${(bytes / 1024 / 1024).toFixed(2)} MB`
+      }
+
+      function fmtMs(ms) {
+        return ms >= 1000 ? `${(ms / 1000).toFixed(2)} s` : `${ms} ms`
+      }
+
+      async function loadVoices() {
+        try {
+          const response = await fetch('/api/voices')
+          const data = await response.json()
+          const voice = data.voices?.[0]
+          if (voice) {
+            $('status').textContent = `声线：${voice.name}（${voice.id}）`
+            $('voiceFile').textContent = `声线文件：${voice.file}`
+          }
+        } catch {
+          /* 目录读不到不影响念话 */
+        }
+      }
+
+      async function refreshStats() {
+        try {
+          const response = await fetch('/api/stats')
+          const data = await response.json()
+          $('lRss').textContent = `${data.rssMb} MB`
+          $('lHeap').textContent = `${data.heapUsedMb} MB`
+          $('lUp').textContent = `${(data.uptimeMs / 1000).toFixed(0)} s`
+          $('lCpu').textContent = `${data.cpuMs} ms`
+        } catch {
+          /* 服务没起就静默，等下一拍 */
+        }
+      }
+
+      $('speak').addEventListener('click', async () => {
+        const button = $('speak')
+        const text = $('text').value.trim()
+        if (text.length === 0) {
+          $('error').hidden = false
+          $('error').textContent = '先写点要念的话。'
+          return
+        }
+        button.disabled = true
+        $('status').textContent = '合成中…'
+        $('error').hidden = true
+        try {
+          const response = await fetch('/api/speak', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ text }),
+          })
+          const data = await response.json()
+          if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`)
+          const bytes = Uint8Array.from(atob(data.audioBase64), (c) => c.charCodeAt(0))
+          const blob = new Blob([bytes], { type: data.mime })
+          if (audioUrl) URL.revokeObjectURL(audioUrl)
+          audioUrl = URL.createObjectURL(blob)
+          $('player').src = audioUrl
+          $('mWall').textContent = `${fmtMs(data.cost.wallMs)}（往返上游）`
+          $('mCpu').textContent = fmtMs(data.cost.cpuMs)
+          $('mCore').textContent = `${data.cost.cpuPercentOfCore}%`
+          $('mRss').textContent = `${data.cost.rssMb} MB（${data.cost.rssDeltaMb >= 0 ? '+' : ''}${data.cost.rssDeltaMb} MB）`
+          $('mHeap').textContent = `${data.cost.heapUsedMb} MB`
+          $('mAudio').textContent = `${fmtBytes(data.audio.bytes)} / ${data.audio.durationMs} ms`
+          $('status').textContent = `已合成：${data.voice.name}`
+          refreshStats()
+        } catch (error) {
+          $('error').hidden = false
+          $('error').textContent = error instanceof Error ? error.message : String(error)
+          $('status').textContent = '合成失败'
+        } finally {
+          button.disabled = false
+        }
+      })
+
+      loadVoices()
+      refreshStats()
+      setInterval(refreshStats, 1000)
+    </script>
+  </body>
+</html>

@@ -68,7 +68,9 @@ compaction-tool-result-pruner / compaction-basic）：
    报错栈、exit code 之类最关键的信息常在结尾，只留头等于骗模型"看到的是全部输出"。
 2. **阈值触发的摘要**（`compactHistory`）：预裁剪之后仍超 `thresholdTokens` 才摘要，
    逐字保留最近 `retainTokens`（默认输入阈值的 1/4）。摘要指令作为最后一条 user 消息
-   跟在待摘要历史之后，让这次调用成为上一轮请求的真前缀（供应商 KV cache 命中）。
+   跟在待摘要历史之后，图的是形状合法（适配器只允许 system 领衔）与近因优先（指令落在
+   最后一轮）。这里**没有**供应商侧的 KV cache 收益：压缩把窗口外那段历史换成了摘要、
+   system 又是压缩器自己的提示，前缀缓存要求从第一条消息起逐字节相同，这里命不中。
 
 取舍与边界：
 

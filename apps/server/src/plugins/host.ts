@@ -19,14 +19,28 @@ export type PluginGroup = 'core' | 'feature' | 'voice' | 'tool'
 /**
  * 插件对外声明自己提供了什么。
  *
- * 只用于展示与排查：真实能力仍以注册表里的内容为准（工具/路由都随 fiber
- * 装卸）。声明与事实不一致时，设置页最多显示得不准，不会让插件多出一个工具。
+ * 声明是**给人看的**，注册表才是事实（工具/路由都随 fiber 装卸）。两者对不上时
+ * 设置页会把差的那几项标出来（见 {@link PluginView.missing}），而不是照着声明
+ * 显示一个其实并不存在的能力。
  */
 export interface PluginCapabilities {
   /** 注册到 ctx.tools 的工具名（按名字白名单被 agent 取用）。 */
   readonly tools?: readonly string[]
   /** 注册到 ctx.routes 的 HTTP 面，形如 `GET /api/...`。 */
   readonly routes?: readonly string[]
+}
+
+/**
+ * 运行时事实快照：当前注册表里真实存在的工具与路由。
+ *
+ * 由组合根提供（读 `ctx.tools.list()` 与 `ctx.routes.list()`），宿主用它核对
+ * 插件的声明。插件自己的注册随 fiber 装卸，所以快照必须**现取**，不能缓存。
+ */
+export interface PluginReality {
+  /** 已注册的工具名。 */
+  readonly tools: readonly string[]
+  /** 已注册的路由，形如 `GET /api/...`。 */
+  readonly routes: readonly string[]
 }
 
 /** 一个可装载的插件：元数据给设置页，apply/config 原样交给 cordis。 */
@@ -76,6 +90,13 @@ export interface PluginView {
   skills?: readonly SkillView[]
   /** 关闭后会发生什么。 */
   impact?: string
+  /**
+   * 声明里有、运行时却没有的能力（工具名或 `GET /api/...` 路由）。
+   *
+   * 只有**启用中且已挂载**的插件会被核对——关掉的插件本就不该有工具留在注册表里。
+   * 差集为空（正常情况）时这个字段缺省。
+   */
+  missing?: readonly string[]
   enabled: boolean
   core: boolean
   status: PluginStatus
@@ -145,6 +166,11 @@ export class PluginHost {
     private readonly ctx: Context,
     entries: readonly PluginEntry[],
     private readonly dataDir: string,
+    /**
+     * 运行时事实的取法（读两个注册表）。缺省时不做核对——声明与事实对不上
+     * 只会让设置页显示得不准，不会让插件多出一个工具。
+     */
+    private readonly probe?: () => PluginReality,
   ) {
     for (const entry of entries) {
       if (this.entries.has(entry.id)) {
@@ -175,6 +201,21 @@ export class PluginHost {
       for (const skill of entry.skills ?? []) out.push(skill)
     }
     return out
+  }
+
+  /**
+   * 这个插件此刻是不是启用中。
+   *
+   * 组合根用它把「随插件开关走」的东西也纳入开关口径：此前 skill 注入看开关、
+   * 问答注入不看，同一个插件关掉后一半能力还在——这个方法就是问「这个 id 在不在」
+   * 的入口。
+   * @param id - 插件 id。
+   * @returns 启用中返回 true；未知 id 也返回 false（未知即不存在）。
+   */
+  isEnabled(id: string): boolean {
+    const entry = this.entries.get(id)
+    if (entry === undefined) return false
+    return this.enabled(entry)
   }
 
   /**
@@ -213,7 +254,16 @@ export class PluginHost {
       throw new PluginError('CORE_PLUGIN', `plugin "${id}" is built in and cannot be disabled`)
     }
     if (enabled) {
-      if (!this.fibers.has(id)) await this.mount(entry)
+      if (!this.fibers.has(id)) {
+        try {
+          await this.mount(entry)
+        } catch (error) {
+          // 重挂失败要把原因记进运行态：否则插件页上它还是「运行中」，而实际什么
+          // 都没挂上——用户看到的是一个说自己在跑、其实没跑的东西。
+          this.errors.set(id, messageOf(error))
+          throw error
+        }
+      }
     } else if (this.fibers.has(id)) {
       await this.unmount(id)
     }
@@ -253,7 +303,9 @@ export class PluginHost {
 
   private view(entry: PluginEntry): PluginView {
     const error = this.errors.get(entry.id)
-    const status: PluginStatus = this.fibers.has(entry.id) ? 'running' : error === undefined ? 'stopped' : 'error'
+    const running = this.fibers.has(entry.id)
+    const status: PluginStatus = running ? 'running' : error === undefined ? 'stopped' : 'error'
+    const missing = this.missingOf(entry, running)
     return {
       id: entry.id,
       name: entry.name,
@@ -272,7 +324,30 @@ export class PluginHost {
       core: entry.core === true,
       status,
       ...(error === undefined ? {} : { error }),
+      ...(missing.length === 0 ? {} : { missing }),
     }
+  }
+
+  /**
+   * 声明里有、运行时却没有的东西。
+   *
+   * 只核对**已挂载**的插件：关掉的插件工具本就不在注册表里，那不是「声明错了」。
+   * 探针缺省（没接线）时一律当作对得上——核对是加分项，不是加载的前提。
+   */
+  private missingOf(entry: PluginEntry, running: boolean): string[] {
+    if (!running) return []
+    const capabilities = entry.capabilities
+    if (capabilities === undefined) return []
+    if (this.probe === undefined) return []
+    const reality = this.probe()
+    const missing: string[] = []
+    for (const tool of capabilities.tools ?? []) {
+      if (!reality.tools.includes(tool)) missing.push(tool)
+    }
+    for (const route of capabilities.routes ?? []) {
+      if (!reality.routes.includes(route)) missing.push(route)
+    }
+    return missing
   }
 
   /** 落盘当前清单的开关值（core 也写 true：读的人不必再猜缺省语义）。 */

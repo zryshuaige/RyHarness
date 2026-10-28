@@ -1,7 +1,6 @@
 /**
  * Centralize the non-secret product identity every provider request sends as `User-Agent`, keeping
- * adapters from drifting. See
- * `.agents/notes/implemented/architecture/2026-06-21-mandatory-app-attribution-headers.md`.
+ * adapters from drifting.
  *
  * App-attribution vocabulary for provider requests.
  * @module @ryharness/llm/attribution
@@ -40,7 +39,9 @@ export interface AppIdentity {
 export const APP_IDENTITY: AppIdentity = {
   product: 'ryharness',
   version,
-  url: 'https://github.com/ryharness/ryharness',
+  // 仓库地址要与 package.json 的 repository 一致：这条会随每一次模型请求发出去，
+  // 指着一个不存在的仓库等于对外报错地址。
+  url: 'https://github.com/zryshuaige/RyHarness',
 }
 
 /**

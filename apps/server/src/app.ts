@@ -44,10 +44,11 @@ import {
   mergeApiKeys,
   resolveSidecarLlm,
   toAdapterConfig,
+  writeProvidersConfig,
 } from './config.ts'
 import { envValue } from './env.ts'
 import type { WsEvent } from './events.ts'
-import { askUserPlugin } from './plugins/ask-user.ts'
+import { ASK_USER_PLUGIN_ID, askUserPlugin } from './plugins/ask-user.ts'
 import { QuestionStore, renderQuestionContext } from './plugins/ask-user-store.ts'
 import { coreToolsPlugin } from './plugins/core-tools.ts'
 import { grillMePlugin } from './plugins/grill-me.ts'
@@ -58,6 +59,7 @@ import { RouteRegistry } from './plugins/routes.ts'
 import { todoPlugin } from './plugins/todo.ts'
 import { TodoStore } from './plugins/todo-store.ts'
 import { voicePlugin } from './plugins/voice.ts'
+import { voiceMinimaxPlugin } from './plugins/voice-minimax.ts'
 import { voicePiperPlugin } from './plugins/voice-piper.ts'
 import { webReadPlugin } from './plugins/web-read.ts'
 import { ProactiveDigest } from './proactive.ts'
@@ -76,7 +78,7 @@ import { registerSettingsRoutes } from './routes/settings.ts'
 import { registerTelemetryRoutes } from './routes/telemetry.ts'
 import { registerUsageRoutes } from './routes/usage.ts'
 import { registerVibeRoutes } from './routes/vibe.ts'
-import { ensureSeedAgents } from './seed.ts'
+import { ensureSeedAgents, migrateBuiltinVoice } from './seed.ts'
 import { Telemetry } from './telemetry.ts'
 import { TurnEngine } from './turn-engine.ts'
 import { VibeStore } from './vibe/store.ts'
@@ -270,19 +272,29 @@ export interface ServerOptions {
 }
 
 /**
- * 解析长期记忆的向量模型：baseURL/凭据与生成侧同一个供应商（用户换服务商时
- * 记忆跟着换），模型 id 必须显式——向量模型不通用，猜一个错的会让余弦在
- * 跨模型空间里静默塌成 -1，检索质量无声下降。只有命中的供应商就是
- * SiliconFlow 时才套用它的默认向量模型，其余情况退回纯 FTS5。
+ * 解析长期记忆的向量模型。
+ *
+ * 两条路：
+ * 1. **显式配置**（providers.embedding 指向某家的某个模型 id）——任何 OpenAI
+ *    兼容的 `/v1/embeddings` 端点都行，用的就是那家的 baseURL 与 key。
+ * 2. **自动判定**：只有副驾那家正好是 SiliconFlow 时才套用它的默认向量模型
+ *    （`Qwen/Qwen3-Embedding-0.6B`，官方文档核对过）。其余家不给默认 id——
+ *    向量模型不通用，猜一个错的会让余弦在跨模型空间里静默塌成 -1，检索质量
+ *    无声下降。用户可以在「我的 → 记忆」里显式指定。
  */
 function resolveSidecarEmbedding(
   providers: ProvidersConfigFile,
-): { apiKey: string; baseURL: string; model: string } | undefined {
+): { apiKey: string; baseURL: string; model: string; allowAnonymous?: boolean } | undefined {
   const configured = providers.embedding
   if (configured !== undefined) {
     const provider = providers.providers[configured.providerId]
-    const apiKey = provider?.apiKey ?? (provider?.apiKeyEnv === undefined ? undefined : process.env[provider.apiKeyEnv])
-    if (provider === undefined || apiKey === undefined || apiKey.length === 0) return undefined
+    if (provider === undefined) return undefined
+    // Ollama 是本机免 key 的：没有 apiKey 也照样能用。
+    if (provider.protocol === 'ollama') {
+      return { apiKey: '', baseURL: provider.baseURL, model: configured.model, allowAnonymous: true }
+    }
+    const apiKey = provider.apiKey ?? (provider.apiKeyEnv === undefined ? undefined : process.env[provider.apiKeyEnv])
+    if (apiKey === undefined || apiKey.length === 0) return undefined
     return { apiKey, baseURL: provider.baseURL, model: configured.model }
   }
   const sidecar = resolveSidecarLlm(providers)
@@ -303,6 +315,14 @@ function createDefaultEvolve(dataDir: string, providers: ProvidersConfigFile): E
 function createDefaultMemory(dataDir: string, providers: ProvidersConfigFile): MemoryService {
   const llmConfig = resolveSidecarLlm(providers)
   const embeddingConfig = resolveSidecarEmbedding(providers)
+  if (embeddingConfig === undefined && llmConfig !== undefined) {
+    // 副驾已经配好（用户能聊天了），但向量模型没有：语义召回静默退化成纯 FTS5。
+    // 说一句，别让用户以为「记忆只能按关键词搜」是产品设定。
+    console.warn(
+      '@ryharness/server: 未配置向量模型，长期记忆的语义检索不可用（只走全文索引）。' +
+        '在「我的 → 记忆」里指定一家供应商的 embedding 模型即可启用。',
+    )
+  }
   return new MemoryService({
     dbPath: join(dataDir, 'ryharness.db'),
     embeddings: embeddingConfig === undefined ? new NullEmbeddings() : new OpenAiCompatibleEmbeddings(embeddingConfig),
@@ -580,10 +600,61 @@ export class RyHarnessServer {
     const config = toAdapterConfig(next)
     if (this.adapterRegistration === undefined) {
       this.mountOpenAiAdapters(config)
+      this.syncEmbeddings()
       return
     }
     if (this.adapterConfig !== undefined) this.adapterConfig.providers = config.providers
     this.adapterRegistration.replace(Object.keys(config.providers))
+    // 供应商换了，向量侧也要跟着重算：副驾那家的 key 可能刚被填上（此前是空的，
+    // 记忆只能走纯 FTS5），也可能刚被删掉。
+    this.syncEmbeddings()
+  }
+
+  /**
+   * 换向量模型：写盘 + 热替换记忆服务里的 embeddings。
+   *
+   * 显式配置（providers.embedding）指向哪家、哪个模型 id，就用那家的；没配就
+   * 回到自动判定（只认 SiliconFlow 的默认向量模型——其余家猜一个 id 就会让
+   * 整库向量静默塌成 -1）。
+   */
+  private applyEmbedding(
+    next: { providerId: string; model: string } | undefined,
+  ): { ok: true } | { ok: false; error: string } {
+    if (next !== undefined) {
+      const provider = this.providers.providers[next.providerId]
+      if (provider === undefined) {
+        return { ok: false, error: `供应商不存在：${next.providerId}` }
+      }
+      const hasKey =
+        (provider.apiKey ?? '').length > 0 ||
+        (provider.apiKeyEnv !== undefined && (process.env[provider.apiKeyEnv] ?? '').length > 0)
+      if (!hasKey && provider.protocol !== 'ollama') {
+        return {
+          ok: false,
+          error: `供应商「${provider.displayName ?? next.providerId}」还没有 API Key，先去「模型供应商」页配好`,
+        }
+      }
+      this.providers.embedding = { providerId: next.providerId, model: next.model }
+    } else {
+      delete this.providers.embedding
+    }
+    writeProvidersConfig(this.dataDir, this.providers)
+    this.syncEmbeddings()
+    return { ok: true }
+  }
+
+  /**
+   * 按当前供应商配置重算向量来源并热替换。
+   *
+   * 换了向量模型等于换了向量空间：旧向量与新模型不同维也不同义，检索侧按模型
+   * id 过滤（不同模型的记忆不参与打分），存量向量靠 /api/memory/reembed 回填。
+   */
+  private syncEmbeddings(): void {
+    if (this.memoryService === undefined) return
+    const config = resolveSidecarEmbedding(this.providers)
+    this.memoryService.setEmbeddings(
+      config === undefined ? new NullEmbeddings() : new OpenAiCompatibleEmbeddings(config),
+    )
   }
 
   /** 组装并启动服务。 */
@@ -602,6 +673,9 @@ export class RyHarnessServer {
       if (store.getAgent(input.id) !== undefined) return
       store.upsertAgent(input)
     })
+    // Ryen 换了声线（猫猫音）：存量安装里它的人格还指着旧的默认音色，这里补一次迁移。
+    // 只动还停在旧默认的那位——用户自己挑过的音色是他的选择。
+    migrateBuiltinVoice(store)
     // 提问文件由组合根与 ask-user 插件共用：插件负责工具/路由，协调器负责在
     // 下一轮把已回答的问答注入模型；两边必须读写同一份数据。
     const questionStore = new QuestionStore(join(dataDir, 'questions.json'))
@@ -648,6 +722,8 @@ export class RyHarnessServer {
       voicePlugin(providers),
       // 离线语音依赖 ctx.voice（provider 注册进同一个目录），所以必须排在 voice 之后。
       voicePiperPlugin({ dataDir }),
+      // 声线文件（猫猫音等）同样注册进 voice 目录，排在 voice 之后。
+      voiceMinimaxPlugin({ dataDir, providers }),
       todoPlugin({
         store: todoStore,
         conversationExists: (conversationId) => {
@@ -673,7 +749,17 @@ export class RyHarnessServer {
       webReadPlugin(),
     )
     pluginEntries.push(...(options.plugins ?? []))
-    const pluginHost = new PluginHost(ctx, pluginEntries, dataDir)
+    const pluginHost = new PluginHost(ctx, pluginEntries, dataDir, () => {
+      // 运行时事实现取：插件的注册随 fiber 装卸，缓存下来的快照会撒谎。
+      return {
+        tools: ctx.tools.list().map((tool) => {
+          return tool.name
+        }),
+        routes: ctx.routes.list().map((route) => {
+          return `${route.method} ${route.pattern}`
+        }),
+      }
+    })
 
     const memoryOption =
       options.memory === null ? undefined : (options.memory ?? createDefaultMemory(dataDir, providers))
@@ -739,6 +825,11 @@ export class RyHarnessServer {
         // 谁都读得到。再注入一遍等于同一件事说两次——而且只回到提问者手里，
         // 没提问的那几位下一轮又缺同一块信息，用户就得被问两遍。
         if (vibeStore.byConversation(conversationId) !== undefined) return undefined
+        // 提问插件关掉后就不再注入待答的答案：工具与路由随插件下线，这块
+        // 能力本该一起消失。此前这里不看开关，于是关掉插件后「已回答的问题」
+        // 仍会回到模型手里——而模型已经没有 ask_user 工具可用了，只能拿着
+        // 一份没人能再回答的答案继续往下走。
+        if (!pluginHost.isEnabled(ASK_USER_PLUGIN_ID)) return undefined
         const entries = questionStore.pendingAnswers(conversationId, agentId)
         if (entries.length === 0) return undefined
         return {
@@ -1170,6 +1261,14 @@ export class RyHarnessServer {
       },
       dataDir: this.dataDir,
       telemetry: this.telemetry,
+      embedding: {
+        current: () => {
+          return this.providers.embedding
+        },
+        apply: (next) => {
+          return this.applyEmbedding(next)
+        },
+      },
     })
 
     registerEvolveRoutes(router, {

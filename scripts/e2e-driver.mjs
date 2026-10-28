@@ -3,7 +3,8 @@
 // 前置条件：
 //   1. 以远程调试端口启动应用，例如：
 //        RYHARNESS_DEV_SERVER_URL=http://localhost:5173 electron . --remote-debugging-port=9333
-//      （端口 9333 在本文件内硬编码，改动需同步）
+//      端口默认 9333；要换端口，两边一起改：启动时带 --remote-debugging-port=<port>，
+//      跑本脚本时带 RYHARNESS_CDP_PORT=<port>。
 //   2. 依赖根 devDependency `ws`（CDP WebSocket 客户端）。
 //
 // 用法：node scripts/e2e-driver.mjs <action> [arg]
@@ -17,10 +18,12 @@ import WebSocket from 'ws'
 
 const action = process.argv[2]
 const arg = process.argv[3]
-const targets = await (await fetch('http://127.0.0.1:9333/json')).json()
+/** CDP 端口：环境变量优先，默认 9333（不占用 action 的参数位——那条可能被当成文本）。 */
+const cdpPort = process.env.RYHARNESS_CDP_PORT ?? '9333'
+const targets = await (await fetch(`http://127.0.0.1:${cdpPort}/json`)).json()
 const page = targets.find((t) => t.type === 'page')
 if (page === undefined) {
-  console.error('未找到可驱动的 page target：请先带 --remote-debugging-port=9333 启动应用并加载页面')
+  console.error(`未找到可驱动的 page target：请先带 --remote-debugging-port=${cdpPort} 启动应用并加载页面`)
   process.exit(1)
 }
 const ws = new WebSocket(page.webSocketDebuggerUrl)

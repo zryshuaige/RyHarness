@@ -74,6 +74,15 @@ ctx.effect(() => {
 
 `describe` 可选；实现它之后，`GET /api/voice/catalog` 会把「未安装 / 未配置」连同 `reason` 一起给界面，而不是等用户点了才失败。`synthesize` 抛 `VoiceError`，宿主按 `profile.engine` 路由；没有 provider 的引擎回 `VOICE_ENGINE_UNAVAILABLE`。provider 注册必须包在调用方插件的 `ctx.effect` 里，插件卸载时目录才会同步消失。
 
+**动态音色还要多注册一步**：只 `registerProvider` 的话，音色在目录里看得见，但人格保存时会被
+`normalizeVoiceId` 洗成「不朗读」——它只放行内核认得的 id。插件里还要把目录条目注册进
+`@ryharness/voice` 的运行时注册表（`registerVoiceProfile`），注销时一并撤掉。
+
+**声线文件**：`voice-minimax` 插件把 `<dataDir>/voice/voices/*.json` 里的每一条读成一条音色，
+随装默认的那条是 `ryen-cat.json`（Ryen 的猫猫音）。文件里的 `voice` / `model` / `speed` /
+`pitch` / `vol` / `emotion` 就是上游请求的参数——改文件存盘、重启应用就换一种念法，不必改
+代码重新出包。字段不合格的文件整条跳过（不让一份写坏的手改 JSON 把软件卡在启动上）。
+
 ## 状态与存储
 
 - 插件自己的数据放在 `<dataDir>/` 下，按插件命名（如 `todos.json`、`questions.json`）。
@@ -95,9 +104,19 @@ ctx.effect(() => {
 | `llm-openai` | core | 模型路由 | 否 |
 | `voice` | voice | `/api/voice/catalog`、`/api/voice/speak` | 是 |
 | `voice-piper` | voice | 离线音色 provider + `/api/voice/engines/piper/install`、`/api/voice/engines/piper/status` | 是 |
+| `voice-minimax` | voice | 声线文件里的音色 provider（MiniMax 合成） | 是 |
 | `todo` | feature | `todo` 工具 + `/api/todos` | 是 |
 | `ask-user` | feature | `ask_user` 工具 + `/api/questions` | 是 |
+| `grill-me` | feature | `grill` / `vibe_scaffold` 工具 + 一条 skill（盘问与落地） | 是 |
 | `web-read` | tool | `read_url`（带私网拦截） | 是 |
+
+开关是真实装卸，关掉之后的行为跟各插件的 `impact` 文案一致。两条容易踩的：
+
+- `ask-user` 关掉后助理发不了问题卡，**待回答的旧问题也不再注入模型**——模型已经没有
+  `ask_user` 工具可用了，手里那份答案也没人能再回答，拿它往下走没有意义。问题记录仍留在
+  `questions.json` 里，重新打开后恢复。
+- `grill-me` 关掉后 RyVibe 不再盘问、也不再落盘项目，它那条 skill（可复用的工作法）也不再
+  注入。已有记录保留。
 
 > `voice-piper` 的二进制来自 [rhasspy/piper](https://github.com/rhasspy/piper)（MIT）。
 > 中文模型 `zh_CN-huayan-medium` 的 [model card](https://hf-mirror.com/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/medium/MODEL_CARD)

@@ -8,7 +8,19 @@
  */
 
 export type { VoiceEngineInfo } from './catalog.ts'
-export { speakerModel, VOICE_ENGINES, VOICE_PROFILES, voiceProfile, voiceProfilesForEngine } from './catalog.ts'
+export {
+  allVoiceProfiles,
+  declareVoiceId,
+  isKnownVoiceId,
+  registerVoiceProfile,
+  speakerModel,
+  VOICE_ENGINES,
+  VOICE_PROFILES,
+  voiceProfile,
+  voiceProfilesForEngine,
+} from './catalog.ts'
+export type { MinimaxDeps, MinimaxSpeakRequest, MinimaxSpeakResult } from './minimax.ts'
+export { MINIMAX_TTS_BASE_URL, MINIMAX_TTS_MODEL, synthesizeMinimax } from './minimax.ts'
 export type { RateLimitOptions, RateLimitVerdict, VoiceRateLimiter } from './rate-limit.ts'
 export { createVoiceRateLimiter, DEFAULT_MAX_CONCURRENT, DEFAULT_MIN_INTERVAL_MS } from './rate-limit.ts'
 export type { SpeakDeps } from './synthesize.ts'
@@ -28,3 +40,5 @@ export {
   VOICE_ERROR_CODES,
   VoiceError,
 } from './types.ts'
+export type { VoiceFile } from './voice-file.ts'
+export { DEFAULT_VOICE_FILES, parseVoiceFile, RYEN_CAT_VOICE, voiceFileToProfile } from './voice-file.ts'
