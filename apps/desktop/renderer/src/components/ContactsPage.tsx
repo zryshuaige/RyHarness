@@ -7,11 +7,12 @@ import {
   useRef,
   useState,
 } from 'react'
-import type { AgentDef, AgentPersona, AgentTemplate, ApiClient, ProviderInfo } from '../api.ts'
+import type { AgentDef, AgentPersona, AgentTemplate, ApiClient, PermissionPresetView, ProviderInfo } from '../api.ts'
 import { isPortraitKey, PORTRAITS, portraitOf } from '../lib/brand-portraits.ts'
 import { humanError } from '../lib/error-text.ts'
 import { providerLabel } from '../lib/humanize.ts'
 import { catalogFromProvider, groupModels, modelMeta, modelTitle } from '../lib/model-catalog.ts'
+import { applyPreset, detectPreset } from '../lib/permission.ts'
 import {
   birthdayFromInput,
   birthdayInputValue,
@@ -1180,6 +1181,25 @@ export function CreateAgentModal({
       return tool !== RISKY_TOOL
     })
   })
+  /**
+   * 权限档位：助理「能碰到什么」的那一档。
+   *
+   * 缺省按工具清单现状反推；用户手动改过工具后反推不出来，就落到「自定义」——
+   * 硬报成某一档会骗用户。
+   */
+  const [permissionPreset, setPermissionPreset] = useState<string>(() => {
+    return editing?.permissionPreset ?? ''
+  })
+  /** 档位清单（服务端出）。读不到就不给这个控件——空着比给一份抄来的强。 */
+  const [presets, setPresets] = useState<PermissionPresetView[]>([])
+  /**
+   * 最新的工具清单（给异步回调用）。
+   *
+   * 档位清单是异步回来的，回调里要拿**当时**的工具清单反推档位；把它放进依赖里
+   * 会让每次改工具都重拉一次清单。用 ref 读最新值，依赖保持干净。
+   */
+  const toolsRef = useRef<string[]>(tools)
+  toolsRef.current = tools
   // 供应商 / 模型 / 工具默认折叠：它们是「这位助理归谁跑、能碰到什么」的实现层选择，
   // 不是「她是谁」。折叠态仍给一行当前值摘要，不是把选择藏起来。
   const [advancedOpen, setAdvancedOpen] = useState(false)
@@ -1200,6 +1220,7 @@ export function CreateAgentModal({
     provider,
     model,
     tools: [...tools].sort(),
+    permissionPreset,
   })
   if (initialForm.current === undefined) initialForm.current = currentForm
   const dirty = initialForm.current !== currentForm
@@ -1235,6 +1256,30 @@ export function CreateAgentModal({
       alive = false
     }
   }, [api])
+  useEffect(() => {
+    if (api === undefined || presets.length > 0) return
+    let alive = true
+    // 权限档位清单：服务端出，界面不抄一份（抄了会与实际放行的工具漂）。
+    api
+      .permissionPresets()
+      .then(({ presets: list }) => {
+        if (!alive) return
+        setPresets(list)
+        // 没存过档位的助理，按现有工具清单反推一档；反推不出来就是「自定义」。
+        setPermissionPreset((current) => {
+          if (current !== '') return current
+          return detectPreset(list, toolsRef.current) ?? ''
+        })
+      })
+      .catch(() => {
+        // 读不到清单就不给这个控件（下面的渲染按 presets.length 判断）。
+        if (alive) setPresets([])
+      })
+    return () => {
+      alive = false
+    }
+    // 清单只取一次：deps 里带上 presets.length 是为了「取到就别再取」。
+  }, [api, presets.length])
   const voiceProfiles = voiceCatalog?.profiles ?? []
   const voiceEngines = voiceCatalog?.engines ?? []
   const selectedVoice = voiceProfiles.find((profile) => {
@@ -1372,6 +1417,8 @@ export function CreateAgentModal({
         provider,
         model,
         tools,
+        // 权限档位：空字符串 = 自定义（工具被手动改过，不再属于任何一档），不发这个字段。
+        ...(permissionPreset === '' ? {} : { permissionPreset }),
         // 留空就是「用模型默认」，不发任何字段；发一个供应商不认的值会被运行时
         // 拒成 UNSUPPORTED_REASONING_EFFORT，整轮失败。
         ...(reasoningEffort.length === 0 ? {} : { reasoningEffort }),
@@ -1559,6 +1606,39 @@ export function CreateAgentModal({
                       </div>
                     )}
                   </div>
+                  {/* 权限档位：先说清「能碰到什么」，再让用户逐个微调。
+                      档位清单由服务端给（渲染层不抄一份）——抄了就会与实际放行的
+                      工具漂，漂了之后界面上写着「只读」、实际还挂着执行命令。 */}
+                  <fieldset className="field" aria-label="权限档位">
+                    <span>权限档位</span>
+                    <div className="tool-checks tool-picker">
+                      {presets.map((preset) => (
+                        <label key={preset.id}>
+                          <input
+                            type="radio"
+                            name="permission-preset"
+                            checked={permissionPreset === preset.id}
+                            onChange={() => {
+                              setPermissionPreset(preset.id)
+                              setTools(applyPreset(presets, preset.id, tools))
+                            }}
+                          />
+                          {preset.name}
+                        </label>
+                      ))}
+                      {permissionPreset === '' && (
+                        <label>
+                          <input type="radio" name="permission-preset" checked readOnly />
+                          自定义
+                        </label>
+                      )}
+                    </div>
+                    <p className="provider-note">
+                      {presets.find((preset) => {
+                        return preset.id === permissionPreset
+                      })?.summary ?? '这一档只管内置工具；插件给的工具（待办、提问、网页、MCP…）不受影响。'}
+                    </p>
+                  </fieldset>
                   {/* .tool-checks 负责排布（styles.css），.tool-picker 把每一格改成可点的胶囊。 */}
                   <fieldset className="field" aria-label="工具白名单">
                     <span>工具白名单</span>
@@ -1569,13 +1649,15 @@ export function CreateAgentModal({
                             type="checkbox"
                             checked={tools.includes(tool)}
                             onChange={(e) => {
-                              setTools(
-                                e.target.checked
-                                  ? [...tools, tool]
-                                  : tools.filter((t) => {
-                                      return t !== tool
-                                    }),
-                              )
+                              const next = e.target.checked
+                                ? [...tools, tool]
+                                : tools.filter((t) => {
+                                    return t !== tool
+                                  })
+                              setTools(next)
+                              // 手动改过工具之后，这一档就不再是任何一档了：显示「自定义」，
+                              // 别硬报成某一档——那会让用户以为权限还是那一档。
+                              setPermissionPreset(detectPreset(presets, next) ?? '')
                             }}
                           />
                           {toolLabel(tool)}

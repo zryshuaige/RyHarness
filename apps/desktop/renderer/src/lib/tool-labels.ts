@@ -8,6 +8,9 @@
 export const TOOL_LABELS: Readonly<Record<string, string>> = {
   fs_read: '读文件',
   fs_write: '写文件',
+  fs_glob: '按名字找文件',
+  fs_grep: '搜文件内容',
+  fs_edit: '改文件内容',
   shell_exec: '执行命令',
   file_produce: '产出文件',
   todo: '待办清单',
@@ -23,6 +26,9 @@ export const TOOL_LABELS: Readonly<Record<string, string>> = {
 const TOOL_RUNNING: Readonly<Record<string, string>> = {
   fs_read: '正在读文件…',
   fs_write: '正在写文件…',
+  fs_glob: '正在找文件…',
+  fs_grep: '正在搜内容…',
+  fs_edit: '正在改文件…',
   shell_exec: '正在执行命令…',
   file_produce: '正在生成文件…',
   todo: '正在整理待办…',
@@ -31,6 +37,9 @@ const TOOL_RUNNING: Readonly<Record<string, string>> = {
 const TOOL_DONE: Readonly<Record<string, string>> = {
   fs_read: '已读文件',
   fs_write: '已写入文件',
+  fs_glob: '已找到文件',
+  fs_grep: '已搜到内容',
+  fs_edit: '已改文件',
   shell_exec: '已执行命令',
   file_produce: '已生成文件',
   todo: '已更新待办',
@@ -40,6 +49,9 @@ const TOOL_DONE: Readonly<Record<string, string>> = {
 const TOOL_FAILED: Readonly<Record<string, string>> = {
   fs_read: '读文件失败',
   fs_write: '写文件失败',
+  fs_glob: '找文件失败',
+  fs_grep: '搜内容失败',
+  fs_edit: '改文件失败',
   shell_exec: '命令执行失败',
   file_produce: '生成文件失败',
   todo: '待办更新失败',

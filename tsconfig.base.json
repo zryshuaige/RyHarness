@@ -34,7 +34,10 @@
       "@ryharness/server": ["./apps/server/src/index.ts"],
       "@ryharness/voice": ["./packages/voice/src/index.ts"],
       "@ryharness/memory": ["./packages/memory/src/index.ts"],
-      "@ryharness/evolve": ["./packages/evolve/src/index.ts"]
+      "@ryharness/evolve": ["./packages/evolve/src/index.ts"],
+      "@ryharness/mcp": ["./packages/mcp/src/index.ts"],
+      "@ryharness/subagent": ["./packages/subagent/src/index.ts"],
+      "@ryharness/context": ["./packages/context/src/index.ts"]
     }
   }
 }

@@ -862,7 +862,7 @@ export function AboutContent() {
   return (
     <div className="about-body">
       <p>
-        <strong>RyHarness</strong> v0.2.0 · 带人格的多 Agent 桌面工作台
+        <strong>RyHarness</strong> v0.3.0 · 带人格的多 Agent 桌面工作台
       </p>
       <p>
         本体以 <strong>MIT License</strong> 发布（见仓库 LICENSE）。

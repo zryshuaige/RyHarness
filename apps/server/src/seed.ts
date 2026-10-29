@@ -52,6 +52,76 @@ export function migrateBuiltinVoice(store: SessionStore): string | undefined {
   return agent.name
 }
 
+/**
+ * 给内置助理补上「找得到、改得动」那三个工具（fs_glob / fs_grep / fs_edit）。
+ *
+ * 种子只补「库里没有的」那条（见 {@link ensureSeedAgents}），所以存量安装里已经
+ * 建好的 Ryen 与小队成员不会自动拿到新工具——升级后助理还是既问不出文件在哪，
+ * 也改不动别的段落。
+ *
+ * 判据是**工具白名单是否还等于旧默认值**：用户自己勾过别的工具，那份清单就与
+ * 旧默认值不同，我们不动它（用户的选择是他的）；完全等于旧默认值的，说明用户
+ * 没动过，补上新工具不违背任何意愿。
+ * @param store - 会话存储（改的是 agents 表）。
+ * @returns 改了工具的助理名（多个时用、分隔）；没改时是 undefined。
+ */
+export function migrateBuiltinTools(store: SessionStore): string | undefined {
+  const changed: string[] = []
+  for (const agent of store.listAgents()) {
+    if (!agent.isBuiltin) continue
+    const addition = toolsToAdd(agent.id, agent.tools)
+    if (addition.length === 0) continue
+    store.upsertAgent({
+      id: agent.id,
+      name: agent.name,
+      ...(agent.avatar === undefined ? {} : { avatar: agent.avatar }),
+      systemPrompt: agent.systemPrompt,
+      provider: agent.provider,
+      model: agent.model,
+      ...(agent.temperature === undefined ? {} : { temperature: agent.temperature }),
+      ...(agent.reasoningEffort === undefined ? {} : { reasoningEffort: agent.reasoningEffort }),
+      tools: [...agent.tools, ...addition],
+      persona: { ...agent.persona },
+      isBuiltin: true,
+      ...(agent.routeLocked === undefined ? {} : { routeLocked: agent.routeLocked }),
+    })
+    changed.push(agent.name)
+  }
+  return changed.length === 0 ? undefined : changed.join('、')
+}
+
+/**
+ * 这个内置助理要补哪些工具：它的白名单还等于旧默认值时，补该角色的新工具。
+ *
+ * 旧默认值按角色记在这里，而不是从模板反推——模板已经改成新值了，反推只会拿到
+ * 「已经补过的」那一份，存量用户反而拿不到。
+ */
+function toolsToAdd(agentId: string, current: readonly string[]): string[] {
+  const old = LEGACY_DEFAULT_TOOLS[agentId]
+  if (old === undefined) return []
+  const same =
+    old.length === current.length &&
+    old.every((tool, index) => {
+      return tool === current[index]
+    })
+  if (!same) return []
+  return [...(NEW_FILE_TOOLS_BY_AGENT[agentId] ?? [])]
+}
+
+/** 升级前每个内置助理的默认工具白名单（判据用）。 */
+const LEGACY_DEFAULT_TOOLS: Record<string, readonly string[]> = {
+  ryen: ['fs_read', 'fs_write', 'file_produce', 'todo'],
+  engineer: ['fs_read', 'fs_write', 'file_produce'],
+  organizer: ['fs_read', 'fs_write', 'todo'],
+}
+
+/** 各内置助理要补的新工具。 */
+const NEW_FILE_TOOLS_BY_AGENT: Record<string, readonly string[]> = {
+  ryen: ['fs_glob', 'fs_grep', 'fs_edit'],
+  engineer: ['fs_glob', 'fs_grep', 'fs_edit'],
+  organizer: ['fs_glob', 'fs_grep'],
+}
+
 /** 一个可实例化的 agent 模板。 */
 export interface AgentTemplate {
   key: string
@@ -98,7 +168,7 @@ export const AGENT_TEMPLATES: Readonly<Record<string, AgentTemplate>> = {
     name: 'Ryen',
     description: 'Ryen：总管，橘色虎斑猫，温暖干练，日常问答与事务安排默认由它接手。',
     suggestedSystemPrompt: RYEN_TEMPLATE.systemPrompt,
-    defaultTools: ['fs_read', 'fs_write', 'file_produce', 'todo'],
+    defaultTools: ['fs_read', 'fs_write', 'fs_glob', 'fs_grep', 'fs_edit', 'file_produce', 'todo'],
     defaultModel: 'deepseek-ai/DeepSeek-V4-Flash',
     avatar: 'cat',
     persona: {
@@ -125,7 +195,7 @@ export const AGENT_TEMPLATES: Readonly<Record<string, AgentTemplate>> = {
       '产出物用 file_produce 落成文件再交付。',
       '边界：写作、翻译、文件归档与日程安排不是你的活；遇到这类活说明一句，交回总管 Ryen，别自己硬做。',
     ].join('\n'),
-    defaultTools: ['fs_read', 'fs_write', 'file_produce'],
+    defaultTools: ['fs_read', 'fs_write', 'fs_glob', 'fs_grep', 'fs_edit', 'file_produce'],
     defaultModel: 'deepseek-ai/DeepSeek-V4-Flash',
     avatar: 'dog',
     persona: {
@@ -202,7 +272,7 @@ export const AGENT_TEMPLATES: Readonly<Record<string, AgentTemplate>> = {
       '做完用一份清单汇报，什么放在哪儿一目了然。',
       '边界：写代码、写作与翻译不是你的活；遇到这类活说明一句，交回总管 Ryen。',
     ].join('\n'),
-    defaultTools: ['fs_read', 'fs_write', 'todo'],
+    defaultTools: ['fs_read', 'fs_write', 'fs_glob', 'fs_grep', 'todo'],
     defaultModel: 'deepseek-ai/DeepSeek-V4-Flash',
     avatar: 'mask',
     persona: {

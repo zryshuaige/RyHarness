@@ -11,7 +11,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import { bigrams, messageSearchText } from './fts.ts'
 
 /** 当前 schema 版本；每次变更表结构时 +1 并追加迁移函数。 */
-export const SCHEMA_VERSION = 11
+export const SCHEMA_VERSION = 12
 
 /** 版本 1：初始表结构。 */
 function migrateV1(db: DatabaseSync): void {
@@ -229,6 +229,28 @@ function migrateV11(db: DatabaseSync): void {
   db.exec('ALTER TABLE agents ADD COLUMN route_locked INTEGER NOT NULL DEFAULT 0')
 }
 
+/**
+ * 版本 12：agents 增加 permission_preset —— 「这个助理能碰到什么」的那一档。
+ *
+ * 工具白名单已经存在，但它是一堆名字：勾了哪些、意味着什么，要用户自己对。
+ * 档位把这件事收成三档（只读 / 工作区可写 / 全权），单独存一列，界面据此显示
+ * 「她现在是哪一档」，而不是让人从工具名反推。
+ *
+ * 存的是**用户选的档**，不是从工具清单反推的——反推的结果在用户手动改过工具之后
+ * 就不成立了，那种情况下界面显示「自定义」更诚实（见 detectPermissionPreset）。
+ * 存量行一律 NULL（= 没选过档，界面按工具清单现状显示）。
+ */
+function migrateV12(db: DatabaseSync): void {
+  const columns = db.prepare('PRAGMA table_info(agents)').all() as { name: string }[]
+  if (
+    columns.some((column) => {
+      return column.name === 'permission_preset'
+    })
+  )
+    return
+  db.exec('ALTER TABLE agents ADD COLUMN permission_preset TEXT')
+}
+
 /** 全部迁移：索引即目标版本。新增迁移只追加，不改动既有条目。 */
 export const MIGRATIONS: Readonly<Record<number, (db: DatabaseSync) => void>> = {
   1: migrateV1,
@@ -242,6 +264,7 @@ export const MIGRATIONS: Readonly<Record<number, (db: DatabaseSync) => void>> = 
   9: migrateV9,
   10: migrateV10,
   11: migrateV11,
+  12: migrateV12,
 }
 
 function userVersion(db: DatabaseSync): number {

@@ -102,6 +102,18 @@ export interface CoordinatorOptions {
     agentId: string,
   ) => { skill: string; tools: readonly string[] } | undefined
   /**
+   * 本轮的**上下文消息**（可选）：装进历史、紧挨用户那句话。
+   *
+   * 与 questionContext 的区别是「形态」：问答是**一段文字**，挂在系统提示末尾；
+   * 上下文是**若干条消息**（项目指引、当前时间、用户 @到的文件、另一个会话的近况），
+   * 以 user 角色的消息进历史——这样它们能被持久化、能被压缩、能被重放，语义与
+   * 上游 dsh 一致（注入内容按普通对话内容对待）。
+   *
+   * 由宿主（服务端）提供：这个包不认识「工作区」「会话存储」这些概念，装配逻辑
+   * 放在 @ryharness/context，宿主负责把它变成消息。
+   */
+  turnContext?: (input: { conversationId: string; agentId: string; userText: string }) => readonly Message[] | undefined
+  /**
    * 「你在跟谁说话」身份句（可选）：每轮组装系统提示时取一次，排在最前面。
    *
    * 由装配层从个人资料读出来传进来（见 apps/server/src/routes/profile.ts）：
@@ -640,6 +652,10 @@ export class SessionCoordinator {
 
     const memory = this.bindMemory(conversationId)
     const evolution = this.bindEvolution(conversationId)
+    // 上下文消息接在历史末尾、用户那句话之前：它们是「这一轮的补充资料」，
+    // 排在用户消息之前，模型读到的顺序与人类理解的顺序一致（先看资料，再看问题）。
+    const contextMessages = this.options.turnContext?.({ conversationId, agentId, userText: text }) ?? []
+    const withContext = contextMessages.length === 0 ? history : [...history, ...contextMessages]
     const usage = new TurnUsage()
     let lastAssistant: StoredMessage | undefined
     const loop = new AgentLoop({
@@ -648,7 +664,7 @@ export class SessionCoordinator {
         usage.add(call)
       }),
       tools,
-      history,
+      history: withContext,
       // 每步组装出的 assistant 消息（含 tool_calls、可能无文本）即时落库：
       // 不持久化它们，重建历史里 tool 消息就没有前置的 assistant tool_calls
       // 消息，违反 OpenAI 消息序列契约（第二轮必 400）。

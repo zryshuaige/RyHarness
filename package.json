@@ -1,6 +1,6 @@
 {
   "name": "ryharness-root",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "RyHarness：带人格的多 Agent 桌面工作台（Electron + React + cordis 内核）",

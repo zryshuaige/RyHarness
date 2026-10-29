@@ -104,16 +104,16 @@ electron-builder 按依赖图收集的也算。
 | @dicebear/core | <!-- notice:runtime.dicebearCore -->9.4.3<!-- /notice --> | MIT | `vendor-avatar-*.js`：头像 SVG 生成器 |
 | @dicebear/collection | <!-- notice:runtime.dicebearCollection -->9.4.2<!-- /notice --> | MIT（框架） | 同上；其中 dylan / mascot 两族风格另受 CC BY 4.0 约束，见上一节 |
 | ws | <!-- notice:runtime.ws -->8.22.0<!-- /notice --> | MIT | 主进程订阅后端 WS（`@ryharness/server` 的生产依赖，electron-builder 一并收集） |
-| @ryharness/*（<!-- notice:runtime.workspaceNonVendorCount -->17<!-- /notice --> 个非 vendor 工作区包） | <!-- notice:runtime.workspaceVersion -->0.2.0<!-- /notice --> | <!-- notice:runtime.workspaceLicense -->MIT<!-- /notice -->（本项目） | 主进程以 `external` 引入、运行时经 node_modules 解析；许可同本项目根 LICENSE |
-| 我方重命名的 vendor（<!-- notice:runtime.vendorShipped -->@ryharness/cordis · @ryharness/cosmokit<!-- /notice -->） | <!-- notice:runtime.workspaceVersion -->0.2.0<!-- /notice --> | <!-- notice:runtime.workspaceLicense -->MIT<!-- /notice -->（本项目重命名自 dsh vendor） | 内核地基（DI / 工具库）。上游作者 Shigma 的 MIT 法条随包保留在各 vendor 目录的 `LICENSE` 里 |
+| @ryharness/*（<!-- notice:runtime.workspaceNonVendorCount -->20<!-- /notice --> 个非 vendor 工作区包） | <!-- notice:runtime.workspaceVersion -->0.3.0<!-- /notice --> | <!-- notice:runtime.workspaceLicense -->MIT<!-- /notice -->（本项目） | 主进程以 `external` 引入、运行时经 node_modules 解析；许可同本项目根 LICENSE |
+| 我方重命名的 vendor（<!-- notice:runtime.vendorShipped -->@ryharness/cordis · @ryharness/cosmokit<!-- /notice -->） | <!-- notice:runtime.workspaceVersion -->0.3.0<!-- /notice --> | <!-- notice:runtime.workspaceLicense -->MIT<!-- /notice -->（本项目重命名自 dsh vendor） | 内核地基（DI / 工具库）。上游作者 Shigma 的 MIT 法条随包保留在各 vendor 目录的 `LICENSE` 里 |
 | `node:sqlite` | 随 Node 22.19+/24 | MIT | 会话持久化；Node 内置模块，其许可随 Electron 交付（见下节） |
 
 随包交付的工作区包是**依赖闭包**，不是「packages 目录下有几个」：桌面应用声明的工作区
 运行期依赖只有 `@ryharness/server` 一个，真正的清单是它的传递闭包
-（<!-- notice:runtime.workspaceCount -->19<!-- /notice --> 个，含上面那两件 vendor）。
+（<!-- notice:runtime.workspaceCount -->22<!-- /notice --> 个，含上面那两件 vendor）。
 闭包里的全部成员：
 
-<!-- notice:runtime.workspaceList -->@ryharness/agent（`packages/agent`）、@ryharness/attachment（`packages/attachment/types`）、@ryharness/brand（`packages/util/brand`）、@ryharness/cordis（`vendor/cordis`）、@ryharness/cosmokit（`vendor/cosmokit`）、@ryharness/evolve（`packages/evolve`）、@ryharness/group（`packages/group`）、@ryharness/llm（`packages/llm/llm`）、@ryharness/llm-openai（`packages/llm/openai`）、@ryharness/memory（`packages/memory`）、@ryharness/server（`apps/server`）、@ryharness/session（`packages/session`）、@ryharness/timeout（`packages/util/timeout`）、@ryharness/tools（`packages/tools`）、@ryharness/typert-protocol（`packages/typert/protocol`）、@ryharness/util-crypto（`packages/util/crypto`）、@ryharness/util-llm-json（`packages/util/llm-json`）、@ryharness/util-values（`packages/util/values`）、@ryharness/voice（`packages/voice`）<!-- /notice -->
+<!-- notice:runtime.workspaceList -->@ryharness/agent（`packages/agent`）、@ryharness/attachment（`packages/attachment/types`）、@ryharness/brand（`packages/util/brand`）、@ryharness/context（`packages/context`）、@ryharness/cordis（`vendor/cordis`）、@ryharness/cosmokit（`vendor/cosmokit`）、@ryharness/evolve（`packages/evolve`）、@ryharness/group（`packages/group`）、@ryharness/llm（`packages/llm/llm`）、@ryharness/llm-openai（`packages/llm/openai`）、@ryharness/mcp（`packages/mcp`）、@ryharness/memory（`packages/memory`）、@ryharness/server（`apps/server`）、@ryharness/session（`packages/session`）、@ryharness/subagent（`packages/subagent`）、@ryharness/timeout（`packages/util/timeout`）、@ryharness/tools（`packages/tools`）、@ryharness/typert-protocol（`packages/typert/protocol`）、@ryharness/util-crypto（`packages/util/crypto`）、@ryharness/util-llm-json（`packages/util/llm-json`）、@ryharness/util-values（`packages/util/values`）、@ryharness/voice（`packages/voice`）<!-- /notice -->
 
 其中 `<!-- notice:runtime.vendorUnshipped -->@ryharness/schemastery<!-- /notice -->` 目前**没有**任何包依赖它，
 因此它不构成分发物（源码里也没有对它的 import），不进上一张表；等真有包用上它时，
@@ -121,7 +121,7 @@ electron-builder 按依赖图收集的也算。
 
 上表第一行那条的成员（不含 vendor）：
 
-<!-- notice:runtime.workspaceNonVendorList -->@ryharness/agent（`packages/agent`）、@ryharness/attachment（`packages/attachment/types`）、@ryharness/brand（`packages/util/brand`）、@ryharness/evolve（`packages/evolve`）、@ryharness/group（`packages/group`）、@ryharness/llm（`packages/llm/llm`）、@ryharness/llm-openai（`packages/llm/openai`）、@ryharness/memory（`packages/memory`）、@ryharness/server（`apps/server`）、@ryharness/session（`packages/session`）、@ryharness/timeout（`packages/util/timeout`）、@ryharness/tools（`packages/tools`）、@ryharness/typert-protocol（`packages/typert/protocol`）、@ryharness/util-crypto（`packages/util/crypto`）、@ryharness/util-llm-json（`packages/util/llm-json`）、@ryharness/util-values（`packages/util/values`）、@ryharness/voice（`packages/voice`）<!-- /notice -->
+<!-- notice:runtime.workspaceNonVendorList -->@ryharness/agent（`packages/agent`）、@ryharness/attachment（`packages/attachment/types`）、@ryharness/brand（`packages/util/brand`）、@ryharness/context（`packages/context`）、@ryharness/evolve（`packages/evolve`）、@ryharness/group（`packages/group`）、@ryharness/llm（`packages/llm/llm`）、@ryharness/llm-openai（`packages/llm/openai`）、@ryharness/mcp（`packages/mcp`）、@ryharness/memory（`packages/memory`）、@ryharness/server（`apps/server`）、@ryharness/session（`packages/session`）、@ryharness/subagent（`packages/subagent`）、@ryharness/timeout（`packages/util/timeout`）、@ryharness/tools（`packages/tools`）、@ryharness/typert-protocol（`packages/typert/protocol`）、@ryharness/util-crypto（`packages/util/crypto`）、@ryharness/util-llm-json（`packages/util/llm-json`）、@ryharness/util-values（`packages/util/values`）、@ryharness/voice（`packages/voice`）<!-- /notice -->
 
 各组件的**精确版本与完整许可全文**以 `node_modules/<pkg>/package.json` 与 `LICENSE` 为准——
 本表是索引，不是替代品。本文件里写的版本号取自实际会被打进安装包的那棵树（而不是

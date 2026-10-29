@@ -3,6 +3,7 @@
  * @module @ryharness/session/types
  */
 
+import type { PermissionPreset } from '@ryharness/agent'
 import type { AgentPersona } from './persona.ts'
 
 /** 持久化的 Agent 定义（与 @ryharness/agent 的 AgentDefinition 同构，常用字段展开便于 SQL 查询）。 */
@@ -18,6 +19,13 @@ export interface StoredAgent {
   reasoningEffort?: string
   /** 工具名白名单。 */
   tools: string[]
+  /**
+   * 权限档位（`read-only` / `workspace-write` / `full-access`）。
+   *
+   * 存的是用户**选过**的那一档，不是从工具清单反推的——用户手动改过工具之后反推
+   * 就不成立了，那种情况下界面显示「自定义」更诚实。缺省 = 没选过档。
+   */
+  permissionPreset?: PermissionPreset
   /**
    * 人格（性格四维 / 生日 / 口头禅 / 形象 / 音色 / 亲密度）。
    * 读出来一定是完整的一份：存量 agent 的 persona 列是 NULL，存储层按默认值补齐。

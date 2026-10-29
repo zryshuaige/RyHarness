@@ -148,12 +148,20 @@ export interface ArtifactInfo {
  * 路由的 reasoningControl 条件带上）——没有可 import 的完整真源。渲染层按「有才
  * 展示」的容错读模型声明可选字段；服务端实际恒回 protocol/baseUrl/custom/usedBy。
  */
+/** 一个权限档位（服务端 /api/permission-presets 给出，渲染层不自己编一份）。 */
+export interface PermissionPresetView {
+  id: string
+  name: string
+  summary: string
+  /** 这一档允许的内置工具名。 */
+  tools: string[]
+}
+
 export interface ProviderInfo {
   id: string
   displayName: string
   apiKeyConfigured: boolean
-  models: { id: string; name?: string; contextWindow?: number }[]
-  /** 用户手动添加的供应商（可删除）；缺省视为内置。 */
+  models: { id: string; name?: string; contextWindow?: number }[] /** 用户手动添加的供应商（可删除）；缺省视为内置。 */
   custom?: boolean
   /** 接入协议（openai / ollama），徽标展示用。 */
   protocol?: string
@@ -562,6 +570,13 @@ export class ApiClient {
   /** 插件清单（服务端运行时的真实状态；渲染层不在本地维护插件表）。 */
   plugins(): Promise<{ plugins: PluginView[] }> {
     return this.request('/api/plugins')
+  }
+
+  /**
+   * 权限档位清单（服务端出，渲染层不抄一份——抄了就会与实际放行的工具漂）。
+   */
+  permissionPresets(): Promise<{ presets: PermissionPresetView[] }> {
+    return this.request('/api/permission-presets')
   }
 
   /**

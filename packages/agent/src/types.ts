@@ -4,6 +4,7 @@
  */
 
 import type { FinishReason, ToolCallId } from '@ryharness/llm'
+import type { PermissionPreset } from './permission.ts'
 
 /** Agent 定义：一段可持久化的 agent 身份 + 能力白名单。 */
 export interface AgentDefinition {
@@ -29,6 +30,14 @@ export interface AgentDefinition {
   reasoningEffort?: string
   /** 可调用的工具名白名单；为空数组表示纯对话。 */
   tools: string[]
+  /**
+   * 权限档位（见 {@link PermissionPreset}）。
+   *
+   * 它是「这个助理能碰到什么」的用户可见口径：档位决定内置工具的范围，
+   * {@link tools} 是这份范围的最终结果（用户按档位改完还能逐个微调，于是清单
+   * 与档位可能不再一致——那不算错，界面照清单显示）。
+   */
+  permissionPreset?: PermissionPreset
   /** 系统内置模板为 true；用户 fork 的为 false。 */
   isBuiltin?: boolean
 }

@@ -45,6 +45,14 @@ export {
   MAX_LOOP_CONTEXT_TOKENS,
   trimHistoryToBudget,
 } from './loop.ts'
+export type { PermissionPreset, PermissionPresetSpec } from './permission.ts'
+export {
+  applyPermissionPreset,
+  CORE_TOOL_NAMES,
+  detectPermissionPreset,
+  PERMISSION_PRESETS,
+  permissionPreset,
+} from './permission.ts'
 export { listTools, resolveAllowedTools } from './tool-source.ts'
 export type {
   AgentDefinition,

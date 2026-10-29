@@ -195,6 +195,8 @@ describe('插件装配', () => {
         'ask-user',
         'grill-me',
         'web-read',
+        'mcp',
+        'subagent',
       ])
       // 两个 core 恒开；其余是非 core，默认开着但可以在设置里关。
       expect(
@@ -214,25 +216,35 @@ describe('插件装配', () => {
           .map((row) => {
             return row.id
           }),
-      ).toEqual(['voice', 'voice-piper', 'voice-minimax', 'todo', 'ask-user', 'grill-me', 'web-read'])
+      ).toEqual([
+        'voice',
+        'voice-piper',
+        'voice-minimax',
+        'todo',
+        'ask-user',
+        'grill-me',
+        'web-read',
+        'mcp',
+        'subagent',
+      ])
       expect(list.every((row) => row.enabled && row.status === 'running')).toBe(true)
     } finally {
       await server.close()
     }
   })
 
-  it('GET /api/plugins 返回分组、能力清单与关闭影响，九个内置插件齐全', async () => {
+  it('GET /api/plugins 返回分组、能力清单与关闭影响，十一个内置插件齐全', async () => {
     const server = await start({})
     try {
       const { status, body } = await getJson(server, '/api/plugins')
       expect(status).toBe(200)
       const list = rows(body)
-      expect(list).toHaveLength(9)
+      expect(list).toHaveLength(11)
       expect(
         list.map((row) => {
           return row.group
         }),
-      ).toEqual(['core', 'core', 'voice', 'voice', 'voice', 'feature', 'feature', 'feature', 'tool'])
+      ).toEqual(['core', 'core', 'voice', 'voice', 'voice', 'feature', 'feature', 'feature', 'tool', 'tool', 'feature'])
       expect(
         list.every((row) => {
           return typeof row.impact === 'string' && row.impact.length > 0
@@ -244,7 +256,7 @@ describe('插件装配', () => {
         }),
       )
       expect(byId.get('core-tools')?.capabilities).toEqual({
-        tools: ['fs_read', 'fs_write', 'shell_exec', 'file_produce'],
+        tools: ['fs_read', 'fs_write', 'fs_glob', 'fs_grep', 'fs_edit', 'shell_exec', 'file_produce'],
       })
       expect(byId.get('voice')?.capabilities).toEqual({
         routes: ['GET /api/voice/catalog', 'POST /api/voice/speak'],

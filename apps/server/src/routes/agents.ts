@@ -3,7 +3,8 @@
  * @module @ryharness/server/routes/agents
  */
 
-import type { AgentDefinition } from '@ryharness/agent'
+import type { AgentDefinition, PermissionPreset } from '@ryharness/agent'
+import { applyPermissionPreset, PERMISSION_PRESETS, permissionPreset } from '@ryharness/agent'
 import type { AgentPersona, SessionStore } from '@ryharness/session'
 import { VOICE_PRESETS } from '@ryharness/session'
 import type { ProvidersConfigFile } from '../config.ts'
@@ -70,6 +71,15 @@ function agentFieldOverrides(
     }
     overrides.tools = record.tools as string[]
   }
+  if (record.permissionPreset !== undefined) {
+    if (typeof record.permissionPreset !== 'string') {
+      throw new HttpRequestError(400, 'field "permissionPreset" must be a string')
+    }
+    if (permissionPreset(record.permissionPreset) === undefined) {
+      throw new HttpRequestError(400, `未知的权限档位：${record.permissionPreset}`)
+    }
+    overrides.permissionPreset = record.permissionPreset as PermissionPreset
+  }
   if (record.persona !== undefined) {
     overrides.persona = personaOverrides(record.persona)
   }
@@ -127,6 +137,25 @@ export function registerAgentRoutes(router: Router, deps: AgentRoutes): void {
     json(res, 200, { agents: store.listAgents() })
   })
 
+  /**
+   * 权限档位清单：给界面渲染那三个选项。
+   *
+   * 清单由服务端出，而不是渲染层抄一份：档位与它管着的工具名必须一致，抄一份
+   * 就会漂——漂了之后界面上写着「只读」，实际放行的工具却多了执行命令。
+   */
+  router.get('/api/permission-presets', async (_req, res) => {
+    json(res, 200, {
+      presets: PERMISSION_PRESETS.map((preset) => {
+        return {
+          id: preset.id,
+          name: preset.name,
+          summary: preset.summary,
+          tools: [...preset.tools],
+        }
+      }),
+    })
+  })
+
   router.post('/api/agents', async (req, res) => {
     const body = await req.body()
     const templateKey = strField(body, 'templateKey')
@@ -165,6 +194,10 @@ export function registerAgentRoutes(router: Router, deps: AgentRoutes): void {
         provider: overrides.provider ?? fallback?.providerId ?? '',
         model: overrides.model ?? fallback?.model ?? '',
         tools: overrides.tools ?? [],
+        // 思考档位与权限档位要带上：此前这个分支只抄了五个字段，调用方给的档位在
+        // 落库前就被丢了（界面上看着选了，实际没生效）。
+        ...(overrides.reasoningEffort === undefined ? {} : { reasoningEffort: overrides.reasoningEffort }),
+        ...(overrides.permissionPreset === undefined ? {} : { permissionPreset: overrides.permissionPreset }),
       }
     }
     // **重名要拦住**：通讯录、群成员选择、气泡上全都按名字认人，两个都叫
@@ -177,6 +210,11 @@ export function registerAgentRoutes(router: Router, deps: AgentRoutes): void {
     }
     const stored = store.upsertAgent({
       ...definition,
+      // 新建时给了档位就按档位定内置工具（模板给的默认工具里可能带着执行命令，
+      // 而用户选的是「只读」——档位必须赢）。
+      ...(definition.permissionPreset === undefined
+        ? {}
+        : { tools: applyPermissionPreset(definition.tools, definition.permissionPreset) }),
       ...(persona === undefined ? {} : { persona }),
       isBuiltin: false,
       // 用户自己建（或从模板实例化）的助理，路由是他挑的：标成「手动挑过」，
@@ -207,6 +245,11 @@ export function registerAgentRoutes(router: Router, deps: AgentRoutes): void {
     json(res, 200, {
       agent: store.upsertAgent({
         ...merged,
+        // 给了档位就按档位收窄内置工具：档位是「能碰到什么」的承诺，工具清单必须
+        // 与它一致，否则界面上写着「只读」、实际工具箱里还挂着执行命令。
+        ...(merged.permissionPreset === undefined
+          ? {}
+          : { tools: applyPermissionPreset(merged.tools, merged.permissionPreset) }),
         ...(overrides.persona === undefined ? {} : { persona: { ...existing.persona, ...overrides.persona } }),
         // 手动改过 provider / model = 用户自己挑了这条路由，标上锁：以后用户再给别家
         // 配好凭据，内置助理那条「跟着走」的规则就不该把这位的选择改回去。

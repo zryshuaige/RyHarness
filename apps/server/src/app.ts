@@ -17,10 +17,11 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { join } from 'node:path'
 import type { Duplex } from 'node:stream'
 import type { AgentEvolutionHooks, AgentMemoryHooks } from '@ryharness/agent'
+import { assembleContext } from '@ryharness/context'
 import { Context } from '@ryharness/cordis'
 import { ChatEvolveLlm, EvolveService, seedIfEmpty } from '@ryharness/evolve'
 import type { AdapterRegistrationHandle } from '@ryharness/llm'
-import { isHarnessError, LlmRuntime } from '@ryharness/llm'
+import { createUserMessage, isHarnessError, LlmRuntime } from '@ryharness/llm'
 import type { OpenAiAdapterConfig, OpenAiPluginConfig } from '@ryharness/llm-openai'
 import { OpenAiAdapter } from '@ryharness/llm-openai'
 import {
@@ -55,7 +56,9 @@ import { grillMePlugin } from './plugins/grill-me.ts'
 import type { PluginEntry } from './plugins/host.ts'
 import { PluginHost } from './plugins/host.ts'
 import { llmOpenAiPlugin } from './plugins/llm-openai.ts'
+import { mcpPlugin } from './plugins/mcp.ts'
 import { RouteRegistry } from './plugins/routes.ts'
+import { subagentPlugin } from './plugins/subagent.ts'
 import { todoPlugin } from './plugins/todo.ts'
 import { TodoStore } from './plugins/todo-store.ts'
 import { voicePlugin } from './plugins/voice.ts'
@@ -78,7 +81,7 @@ import { registerSettingsRoutes } from './routes/settings.ts'
 import { registerTelemetryRoutes } from './routes/telemetry.ts'
 import { registerUsageRoutes } from './routes/usage.ts'
 import { registerVibeRoutes } from './routes/vibe.ts'
-import { ensureSeedAgents, migrateBuiltinVoice } from './seed.ts'
+import { ensureSeedAgents, migrateBuiltinTools, migrateBuiltinVoice } from './seed.ts'
 import { Telemetry } from './telemetry.ts'
 import { TurnEngine } from './turn-engine.ts'
 import { VibeStore } from './vibe/store.ts'
@@ -676,6 +679,9 @@ export class RyHarnessServer {
     // Ryen 换了声线（猫猫音）：存量安装里它的人格还指着旧的默认音色，这里补一次迁移。
     // 只动还停在旧默认的那位——用户自己挑过的音色是他的选择。
     migrateBuiltinVoice(store)
+    // 内置助理补上「找得到、改得动」那三个工具：只动白名单还等于旧默认值的那些，
+    // 用户自己勾过工具的助理不动（见 seed.ts 的 migrateBuiltinTools）。
+    migrateBuiltinTools(store)
     // 提问文件由组合根与 ask-user 插件共用：插件负责工具/路由，协调器负责在
     // 下一轮把已回答的问答注入模型；两边必须读写同一份数据。
     const questionStore = new QuestionStore(join(dataDir, 'questions.json'))
@@ -747,6 +753,10 @@ export class RyHarnessServer {
         workspaceRoot,
       }),
       webReadPlugin(),
+      // MCP 外部工具：连不上的 server 不影响其余（插件里逐个报失败原因）。
+      mcpPlugin({ dataDir, cwd: workspaceRoot }),
+      // 子代理：把活派给上下文独立的子代理（路由跟着发起者走）。
+      subagentPlugin({ llm: ctx.llm, tools: ctx.tools, store }),
     )
     pluginEntries.push(...(options.plugins ?? []))
     const pluginHost = new PluginHost(ctx, pluginEntries, dataDir, () => {
@@ -858,6 +868,26 @@ export class RyHarnessServer {
         })
         if (skill === undefined) return undefined
         return { skill: skill.body, tools: skill.tools ?? [] }
+      },
+      // 上下文装配：项目指引、当前时间、用户 @到的文件、另一个会话的近况。
+      //
+      // 装成**历史里的 user 消息**（而不是系统提示尾巴上的一段文字）：这样它们与
+      // 普通对话内容同一条生命周期——压缩时一起被裁、模型看到的位置也对（紧挨用户
+      // 那句话之前）。它们**不落库**：落库就会变成聊天气泡里的一段资料，聊天记录
+      // 立刻变得没法看。
+      turnContext: ({ conversationId, userText }) => {
+        const blocks = assembleContext({
+          workspaceRoot,
+          userText,
+          conversationId,
+        })
+        if (blocks.length === 0) return undefined
+        return blocks.map((block) => {
+          return createUserMessage({
+            content: [{ type: 'text', text: block.text }],
+            source: { kind: 'user' },
+          })
+        })
       },
       ...(coordinatorMemory === undefined ? {} : { memory: coordinatorMemory }),
       ...(evolutionOption === undefined ? {} : { evolution: evolutionOption }),

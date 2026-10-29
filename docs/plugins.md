@@ -100,7 +100,7 @@ ctx.effect(() => {
 
 | id | 分组 | 提供 | 可关闭 |
 |---|---|---|---|
-| `core-tools` | core | `fs_read` / `fs_write` / `shell_exec` / `file_produce` | 否 |
+| `core-tools` | core | `fs_read` / `fs_write` / `fs_glob` / `fs_grep` / `fs_edit` / `shell_exec` / `file_produce` | 否 |
 | `llm-openai` | core | 模型路由 | 否 |
 | `voice` | voice | `/api/voice/catalog`、`/api/voice/speak` | 是 |
 | `voice-piper` | voice | 离线音色 provider + `/api/voice/engines/piper/install`、`/api/voice/engines/piper/status` | 是 |
@@ -109,6 +109,41 @@ ctx.effect(() => {
 | `ask-user` | feature | `ask_user` 工具 + `/api/questions` | 是 |
 | `grill-me` | feature | `grill` / `vibe_scaffold` 工具 + 一条 skill（盘问与落地） | 是 |
 | `web-read` | tool | `read_url`（带私网拦截） | 是 |
+| `mcp` | tool | 外部 MCP server 的工具（配置在 `<dataDir>/config/mcp-servers.json`） | 是 |
+| `subagent` | feature | `subagent` / `subagent_list` 工具（把活派给上下文独立的子代理） | 是 |
+
+## 外部 MCP server
+
+`mcp` 插件读 `<dataDir>/config/mcp-servers.json`：
+
+```json
+{
+  "servers": {
+    "filesystem": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "."] }
+  }
+}
+```
+
+每个 server 起一条 stdio 连接，它提供的工具以 `mcp__<server>__<tool>` 的名字注册进来
+（名字里的字符会被清洗成 `[a-zA-Z0-9_-]`，撞名自动加序号）。**连不上不影响其余 server**：
+失败原因写进日志，其余 server 的工具照常可用。文件不存在或写坏了都按「没有配置」处理，
+不让一份手改坏的 JSON 把应用卡在启动上。
+
+关闭插件时连接的子进程会被收干净（Windows 上按进程树杀）。审批默认关——在配置里写下一个
+server 本身就是一次信任动作；要更严就在装配处把 `requiresApproval` 打开。
+
+## 权限档位
+
+每个助理有一档权限：`只读` / `工作区可写` / `全权`（见 `@ryharness/agent` 的
+`PERMISSION_PRESETS`）。档位管的是**内置工具**的范围，插件自己的工具（待办、提问、网页、
+MCP…）不受影响——用户自己装的插件不该被换档卸掉。
+
+档位清单由服务端出（`GET /api/permission-presets`），界面不抄一份：抄了就会与实际放行的
+工具漂，漂了之后界面上写着「只读」、实际工具箱里却还挂着执行命令。
+
+要说明白的边界：**目前没有内核级隔离**。上游 dsh 那一档还管着沙箱（bwrap / Landlock /
+Windows ACL），我们这里只是工具面上的收窄——「只读」意味着拿不到写与执行工具，不意味着
+模型碰不到工作区外的任何东西。真正的隔离见 [dsh 对账](dsh-parity.md) 的 sandbox 一行。
 
 开关是真实装卸，关掉之后的行为跟各插件的 `impact` 文案一致。两条容易踩的：
 

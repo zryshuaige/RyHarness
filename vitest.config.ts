@@ -227,6 +227,12 @@ export default defineConfig({
         'packages/session/src/**': { lines: -16, statements: -26, functions: -5, branches: -38 },
         'packages/memory/src/**': { lines: -19, statements: -26, functions: -6, branches: -30 },
         'packages/tools/src/**': { lines: -21, statements: -27, functions: -8, branches: -29 },
+        // 2026-10-29 新增的三包（上下文装配 / MCP 客户端 / 子代理）：数字取自实测的
+        // 最差单文件，留一点余量。它们是这一轮新写的，照例要带着棘轮进场——
+        // 新写一个不带测试的文件进来会红，回头补存量债不会。
+        'packages/context/src/**': { lines: -4, statements: -4, functions: -2, branches: -6 },
+        'packages/mcp/src/**': { lines: -4, statements: -5, functions: -3, branches: -12 },
+        'packages/subagent/src/**': { lines: -4, statements: -5, functions: -2, branches: -8 },
       },
     },
   },

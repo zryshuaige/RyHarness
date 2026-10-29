@@ -1,6 +1,6 @@
 {
   "name": "@ryharness/server",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "license": "MIT",
   "main": "./lib/index.js",
@@ -19,15 +19,18 @@
   },
   "dependencies": {
     "@ryharness/agent": "workspace:*",
+    "@ryharness/context": "workspace:*",
     "@ryharness/cordis": "workspace:*",
+    "@ryharness/evolve": "workspace:*",
     "@ryharness/llm": "workspace:*",
     "@ryharness/llm-openai": "workspace:*",
+    "@ryharness/mcp": "workspace:*",
+    "@ryharness/memory": "workspace:*",
     "@ryharness/session": "workspace:*",
+    "@ryharness/subagent": "workspace:*",
     "@ryharness/tools": "workspace:*",
     "@ryharness/voice": "workspace:*",
-    "ws": "^8.18.0",
-    "@ryharness/memory": "workspace:*",
-    "@ryharness/evolve": "workspace:*"
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@types/ws": "^8.5.10"

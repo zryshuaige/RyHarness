@@ -103,6 +103,9 @@ importers:
       '@ryharness/agent':
         specifier: workspace:*
         version: link:../../packages/agent
+      '@ryharness/context':
+        specifier: workspace:*
+        version: link:../../packages/context
       '@ryharness/cordis':
         specifier: workspace:*
         version: link:../../vendor/cordis
@@ -115,12 +118,18 @@ importers:
       '@ryharness/llm-openai':
         specifier: workspace:*
         version: link:../../packages/llm/openai
+      '@ryharness/mcp':
+        specifier: workspace:*
+        version: link:../../packages/mcp
       '@ryharness/memory':
         specifier: workspace:*
         version: link:../../packages/memory
       '@ryharness/session':
         specifier: workspace:*
         version: link:../../packages/session
+      '@ryharness/subagent':
+        specifier: workspace:*
+        version: link:../../packages/subagent
       '@ryharness/tools':
         specifier: workspace:*
         version: link:../../packages/tools
@@ -150,6 +159,8 @@ importers:
       '@ryharness/cordis':
         specifier: workspace:*
         version: link:../../../vendor/cordis
+
+  packages/context: {}
 
   packages/evolve:
     dependencies:
@@ -216,6 +227,15 @@ importers:
         specifier: workspace:*
         version: link:../../util/brand
 
+  packages/mcp:
+    dependencies:
+      '@ryharness/agent':
+        specifier: workspace:*
+        version: link:../agent
+      '@ryharness/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
+
   packages/memory:
     dependencies:
       '@ryharness/llm':
@@ -249,6 +269,22 @@ importers:
       '@ryharness/memory':
         specifier: workspace:*
         version: link:../memory
+
+  packages/subagent:
+    dependencies:
+      '@ryharness/agent':
+        specifier: workspace:*
+        version: link:../agent
+      '@ryharness/llm':
+        specifier: workspace:*
+        version: link:../llm/llm
+    devDependencies:
+      '@ryharness/brand':
+        specifier: workspace:*
+        version: link:../util/brand
+      '@ryharness/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
 
   packages/tools:
     dependencies:
@@ -2268,7 +2304,7 @@ packages:
 
   glob@7.2.3:
     resolution: {integrity: sha512-nFR0zLpU2YCaRxwoCJvL6UvCH2JFyFVIvwTLsIf21AuHlMskA1hhTdk+LlYJtOlYt9v6dvszD2BGRqBL+iQK9Q==}
-    deprecated: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+    deprecated: Glob versions prior to v9 are no longer supported
 
   global-agent@3.0.0:
     resolution: {integrity: sha512-PT6XReJ+D07JvGoxQMkT6qji/jVNfX/h364XHZOWeRzy64sSFr+xJ5OX7LI3b4MPQzdL4H8Y8M0xzPpsVMwA8Q==}

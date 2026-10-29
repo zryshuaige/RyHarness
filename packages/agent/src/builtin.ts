@@ -26,7 +26,9 @@ export const RYEN_TEMPLATE: AgentDefinition = {
   // 会敲我的电脑」时默认打开。与服务端模板目录（apps/server/src/seed.ts）保持
   // 一致；要用就在 agent 编辑里显式勾选，工具本身还有敏感路径闸兜底。
   // todo 是低风险的本机会话数据，默认开：用户说「帮我记一下」时助理必须能接住。
-  tools: ['fs_read', 'fs_write', 'file_produce', 'todo'],
+  // fs_glob / fs_grep / fs_edit 是「找得到、改得动」的那条路：只有 read/write 时，
+  // 助理既问不出工作区里有哪些文件，也改不动一个已知路径之外的段落。
+  tools: ['fs_read', 'fs_write', 'fs_glob', 'fs_grep', 'fs_edit', 'file_produce', 'todo'],
   isBuiltin: true,
 }
 
