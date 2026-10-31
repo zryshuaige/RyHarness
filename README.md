@@ -7,7 +7,7 @@ English | [中文](README.zh.md)
 [![pnpm](https://img.shields.io/badge/pnpm-11-F69220.svg)](https://pnpm.io)
 [![Electron](https://img.shields.io/badge/Electron-44-47848F.svg)](https://electronjs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-6-3178C6.svg)](https://www.typescriptlang.org)
-[![tests](https://img.shields.io/badge/tests-237%20files-brightgreen)](https://github.com/zryshuaige/RyHarness/actions)
+[![tests](https://img.shields.io/badge/tests-238%20files-brightgreen)](https://github.com/zryshuaige/RyHarness/actions)
 
 RyHarness is a desktop app for AI agents that live on your own machine. You keep a
 small team of them — each with its own personality, its own memory, its own tools —

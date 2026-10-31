@@ -12,8 +12,9 @@
 import type { PermissionPresetView } from '../api.ts'
 
 /** 所有档位合起来覆盖到的工具 = 受档位管辖的内置工具。 */
-export function coreToolNames(presets: readonly PermissionPresetView[]): ReadonlySet<string> {
+export function coreToolNames(presets: readonly PermissionPresetView[] | undefined): ReadonlySet<string> {
   const names = new Set<string>()
+  if (presets === undefined) return names
   for (const preset of presets) {
     for (const tool of preset.tools) names.add(tool)
   }
@@ -28,10 +29,11 @@ export function coreToolNames(presets: readonly PermissionPresetView[]): Readonl
  * @returns 套档之后的清单；档位不认识时原样返回。
  */
 export function applyPreset(
-  presets: readonly PermissionPresetView[],
+  presets: readonly PermissionPresetView[] | undefined,
   presetId: string,
   current: readonly string[],
 ): string[] {
+  if (presets === undefined) return [...current]
   const preset = presets.find((candidate) => {
     return candidate.id === presetId
   })
@@ -49,7 +51,11 @@ export function applyPreset(
  * @param current - 现在的工具清单。
  * @returns 档位 id；不是任何一档时是 undefined。
  */
-export function detectPreset(presets: readonly PermissionPresetView[], current: readonly string[]): string | undefined {
+export function detectPreset(
+  presets: readonly PermissionPresetView[] | undefined,
+  current: readonly string[],
+): string | undefined {
+  if (presets === undefined) return undefined
   const core = coreToolNames(presets)
   const coreTools = current.filter((tool) => {
     return core.has(tool)

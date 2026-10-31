@@ -1257,13 +1257,19 @@ export function CreateAgentModal({
     }
   }, [api])
   useEffect(() => {
-    if (api === undefined || presets.length > 0) return
+    if (api === undefined) return
+    if (presets.length > 0) return
+    // 旧服务端与测试替身可能没有这个接口：没有就���显示这个控件，别把整个表单炸掉。
+    const load = api.permissionPresets
+    if (typeof load !== 'function') return
     let alive = true
     // 权限档位清单：服务端出，界面不抄一份（抄了会与实际放行的工具漂）。
-    api
-      .permissionPresets()
-      .then(({ presets: list }) => {
+    load
+      .call(api)
+      .then((body) => {
         if (!alive) return
+        // 回包形状不可信就当没有：档位清单是可选功能，缺了不该让建 agent 的表单崩。
+        const list = Array.isArray(body?.presets) ? body.presets : []
         setPresets(list)
         // 没存过档位的助理，按现有工具清单反推一档；反推不出来就是「自定义」。
         setPermissionPreset((current) => {
