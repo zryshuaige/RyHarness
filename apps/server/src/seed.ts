@@ -91,35 +91,65 @@ export function migrateBuiltinTools(store: SessionStore): string | undefined {
 }
 
 /**
- * 这个内置助理要补哪些工具：它的白名单还等于旧默认值时，补该角色的新工具。
+ * 这个内置助理要补哪些工具：它的白名单还等于某一代旧默认值时，补那一代新增的工具。
  *
- * 旧默认值按角色记在这里，而不是从模板反推——模板已经改成新值了，反推只会拿到
+ * 旧默认值按**代**记在这里，而不是从模板反推——模板已经改成新值了，反推只会拿到
  * 「已经补过的」那一份，存量用户反而拿不到。
  */
 function toolsToAdd(agentId: string, current: readonly string[]): string[] {
-  const old = LEGACY_DEFAULT_TOOLS[agentId]
-  if (old === undefined) return []
-  const same =
-    old.length === current.length &&
-    old.every((tool, index) => {
-      return tool === current[index]
-    })
-  if (!same) return []
-  return [...(NEW_FILE_TOOLS_BY_AGENT[agentId] ?? [])]
+  const generations = TOOL_GENERATIONS[agentId]
+  if (generations === undefined) return []
+  for (const generation of generations) {
+    const same =
+      generation.tools.length === current.length &&
+      generation.tools.every((tool, index) => {
+        return tool === current[index]
+      })
+    if (!same) continue
+    return [...generation.add]
+  }
+  return []
 }
 
-/** 升级前每个内置助理的默认工具白名单（判据用）。 */
-const LEGACY_DEFAULT_TOOLS: Record<string, readonly string[]> = {
-  ryen: ['fs_read', 'fs_write', 'file_produce', 'todo'],
-  engineer: ['fs_read', 'fs_write', 'file_produce'],
-  organizer: ['fs_read', 'fs_write', 'todo'],
+/**
+ * 各内置助理的工具白名单的历代默认值。
+ *
+ * 每一代记两件事：那一代的白名单是什么、那一代新增了哪些工具。存量安装的白名单
+ * 只要**逐字**等于其中某一代，就补上那一代新增的工具；用户自己勾过别的工具，
+ * 那份清单与任何一代都不同，我们不动它（用户的选择是他的）。
+ */
+const TOOL_GENERATIONS: Record<string, readonly ToolGeneration[]> = {
+  ryen: [
+    {
+      tools: ['fs_read', 'fs_write', 'file_produce', 'todo'],
+      add: ['fs_glob', 'fs_grep', 'fs_edit'],
+    },
+    {
+      tools: ['fs_read', 'fs_write', 'fs_glob', 'fs_grep', 'fs_edit', 'file_produce', 'todo'],
+      // spill_read：超长的工具结果会落盘，模型要能自己取回来。少了它，溢出等于丢内容。
+      add: ['spill_read'],
+    },
+  ],
+  engineer: [
+    {
+      tools: ['fs_read', 'fs_write', 'file_produce'],
+      add: ['fs_glob', 'fs_grep', 'fs_edit'],
+    },
+  ],
+  organizer: [
+    {
+      tools: ['fs_read', 'fs_write', 'todo'],
+      add: ['fs_glob', 'fs_grep'],
+    },
+  ],
 }
 
-/** 各内置助理要补的新工具。 */
-const NEW_FILE_TOOLS_BY_AGENT: Record<string, readonly string[]> = {
-  ryen: ['fs_glob', 'fs_grep', 'fs_edit'],
-  engineer: ['fs_glob', 'fs_grep', 'fs_edit'],
-  organizer: ['fs_glob', 'fs_grep'],
+/** 工具白名单的一代。 */
+interface ToolGeneration {
+  /** 这一代的默认白名单（逐字比较）。 */
+  readonly tools: readonly string[]
+  /** 这一代新增的工具。 */
+  readonly add: readonly string[]
 }
 
 /** 一个可实例化的 agent 模板。 */

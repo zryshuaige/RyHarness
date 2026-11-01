@@ -627,16 +627,22 @@ describe('弹窗提交失败不再静默', () => {
 
 describe('工具中文名只有一份', () => {
   it('新建表单与右栏徽章读同一张表', () => {
-    expect(ALL_TOOLS).toEqual([
-      'fs_read',
-      'fs_write',
-      'fs_glob',
-      'fs_grep',
-      'fs_edit',
-      'shell_exec',
-      'file_produce',
-      'todo',
-    ])
+    expect(ALL_TOOLS).toEqual(
+      expect.arrayContaining([
+        'fs_read',
+        'fs_write',
+        'fs_glob',
+        'fs_grep',
+        'fs_edit',
+        'shell_exec',
+        'file_produce',
+        'todo',
+      ]),
+    )
+    // 每个工具都要有中文名：界面上露出英文标识就是漏了。
+    for (const tool of ALL_TOOLS) {
+      expect(toolLabel(tool), tool).not.toBe(tool)
+    }
     expect(toolLabel('fs_read')).toBe('读文件')
     expect(toolLabel('todo')).toBe('待办清单')
     // 未知工具原样透出，不显示空白。

@@ -1181,6 +1181,10 @@ export function CreateAgentModal({
       return tool !== RISKY_TOOL
     })
   })
+  /** 可勾的工具名：服务端给的清单（取不到时用本地那份）。 */
+  const [toolNames, setToolNames] = useState<string[]>(() => {
+    return [...ALL_TOOLS]
+  })
   /**
    * 权限档位：助理「能碰到什么」的那一档。
    *
@@ -1259,7 +1263,7 @@ export function CreateAgentModal({
   useEffect(() => {
     if (api === undefined) return
     if (presets.length > 0) return
-    // 旧服务端与测试替身可能没有这个接口：没有就���显示这个控件，别把整个表单炸掉。
+    // 旧服务端与测试替身可能没有这个接口：没有就不显示这个控件，别把整个表单炸掉。
     const load = api.permissionPresets
     if (typeof load !== 'function') return
     let alive = true
@@ -1286,6 +1290,41 @@ export function CreateAgentModal({
     }
     // 清单只取一次：deps 里带上 presets.length 是为了「取到就别再取」。
   }, [api, presets.length])
+  /**
+   * 工具清单：服务端出，界面不抄一份。
+   *
+   * 抄的那份会与实际注册的工具漂——插件装上装下、或某个能力还没接进服务端时，
+   * 界面照样让人勾一个调不通的工具。取不到就退回本地那份（宁可少几个可选的，
+   * 也不让整个白名单空掉）。
+   */
+  useEffect(() => {
+    if (api === undefined) return
+    if (toolNames.length > ALL_TOOLS.length) return
+    const load = api.tools
+    if (typeof load !== 'function') return
+    let alive = true
+    load
+      .call(api)
+      .then((body) => {
+        if (!alive) return
+        const list = Array.isArray(body?.tools) ? body.tools : []
+        const names = list
+          .map((tool) => {
+            return tool?.name
+          })
+          .filter((name): name is string => {
+            return typeof name === 'string' && name.length > 0
+          })
+        if (names.length === 0) return
+        setToolNames(names)
+      })
+      .catch(() => {
+        // 读不到就还用本地那份。
+      })
+    return () => {
+      alive = false
+    }
+  }, [api, toolNames.length])
   const voiceProfiles = voiceCatalog?.profiles ?? []
   const voiceEngines = voiceCatalog?.engines ?? []
   const selectedVoice = voiceProfiles.find((profile) => {
@@ -1649,7 +1688,7 @@ export function CreateAgentModal({
                   <fieldset className="field" aria-label="工具白名单">
                     <span>工具白名单</span>
                     <div className="tool-checks tool-picker">
-                      {ALL_TOOLS.map((tool) => (
+                      {toolNames.map((tool) => (
                         <label key={tool}>
                           <input
                             type="checkbox"

@@ -31,11 +31,23 @@ import {
   NullEmbeddings,
   OpenAiCompatibleEmbeddings,
 } from '@ryharness/memory'
+import { SandboxPolicy } from '@ryharness/sandbox'
+import { CommandRegistry } from '@ryharness/commands'
+import { CredentialRegistry, FileCredentialStore } from '@ryharness/credentials'
+import { createGoalCommand, GoalService } from '@ryharness/goal'
+import { ScheduleService } from '@ryharness/schedule'
+import { IdentityStore } from '@ryharness/identity'
+import { PresetRegistry } from '@ryharness/preset'
+import { SessionQueryService } from '@ryharness/session-query'
+import { FileSettingsStore, SettingsService } from '@ryharness/settings'
+import { makeSpan, OtlpExporter, randomHexId } from '@ryharness/otel'
+import { LocalSpillStore, SpillPolicy } from '@ryharness/spill'
 import { SessionCoordinator, SessionStore } from '@ryharness/session'
 import { ToolRegistry } from '@ryharness/tools'
 import type { WebSocket as WsSocket } from 'ws'
 import { WebSocketServer } from 'ws'
 import { ApprovalBroker } from './approvals.ts'
+import { deliverAgentNotice } from './agent-notice.ts'
 import { EventHub } from './bus.ts'
 import type { ProvidersConfigFile } from './config.ts'
 import {
@@ -52,12 +64,24 @@ import type { WsEvent } from './events.ts'
 import { ASK_USER_PLUGIN_ID, askUserPlugin } from './plugins/ask-user.ts'
 import { QuestionStore, renderQuestionContext } from './plugins/ask-user-store.ts'
 import { coreToolsPlugin } from './plugins/core-tools.ts'
+import { commandsPlugin } from './plugins/commands.ts'
+import { goalPlugin } from './plugins/goal.ts'
 import { grillMePlugin } from './plugins/grill-me.ts'
+import { jobsPlugin } from './plugins/jobs.ts'
 import type { PluginEntry } from './plugins/host.ts'
 import { PluginHost } from './plugins/host.ts'
 import { llmOpenAiPlugin } from './plugins/llm-openai.ts'
+import { credentialsPlugin } from './plugins/credentials.ts'
+import { extensionsPlugin } from './plugins/extensions.ts'
+import { settingsPlugin } from './plugins/settings.ts'
+import { terminalPlugin } from './plugins/terminal.ts'
+import { lspPlugin } from './plugins/lsp.ts'
 import { mcpPlugin } from './plugins/mcp.ts'
+import { sessionQueryPlugin } from './plugins/session-query.ts'
+import { skillPlugin } from './plugins/skill.ts'
+import { spillPlugin } from './plugins/spill.ts'
 import { RouteRegistry } from './plugins/routes.ts'
+import { schedulePlugin } from './plugins/schedule.ts'
 import { subagentPlugin } from './plugins/subagent.ts'
 import { todoPlugin } from './plugins/todo.ts'
 import { TodoStore } from './plugins/todo-store.ts'
@@ -65,6 +89,8 @@ import { voicePlugin } from './plugins/voice.ts'
 import { voiceMinimaxPlugin } from './plugins/voice-minimax.ts'
 import { voicePiperPlugin } from './plugins/voice-piper.ts'
 import { webReadPlugin } from './plugins/web-read.ts'
+import { webPlugin } from './plugins/web.ts'
+import { workflowPlugin } from './plugins/workflow.ts'
 import { ProactiveDigest } from './proactive.ts'
 import { retargetBuiltinAgents } from './provider-routing.ts'
 import { HttpRequestError, json, Router } from './router.ts'
@@ -77,12 +103,15 @@ import { registerPluginRoutes } from './routes/plugins.ts'
 import { registerProactiveRoutes } from './routes/proactive.ts'
 import { identityLine, readProfile, registerProfileRoutes } from './routes/profile.ts'
 import { registerProviderRoutes } from './routes/providers.ts'
+import { registerSandboxRoutes } from './routes/sandbox.ts'
 import { registerSettingsRoutes } from './routes/settings.ts'
 import { registerTelemetryRoutes } from './routes/telemetry.ts'
 import { registerUsageRoutes } from './routes/usage.ts'
 import { registerVibeRoutes } from './routes/vibe.ts'
-import { ensureSeedAgents, migrateBuiltinTools, migrateBuiltinVoice } from './seed.ts'
-import { Telemetry } from './telemetry.ts'
+import { AGENT_TEMPLATES, ensureSeedAgents, migrateBuiltinTools, migrateBuiltinVoice } from './seed.ts'
+import { readBundleDecisions } from './bundle-config.ts'
+import { readServerVersion, readTelemetryConfig } from './otel-config.ts'
+import { DEFAULT_TELEMETRY_CAPACITY, Telemetry } from './telemetry.ts'
 import { TurnEngine } from './turn-engine.ts'
 import { VibeStore } from './vibe/store.ts'
 
@@ -451,6 +480,10 @@ export interface RyHarnessServerOptions {
    * 依赖由本组合根显式注入；server 只保留生命周期与路由装配。
    */
   readonly turnEngine: TurnEngine
+  /** 沙箱策略：会话级权限覆盖（轮次引擎与沙箱路由共用同一份）。 */
+  readonly sandboxPolicy: SandboxPolicy
+  /** 能力预设：给助理定一版「能用什么」（助理路由用它）。 */
+  readonly presetRegistry: PresetRegistry
 }
 
 /** RyHarness 本地后端服务。 */
@@ -479,6 +512,10 @@ export class RyHarnessServer {
   readonly approvals: ApprovalBroker
   /** 轮次引擎：路由回调与优雅停机经由它驱动轮次链（见 turn-engine.ts）。 */
   readonly turnEngine: TurnEngine
+  /** 沙箱策略：会话级权限覆盖（沙箱路由与轮次引擎共用这一份）。 */
+  readonly sandboxPolicy: SandboxPolicy
+  /** 能力预设注册表（助理路由与设置页共用这一份）。 */
+  readonly presetRegistry: PresetRegistry
 
   private readonly memoryService: MemoryService | undefined
   private readonly evolutionService: EvolveService | undefined
@@ -523,6 +560,8 @@ export class RyHarnessServer {
     this.proactiveDigest = options.proactiveDigest
     this.approvals = options.approvals
     this.turnEngine = options.turnEngine
+    this.sandboxPolicy = options.sandboxPolicy
+    this.presetRegistry = options.presetRegistry
   }
 
   /** 第二次及以后的 close() 直接复用首次的停机 Promise（幂等）。 */
@@ -691,6 +730,120 @@ export class RyHarnessServer {
     // 待办清单同样由组合根持有：待办插件的路由/工具与 RyVibe 的落盘工具写的是
     // 同一份（RyVibe 落盘时把任务清单写进清单，用户在聊天页右侧就能勾）。
     const todoStore = new TodoStore(join(dataDir, 'todos.json'))
+    /**
+     * 沙箱策略：会话级权限覆盖的存放处。
+     *
+     * 模式从哪儿来的优先级是「会话覆盖 > 助理档位 > 部署默认值」；这个对象只管
+     * 中间那层的覆盖，档位在助理定义里，默认值是「工作区可写」。
+     */
+    const sandboxPolicy = new SandboxPolicy({ workspaceRoot })
+    /**
+     * 斜杠命令注册表：组合根持有一份，插件与别的插件往同一张表里登记。
+     *
+     * 为什么在组合根而不是插件里 new：命令是**应用级**的东西（别的插件也要往
+     * 表里加命令），各建一张表的话，界面拿到的那张清单是空的。
+     */
+    const commandRegistry = new CommandRegistry()
+    /**
+     * 能力预设：内置模板本身就是一份能力组合，所以预设直接从模板生成。
+     *
+     * 选中一版 = 给这位助理定一套工具白名单（版本号递增，旧版能回看）。
+     */
+    const presetRegistry = new PresetRegistry()
+    for (const template of Object.values(AGENT_TEMPLATES)) {
+      presetRegistry.register({
+        id: template.key,
+        name: template.name,
+        description: template.description,
+        tools: template.defaultTools,
+        prompt: template.suggestedSystemPrompt,
+      })
+    }
+    /**
+     * 匿名安装 id：把同一台机器上的多次运行归到一起。
+     *
+     * **不含任何个人信息**（不取用户名、不取机器名）——它只是一个随机 id，落在本机的
+     * 应用数据目录里。
+     */
+    const installationId = new IdentityStore({ dataDir }).ensure().id
+    /**
+     * 插件配置表单服务：把插件的配置变成能填的表单，改完热生效。
+     *
+     * 落盘在 `config/plugin-settings.json`（存的是**值**，不是密钥）。
+     */
+    const settingsService = new SettingsService({
+      store: new FileSettingsStore({ filePath: join(dataDir, 'config', 'plugin-settings.json') }),
+      /**
+       * 热生效：把新值写进插件自己的配置文件，再把那个插件**重挂一遍**。
+       *
+       * 为什么是重挂：插件的 apply 只在装载时读一次配置，写文件它不会自己看。
+       * 重挂是现在唯一能让它重读的办法（插件的开关本来就是这么实现的）。
+       */
+      apply: (pluginId, values) => {
+        if (pluginId !== 'web') return
+        writeFileSync(join(dataDir, 'config', 'web.json'), JSON.stringify(values, null, 2), 'utf8')
+      },
+    })
+    /**
+     * 凭据引用注册表：配置里只存引用，真密钥要走授权流。
+     */
+    const credentialRegistry = new CredentialRegistry({
+      store: new FileCredentialStore({ filePath: join(dataDir, 'config', 'credentials.json') }),
+      /**
+       * 要人点头：用工具执行那套审批桥（界面出卡片、用户点允许/拒绝、超时按拒绝）。
+       *
+       * 会话范围用**发起方**给的会话 id；没有就给一个固定的伪会话——这条流程今天
+       * 还没有工具在用，等真有工具要用时把它接到真实会话上。
+       */
+      requestApproval: async (request) => {
+        const approved = await approvals.request({
+          conversationId: request.requester,
+          agentId: request.requester,
+          toolName: 'credential_use',
+          args: JSON.stringify({ credentialId: request.credentialId, purpose: request.purpose }),
+        })
+        return approved ? { approved: true } : { approved: false, reason: '用户没有批准这次取用' }
+      },
+      /** 真密钥由宿主自己的加密存储管（见 apps/server/src/config.ts 的 SecretCodec）。 */
+      resolveSecret: (ref) => {
+        const keys = loadApiKeys(dataDir)
+        const key = keys[ref.providerId]
+        return key ?? ''
+      },
+    })
+    /**
+     * 会话历史查询服务：助理能翻自己的历史。
+     *
+     * 由组合根持有：服务里有一份搜索索引，插件装载一次就重建一次索引，白白把已经
+     * 建好的索引扔掉。
+     */
+    const sessionQueryService = new SessionQueryService({ store })
+    /**
+     * 目标与提醒服务：都是**跨重启**的东西，存储路径是应用级的事。
+     *
+     * 目标按会话归属（一个会话一件要做完的事）；提醒到点时把话投回原会话——
+     * 投递走 {@link deliverAgentNotice}，落库与推送同源。
+     */
+    const goalService = new GoalService({ storePath: join(dataDir, 'goals.json') })
+    const scheduleService = new ScheduleService({
+      storePath: join(dataDir, 'schedules.json'),
+      deliver: (_scheduleId, conversationId, text) => {
+        if (noticeHub === undefined) return
+        // 投给这个会话里的第一位成员：提醒是对着这个会话说的。
+        const conversation = store.getConversation(conversationId)
+        const agentId = conversation?.memberAgentIds[0]
+        if (agentId === undefined) return
+        deliverAgentNotice({ store, hub: noticeHub }, { conversationId, agentId, text })
+      },
+    })
+    /**
+     * 溢出文本存储：工具结果太长时，原文落在这里（模型只拿预览 + 定位符）。
+     *
+     * 由组合根持有而不是插件自建：数据目录与容量上限是应用级的事，而且必须
+     * 只有一份——两份存储各写各的目录，模型拿到的定位符有一半取不回来。
+     */
+    const spillStore = new LocalSpillStore({ dataDir })
+    const spillPolicy = new SpillPolicy({ store: spillStore })
 
     // 供应商配置解析一次：显式注入 > 挂载自定义 runtime > 配置文件（含应用内 key 合并）。
     const providers =
@@ -713,6 +866,13 @@ export class RyHarnessServer {
     // 内置插件 + 调用方追加的插件。llm-openai 只在没有自定义 LLM 挂载时装：
     // 测试的 mock 适配器与真实供应商路由会撞同一个 route id。
     const pluginEntries: PluginEntry[] = [coreToolsPlugin]
+    /**
+     * 通知出口：hub 在插件清单之后才建好（插件清单要拿 ctx.tools），所以这里先留一个洞。
+     *
+     * 用一个可变量而不是直接引用后面的 `hub`：直接引用会在「插件清单」这一行就把
+     * 一个还没初始化的常量捕获进去，排查时看到的是 undefined 而不是「还没建好」。
+     */
+    let noticeHub: EventHub | undefined
     let adoptOpenAi: ((handle: AdapterRegistrationHandle, config: OpenAiAdapterConfig) => void) | undefined
     if (options.mountLlm === undefined) {
       const openAiConfig: OpenAiPluginConfig = toAdapterConfig(providers)
@@ -753,13 +913,95 @@ export class RyHarnessServer {
         workspaceRoot,
       }),
       webReadPlugin(),
+      // 搜索与抓网页：搜索要配后端（config/web.json），抓网页开箱可用。
+      webPlugin({ dataDir }),
+      // 代码导航：语言服务器要用户自己装并配（config/lsp.json），没配时工具直说。
+      lspPlugin({ dataDir, workspaceRoot }),
+      spillPlugin({
+        store: spillStore,
+        resolveSessionId: (request) => {
+          const sessionId = request.query.get('sessionId')
+          return sessionId === null || sessionId.length === 0 ? undefined : sessionId
+        },
+      }),
+      // 技能目录：助理按需加载工作法（项目目录 / 用户目录里的技能文件）。
+      skillPlugin({ workspaceRoot, dataDir }),
+      // 斜杠命令：人敲 /命令 直接触发动作，不等模型回话。
+      commandsPlugin({
+        registry: commandRegistry,
+        commands: [
+          {
+            name: 'help',
+            description: '列出当前可用的斜杠命令。',
+            execute: async () => {
+              const lines = ['可用命令：']
+              for (const summary of commandRegistry.list()) {
+                lines.push(`- /${summary.name}：${summary.description}`)
+              }
+              return { text: lines.join('\n') }
+            },
+          },
+          // `/goal`：人直接看与控制目标，不花模型一轮。
+          createGoalCommand(goalService, {
+            resolveSessionId: (context) => context?.sessionId,
+          }),
+        ],
+      }),
+      // 跨重启的目标：助理能定、能改、能看状态。
+      goalPlugin({ service: goalService }),
+      // 提醒：到点在原会话里说一句，跨重启存活。
+      schedulePlugin({ service: scheduleService }),
+      // 插件配置表单：改完热生效。
+      settingsPlugin({ service: settingsService }),
+      // 凭据引用：清单与吊销面（真密钥要授权才能取）。
+      credentialsPlugin({ registry: credentialRegistry }),
+      // 终端：持久会话（管道模式；Windows 上没有真 PTY）。
+      terminalPlugin(),
+      // 运行时能力目录：助理能查这个运行时有什么（只读）。
+      extensionsPlugin(),
+      // 会话历史查询：搜关键词、按 id 读一条、追关系。
+      sessionQueryPlugin({ service: sessionQueryService }),
+      // 编排：助理写脚本扇出子代理。脚本的文件策略锁在工作区里。
+      workflowPlugin({
+        llm: ctx.llm,
+        tools: ctx.tools,
+        store,
+        filePolicy: { cwd: workspaceRoot, readRoots: [workspaceRoot], writeRoots: [workspaceRoot] },
+      }),
       // MCP 外部工具：连不上的 server 不影响其余（插件里逐个报失败原因）。
       mcpPlugin({ dataDir, cwd: workspaceRoot }),
       // 子代理：把活派给上下文独立的子代理（路由跟着发起者走）。
       subagentPlugin({ llm: ctx.llm, tools: ctx.tools, store }),
+      // 后台任务与计划模式：活派到后台去跑，跑完通知自己进会话。
+      jobsPlugin({
+        llm: ctx.llm,
+        tools: ctx.tools,
+        store,
+        deliver: (input) => {
+          if (noticeHub === undefined) return
+          deliverAgentNotice({ store, hub: noticeHub }, input)
+        },
+        conversationExists: (conversationId) => {
+          return store.getConversation(conversationId) !== undefined
+        },
+      }),
     )
     pluginEntries.push(...(options.plugins ?? []))
-    const pluginHost = new PluginHost(ctx, pluginEntries, dataDir, () => {
+    /**
+     * 分层装配：用户可以在 `config/bundle.json` 里定义一套插件装法。
+     *
+     * 文件不存在就用上面这份默认清单；存在就按 bundle 叠出来的决定裁剪——bundle 里
+     * 说了不装的插件这里就不装。**bundle 没提到的插件照旧装**（bundle 是「减法」，
+     * 不是「全量替换」）。
+     */
+    const bundleDecisions = readBundleDecisions(dataDir)
+    const selectedEntries =
+      bundleDecisions === undefined
+        ? pluginEntries
+        : pluginEntries.filter((entry) => {
+            return bundleDecisions.get(entry.id) !== false
+          })
+    const pluginHost = new PluginHost(ctx, selectedEntries, dataDir, () => {
       // 运行时事实现取：插件的注册随 fiber 装卸，缓存下来的快照会撒谎。
       return {
         tools: ctx.tools.list().map((tool) => {
@@ -811,7 +1053,59 @@ export class RyHarnessServer {
         },
       })
     }
-    const telemetry = new Telemetry()
+    /**
+     * OTel 通道：配了端点就把轮次计量按 OTLP 送出去。
+     *
+     * 送出去是**可选**的：没配就在本地缓冲里待着（界面看的那份照常有）。
+     * 送不出去也不影响对话——计量是旁观者。
+     */
+    const telemetryConfig = readTelemetryConfig(dataDir)
+    const otelExporter =
+      telemetryConfig.otlpEndpoint === undefined
+        ? undefined
+        : new OtlpExporter({
+            endpoint: telemetryConfig.otlpEndpoint,
+            resource: {
+              serviceName: 'ryharness',
+              serviceVersion: readServerVersion(),
+              attributes: { 'installation.id': installationId },
+            },
+            ...(telemetryConfig.headers === undefined ? {} : { headers: telemetryConfig.headers }),
+          })
+    const telemetry = new Telemetry(
+      DEFAULT_TELEMETRY_CAPACITY,
+      otelExporter === undefined
+        ? undefined
+        : {
+            recordTurn: (timing) => {
+              otelExporter.record(
+                makeSpan({
+                  name: 'turn',
+                  traceId: randomHexId(16),
+                  spanId: randomHexId(8),
+                  startedAtMs: timing.finishedAt - timing.totalMs,
+                  endedAtMs: timing.finishedAt,
+                  attributes: {
+                    'conversation.kind': timing.kind,
+                    'turn.index': timing.turnIndex,
+                    'turn.status': timing.status,
+                    'turn.total_ms': timing.totalMs,
+                    ...(timing.firstTokenMs === undefined ? {} : { 'turn.first_token_ms': timing.firstTokenMs }),
+                  },
+                  status: { code: timing.status === 'ok' ? 'OK' : 'ERROR' },
+                }),
+              )
+            },
+          },
+    )
+    // 冲刷定时器：按配置的周期把队列发出去。没配端点就没有这个定时器。
+    const otelFlushTimer =
+      otelExporter === undefined
+        ? undefined
+        : setInterval(() => {
+            void otelExporter.flush()
+          }, telemetryConfig.flushIntervalMs ?? 10_000)
+    otelFlushTimer?.unref?.()
     const authToken = options.authToken ?? envValue(process.env, 'API_TOKEN')
     // 端口固定 + 零鉴权意味着本机任何进程都能驱动 shellExec。桌面端一定会传
     // token（主进程随机生成），所以只提醒，不阻断：独立开发进程与测试不传。
@@ -823,11 +1117,29 @@ export class RyHarnessServer {
     const coordinatorMemory = memoryOption === undefined ? undefined : timedMemoryHooks(memoryOption, telemetry)
     // hub 与审批桥先于协调器建：协调器的 approver 挂点要用它发 approval-request。
     const hub = new EventHub()
+    // 通知出口这时才算真的通：后台任务与计划的回调要往会话里写消息。
+    noticeHub = hub
     const approvals = new ApprovalBroker(hub)
     const coordinator = new SessionCoordinator({
       store,
       llm: ctx.llm,
       tools: ctx.tools,
+      /**
+       * 超长的工具结果换成「预览 + 定位符」：原文落到模型看不见的地方，
+       * 模型要全文时用 spill_read 自己取回。
+       */
+      transformToolResult: async (result, toolCtx) => {
+        /**
+         * 只有带着取回工具的助理才溢出。
+         *
+         * 模型拿到一个定位符却取不回来，等于内容凭空消失了——那比上下文撑爆更糟。
+         * 所以先看这位助理的白名单里有没有 `spill_read`。
+         */
+        const agent = toolCtx.agentId === undefined ? undefined : store.getAgent(toolCtx.agentId)
+        if (agent === undefined || !agent.tools.includes('spill_read')) return result
+        const outcome = spillPolicy.apply({ text: result.content }, { sessionId: toolCtx.conversationId })
+        return { ...result, content: outcome.content }
+      },
       // 下一轮注入：只取「已回答、还没送达」的问答；commit 在对应 agent 真的
       // 跑过之后才落 deliveredAt，群聊里没发言的成员不会把答案吃掉。
       questionContext: (conversationId, agentId) => {
@@ -950,9 +1262,11 @@ export class RyHarnessServer {
       ...(memoryService === undefined ? {} : { memory: memoryService }),
       questionStore,
       approvals,
+      sandboxPolicy,
     })
     const server = new RyHarnessServer({
       store,
+      presetRegistry,
       coordinator,
       memory: memoryOption,
       memoryService,
@@ -974,6 +1288,7 @@ export class RyHarnessServer {
       proactiveDigest,
       approvals,
       turnEngine,
+      sandboxPolicy,
       tools: ctx.tools,
       routes: ctx.routes,
       plugins: pluginHost,
@@ -1280,7 +1595,12 @@ export class RyHarnessServer {
     const router = new Router()
     const store = this.store
 
-    registerAgentRoutes(router, { store, providers: this.providers })
+    registerAgentRoutes(router, {
+      store,
+      providers: this.providers,
+      tools: this.tools,
+      presets: this.presetRegistry,
+    })
     registerProfileRoutes(router, { store })
 
     registerMemoryRoutes(router, {
@@ -1364,6 +1684,12 @@ export class RyHarnessServer {
     registerPluginRoutes(router, { plugins: this.plugins })
 
     registerProactiveRoutes(router, { proactive: this.proactiveDigest })
+
+    registerSandboxRoutes(router, {
+      store,
+      policy: this.sandboxPolicy,
+      workspaceRoot: this.workspaceRoot,
+    })
 
     registerTelemetryRoutes(router, {
       telemetry: this.telemetry,

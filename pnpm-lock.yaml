@@ -103,39 +103,114 @@ importers:
       '@ryharness/agent':
         specifier: workspace:*
         version: link:../../packages/agent
+      '@ryharness/attachment-storage':
+        specifier: workspace:*
+        version: link:../../packages/attachment/storage
+      '@ryharness/browser-use':
+        specifier: workspace:*
+        version: link:../../packages/browser-use
+      '@ryharness/bundle':
+        specifier: workspace:*
+        version: link:../../packages/bundle
+      '@ryharness/commands':
+        specifier: workspace:*
+        version: link:../../packages/commands
+      '@ryharness/computer-use':
+        specifier: workspace:*
+        version: link:../../packages/computer-use
       '@ryharness/context':
         specifier: workspace:*
         version: link:../../packages/context
       '@ryharness/cordis':
         specifier: workspace:*
         version: link:../../vendor/cordis
+      '@ryharness/credentials':
+        specifier: workspace:*
+        version: link:../../packages/credentials
+      '@ryharness/document':
+        specifier: workspace:*
+        version: link:../../packages/document
       '@ryharness/evolve':
         specifier: workspace:*
         version: link:../../packages/evolve
+      '@ryharness/extensions':
+        specifier: workspace:*
+        version: link:../../packages/extensions
+      '@ryharness/goal':
+        specifier: workspace:*
+        version: link:../../packages/goal
+      '@ryharness/identity':
+        specifier: workspace:*
+        version: link:../../packages/identity
+      '@ryharness/jobs':
+        specifier: workspace:*
+        version: link:../../packages/jobs
       '@ryharness/llm':
         specifier: workspace:*
         version: link:../../packages/llm/llm
       '@ryharness/llm-openai':
         specifier: workspace:*
         version: link:../../packages/llm/openai
+      '@ryharness/lsp':
+        specifier: workspace:*
+        version: link:../../packages/lsp
       '@ryharness/mcp':
         specifier: workspace:*
         version: link:../../packages/mcp
       '@ryharness/memory':
         specifier: workspace:*
         version: link:../../packages/memory
+      '@ryharness/otel':
+        specifier: workspace:*
+        version: link:../../packages/otel
+      '@ryharness/preset':
+        specifier: workspace:*
+        version: link:../../packages/preset
+      '@ryharness/ptc':
+        specifier: workspace:*
+        version: link:../../packages/ptc
+      '@ryharness/sandbox':
+        specifier: workspace:*
+        version: link:../../packages/sandbox
+      '@ryharness/schedule':
+        specifier: workspace:*
+        version: link:../../packages/schedule
       '@ryharness/session':
         specifier: workspace:*
         version: link:../../packages/session
+      '@ryharness/session-query':
+        specifier: workspace:*
+        version: link:../../packages/session-query
+      '@ryharness/settings':
+        specifier: workspace:*
+        version: link:../../packages/settings
+      '@ryharness/skill':
+        specifier: workspace:*
+        version: link:../../packages/skill
+      '@ryharness/spill':
+        specifier: workspace:*
+        version: link:../../packages/spill
+      '@ryharness/ssh':
+        specifier: workspace:*
+        version: link:../../packages/ssh
       '@ryharness/subagent':
         specifier: workspace:*
         version: link:../../packages/subagent
+      '@ryharness/terminal':
+        specifier: workspace:*
+        version: link:../../packages/terminal
       '@ryharness/tools':
         specifier: workspace:*
         version: link:../../packages/tools
       '@ryharness/voice':
         specifier: workspace:*
         version: link:../../packages/voice
+      '@ryharness/web':
+        specifier: workspace:*
+        version: link:../../packages/web
+      '@ryharness/workflow':
+        specifier: workspace:*
+        version: link:../../packages/workflow
       ws:
         specifier: ^8.18.0
         version: 8.22.0
@@ -144,15 +219,41 @@ importers:
         specifier: ^8.5.10
         version: 8.18.2
 
+  packages/acp:
+    dependencies:
+      '@ryharness/api':
+        specifier: workspace:*
+        version: link:../api
+      '@ryharness/typert-protocol':
+        specifier: workspace:*
+        version: link:../typert/protocol
+
   packages/agent:
     dependencies:
+      '@ryharness/guard':
+        specifier: workspace:*
+        version: link:../guard
       '@ryharness/llm':
         specifier: workspace:*
         version: link:../llm/llm
+      '@ryharness/sandbox':
+        specifier: workspace:*
+        version: link:../sandbox
     devDependencies:
       '@ryharness/brand':
         specifier: workspace:*
         version: link:../util/brand
+
+  packages/api:
+    dependencies:
+      '@ryharness/typert-gateway':
+        specifier: workspace:*
+        version: link:../typert/gateway
+      '@ryharness/typert-protocol':
+        specifier: workspace:*
+        version: link:../typert/protocol
+
+  packages/attachment/storage: {}
 
   packages/attachment/types:
     dependencies:
@@ -160,7 +261,19 @@ importers:
         specifier: workspace:*
         version: link:../../../vendor/cordis
 
+  packages/browser-use: {}
+
+  packages/bundle: {}
+
+  packages/commands: {}
+
+  packages/computer-use: {}
+
   packages/context: {}
+
+  packages/credentials: {}
+
+  packages/document: {}
 
   packages/evolve:
     dependencies:
@@ -170,6 +283,14 @@ importers:
       '@ryharness/util-llm-json':
         specifier: workspace:*
         version: link:../util/llm-json
+
+  packages/extensions:
+    dependencies:
+      '@ryharness/agent':
+        specifier: workspace:*
+        version: link:../agent
+
+  packages/goal: {}
 
   packages/group:
     dependencies:
@@ -183,6 +304,19 @@ importers:
       '@ryharness/brand':
         specifier: workspace:*
         version: link:../util/brand
+
+  packages/guard: {}
+
+  packages/identity: {}
+
+  packages/jobs:
+    dependencies:
+      '@ryharness/agent':
+        specifier: workspace:*
+        version: link:../agent
+      '@ryharness/subagent':
+        specifier: workspace:*
+        version: link:../subagent
 
   packages/llm/llm:
     dependencies:
@@ -227,6 +361,8 @@ importers:
         specifier: workspace:*
         version: link:../../util/brand
 
+  packages/lsp: {}
+
   packages/mcp:
     dependencies:
       '@ryharness/agent':
@@ -244,6 +380,29 @@ importers:
       '@ryharness/util-llm-json':
         specifier: workspace:*
         version: link:../util/llm-json
+
+  packages/otel: {}
+
+  packages/preset: {}
+
+  packages/ptc: {}
+
+  packages/sandbox:
+    dependencies:
+      '@ryharness/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
+
+  packages/schedule: {}
+
+  packages/sdk:
+    dependencies:
+      '@ryharness/api':
+        specifier: workspace:*
+        version: link:../api
+      '@ryharness/typert-protocol':
+        specifier: workspace:*
+        version: link:../typert/protocol
 
   packages/session:
     dependencies:
@@ -270,6 +429,26 @@ importers:
         specifier: workspace:*
         version: link:../memory
 
+  packages/session-query:
+    dependencies:
+      '@ryharness/session':
+        specifier: workspace:*
+        version: link:../session
+
+  packages/settings: {}
+
+  packages/skill:
+    dependencies:
+      '@ryharness/agent':
+        specifier: workspace:*
+        version: link:../agent
+
+  packages/spill: {}
+
+  packages/ssh: {}
+
+  packages/storage: {}
+
   packages/subagent:
     dependencies:
       '@ryharness/agent':
@@ -286,6 +465,10 @@ importers:
         specifier: workspace:*
         version: link:../../vendor/cordis
 
+  packages/subprocess: {}
+
+  packages/terminal: {}
+
   packages/tools:
     dependencies:
       '@ryharness/agent':
@@ -294,6 +477,15 @@ importers:
       '@ryharness/cordis':
         specifier: workspace:*
         version: link:../../vendor/cordis
+      '@ryharness/sandbox':
+        specifier: workspace:*
+        version: link:../sandbox
+
+  packages/typert/gateway:
+    dependencies:
+      '@ryharness/typert-protocol':
+        specifier: workspace:*
+        version: link:../protocol
 
   packages/typert/protocol:
     dependencies:
@@ -320,6 +512,19 @@ importers:
       '@ryharness/llm':
         specifier: workspace:*
         version: link:../llm/llm
+
+  packages/web: {}
+
+  packages/workflow:
+    dependencies:
+      '@ryharness/agent':
+        specifier: workspace:*
+        version: link:../agent
+      '@ryharness/ptc':
+        specifier: workspace:*
+        version: link:../ptc
+
+  packages/workspace: {}
 
   vendor/cordis:
     dependencies:

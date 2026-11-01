@@ -7,6 +7,8 @@ import type { AgentDefinition, PermissionPreset } from '@ryharness/agent'
 import { applyPermissionPreset, PERMISSION_PRESETS, permissionPreset } from '@ryharness/agent'
 import type { AgentPersona, SessionStore } from '@ryharness/session'
 import { VOICE_PRESETS } from '@ryharness/session'
+import type { ToolRegistry } from '@ryharness/tools'
+import { PresetError, type PresetRegistry } from '@ryharness/preset'
 import type { ProvidersConfigFile } from '../config.ts'
 import { resolveSidecarLlm } from '../config.ts'
 import { HttpRequestError, json, type Router, strField } from '../router.ts'
@@ -17,6 +19,10 @@ export interface AgentRoutes {
   store: SessionStore
   /** 进程内的供应商配置（新建 agent 时据此挑默认供应商/模型）。 */
   providers: ProvidersConfigFile
+  /** 工具注册表：工具清单由它出（界面不抄一份，抄了会与实际注册的工具漂）。 */
+  tools: ToolRegistry
+  /** 能力预设：给这位助理定一版「能用什么」。 */
+  presets: PresetRegistry
 }
 
 /**
@@ -143,6 +149,69 @@ export function registerAgentRoutes(router: Router, deps: AgentRoutes): void {
    * 清单由服务端出，而不是渲染层抄一份：档位与它管着的工具名必须一致，抄一份
    * 就会漂——漂了之后界面上写着「只读」，实际放行的工具却多了执行命令。
    */
+  /**
+   * 能力预设清单：助理编辑器里「换一套能力」的那份清单。
+   *
+   * 预设由内置模板生成（模板本来就是一份能力组合），选中即给这位助理**定一版**——
+   * 版本号递增，旧版留着能回看。
+   */
+  router.get('/api/agent-presets', async (_req, res) => {
+    json(res, 200, {
+      presets: deps.presets.list().map((preset) => {
+        return {
+          id: preset.id,
+          name: preset.name,
+          description: preset.description,
+          tools: [...preset.tools],
+        }
+      }),
+    })
+  })
+
+  /**
+   * 给一位助理选定一套能力预设。
+   *
+   * 改的是这位助理的**工具白名单**：预设给的那一套盖过原来那份。改完给这位助理
+   * 记一版（版本号 +1），旧版留在注册表里能回看。
+   */
+  router.post('/api/agents/:id/preset', async (req, res) => {
+    const body = await req.body()
+    const presetId = strField(body, 'presetId')
+    if (presetId === undefined) {
+      throw new HttpRequestError(400, '缺少 presetId', 'PRESET_BAD_REQUEST')
+    }
+    const agentId = req.params.id ?? ''
+    const agent = store.getAgent(agentId)
+    if (agent === undefined) {
+      throw new HttpRequestError(404, `没有这个 agent: ${agentId}`, 'AGENT_NOT_FOUND')
+    }
+    let revision
+    try {
+      revision = deps.presets.select(agentId, presetId)
+    } catch (error) {
+      // 预设不存在是调用方的错（404），不是服务端故障（500）。
+      if (error instanceof PresetError) {
+        throw new HttpRequestError(404, error.message, 'PRESET_NOT_FOUND')
+      }
+      throw error
+    }
+    const updated = store.upsertAgent({
+      id: agent.id,
+      name: agent.name,
+      ...(agent.avatar === undefined ? {} : { avatar: agent.avatar }),
+      systemPrompt: agent.systemPrompt,
+      provider: agent.provider,
+      model: agent.model,
+      ...(agent.temperature === undefined ? {} : { temperature: agent.temperature }),
+      ...(agent.reasoningEffort === undefined ? {} : { reasoningEffort: agent.reasoningEffort }),
+      tools: [...revision.tools],
+      persona: { ...agent.persona },
+      isBuiltin: agent.isBuiltin,
+      ...(agent.routeLocked === undefined ? {} : { routeLocked: agent.routeLocked }),
+    })
+    json(res, 200, { agent: updated, revision })
+  })
+
   router.get('/api/permission-presets', async (_req, res) => {
     json(res, 200, {
       presets: PERMISSION_PRESETS.map((preset) => {
@@ -152,6 +221,21 @@ export function registerAgentRoutes(router: Router, deps: AgentRoutes): void {
           summary: preset.summary,
           tools: [...preset.tools],
         }
+      }),
+    })
+  })
+
+  /**
+   * 工具清单：当前**真正注册着**的工具（名字 + 一句话说明）。
+   *
+   * 界面在助理编辑器里勾工具，勾的必须是真能调的那些。清单由注册表出而不是界面
+   * 抄一份：抄的那份会与实际注册的工具漂（插件装上装下、或某个能力还没接进
+   * 服务端时，界面照样让人勾一个调不通的工具）。
+   */
+  router.get('/api/tools', async (_req, res) => {
+    json(res, 200, {
+      tools: deps.tools.list().map((tool) => {
+        return { name: tool.name, description: tool.description }
       }),
     })
   })

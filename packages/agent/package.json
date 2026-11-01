@@ -1,6 +1,6 @@
 {
   "name": "@ryharness/agent",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "license": "MIT",
   "main": "./lib/index.js",
@@ -17,7 +17,9 @@
     "build": "tsdown"
   },
   "dependencies": {
-    "@ryharness/llm": "workspace:*"
+    "@ryharness/guard": "workspace:*",
+    "@ryharness/llm": "workspace:*",
+    "@ryharness/sandbox": "workspace:*"
   },
   "devDependencies": {
     "@ryharness/brand": "workspace:*"

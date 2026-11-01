@@ -4,6 +4,7 @@
  */
 
 import type { FinishReason, ToolCallId } from '@ryharness/llm'
+import type { SandboxMode } from '@ryharness/sandbox'
 import type { PermissionPreset } from './permission.ts'
 
 /** Agent 定义：一段可持久化的 agent 身份 + 能力白名单。 */
@@ -46,12 +47,39 @@ export interface AgentDefinition {
 export interface ToolContext {
   /** 工作区根目录：fs 类工具必须限制在其内。 */
   workspaceRoot: string
+  /**
+   * 本次执行的沙箱模式（`read-only` / `workspace-write` / `full-access`）。
+   *
+   * 由循环按**助理的权限档位**换算后写进上下文；工具据此决定放行还是套围栏。
+   * 缺省按「工作区可写」处理。
+   */
+  sandboxMode?: SandboxMode
   /** 当前轮所属会话：待办这类按会话落数据的工具靠它分组。 */
   conversationId?: string
   /** 正在执行的 agent id：群里多个成员共用一份上下文时，工具靠它认领归属。 */
   agentId?: string
+  /**
+   * 这一轮读过哪些文件（「改前必须先读过」这条策略用）。
+   *
+   * 由循环在每轮开跑时建一份并放进上下文；工具读到文件就记一笔，要改文件时先问
+   * 一句「读过没有」。**没有它就没有这条策略**——独立用工具、直接调用的场景不受影响。
+   */
+  readTracker?: ReadTracker
   /** 调用方取消信号。 */
   signal?: AbortSignal
+}
+
+/**
+ * 这一轮读过哪些文件。
+ *
+ * 为什么要它：模型改文件时最常见的错是「按自己以为的内容去改」，而它以为的那份
+ * 内容可能已经是旧的了。改之前必须真读过，读过的那份就是它动手的依据。
+ */
+export interface ReadTracker {
+  /** 记下一次读取（路径用绝对路径）。 */
+  markRead(path: string): void
+  /** 这个路径这一轮读过没有。 */
+  hasRead(path: string): boolean
 }
 
 /** "发文件"产物卡片：file_produce 类工具返回，UI 据此渲染文件消息。 */
@@ -94,6 +122,14 @@ export interface Tool {
    * 装配层的安全闸，不是内核的前置条件。
    */
   requiresApproval?: boolean
+  /**
+   * 单次调用时限（毫秒）。
+   *
+   * **缺省 = 没有上限**：宿主不替工具编一个上限（编了就等于给所有工具套同一个
+   * 拍脑袋的数）。声明了它，循环就在这个时限内把调用收掉，并把一条中文错误结果
+   * 回给模型——工具不返回就一直挂着的那轮，至少让模型知道该换条路。
+   */
+  timeoutMs?: number
   execute(args: unknown, ctx: ToolContext): Promise<ToolResult>
 }
 

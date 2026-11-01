@@ -571,7 +571,7 @@ describe('可访问性：读屏能定位到新增内容与当前所在', () => {
       return [label, slotWidth(label)] as const
     })
     for (const [label, width] of widths) {
-      expect(width, `「${label}」槽位没渲染出线���图标`).toBeGreaterThan(0)
+      expect(width, `「${label}」槽位没渲染出线框图标`).toBeGreaterThan(0)
       expect([16, 20, 24], `栏 1 图标尺寸 ${width} 不在 16/20/24 三档上`).toContain(width)
     }
     // 四个页签是同一套图形语言：尺寸必须一致，不能一个 20 一个 16。

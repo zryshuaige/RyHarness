@@ -28,7 +28,7 @@ export const RYEN_TEMPLATE: AgentDefinition = {
   // todo 是低风险的本机会话数据，默认开：用户说「帮我记一下」时助理必须能接住。
   // fs_glob / fs_grep / fs_edit 是「找得到、改得动」的那条路：只有 read/write 时，
   // 助理既问不出工作区里有哪些文件，也改不动一个已知路径之外的段落。
-  tools: ['fs_read', 'fs_write', 'fs_glob', 'fs_grep', 'fs_edit', 'file_produce', 'todo'],
+  tools: ['fs_read', 'fs_write', 'fs_glob', 'fs_grep', 'fs_edit', 'file_produce', 'todo', 'spill_read'],
   isBuiltin: true,
 }
 

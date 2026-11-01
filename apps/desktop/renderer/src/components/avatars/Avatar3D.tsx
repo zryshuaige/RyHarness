@@ -110,7 +110,7 @@ function useTilt(enabled: boolean): React.RefObject<HTMLSpanElement | null> {
       } else {
         view = 'front'
       }
-      // 一动鼠标就回到转脸：打招呼是"见面那一���"，不是常驻状态——
+      // 一动鼠标就回到转脸：打招呼是"见面那一瞬"，不是常驻状态——
       // 指针一直压在上面还想看侧脸时，挥手会把它一直盖住。
       face = view
       // 转的时候不要过渡（否则每帧都在跟 280ms 的过渡打架，手感是"黏"的）；

@@ -35,6 +35,7 @@ import type {
   AgentLoopEvent,
   AgentLoopOptions,
   AgentMemoryHooks,
+  SandboxMode,
   SessionQuota,
   Tool,
   ToolContext,
@@ -202,6 +203,11 @@ export interface GroupDispatcherOptions {
    * 群里每一位成员的 loop 都挂同一条闸（接力链不放大未经批准的执行面）。
    */
   approver?: AgentLoopOptions['approver']
+  /**
+   * 工具结果的改写钩子（可选）：结果进模型历史之前调一次（溢出文本那一套）。
+   * 群里每一位成员的 loop 都挂同一条钩子。
+   */
+  transformToolResult?: AgentLoopOptions['transformToolResult']
 }
 
 /**
@@ -528,6 +534,13 @@ export class GroupDispatcher {
     workspaceRoot: string
     /** 当前会话 id：按会话落数据的工具（待办）据此分组；缺省时那类工具会拒绝执行。 */
     conversationId?: string
+    /**
+     * 本轮的沙箱模式：会话级覆盖（用户临时收紧）。
+     *
+     * 缺省时由每位助理自己的权限档位决定（见 AgentLoop），所以这里只在
+     * 「用户对整个会话收紧了」时才传值。
+     */
+    sandboxMode?: SandboxMode
     turnIndex: number
     historyBudgetTokens?: number
     /** 调用方取消信号：取消后不再接力，以 code=ABORTED 的 error 事件收尾。 */
@@ -546,6 +559,7 @@ export class GroupDispatcher {
     const toolContext: ToolContext = {
       workspaceRoot: input.workspaceRoot,
       ...(input.conversationId === undefined ? {} : { conversationId: input.conversationId }),
+      ...(input.sandboxMode === undefined ? {} : { sandboxMode: input.sandboxMode }),
       ...(signal === undefined ? {} : { signal }),
     }
     if (signal?.aborted === true) {
@@ -939,6 +953,9 @@ export class GroupDispatcher {
       ...(this.options.identity === undefined ? {} : { identity: this.options.identity }),
       ...(this.options.evolution === undefined ? {} : { evolution: this.options.evolution }),
       ...(this.options.approver === undefined ? {} : { approver: this.options.approver }),
+      ...(this.options.transformToolResult === undefined
+        ? {}
+        : { transformToolResult: this.options.transformToolResult }),
     })
   }
 

@@ -50,6 +50,17 @@ export interface TelemetrySnapshot {
   capacity: number
 }
 
+/**
+ * 计量往外送的口子（宿主注入）。
+ *
+ * 本地环形缓冲是给界面看的；「送出去」是另一件事（OTel 收集器、自己的看板…）。
+ * 宿主给一个实现，这边每收一轮就递一条过去——遥测接口不认 OTLP，也不该认。
+ */
+export interface TelemetrySink {
+  /** 一轮结束了：把它的计量递出去。 */
+  recordTurn(timing: TurnTiming): void
+}
+
 /** 环形缓冲默认容量。 */
 export const DEFAULT_TELEMETRY_CAPACITY = 200
 /** GET /api/telemetry 默认返回的条数。 */
@@ -116,7 +127,11 @@ export class Telemetry {
   /** 当前异步链所属的会话 id（由 scopedTurn 建立）。 */
   private readonly scope = new AsyncLocalStorage<string>()
 
-  constructor(readonly capacity: number = DEFAULT_TELEMETRY_CAPACITY) {}
+  constructor(
+    readonly capacity: number = DEFAULT_TELEMETRY_CAPACITY,
+    /** 往外送的口子（缺省 = 只留在本地缓冲里）。 */
+    private readonly sink?: TelemetrySink,
+  ) {}
 
   /**
    * 在 conversationId 的异步上下文里跑 fn：期间（以及它 await 出来的所有续链）
@@ -142,6 +157,12 @@ export class Telemetry {
     if (this.inflight.get(recorder.conversationId) === recorder) this.inflight.delete(recorder.conversationId)
     const timing = recorder.finish(status)
     this.push(this.turnRing, timing)
+    // 往外送一份：送出失败不该让这一轮失败，所以这里只递不 await。
+    try {
+      this.sink?.recordTurn(timing)
+    } catch {
+      // 计量是旁观者：它出问题不能拖垮对话。
+    }
     return timing
   }
 

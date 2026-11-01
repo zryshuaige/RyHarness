@@ -11,8 +11,11 @@ describe('内置 Ryen 模板的工具白名单', () => {
       'fs_edit',
       'file_produce',
       'todo',
+      'spill_read',
     ])
     expect(RYEN_TEMPLATE.tools).not.toContain('shell_exec')
+    // spill_read 必须在：超长的工具结果会落盘，没有它模型取不回来原文。
+    expect(RYEN_TEMPLATE.tools).toContain('spill_read')
   })
 
   it('fork 出来的用户 agent 继承同一份白名单（显式勾选才拿得到 shell_exec）', () => {

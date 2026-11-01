@@ -8,6 +8,67 @@
 
 暂无。
 
+## [0.4.0] - 2026-11-01
+
+### Added
+
+- **沙箱**（`packages/sandbox` + `sandbox` 路由）：权限从「一堆工具复选框」变成**执行层
+  的事实**。三档模式（只读 / 工作区可写 / 全权）跟着助理的权限档位走，会话里还能临时
+  收紧（`POST /api/sandbox/conversations/:id`，撤掉就回档位）。POSIX 上用 bubblewrap
+  做**内核级隔离**；Windows 上只有围栏（清环境 + 限定工作目录 + 拦越界写目标）——
+  隔离强度写在 `Confinement.kernelLevel` 上，界面不许把两种显示成一种。
+- **循环卫生**（`packages/guard` + 循环内接线）：模型**原样重发**同一个工具调用时，提醒它
+  换条路（提醒是建议，不拦截）；工具自己声明了 `timeoutMs` 就按时限收掉，别让一轮挂在
+  一个不返回的工具上；工具调用与结果先落 checkpoint 日志，崩了能读回来。
+- **后台任务与计划模式**（`packages/jobs`）：长活派到后台去跑，跑完通知**自己进会话**
+  （不是让模型轮询）；计划模式下助理先交一份计划**等人批**，批了才动手（`GET/POST
+  /api/plans/:id`）。
+- **搜索与抓网页**（`packages/web`）：助理能「查一下」了。搜索后端可配（`config/web.json`），
+  抓取的私网拦截 / 重定向逐跳复核 / 连接钉在已校验的地址上，与 `read_url` 同一套口径。
+- **代码导航**（`packages/lsp`）：用语言服务器跳定义、找引用、读 hover（自己实现 LSP 的
+  帧协议，不引依赖；语言服务器由用户自己装）。
+- **跑模型写的程序**（`packages/ptc`）与**编排**（`packages/workflow`）：模型写的程序在
+  **独立子进程**里跑（程序碰不到宿主的内存），绑定跨进程回宿主执行；编排脚本能一次扇出
+  几个子代理再把结论合起来。
+- **超长结果落盘**（`packages/spill`）：工具结果太长时，原文落到模型看不见的地方，模型
+  只拿到一段预览加一个定位符，用 `spill_read` 自己取回（带 `spill_read` 的助理才溢出——
+  取不回来的原文等于丢了）。
+- **技能目录与斜杠命令**（`packages/skill` / `packages/commands`）：技能从目录发现、按需
+  加载（模型只拿目录）；人敲 `/命令` 直接触发动作，不花模型一轮（`/goal` 是其中一条）。
+- **跨重启的目标与提醒**（`packages/goal` / `packages/schedule`）：目标跨重启还在，
+  提醒支持一次性 / 固定间隔 / 每日 / 每周 / cron 五种触发（cron 解析器自己写）。
+- **会话历史查询**（`packages/session-query`）：搜关键词、按 id 读一条、追一条消息前后
+  有什么关系；导出会话 ZIP（ZIP 自己拼，不引依赖）。搜出来的与模型看到的历史是同一份。
+- **持久终端会话**（`packages/terminal`）：交互式 shell 跨工具调用保留工作目录与环境变量
+  （**Windows 上是管道模式，没有真 PTY**——交互式 TUI 程序不工作，这点写明了）。
+- **统一进程服务**（`packages/subprocess`）：全仓库的子进程从这一处启动、观测、终止；
+  环境按白名单清洗（模型凭据不递过去），进程树按 provider 收干净。
+- **协议面**（`packages/typert/gateway` / `packages/api` / `packages/sdk` /
+  `packages/acp`）：类型图 + 网关 + 生成的客户端；Remote 层（Client 调 Host）；进程外
+  JSON-RPC 的 SDK；Agent Client Protocol 客户端。线协议只有一份实现。
+- **其余家族**：`browser-use` / `computer-use`（驱动接口 + 安全边界）、`ssh`（远程
+  POSIX）、`document`（Office → PDF 的转换接口 + 能力边界）、`settings`（schema 推出的
+  配置表单 + 版本化编辑）、`credentials`（只存引用 + 要人点头的取号流 + 审计）、
+  `storage`（非会话数据中枢）、`workspace`（项目分组）、`identity`（匿名安装 id）、
+  `extensions`（运行时能力目录）、`preset`（助理能力预设的版本）、`bundle`（分层装配）、
+  `otel`（OTLP/HTTP 导出）、`attachment/storage`（内容寻址的附件存储）。
+- **改前必须先读过**（`fs_edit`）：这一轮没读过的文件不让改——模型最常见的错是按自己
+  以为的内容去改，而它以为的那份可能已经旧了。
+
+### Changed
+
+- **工具清单与权限档位由服务端出**：助理编辑器里勾的工具来自 `GET /api/tools`（真正注册
+  着的那批），本地那份只当兜底；界面新增的工具中文名也跟着补齐了。
+- **内置助理的工具白名单补上了 `spill_read`**：没有它，超长结果落盘后模型取不回来。
+- **对账表核销**：`docs/dsh-parity.md` 里 51 个家族逐条更新到「已有 / 部分」，
+  剩下的「部分」都写清了差在哪（多半是上游用了原生代码或大依赖，我们不背）。
+
+### Fixed
+
+- **九处界面与注释里的乱码字符**：仓库里本来就有几个 U+FFFD（中文被截断），一并修掉。
+- **PTC 子进程脚本的定位在 jsdom 环境下会炸**：`import.meta.url` 不是 file:// 时模块
+  一被 import 就抛错；改成首次用到时才算路径。
+
 ## [0.3.0] - 2026-10-29
 
 ### Added

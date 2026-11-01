@@ -157,6 +157,14 @@ export interface PermissionPresetView {
   tools: string[]
 }
 
+/** 一个注册着的工具（服务端 /api/tools 给出，渲染层不自己编一份）。 */
+export interface ToolInfo {
+  /** 工具标识（英文名）。 */
+  name: string
+  /** 一句话说明这个工具干什么。 */
+  description: string
+}
+
 export interface ProviderInfo {
   id: string
   displayName: string
@@ -577,6 +585,16 @@ export class ApiClient {
    */
   permissionPresets(): Promise<{ presets: PermissionPresetView[] }> {
     return this.request('/api/permission-presets')
+  }
+
+  /**
+   * 当前注册着的工具清单（服务端出）。
+   *
+   * 助理编辑器里勾的工具必须是真能调的那些，所以清单从服务端取；本地那份
+   * ALL_TOOLS 只当兜底（取不到时不让工具白名单整个空掉）。
+   */
+  tools(): Promise<{ tools: ToolInfo[] }> {
+    return this.request('/api/tools')
   }
 
   /**

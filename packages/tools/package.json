@@ -1,6 +1,6 @@
 {
   "name": "@ryharness/tools",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "license": "MIT",
   "main": "./lib/index.js",
@@ -17,7 +17,8 @@
     "build": "tsdown"
   },
   "dependencies": {
-    "@ryharness/agent": "workspace:*"
+    "@ryharness/agent": "workspace:*",
+    "@ryharness/sandbox": "workspace:*"
   },
   "peerDependencies": {
     "@ryharness/cordis": "workspace:*"

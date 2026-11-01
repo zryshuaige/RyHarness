@@ -110,6 +110,16 @@ agent 每天至多主动说一次：把**确实发生过**的变化（手册新�
 | `PATCH /api/todos/:id` | 勾选/取消一条待办：body `{ conversationId, done }`。 |
 | `DELETE /api/todos?conversationId=<id>` | 清空这个会话的待办。 |
 | `POST /api/todos/restore` | 撤销清空：body `{ conversationId, items }`，把被清掉的那批原样写回（id 与勾选状态都不变）。 |
+| `GET /api/sandbox/modes` | 三个沙箱模式清单：id、名字、一句话、**隔离强度**（Windows 上只是围栏，别显示成内核级）。 |
+| `GET /api/sandbox/conversations/:id` | 该会话的权限覆盖（`{override}`，没有就是 null）。 |
+| `POST /api/sandbox/conversations/:id` | 设 / 撤会话级权限覆盖：body `{mode}`，`mode` 为 null 表示撤掉回到助理自己的档位；非法值回 **400** `SANDBOX_BAD_MODE`。 |
+| `GET /api/sandbox/overrides` | 所有会话的覆盖一览。 |
+| `GET /api/plans/:id` | 该会话的计划状态（`{status, plan}`；`status` 为 `none` 表示还没有计划）。 |
+| `POST /api/plans/:id/approve` | 批一份待批的计划。 |
+| `POST /api/plans/:id/reject` | 打回一份待批的计划：body `{feedback}`（人给的反馈，agent 下一版照着改）。 |
+| `GET /api/spills/:id?sessionId=<id>` | 取回一条溢出文本的原文（会话私有，跨会话读取回 **403**）。 |
+| `GET /api/commands` | 斜杠命令清单（名字、说明、别名），供输入框补全。 |
+| `POST /api/commands/execute` | 跑一行斜杠命令：body `{line}`，回 `{text, isError?, ran, name}`。 |
 | `GET /api/voice/catalog` | 音色目录（`voice` 插件的路由）：系统音色、云端音色与插件注册进来的音色。未安装/未配置的引擎连同原因一起给，不等用户点了才失败。 |
 | `POST /api/voice/speak` | 合成一段语音：body `{ text, voiceId, … }` → 音频。 |
 | `GET /api/voice/engines/piper/status` | 离线 Piper 引擎的安装状态（`voice-piper` 插件的路由）。 |
@@ -156,7 +166,7 @@ agent 每天至多主动说一次：把**确实发生过**的变化（手册新�
 
 `RyHarnessServer.create(options)`：
 - `mountLlm(ctx)`：替换默认 OpenAI 适配器挂载（测试注入 mock）；
-- `plugins`：在全部内置插件之后追加的插件清单（`core-tools`、`llm-openai`、`voice`、`voice-piper`、`voice-minimax`、`todo`、`ask-user`、`grill-me`、`web-read`），用于测试注入与预留的用户插件位；
+- `plugins`：在全部内置插件之后追加的插件清单（`core-tools`、`llm-openai`、`voice`、`voice-piper`、`voice-minimax`、`todo`、`ask-user`、`grill-me`、`web-read`、`web`、`lsp`、`spill`、`skill`、`commands`、`workflow`、`goal`、`schedule`、`extensions`、`session-query`、`mcp`、`subagent`、`jobs`），用于测试注入与预留的用户插件位；
 - `providersConfig`：内存覆盖 providers.json；
 - `llm`（只读）：`LlmRuntime`，用于查已注册的供应商路由与模型目录；
 - `tools`（只读）：`ToolRegistry`，当前注册的工具（按 agent 白名单逐轮解析）；
@@ -164,7 +174,7 @@ agent 每天至多主动说一次：把**确实发生过**的变化（手册新�
 - `consolidationIntervalMs`：巩固周期（默认 6 小时，0 = 关闭）；
 - `proactive: false`：关掉主动消息（默认开，见「主动消息」一节）；`proactiveHour` 覆盖每日发送时刻，`proactiveIntervalMs: 0` 只保留启动那一次（测试用小值把每日检查拉成毫秒级）。
 
-插件装配：`ctx.plugin(LlmRuntime)` → `ctx.plugin(ToolRegistry)` → 按清单顺序 `await ctx.plugin(entry.apply, entry.config)`；关闭时 `PluginHost` 逆序 dispose 各插件 fiber。`core-tools` 在 apply 里把四个基础工具注册进 `ctx.tools`，`llm-openai` 首次挂载供应商路由并把 `replace` 句柄交回服务；`ask-user` 注册 `ask_user` 工具与问题路由，`web-read` 注册 `read_url` 工具（无 HTTP 面）。
+插件装配：`ctx.plugin(LlmRuntime)` → `ctx.plugin(ToolRegistry)` → 按清单顺序 `await ctx.plugin(entry.apply, entry.config)`；关闭时 `PluginHost` 逆序 dispose 各插件 fiber。`core-tools` 在 apply 里把基础工具注册进 `ctx.tools`，`llm-openai` 首次挂载供应商路由并把 `replace` 句柄交回服务；`ask-user` 注册 `ask_user` 工具与问题路由，`web-read` 注册 `read_url` 工具（无 HTTP 面），`web` 注册 `web_search`/`web_fetch`（搜索后端读 `<dataDir>/config/web.json`），`lsp` 注册 `lsp` 工具（语言服务器读 `<dataDir>/config/lsp.json`，没配就直说），`spill` 注册 `spill_read` 工具与 `GET /api/spills/:id`，`skill` 注册 `skill` 工具（目录来自工作区 `.skills/` 与数据目录 `skills/`），`commands` 注册 `GET /api/commands` 与 `POST /api/commands/execute`，`workflow` 注册 `workflow` 工具，`jobs` 注册 `job_*` 与 `plan_*` 六件工具外加 `GET/POST /api/plans/:id`，`goal` 注册 `get_goal`/`create_goal`/`update_goal`，`schedule` 注册 `schedule_*` 四件工具，`extensions` 注册 `runtime_catalog`（助理查运行时有什么），`session-query` 注册 `session_search`/`session_read`/`session_trace`。
 
 供应商的热注册：服务持有 `llm-openai` 插件交回的 `AdapterRegistrationHandle`（重复 `registerAdapter` 会撞 `DUPLICATE_ADAPTER`），增删供应商时原地换适配器配置内容并 `replace` 路由集合——在途 turn 不受影响，每个请求在发出那一刻现读配置。启动时零路由（插件 dormant）后新增第一个供应商，则走 `mountOpenAiAdapters` 补挂。
 

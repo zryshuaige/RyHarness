@@ -123,6 +123,10 @@ export const fsEdit: Tool = {
   async execute(args, ctx) {
     try {
       throwIfAborted(ctx.signal)
+      // 沙箱闸：只读模式下不改（会话级覆盖把权限收紧时，工具在白名单里也不能动）。
+      if (ctx.sandboxMode === 'read-only') {
+        return failure('当前权限是「只读」：改文件需要用户提权。')
+      }
       const path = argString(args, 'path')
       if (path === undefined || path === '') return failure('fs_edit：缺少 path 参数')
       const oldText = argString(args, 'oldText')
@@ -130,6 +134,20 @@ export const fsEdit: Tool = {
       const newText = argString(args, 'newText')
       if (newText === undefined) return failure('fs_edit：缺少 newText 参数')
       const absolutePath = resolveTarget(ctx.workspaceRoot, path)
+      /**
+       * 改前必须先读过。
+       *
+       * 模型最常见的错是「按自己以为的内容去改」，而它以为的那份可能已经是旧的
+       * （别的进程改过、它上一轮改过）。没读过就改，改坏了它还不知道坏在哪。
+       *
+       * 没有追踪器时不做这道闸（独立调用工具的场景不该被拦）。
+       */
+      const tracker = ctx.readTracker
+      if (tracker !== undefined && !tracker.hasRead(absolutePath)) {
+        return failure(
+          `这个文件这一轮还没读过：先用 fs_read 读一遍再改（要改的那段必须是你真看到过的那份）。目标：${path}`,
+        )
+      }
       const result = replaceInFile({
         absolutePath,
         oldText,

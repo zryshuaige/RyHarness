@@ -7,6 +7,13 @@
  * @module @ryharness/agent
  */
 
+export type {
+  PermissionTier,
+  SandboxDecision,
+  SandboxMode,
+  SandboxOperation,
+  SandboxRequest,
+} from '@ryharness/sandbox'
 export { ABORTED_CODE, AbortedError, abortedErrorOf, isAbortedError, throwIfAborted } from './aborted.ts'
 export type { RequestBudget } from './budget.ts'
 export {
@@ -58,6 +65,7 @@ export type {
   AgentDefinition,
   AgentLoopEvent,
   ProduceCard,
+  ReadTracker,
   Tool,
   ToolContext,
   ToolExecutionMode,

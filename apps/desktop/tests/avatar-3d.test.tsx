@@ -125,7 +125,7 @@ describe('立体头像外壳', () => {
     // 染色是 GPU 上跑的 filter 链，不是另一套图
     expect(img.style.filter).toContain('hue-rotate(')
     expect(img.style.filter).toContain('saturate(')
-    // 有色主色的动物不�� sepia：它会把胸口那片浅色一起染脏。
+    // 有色主色的动物不上 sepia：它会把胸口那片浅色一起染脏。
     // 黑白配色（熊猫）才需要先上棕调才有色相可转。
     expect(img.style.filter).not.toContain('sepia(')
     act(() => {

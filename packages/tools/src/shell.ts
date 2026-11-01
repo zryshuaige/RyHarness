@@ -18,6 +18,7 @@ import type { ChildProcess } from 'node:child_process'
 import { execFile, spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { type Tool, throwIfAborted } from '@ryharness/agent'
+import { confine, findOutsideWriteTarget } from '@ryharness/sandbox'
 import { truncateOutput } from './workspace.ts'
 
 const DEFAULT_TIMEOUT_MS = 30_000
@@ -311,8 +312,35 @@ export const shellExec: Tool = {
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
       return { content: `invalid timeoutMs: ${String(timeoutMs)}`, isError: true }
     }
+    // 沙箱：这一位助理的权限档位决定这条命令能不能跑、跑了被关在哪。
+    const mode = ctx.sandboxMode ?? 'workspace-write'
+    if (mode === 'read-only') {
+      return {
+        content:
+          '当前权限是「只读」，不能执行命令。要放开的话，在「通讯录」里改这位助理的权限档位，或取消这个会话的只读覆盖。',
+        isError: true,
+      }
+    }
     const { shell, args: shellArgs } = defaultShell()
-    const { child, done } = runShell(shell, shellArgs(command), ctx.workspaceRoot)
+    const confinement = confine({
+      mode,
+      workspaceRoot: ctx.workspaceRoot,
+      command: shell,
+      args: shellArgs(command),
+      env: process.env,
+    })
+    if (mode !== 'full-access') {
+      // 围栏之外还要拦一道「明显越界」的写目标：bubblewrap 能挡住内核层的越界，
+      // 但 Windows 上只有围栏，命令里明写的工作区外路径我们至少要拦下来。
+      const outside = findOutsideWriteTarget(command, ctx.workspaceRoot)
+      if (outside !== undefined) {
+        return {
+          content: `命令要写到工作区之外（${outside}），当前权限不允许。要放开的话，在「通讯录」里改这位助理的权限档位，或取消这个会话的权限覆盖。`,
+          isError: true,
+        }
+      }
+    }
+    const { child, done } = runShell(confinement.command, confinement.args, ctx.workspaceRoot, confinement.env)
     const settled = await raceInterruption(done, timeoutMs, ctx.signal)
     if (settled === 'abort' || settled === 'timeout') {
       await terminateProcessTree(child)
@@ -361,7 +389,12 @@ interface ExecFailure {
  * 用回调形式而不是 `promisify(execFile)`：中断收尾必须赶在 execFile 自己的
  * signal/timeout 杀掉直接子进程**之前**拿到句柄去按树枚举，否则树就拼不出来了。
  */
-function runShell(file: string, args: string[], cwd: string): { child: ChildProcess; done: Promise<ShellOutcome> } {
+function runShell(
+  file: string,
+  args: string[],
+  cwd: string,
+  env?: NodeJS.ProcessEnv,
+): { child: ChildProcess; done: Promise<ShellOutcome> } {
   let settle: (outcome: ShellOutcome) => void = () => {}
   const done = new Promise<ShellOutcome>((resolve) => {
     settle = resolve
@@ -373,6 +406,7 @@ function runShell(file: string, args: string[], cwd: string): { child: ChildProc
       cwd,
       maxBuffer: MAX_BUFFER_BYTES,
       windowsHide: true,
+      ...(env === undefined ? {} : { env }),
     },
     (error, stdout, stderr) => {
       settle({ stdout, stderr, error })

@@ -12,6 +12,7 @@
  */
 
 import type { MemoryService } from '@ryharness/memory'
+import type { SandboxPolicy } from '@ryharness/sandbox'
 import type { RunContext, SessionCoordinator, SessionStore } from '@ryharness/session'
 import type { ApprovalBroker } from './approvals.ts'
 import type { EventHub } from './bus.ts'
@@ -81,6 +82,13 @@ export interface TurnEngineOptions {
   readonly questionStore: QuestionStore
   /** 工具执行审批桥：取消/顶掉轮次时把挂起的审批一起收口（只调用，不改它）。 */
   readonly approvals: ApprovalBroker
+  /**
+   * 沙箱策略：会话级权限覆盖的来源。
+   *
+   * 每轮开跑前取一次该会话的覆盖值；**没有覆盖就不传**，让助理自己的权限档位
+   * 说了算（助理是只读与会话被临时只读是两件事）。
+   */
+  readonly sandboxPolicy?: SandboxPolicy
 }
 
 /**
@@ -419,9 +427,17 @@ export class TurnEngine {
       await this.options.vibeStore.setStatus(vibeSession.id, 'building')
     }
     // 协调器在每次模型调用出账后回调；记下本轮累计，done 事件带给渲染层。
+    /**
+     * 沙箱模式：会话级覆盖优先，没有覆盖就**不传**（由助理的权限档位决定）。
+     *
+     * 这里取的是「这一轮开跑那一刻」的覆盖值：用户在轮次跑着的时候改了权限，
+     * 下一轮才生效——已经在跑的进程不半路换壳。
+     */
+    const sandboxMode = this.options.sandboxPolicy?.conversationMode(conversation.id)
     const runContext: RunContext = {
       workspaceRoot: this.options.workspaceRoot,
       signal: controller.signal,
+      ...(sandboxMode === undefined ? {} : { sandboxMode }),
       onUsage: (report) => {
         translation.usage = report.turnTotal
       },

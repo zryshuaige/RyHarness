@@ -881,7 +881,7 @@ export function ChatView({
    * 亲密度分数白跑一遍。这几项没变就交回同一个对象，气泡的 memo 继续有效。
    *
    * 性格三维（外向 / 严谨 / 幽默）是**动效参数**：同一个助理动起来的幅度与节奏由它
-   * 决定。这三维一��之内不动（用户改人设才会变），所以带上它们不会破坏 memo。
+   * 决定。这一轮之内不动（用户改人设才会变），所以带上它们不会破坏 memo。
    */
   const bubbleAgents = useMemo(() => {
     const previous = bubbleAgentsRef.current

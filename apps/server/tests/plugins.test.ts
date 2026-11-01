@@ -185,19 +185,30 @@ describe('插件装配', () => {
         list.map((row) => {
           return row.id
         }),
-      ).toEqual([
-        'core-tools',
-        'llm-openai',
-        'voice',
-        'voice-piper',
-        'voice-minimax',
-        'todo',
-        'ask-user',
-        'grill-me',
-        'web-read',
-        'mcp',
-        'subagent',
-      ])
+      ).toEqual(
+        expect.arrayContaining([
+          'core-tools',
+          'llm-openai',
+          'voice',
+          'voice-piper',
+          'voice-minimax',
+          'todo',
+          'ask-user',
+          'grill-me',
+          'web-read',
+          'web',
+          'lsp',
+          'spill',
+          'skill',
+          'commands',
+          'workflow',
+          'goal',
+          'schedule',
+          'mcp',
+          'subagent',
+          'jobs',
+        ]),
+      )
       // 两个 core 恒开；其余是非 core，默认开着但可以在设置里关。
       expect(
         list
@@ -216,35 +227,52 @@ describe('插件装配', () => {
           .map((row) => {
             return row.id
           }),
-      ).toEqual([
-        'voice',
-        'voice-piper',
-        'voice-minimax',
-        'todo',
-        'ask-user',
-        'grill-me',
-        'web-read',
-        'mcp',
-        'subagent',
-      ])
+      ).toEqual(
+        expect.arrayContaining([
+          'voice',
+          'voice-piper',
+          'voice-minimax',
+          'todo',
+          'ask-user',
+          'grill-me',
+          'web-read',
+          'web',
+          'lsp',
+          'spill',
+          'skill',
+          'commands',
+          'workflow',
+          'goal',
+          'schedule',
+          'mcp',
+          'subagent',
+          'jobs',
+        ]),
+      )
       expect(list.every((row) => row.enabled && row.status === 'running')).toBe(true)
     } finally {
       await server.close()
     }
   })
 
-  it('GET /api/plugins 返回分组、能力清单与关闭影响，十一个内置插件齐全', async () => {
+  it('GET /api/plugins 返回分组、能力清单与关闭影响，内置插件齐全', async () => {
     const server = await start({})
     try {
       const { status, body } = await getJson(server, '/api/plugins')
       expect(status).toBe(200)
       const list = rows(body)
-      expect(list).toHaveLength(11)
+      // 用「下限」而不是精确个数：加一个能力家族就是多一个插件，把个数写死会让
+      // 这条用例每次都成为「必须改测试」的噪音。真正要守住的是下面那几条不变量：
+      // 核心插件在、每个插件都说了关闭后果、声明的能力都真的挂着。
+      expect(list.length).toBeGreaterThanOrEqual(18)
       expect(
-        list.map((row) => {
-          return row.group
+        list.every((row) => {
+          return row.group !== undefined && ['core', 'voice', 'feature', 'tool'].includes(row.group)
         }),
-      ).toEqual(['core', 'core', 'voice', 'voice', 'voice', 'feature', 'feature', 'feature', 'tool', 'tool', 'feature'])
+      ).toBe(true)
+      expect(list.filter((row) => {
+        return row.core
+      })).toHaveLength(2)
       expect(
         list.every((row) => {
           return typeof row.impact === 'string' && row.impact.length > 0

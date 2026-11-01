@@ -35,6 +35,7 @@
  * @module @ryharness/agent/loop
  */
 
+import { RepeatToolReminder, resolveToolTimeoutMs, runToolWithTimeout } from '@ryharness/guard'
 import type {
   AssistantMessage,
   ContentBlock,
@@ -59,13 +60,14 @@ import {
   estimateToolsTokens,
   isHarnessError,
 } from '@ryharness/llm'
+import { modeForTier } from '@ryharness/sandbox'
 import { ABORTED_CODE, abortedErrorOf, throwIfAborted } from './aborted.ts'
 import type { RequestBudget } from './budget.ts'
 import { MIN_OUTPUT_TOKENS, outputTokenCap, resolveRequestBudget } from './budget.ts'
 import type { CompactionOptions, CompactSpec } from './compact.ts'
 import { alignWindowStart, compactHistory, createLlmSummarizer, resolveCompactSpec } from './compact.ts'
 import { resolveAllowedTools } from './tool-source.ts'
-import type { AgentDefinition, AgentLoopEvent, Tool, ToolContext, ToolResult, ToolSource } from './types.ts'
+import type { AgentDefinition, AgentLoopEvent, ReadTracker, Tool, ToolContext, ToolResult, ToolSource } from './types.ts'
 
 /** AgentLoop 构造参数。 */
 export interface AgentLoopOptions {
@@ -142,6 +144,16 @@ export interface AgentLoopOptions {
    * （OWASP LLM06 过度代理的 human-in-the-loop），内核只提供挂点。
    */
   approver?: (input: { name: string; arguments: string }, ctx: ToolContext) => Promise<boolean>
+  /**
+   * 工具结果的改写钩子（可选）：结果进模型历史**之前**调一次。
+   *
+   * 它存在的理由是「结果太长」：超长的工具结果会把模型上下文吃穿，而把它换成
+   * 「一段预览 + 一个定位符」对模型更好（它要全文时自己去取）。内核不认识
+   * 溢出存储，所以这里只留一个口子，由装配层注入真正的实现。
+   *
+   * 钩子抛错**不能**让这次调用失败：结果照旧进历史（原文比没有强）。
+   */
+  transformToolResult?: (result: ToolResult, ctx: ToolContext) => Promise<ToolResult>
 }
 
 /** 记忆系统对运行时的最小接口（由 @ryharness/memory 的 MemoryService 实现）。 */
@@ -512,14 +524,44 @@ export class AgentLoop {
     const { definition, llm } = this.options
     const maxSteps = this.options.maxSteps ?? DEFAULT_MAX_STEPS
     const signal = options?.signal ?? context.signal
+    /**
+     * 这一轮读过哪些文件。
+     *
+     * 工具读到文件就记一笔，要改文件时先问一句「读过没有」——模型最常见的错是按
+     * 自己以为的内容去改，而它以为的那份可能已经是旧的了。跨轮不延续：下一轮读的
+     * 是另一回事。
+     */
+    const readPaths = new Set<string>()
+    const readTracker: ReadTracker = {
+      markRead: (path: string) => {
+        readPaths.add(path)
+      },
+      hasRead: (path: string) => {
+        return readPaths.has(path)
+      },
+    }
+
     // agentId 由循环写下而不是要求调用方传：群聊里同一份工具上下文会交给多个
     // 成员，只有定义知道此刻是谁在调用工具（ask_user 靠它把答案交回问的人）。
     const toolContext: ToolContext = {
       ...context,
       agentId: definition.id,
+      // 沙箱模式跟着**这位助理的权限档位**走：只读档位的助理拿到的工具上下文里
+      // 就是「只读」，工具据此决定放行还是套围栏。调用方没给模式时按档位换算，
+      // 档位也没有时按「工作区可写」——那是最常见的一档，也是最保守的默认。
+      sandboxMode: context.sandboxMode ?? modeForTier(definition.permissionPreset),
+      readTracker,
       ...(signal === undefined || signal === context.signal ? {} : { signal }),
     }
     throwIfAborted(signal)
+
+    /**
+     * 重复调用提醒器：**一轮一份**。
+     *
+     * 跨轮不延续——两轮之间隔着用户的话，那不叫「连续」。一轮之内连续同参地调
+     * 同一个工具，才是模型卡住了。
+     */
+    const reminder = new RepeatToolReminder()
 
     const toolSchemas: ToolSchema[] = [...this.allowedTools.values()].map((tool) => {
       return { name: tool.name, description: tool.description, parameters: tool.parameters }
@@ -595,6 +637,7 @@ export class AgentLoop {
         if (room > 0 && fixedTokens + totalTokensOf(history) > promptBudget) {
           history = await this.compactHistory(history, { ...compactSpec, thresholdTokens: room }, definition, signal)
         }
+
         // 供应商 400（CONTEXT_WINDOW_EXCEEDED）而本地估算没超：供应商口径比本地
         // 估算严（计数方式、system 计费、图片块都会让两边对不上）。这时用激进规格
         // 强制压一次历史（阈值砍半留余量、retainTokens=0 只保最新一条）再重试一次；
@@ -703,7 +746,7 @@ export class AgentLoop {
         // 工具声明 sequential 时整批退回串行，避免有副作用的工具互相踩踏。结果
         // 按 call 顺序回填，事件与历史顺序不随完成先后变化，历史保持确定。
         throwIfAborted(signal)
-        const results = await this.executeCalls(calls, toolContext)
+        const results = await this.executeCalls(calls, toolContext, reminder)
         throwIfAborted(signal)
         for (const [index, call] of calls.entries()) {
           const result = results[index] as ToolResult
@@ -774,20 +817,68 @@ ${definition.name}：${assistantText.trim()}`,
    * 线程轮转调度）；批次里任一工具声明 `executionMode: 'sequential'` 时整批
    * 串行（工具的副作用可能互相排斥）。结果按 call 顺序回填，事件与历史顺序
    * 不随完成先后变化，历史保持确定。
+   * @param calls - 模型这一批给出的调用。
+   * @param context - 工具执行上下文。
+   * @param reminder - 重复调用提醒器：登记连续同参的调用，必要时往结果里附提醒。
    * @returns 与 calls 同序的结果数组。
    */
-  private async executeCalls(calls: readonly ToolCallBlock[], context: ToolContext): Promise<ToolResult[]> {
+  private async executeCalls(
+    calls: readonly ToolCallBlock[],
+    context: ToolContext,
+    reminder: RepeatToolReminder,
+  ): Promise<ToolResult[]> {
+    /**
+     * 登记必须在**执行之前**按模型给出的顺序做完。
+     *
+     * 连续性看的是「上一条」，而执行是并发的（完成顺序会乱）——按完成顺序登记
+     * 会把不相邻的两次调用算成一条链，提醒就发错了地方。
+     */
+    const verdicts = calls.map((call) => {
+      return reminder.note({ name: call.name, arguments: call.arguments })
+    })
     const sequential = calls.some((call) => {
       return this.allowedTools.get(call.name)?.executionMode === 'sequential'
     })
-    if (sequential || calls.length === 1) {
-      const results: ToolResult[] = []
-      for (const call of calls) {
-        results.push(await this.executeCall(call, context))
-      }
-      return results
+    const results =
+      sequential || calls.length === 1
+        ? await this.runCallsSerially(calls, context)
+        : await mapWithConcurrency(calls, DEFAULT_TOOL_CONCURRENCY, (call) => this.executeCall(call, context))
+    // 提醒附在结果末尾：模型读到的是「这次的结果 + 一句提醒」，不是凭空多一条消息。
+    for (const [index, verdict] of verdicts.entries()) {
+      if (!verdict.remind) continue
+      const result = results[index]
+      if (result === undefined) continue
+      result.content = `${result.content}\n\n${verdict.reminder}`
     }
-    return await mapWithConcurrency(calls, DEFAULT_TOOL_CONCURRENCY, (call) => this.executeCall(call, context))
+    return results
+  }
+
+  /** 串行跑一批调用（任一工具声明 sequential 时用）。 */
+  private async runCallsSerially(calls: readonly ToolCallBlock[], context: ToolContext): Promise<ToolResult[]> {
+    const results: ToolResult[] = []
+    for (const call of calls) {
+      results.push(await this.executeCall(call, context))
+    }
+    return results
+  }
+
+  /**
+   * 工具结果的改写：装配层注入的钩子（溢出文本那一套）在这里生效。
+   *
+   * 钩子抛错**不**让这次调用失败——结果照旧进历史：原文总比没有强，
+   * 而一次溢出处理的故障不该把整趟工具调用变成失败。
+   * @param result - 工具返回的结果。
+   * @param context - 工具执行上下文。
+   * @returns 改写后的结果（钩子没配或出错时是原结果）。
+   */
+  private async transformResult(result: ToolResult, context: ToolContext): Promise<ToolResult> {
+    const transform = this.options.transformToolResult
+    if (transform === undefined) return result
+    try {
+      return await transform(result, context)
+    } catch {
+      return result
+    }
   }
 
   /** 长期记忆召回（故障静默降级为无人设增强）。 */
@@ -977,7 +1068,33 @@ ${definition.name}：${assistantText.trim()}`,
       }
     }
     try {
-      return await tool.execute(args, context)
+      /**
+       * 单次调用时限：工具自己声明了 `timeoutMs` 才设限（没声明 = 没有上限，
+       * 宿主不替它编）。
+       *
+       * 没声明时限时**原样**把上下文里的信号透传给工具：工具看到的与调用方给的
+       * 是同一个对象，别为了「统一」换一个派生信号——那会让工具分辨不出
+       * 「外层取消」和「内部超时」这两种收尾。
+       */
+      const limit = resolveToolTimeoutMs(tool)
+      if (limit === undefined) return await this.transformResult(await tool.execute(args, context), context)
+      /**
+       * 到点 abort 派发的 signal 并**立刻**回一条中文错误结果，不等工具收尾——
+       * 等它就等于把超时又拖回成挂起。
+       */
+      const outcome = await runToolWithTimeout({
+        name: call.name,
+        timeoutMs: limit,
+        ...(context.signal === undefined ? {} : { signal: context.signal }),
+        execute: (signal) => tool.execute(args, { ...context, signal }),
+      })
+      if (outcome.status === 'completed') {
+        const value = outcome.value
+        if (value === undefined) return { content: `tool "${call.name}" returned nothing`, isError: true }
+        return await this.transformResult(value, context)
+      }
+      if (outcome.result !== undefined) return outcome.result
+      return { content: outcome.message ?? `tool "${call.name}" ${outcome.status}`, isError: true }
     } catch (error) {
       return { content: `tool "${call.name}" failed: ${errorChain(error)}`, isError: true }
     }

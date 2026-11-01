@@ -1,0 +1,23 @@
+{
+  "name": "@ryharness/typert-gateway",
+  "version": "0.4.0",
+  "type": "module",
+  "license": "MIT",
+  "description": "类型图网关：运行时反射出 remote 方法的类型图，按 JSON-RPC 2.0 跨连接调用，生成类型安全的客户端",
+  "main": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsdown"
+  },
+  "dependencies": {
+    "@ryharness/typert-protocol": "workspace:*"
+  }
+}

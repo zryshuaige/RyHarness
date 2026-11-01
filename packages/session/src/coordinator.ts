@@ -28,6 +28,7 @@ import type {
   AgentLoopEvent,
   AgentLoopOptions,
   AgentMemoryHooks,
+  SandboxMode,
   SessionQuota,
   SessionQuotaLimits,
   ToolSource,
@@ -126,6 +127,13 @@ export interface CoordinatorOptions {
    * 单聊与群聊成员走同一条闸。见 AgentLoopOptions.approver。
    */
   approver?: AgentLoopOptions['approver']
+  /**
+   * 工具结果的改写钩子（可选）：结果进模型历史之前调一次。
+   *
+   * 服务端用它把超长的工具结果换成「预览 + 定位符」（溢出文本那一套）。
+   * 群聊里每个成员走同一条钩子。
+   */
+  transformToolResult?: AgentLoopOptions['transformToolResult']
 }
 
 /** 一次性上下文注入：文本 + 送达确认。 */
@@ -151,6 +159,13 @@ export interface RunContext {
   workspaceRoot: string
   /** 取消信号：透传给 AgentLoop / GroupDispatcher / 工具执行。 */
   signal?: AbortSignal
+  /**
+   * 本轮的沙箱模式（会话级覆盖）。
+   *
+   * 用户在某个会话里临时收紧权限时由宿主传进来；**缺省时不由这里决定**——
+   * 没有覆盖就按每位助理自己的权限档位走（见 AgentLoop）。
+   */
+  sandboxMode?: SandboxMode
   /** 可选扩展点：模型调用出账后回调（server 推 WS / 记会话累计）。 */
   onUsage?: (report: UsageReport) => void
 }
@@ -689,6 +704,9 @@ export class SessionCoordinator {
       ...(memory === undefined ? {} : { memory }),
       ...(evolution === undefined ? {} : { evolution }),
       ...(this.options.approver === undefined ? {} : { approver: this.options.approver }),
+      ...(this.options.transformToolResult === undefined
+        ? {}
+        : { transformToolResult: this.options.transformToolResult }),
     })
 
     let failed: { message: string; code: string } | undefined
@@ -854,6 +872,9 @@ export class SessionCoordinator {
       // 调度器把同一个闸分给本轮所有成员：接力链变长不会放大工具预算。
       quota: this.quotas.take(conversationId),
       ...(this.options.approver === undefined ? {} : { approver: this.options.approver }),
+      ...(this.options.transformToolResult === undefined
+        ? {}
+        : { transformToolResult: this.options.transformToolResult }),
     })
     try {
       for await (const event of dispatcher.runTurn({
@@ -861,6 +882,7 @@ export class SessionCoordinator {
         history,
         workspaceRoot: context.workspaceRoot,
         conversationId,
+        ...(context.sandboxMode === undefined ? {} : { sandboxMode: context.sandboxMode }),
         turnIndex,
         ...(context.signal === undefined ? {} : { signal: context.signal }),
       })) {

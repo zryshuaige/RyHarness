@@ -65,7 +65,7 @@ pnpm --filter @ryharness/desktop dev   # 起桌面应用（Vite HMR + Electron�
   `apps/desktop/README.md`「实测截图」一节（`redesign4-*`）。
   品牌资产只有一个真源：`apps/desktop/assets/brand/mark.png` 位图母版，其余图标
   （`icon-*.png`、`icon.ico`、`favicon-*`、`cat.png`）都是 `gen:icon` 从它逐档栅格化
-  派生���（每档独立栅格化并按该尺寸做光学补偿，不降采样）。改图要改母版再重跑生成脚本，
+  派生图（每档独立栅格化并按该尺寸做光学补偿，不降采样）。改图要改母版再重跑生成脚本，
   别单独手改某一档 PNG。
 
 ## 提交前检查

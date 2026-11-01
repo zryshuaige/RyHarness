@@ -118,8 +118,11 @@ export const fsRead: Tool = {
       }
       if (bytesRead < stat.size) {
         const head = raw.slice(0, MAX_READ_CHARS)
+        // 记一笔「读过」：改文件前要问一句读没读过（见 ToolContext.readTracker）。
+        ctx.readTracker?.markRead(target)
         return { content: `${head}\n…[truncated: file is ${stat.size} bytes, showing first ${head.length} chars]` }
       }
+      ctx.readTracker?.markRead(target)
       return { content: truncateOutput(raw, MAX_READ_CHARS) }
     })
   },
@@ -142,11 +145,22 @@ export const fsWrite: Tool = {
   },
   async execute(args, ctx) {
     throwIfAborted(ctx.signal)
+    /**
+     * 沙箱闸：只读模式下不写。
+     *
+     * 助理的权限档位已经决定了它有没有这个工具，但**会话级覆盖**是另一回事——
+     * 用户在某个会话里把权限收紧了，这时哪怕工具在白名单里也不能写。
+     */
+    if (ctx.sandboxMode === 'read-only') {
+      return { content: '当前权限是「只读」：写文件需要用户提权。', isError: true }
+    }
     return guard(() => {
       const target = resolveTarget(ctx.workspaceRoot, argString(args, 'path'))
       const content = argString(args, 'content')
       mkdirSync(dirname(target), { recursive: true })
       writeFileSync(target, content, 'utf8')
+      // 写过的文件也算「知道内容」：模型刚写进去的正文它当然清楚。
+      ctx.readTracker?.markRead(target)
       return { content: `wrote ${content.length} chars to ${target}` }
     })
   },

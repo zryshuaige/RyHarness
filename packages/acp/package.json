@@ -1,0 +1,24 @@
+{
+  "name": "@ryharness/acp",
+  "version": "0.4.0",
+  "type": "module",
+  "license": "MIT",
+  "description": "Agent Client Protocol：编辑器之类的客户端用它驱动一个 agent 会话",
+  "main": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsdown"
+  },
+  "dependencies": {
+    "@ryharness/api": "workspace:*",
+    "@ryharness/typert-protocol": "workspace:*"
+  }
+}
