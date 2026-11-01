@@ -36,7 +36,7 @@ Web GUI），所以「对账」不是逐行比对，而是**按能力家族核�
 | read-before-edit 策略 | 改前必须先读过 | 用「精确文字匹配」替代 | **已有** | `packages/tools` 的 `fs_edit`（这一轮没读过的文件不让改；要改的那段必须是真看到过的那份） | 低 |
 | shell | bash / pwsh 执行器 | 有 | **已有** | `packages/tools/src/shell.ts`（Git Bash 优先、敏感路径闸、进程树回收） | — |
 | subprocess | 统一进程服务 | **本轮补上** | **已有** | `packages/subprocess`（可执行查找、托管 spawn、有界输出、环境清洗、进程范围）；**Windows 上是 taskkill 收树，不是 Job Object** | — |
-| spill | 超长工具结果落盘 + 定位符 | 没有 | **本轮补上** | **已有** | `packages/spill`（原文落到模型看不见的地方，模型用 `spill_read` 取回） | — |
+| spill | 超长工具结果落盘 + 定位符 | **本轮补上** | **已有** | `packages/spill`（原文落到模型看不见的地方，模型用 `spill_read` 取回） | — |
 | sandbox | read-only / workspace-write / 全权三档 + 提权 | **本轮补上** | **部分** | `packages/sandbox`（POSIX 走 bubblewrap 内核级隔离；**Windows 只有围栏**：清环境 + 限定工作目录 + 拦越界写目标，强度写在 `Confinement.kernelLevel` 上） | — |
 | terminal | 持久 PTY | 没有 | **已有** | `packages/terminal`（持久会话；**Windows 上是管道模式，没有真 PTY**） | 中 |
 | ssh | 远程 POSIX 一套 fs/subprocess/sandbox | 没有 | **已有** | `packages/ssh`（连接接口 + ssh 命令行后端；不引 ssh2 库） | 低 |
@@ -61,7 +61,7 @@ Web GUI），所以「对账」不是逐行比对，而是**按能力家族核�
 | subagent | 委派子代理（进程内 / 跨进程 / ACP） | **本轮在做** | → 已有 | `packages/subagent` | — |
 | jobs | 后台长任务，agent 不阻塞 | **本轮补上** | **已有** | `packages/jobs` 的 `JobService`（进程内运行时；跑完经宿主回调写进会话，不让模型轮询） | — |
 | workflow | 编排脚本 + 扇出 | 没有 | **已有** | `packages/workflow`（编排脚本扇出子代理）+ `packages/ptc`（跑模型写的程序） | 低 |
-| ptc-runtime | 跑模型写的程序（宿主提供异步绑定） | 没有 | **本轮补上** | **已有** | `packages/ptc`（三种跑法：函数体 / REPL / 脚本；绑定跨进程回宿主执行） | — |
+| ptc-runtime | 跑模型写的程序（宿主提供异步绑定） | **本轮补上** | **已有** | `packages/ptc`（三种跑法：函数体 / REPL / 脚本；绑定跨进程回宿主执行） | — |
 | plan | plan 模式 + 计划审批 | **本轮补上** | **已有** | `packages/jobs` 的 `PlanModeService`（按会话；待批 → 批/打回，打回后版本 +1）+ `POST /api/plans/:id/approve` | — |
 | goal | 跨重启的目标与续跑 | 没有 | **已有** | `packages/goal`（跨重启的目标 + `/goal` 命令） | 低 |
 | schedule | 一次性/每日/每周/cron 提醒 | 只有每日回顾 | **已有** | `packages/schedule`（五种触发方式 + 自写 cron 解析） | 低 |
