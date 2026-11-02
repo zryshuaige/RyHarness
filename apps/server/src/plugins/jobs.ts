@@ -12,17 +12,17 @@
  */
 
 import type { Context } from '@ryharness/cordis'
-import type { LlmRuntime } from '@ryharness/llm'
-import type { SessionStore } from '@ryharness/session'
 import {
   createSubagentJobExecutor,
-  JobService,
   JOB_TOOL_NAMES,
-  PlanModeService,
+  JobService,
   PLAN_TOOL_NAMES,
+  PlanModeService,
   renderJobNotice,
   renderPlanNotice,
 } from '@ryharness/jobs'
+import type { LlmRuntime } from '@ryharness/llm'
+import type { SessionStore } from '@ryharness/session'
 import { SubagentService } from '@ryharness/subagent'
 import type { ToolRegistry } from '@ryharness/tools'
 import { HttpRequestError, json } from '../router.ts'
@@ -55,8 +55,7 @@ export function jobsPlugin(deps: JobsPluginDeps): PluginEntry {
   return {
     id: JOBS_PLUGIN_ID,
     name: '后台任务与计划',
-    description:
-      '让助理把耗时的活派到后台去跑，跑完通知自己进会话；开会话时还能先交一份计划等人批，批了才动手。',
+    description: '让助理把耗时的活派到后台去跑，跑完通知自己进会话；开会话时还能先交一份计划等人批，批了才动手。',
     group: 'feature',
     capabilities: {
       tools: [...JOB_TOOL_NAMES, ...PLAN_TOOL_NAMES],
@@ -171,8 +170,7 @@ function registerPlanRoutes(routes: RouteRegistry, deps: PlanRoutesDeps): void {
   routes.register('POST', '/api/plans/:id/reject', async (req, res) => {
     const conversationId = requireConversation(req.params.id ?? '')
     const body = (await req.body()) as { feedback?: unknown }
-    const feedback =
-      typeof body === 'object' && body !== null && typeof body.feedback === 'string' ? body.feedback : ''
+    const feedback = typeof body === 'object' && body !== null && typeof body.feedback === 'string' ? body.feedback : ''
     const plan = deps.plans.reject(conversationId, feedback)
     if (plan === undefined) {
       throw new HttpRequestError(404, '这个会话没有待批的计划', 'PLAN_NOT_FOUND')

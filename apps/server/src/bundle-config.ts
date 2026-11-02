@@ -10,7 +10,7 @@
 
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { resolveBundle, type Bundle } from '@ryharness/bundle'
+import { type Bundle, resolveBundle } from '@ryharness/bundle'
 
 /**
  * 读 bundle 配置并叠出插件决定。

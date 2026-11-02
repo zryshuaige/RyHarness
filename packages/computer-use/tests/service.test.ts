@@ -72,7 +72,7 @@ class WeirdDriver extends FakeDriver {
   }
 }
 
-/** 建一个带假驱动的服务。 */function makeService(
+/** 建一个带假驱动的服务。 */ function makeService(
   options: {
     maxSessions?: number
     stepTimeoutMs?: number

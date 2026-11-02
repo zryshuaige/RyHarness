@@ -6,11 +6,11 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  BrowserSessionService,
-  BrowserUseError,
-  defaultResolveHost,
-  type BrowserDriver,
   type BrowserDownloader,
+  type BrowserDriver,
+  BrowserSessionService,
+  type BrowserUseError,
+  defaultResolveHost,
 } from '../src/index.ts'
 
 /** 一个只实现基本动作的驱动：不会提交表单，也不会下载文件。 */

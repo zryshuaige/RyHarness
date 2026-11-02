@@ -10,7 +10,7 @@
  */
 
 import type { Context } from '@ryharness/cordis'
-import { buildCatalog, createRuntimeCatalogTool, type CatalogRoute, type CatalogTool } from '@ryharness/extensions'
+import { buildCatalog, type CatalogRoute, type CatalogTool, createRuntimeCatalogTool } from '@ryharness/extensions'
 import type { PluginEntry } from './host.ts'
 
 export const EXTENSIONS_PLUGIN_ID = 'extensions'

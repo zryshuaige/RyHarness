@@ -11,8 +11,8 @@ import {
   findOutsideWriteTarget,
   isSandboxMode,
   modeForTier,
-  SandboxPolicy,
   SANDBOX_MODES,
+  SandboxPolicy,
   scrubEnv,
 } from '@ryharness/sandbox'
 import { describe, expect, it } from 'vitest'

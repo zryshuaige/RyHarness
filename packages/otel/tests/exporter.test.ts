@@ -77,9 +77,11 @@ describe('OTel 导出器', () => {
       }>
     }
     const resource = payload.resourceSpans[0]?.resource
-    expect(resource?.attributes.map((attribute) => {
-      return attribute.key
-    })).toContain('service.name')
+    expect(
+      resource?.attributes.map((attribute) => {
+        return attribute.key
+      }),
+    ).toContain('service.name')
     const sent = payload.resourceSpans[0]?.scopeSpans[0]?.spans[0]
     expect(sent?.name).toBe('turn')
     expect(sent?.startTimeUnixNano).toBe(unixNano(1_700_000_000_000))
@@ -119,9 +121,11 @@ describe('OTel 导出器', () => {
       attributes: {},
     })
     await exporter.flush()
-    expect(fake.calls.map((call) => {
-      return call.url
-    })).toEqual(['http://127.0.0.1:4318/v1/traces', 'http://127.0.0.1:4318/v1/metrics'])
+    expect(
+      fake.calls.map((call) => {
+        return call.url
+      }),
+    ).toEqual(['http://127.0.0.1:4318/v1/traces', 'http://127.0.0.1:4318/v1/metrics'])
   })
 
   it('发失败不抛：只记一笔失败', async () => {

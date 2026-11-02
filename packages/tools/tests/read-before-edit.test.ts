@@ -42,10 +42,7 @@ describe('改前必须先读过', () => {
   it('没读过就改：拒绝，并说清要先读哪个文件', async () => {
     const { root, ctx } = workspace()
     writeFileSync(join(root, 'a.txt'), 'old text', 'utf8')
-    const result = await fsEdit.execute(
-      { path: 'a.txt', oldText: 'old text', newText: 'new text' },
-      ctx,
-    )
+    const result = await fsEdit.execute({ path: 'a.txt', oldText: 'old text', newText: 'new text' }, ctx)
     expect(result.isError).toBe(true)
     expect(result.content).toContain('还没读过')
     expect(result.content).toContain('a.txt')
@@ -56,10 +53,7 @@ describe('改前必须先读过', () => {
     writeFileSync(join(root, 'b.txt'), 'old text', 'utf8')
     const read = await fsRead.execute({ path: 'b.txt' }, ctx)
     expect(read.isError).toBeUndefined()
-    const result = await fsEdit.execute(
-      { path: 'b.txt', oldText: 'old text', newText: 'new text' },
-      ctx,
-    )
+    const result = await fsEdit.execute({ path: 'b.txt', oldText: 'old text', newText: 'new text' }, ctx)
     expect(result.isError).toBeUndefined()
     expect(result.content).toContain('已改')
   })

@@ -270,9 +270,11 @@ describe('插件装配', () => {
           return row.group !== undefined && ['core', 'voice', 'feature', 'tool'].includes(row.group)
         }),
       ).toBe(true)
-      expect(list.filter((row) => {
-        return row.core
-      })).toHaveLength(2)
+      expect(
+        list.filter((row) => {
+          return row.core
+        }),
+      ).toHaveLength(2)
       expect(
         list.every((row) => {
           return typeof row.impact === 'string' && row.impact.length > 0

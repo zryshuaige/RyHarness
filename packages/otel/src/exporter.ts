@@ -84,8 +84,7 @@ export class OtlpExporter {
    * @param item - span 或指标点。
    */
   record(item: Span | MetricPoint): void {
-    const entry: QueueItem =
-      'traceId' in item ? { kind: 'span', span: item } : { kind: 'metric', point: item }
+    const entry: QueueItem = 'traceId' in item ? { kind: 'span', span: item } : { kind: 'metric', point: item }
     this.queue.push(entry)
     while (this.queue.length > this.maxQueue) {
       this.queue.shift()
@@ -117,12 +116,13 @@ export class OtlpExporter {
    */
   async flush(): Promise<{ spans: OtlpExportResult; metrics: OtlpExportResult }> {
     const spans = this.queue.filter((item): item is { kind: 'span'; span: Span } => item.kind === 'span')
-    const metrics = this.queue.filter(
-      (item): item is { kind: 'metric'; point: MetricPoint } => item.kind === 'metric',
-    )
+    const metrics = this.queue.filter((item): item is { kind: 'metric'; point: MetricPoint } => item.kind === 'metric')
     this.queue.length = 0
     return {
-      spans: spans.length === 0 ? { ok: true } : await this.send('/v1/traces', this.tracesPayload(spans.map((item) => item.span))),
+      spans:
+        spans.length === 0
+          ? { ok: true }
+          : await this.send('/v1/traces', this.tracesPayload(spans.map((item) => item.span))),
       metrics:
         metrics.length === 0
           ? { ok: true }

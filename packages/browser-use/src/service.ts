@@ -406,11 +406,7 @@ export class BrowserSessionService implements BrowserToolSession {
    * @param factory - 驱动工厂。
    * @returns 标签页记录。
    */
-  async #openTab(
-    record: SessionRecord,
-    url: string,
-    factory: BrowserDriverFactory,
-  ): Promise<TabRecord> {
+  async #openTab(record: SessionRecord, url: string, factory: BrowserDriverFactory): Promise<TabRecord> {
     const target = await assertNavigableUrl(url, {
       allowPrivateNetwork: this.#policy.allowPrivateNetwork,
       resolveHost: this.#resolveHost,

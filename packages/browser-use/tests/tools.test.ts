@@ -212,10 +212,7 @@ describe('模型工具：出错的兜底', () => {
       read: async () => ({ kind: 'text' as const, text: '' }),
     }
     const tools = createBrowserTools(broken)
-    const result = await pick(tools, 'browser_open').execute(
-      { url: 'https://example.com/' },
-      { owner: 'agent-1' },
-    )
+    const result = await pick(tools, 'browser_open').execute({ url: 'https://example.com/' }, { owner: 'agent-1' })
     expect(result.isError).toBe(true)
     expect(result.content).toContain('内部错误')
     expect(result.content).not.toContain('boom')
@@ -230,10 +227,7 @@ describe('模型工具：出错的兜底', () => {
 
   it('browser_read 在别人的会话上读会被围栏挡住', async () => {
     const { tools } = makeTools()
-    const opened = await pick(tools, 'browser_open').execute(
-      { url: 'https://example.com/' },
-      { owner: 'agent-1' },
-    )
+    const opened = await pick(tools, 'browser_open').execute({ url: 'https://example.com/' }, { owner: 'agent-1' })
     const sessionId = (JSON.parse(opened.content) as { sessionId: string }).sessionId
     const result = await pick(tools, 'browser_read').execute({ sessionId }, { owner: 'agent-2' })
     expect(result.isError).toBe(true)

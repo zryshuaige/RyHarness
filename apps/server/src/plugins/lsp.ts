@@ -11,9 +11,9 @@
 
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { Context } from '@ryharness/cordis'
 import type { Tool, ToolContext, ToolResult } from '@ryharness/agent'
-import { LspService, type LspLocation, StdioLspProvider, type StdioLspProviderConfig } from '@ryharness/lsp'
+import type { Context } from '@ryharness/cordis'
+import { type LspLocation, LspService, StdioLspProvider, type StdioLspProviderConfig } from '@ryharness/lsp'
 import type { PluginEntry } from './host.ts'
 
 export const LSP_PLUGIN_ID = 'lsp'

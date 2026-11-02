@@ -67,7 +67,15 @@ import { MIN_OUTPUT_TOKENS, outputTokenCap, resolveRequestBudget } from './budge
 import type { CompactionOptions, CompactSpec } from './compact.ts'
 import { alignWindowStart, compactHistory, createLlmSummarizer, resolveCompactSpec } from './compact.ts'
 import { resolveAllowedTools } from './tool-source.ts'
-import type { AgentDefinition, AgentLoopEvent, ReadTracker, Tool, ToolContext, ToolResult, ToolSource } from './types.ts'
+import type {
+  AgentDefinition,
+  AgentLoopEvent,
+  ReadTracker,
+  Tool,
+  ToolContext,
+  ToolResult,
+  ToolSource,
+} from './types.ts'
 
 /** AgentLoop 构造参数。 */
 export interface AgentLoopOptions {

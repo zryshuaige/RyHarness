@@ -4,7 +4,7 @@
  * @module @ryharness/otel
  */
 
+export type { OtlpExporterOptions, OtlpExporterStats, OtlpExportResult } from './exporter.ts'
+export { makeSpan, OtlpExporter } from './exporter.ts'
 export type { MetricPoint, OtelResource, Span, SpanStatusCode } from './types.ts'
 export { randomHexId, unixNano } from './types.ts'
-export type { OtlpExportResult, OtlpExporterOptions, OtlpExporterStats } from './exporter.ts'
-export { makeSpan, OtlpExporter } from './exporter.ts'

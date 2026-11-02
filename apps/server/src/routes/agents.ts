@@ -5,10 +5,10 @@
 
 import type { AgentDefinition, PermissionPreset } from '@ryharness/agent'
 import { applyPermissionPreset, PERMISSION_PRESETS, permissionPreset } from '@ryharness/agent'
+import { PresetError, type PresetRegistry, type PresetRevision } from '@ryharness/preset'
 import type { AgentPersona, SessionStore } from '@ryharness/session'
 import { VOICE_PRESETS } from '@ryharness/session'
 import type { ToolRegistry } from '@ryharness/tools'
-import { PresetError, type PresetRegistry } from '@ryharness/preset'
 import type { ProvidersConfigFile } from '../config.ts'
 import { resolveSidecarLlm } from '../config.ts'
 import { HttpRequestError, json, type Router, strField } from '../router.ts'
@@ -185,7 +185,7 @@ export function registerAgentRoutes(router: Router, deps: AgentRoutes): void {
     if (agent === undefined) {
       throw new HttpRequestError(404, `没有这个 agent: ${agentId}`, 'AGENT_NOT_FOUND')
     }
-    let revision
+    let revision: PresetRevision
     try {
       revision = deps.presets.select(agentId, presetId)
     } catch (error) {

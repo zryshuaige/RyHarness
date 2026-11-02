@@ -14,7 +14,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Context } from '@ryharness/cordis'
-import { type WebConfig, createWebFetchTool, createWebSearchTool } from '@ryharness/web'
+import { createWebFetchTool, createWebSearchTool, type WebConfig } from '@ryharness/web'
 import type { PluginEntry } from './host.ts'
 
 export const WEB_PLUGIN_ID = 'web'
