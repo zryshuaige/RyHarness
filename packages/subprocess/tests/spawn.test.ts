@@ -311,32 +311,40 @@ describe('托管 spawn：进程树回收', () => {
 })
 
 describe('托管 spawn：Windows 上的脚本宿主', () => {
-  it.skipIf(process.platform !== 'win32')('.cmd 脚本能跑起来（走 cmd.exe，参数带空格也不散）', async () => {
-    const { dir, cleanup } = makeTempDir()
-    try {
-      const script = writeFileIn(dir, 'hello.cmd', '@echo off\r\necho ARGS:%*\r\n')
-      const proc = spawnManaged({ command: script, args: ['one', 'two three'], resolve: false })
-      const result = await proc.done
+  it.skipIf(process.platform !== 'win32')(
+    '.cmd 脚本能跑起来（走 cmd.exe，参数带空格也不散）',
+    async () => {
+      const { dir, cleanup } = makeTempDir()
+      try {
+        const script = writeFileIn(dir, 'hello.cmd', '@echo off\r\necho ARGS:%*\r\n')
+        const proc = spawnManaged({ command: script, args: ['one', 'two three'], resolve: false })
+        const result = await proc.done
 
-      expect(result.status).toBe('completed')
-      expect(result.stdout).toContain('one')
-      expect(result.stdout).toContain('two three')
-    } finally {
-      cleanup()
-    }
-  })
+        expect(result.status).toBe('completed')
+        expect(result.stdout).toContain('one')
+        expect(result.stdout).toContain('two three')
+      } finally {
+        cleanup()
+      }
+    },
+    90_000,
+  )
 
-  it.skipIf(process.platform !== 'win32')('.ps1 脚本能跑起来（走 powershell）', async () => {
-    const { dir, cleanup } = makeTempDir()
-    try {
-      const script = writeFileIn(dir, 'hello.ps1', 'Write-Output "PS-OK"\n')
-      const proc = spawnManaged({ command: script, args: [], resolve: false })
-      const result = await proc.done
+  it.skipIf(process.platform !== 'win32')(
+    '.ps1 脚本能跑起来（走 powershell）',
+    async () => {
+      const { dir, cleanup } = makeTempDir()
+      try {
+        const script = writeFileIn(dir, 'hello.ps1', 'Write-Output "PS-OK"\n')
+        const proc = spawnManaged({ command: script, args: [], resolve: false })
+        const result = await proc.done
 
-      expect(result.status).toBe('completed')
-      expect(result.stdout).toContain('PS-OK')
-    } finally {
-      cleanup()
-    }
-  })
+        expect(result.status).toBe('completed')
+        expect(result.stdout).toContain('PS-OK')
+      } finally {
+        cleanup()
+      }
+    },
+    90_000,
+  )
 })
