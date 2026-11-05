@@ -95,19 +95,21 @@ describe('MCP stdio 客户端', () => {
   })
 
   it('超时报中文，不抛英文异常', async () => {
-    const connection = client({ timeoutMs: 300 })
+    // 超时给 1.5 秒：测的是「超时这件事会发生」，不是「机器多快」。
+  // 给 300ms 的话，CI 的 Windows runner 上 fake server 还没起来就先超时了。
+  const connection = client({ timeoutMs: 1_500 })
     await connection.connect()
     const error = await capture(connection.callTool('slow', {}))
     expect(error).toBeInstanceOf(McpError)
     expect(error).toMatchObject({ kind: 'timeout' })
-    expect(error).toMatchObject({ message: expect.stringContaining('300ms 内没有响应') })
+    expect(error).toMatchObject({ message: expect.stringContaining('1500ms 内没有响应') })
   })
 
   it('超时会给 server 发取消通知', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ryharness-mcp-'))
     temps.push(dir)
     const log = join(dir, 'notify.log')
-    const connection = client({ timeoutMs: 300 }, { MCP_FIXTURE_LOG: log })
+    const connection = client({ timeoutMs: 1_500 }, { MCP_FIXTURE_LOG: log })
     await connection.connect()
     await capture(connection.callTool('slow', {}))
     expect(await waitForFile(log, 'notifications/cancelled')).toBe(true)

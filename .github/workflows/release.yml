@@ -74,7 +74,7 @@ jobs:
       - name: Test
         run: npx vitest run
 
-      - name: Guardrails (类型逃逸 / 包依赖缺失 / 重复代码 / lint 棘轮 / NOTICE 总账)
+      - name: Guardrails (类型逃逸 / 包依赖缺失 / 重复代码 / lint 棘轮 / NOTICE 总账 / 死代码)
         # 与 CI 同一套硬门禁：发布构建不允许带着「PR 通道会拦下」的问题出厂。
         # 此前这一步只在 ci.yml 里有，于是一次 tag 推送可以打出带类型逃逸、
         # 重复代码、NOTICE 漂移的安装包——发布通道比 PR 通道松，是最难发现的那种红。

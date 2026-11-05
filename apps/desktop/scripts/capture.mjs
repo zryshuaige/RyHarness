@@ -80,7 +80,18 @@ const cleanup = (code) => {
   if (cleaned) return
   cleaned = true
   killTree()
-  rmSync(dataDir, { recursive: true, force: true, maxRetries: 5 })
+  // **Windows 上句柄释放滞后**：Electron 刚退，它的工作目录句柄可能还挂着，
+  // 这时 rmSync 会报 EPERM。删不掉不该让整轮拍照失败——图已经拍出来了，
+  // 临时目录留给系统去清。
+  try {
+    rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
+  } catch {
+    try {
+      rmSync(dataDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 500 })
+    } catch {
+      // 彻底删不掉就留着：它在系统临时目录里，下次开机自己会清。
+    }
+  }
   process.exit(code ?? 0)
 }
 

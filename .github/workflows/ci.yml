@@ -73,10 +73,15 @@ jobs:
         # coverage 需要重新统计执行数据。
         run: npx vitest run --coverage
 
-      - name: Guardrails (类型逃逸 / 包依赖缺失 / 重复代码 / lint 棘轮 / NOTICE 总账)
-        # 硬门禁：scripts/verify-*.mjs 五条自研校验，任何一条非 0 退出即让 CI 变红。
+      - name: Guardrails (类型逃逸 / 包依赖缺失 / 重复代码 / lint 棘轮 / NOTICE 总账 / 死代码)
+        # 硬门禁：scripts/verify-*.mjs 七条自研校验，任何一条非 0 退出即让 CI 变红。
         # 这是「死代码 / 类型逃逸 / 重复代码 / 包依赖缺失 / lint 告警增长 / 许可总账漂移」
-        # 六类退化不再靠人眼的保证。
+        # 七类退化不再靠人眼的保证。
+        #
+        # 「死代码」那一条（scripts/verify-no-dead-code.mjs）是 2026-11-04 加的：
+        # 上一轮把 53 个能力家族都建成了包，其中 12 个在产品里根本触发不到（没有任何
+        # import 指向它们），却在对账表里被标成「已有」。这道门禁盯的是「从产品入口
+        # 出发不可达的包与文件」，让这种事攒不起来。
         #
         # NOTICE 已在 `pnpm verify` 链内（根 package.json 的 verify 脚本），这里单独再跑
         # 一行是双保险：即使哪天有人把它从 verify 链里摘掉，CI 这一步仍然挡得住
