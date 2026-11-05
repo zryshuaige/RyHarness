@@ -127,7 +127,13 @@ export default defineConfig({
     tsconfigPaths: true,
   },
   test: {
-    include: ['apps/*/tests/**/*.test.{ts,tsx}', 'packages/*/tests/**/*.test.ts', 'packages/*/*/tests/**/*.test.ts'],
+    include: [
+      'apps/*/tests/**/*.test.{ts,tsx}',
+      'packages/*/tests/**/*.test.ts',
+      'packages/*/*/tests/**/*.test.ts',
+      // 仓库级门禁脚本的自测：它们不属于任何一个包，但门禁自己得管用。
+      'scripts/tests/**/*.test.ts',
+    ],
     // 默认 5s 是给「跑一个文件」的假设设的。本仓 1500 多条用例在 Windows 上全量并行，
     // 每个 worker 同时抢 CPU/磁盘，超时算的是排队时间而不是被测代码的耗时——同一份
     // 代码在不同时刻测出 7~8 个「失败」，量的是机器负载，不是回归。真慢的用例应当自己
