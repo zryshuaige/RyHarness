@@ -54,6 +54,14 @@ export interface Conversation {
   memberAgentIds: string[]
   /** 群聊调度员 agent id：决定每条用户消息路由给谁；单聊为空。 */
   dispatcherAgentId?: string
+  /**
+   * 这个会话归哪个工作区。
+   *
+   * 存的是**工作区 id**（`@ryharness/workspace` 的注册表里那条记录的 id），不是
+   * 路径——路径会变（用户挪了目录），id 不会。没有就是「未归属」，工具读写文件
+   * 落在默认工作区根目录。
+   */
+  workspaceId?: string
   /** 用户已读到的消息序号（未读 = seq 更大且非本人发送的消息数）。 */
   lastReadSeq: number
   createdAt: number

@@ -43,6 +43,8 @@ export interface ConversationInput {
   title?: string
   memberAgentIds: string[]
   dispatcherAgentId?: string
+  /** 归到哪个工作区（`@ryharness/workspace` 的工作区 id）；不给就是未归属。 */
+  workspaceId?: string
 }
 
 /** 追加消息的输入。 */
@@ -541,24 +543,43 @@ export class SessionStore {
       title: input.title ?? '',
       memberAgentIds: [...input.memberAgentIds],
       ...(input.dispatcherAgentId === undefined ? {} : { dispatcherAgentId: input.dispatcherAgentId }),
+      ...(input.workspaceId === undefined ? {} : { workspaceId: input.workspaceId }),
       lastReadSeq: 0,
       createdAt: now,
       updatedAt: now,
     }
     this.stmt(`
-      INSERT INTO conversations (id, kind, title, member_agent_ids, dispatcher_agent_id, last_read_seq, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO conversations (id, kind, title, member_agent_ids, dispatcher_agent_id, workspace_id, last_read_seq, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       conversation.id,
       conversation.kind,
       conversation.title,
       JSON.stringify(conversation.memberAgentIds),
       conversation.dispatcherAgentId ?? null,
+      conversation.workspaceId ?? null,
       0,
       now,
       now,
     )
     return conversation
+  }
+
+  /**
+   * 把会话归到某个工作区（或摘出来）。
+   *
+   * 存的是**工作区 id**（不是路径）：路径会变，id 不会。给空串等于摘出来
+   * （回到「未归属」），这样调用方不用为「清空」单开一个方法。
+   * @param id - 会话 id。
+   * @param workspaceId - 工作区 id；空串表示摘出来。
+   * @returns 真的改了（会话存在）才为 true。
+   */
+  setConversationWorkspace(id: string, workspaceId: string | undefined): boolean {
+    const value = workspaceId === undefined || workspaceId.length === 0 ? null : workspaceId
+    const result = this.stmt(
+      'UPDATE conversations SET workspace_id = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL',
+    ).run(value, Date.now(), id)
+    return Number(result.changes) > 0
   }
 
   /** 读取会话；不存在**或已软删**返回 undefined。 */
@@ -693,6 +714,7 @@ export class SessionStore {
       ...(row.dispatcher_agent_id === null || row.dispatcher_agent_id === undefined
         ? {}
         : { dispatcherAgentId: String(row.dispatcher_agent_id) }),
+      ...(row.workspace_id === null || row.workspace_id === undefined ? {} : { workspaceId: String(row.workspace_id) }),
       lastReadSeq: Number(row.last_read_seq ?? 0),
       createdAt: Number(row.created_at),
       updatedAt: Number(row.updated_at),

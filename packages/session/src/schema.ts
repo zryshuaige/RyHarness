@@ -11,7 +11,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import { bigrams, messageSearchText } from './fts.ts'
 
 /** 当前 schema 版本；每次变更表结构时 +1 并追加迁移函数。 */
-export const SCHEMA_VERSION = 12
+export const SCHEMA_VERSION = 13
 
 /** 版本 1：初始表结构。 */
 function migrateV1(db: DatabaseSync): void {
@@ -251,6 +251,29 @@ function migrateV12(db: DatabaseSync): void {
   db.exec('ALTER TABLE agents ADD COLUMN permission_preset TEXT')
 }
 
+/**
+ * 版本 13：conversations 增加 workspace_id —— 这个会话归哪个工作区。
+ *
+ * 「多个工作区」这件事的落点：同一个助理在不同项目里干活，工具读写文件的边界
+ * 落在哪个目录，取决于**这个会话属于哪个工作区**。之前只有一个固定根目录，
+ * 助理在别的项目里改文件时只能靠 `..` 越界（被挡住）或写到工作区外面。
+ *
+ * 存的是**工作区 id**（`@ryharness/workspace` 的注册表里那条记录的 id），不是路径：
+ * 路径会变（用户挪了目录），id 不会。id 指向的工作区没了时按「未归属」处理。
+ *
+ * 存量行一律 NULL（= 没归过任何工作区，行为与迁移前完全一致）。
+ */
+function migrateV13(db: DatabaseSync): void {
+  const columns = db.prepare('PRAGMA table_info(conversations)').all() as { name: string }[]
+  if (
+    columns.some((column) => {
+      return column.name === 'workspace_id'
+    })
+  )
+    return
+  db.exec('ALTER TABLE conversations ADD COLUMN workspace_id TEXT')
+}
+
 /** 全部迁移：索引即目标版本。新增迁移只追加，不改动既有条目。 */
 export const MIGRATIONS: Readonly<Record<number, (db: DatabaseSync) => void>> = {
   1: migrateV1,
@@ -265,6 +288,7 @@ export const MIGRATIONS: Readonly<Record<number, (db: DatabaseSync) => void>> = 
   10: migrateV10,
   11: migrateV11,
   12: migrateV12,
+  13: migrateV13,
 }
 
 function userVersion(db: DatabaseSync): number {
