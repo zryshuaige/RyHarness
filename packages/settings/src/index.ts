@@ -18,6 +18,8 @@ export { describeError, SettingsError } from './errors.ts'
 export type { SettingsPropertySchema, SettingsSchema } from './schema.ts'
 export { defaultValues, describeSchema } from './schema.ts'
 export { SettingsService, type SettingsServiceOptions } from './service.ts'
+export type { MigratingSettingsStoreOptions } from './storage-store.ts'
+export { MigratingSettingsStore, SETTINGS_KIND, StorageSettingsStore } from './storage-store.ts'
 export type { FileSettingsStoreOptions, SettingsSnapshot, SettingsStore } from './store.ts'
 export { FileSettingsStore, MemorySettingsStore } from './store.ts'
 export type {

@@ -20,6 +20,8 @@ export { assertShape, checkShape, describeType, isPlainObject, matchesType } fro
 export { StorageCorruptError, StorageValidationError } from './errors.ts'
 export type { JsonBackendOptions } from './json-backend.ts'
 export { decodeSegment, encodeSegment, JSON_BACKEND_NAME, JsonBackend } from './json-backend.ts'
+export type { TableRows } from './kv-table.ts'
+export { StorageTable } from './kv-table.ts'
 export type { StorageChangeListener, StorageServiceOptions } from './service.ts'
 export { StorageService } from './service.ts'
 export type { SqliteBackendOptions } from './sqlite-backend.ts'
