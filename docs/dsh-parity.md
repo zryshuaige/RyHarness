@@ -28,29 +28,29 @@ Web GUI），所以「对账」不是逐行比对，而是**按能力家族核�
 
 | 家族 | 上游做什么 | 我们 | 状态 | 落点 / 缺口 | 优先级 |
 |---|---|---|---|---|---|
-| core（agent 循环） | 消息+工具循环、上下文组装 | 同一套语义自写 | **已有** | `packages/agent`（16 步上限、有界并发 4、工具白名单每轮现查） | — |
-| llm | 适配器 / 流式协议 / 装配 | 自写，语义对齐 | **已有** | `packages/llm` + `packages/llm/openai`（含 replayState、tool-addition 原语） | — |
-| session | 持久化、迁移、投影 | 自写，迁移规则沿用上游 | **已有** | `packages/session`（SCHEMA_VERSION 12，投影层没有） | — |
-| compaction | 两段压缩 | 同一套口径 | **已有** | `packages/agent/src/compact.ts`（预裁剪 + 摘要，fail-closed） | — |
-| context | 指引文件 / @文件 / 时间 / 跨会话快照 | **本轮补上** | **已有** | `packages/context`（注入成历史里的 user 消息，不落库） | — |
-| token 计量 | 上下文/输出/缓存分别计 | 自写 | **已有** | `packages/llm/llm/src/token-estimate.ts` | — |
-| session-checkpoint | 请求/工具副作用/完成步骤先落盘 | **本轮补上** | **已有** | `packages/guard` 的 `CheckpointJournal`（每会话一份追加式 JSONL，崩在工具中途能读回） | — |
-| guard | 重复工具调用提醒、tools/execute 超时强制 | 没有 | **已有** | `packages/guard`（重复调用提醒 + 单工具超时 + checkpoint 日志） | 中 |
+| core（agent 循环） | 消息+工具循环、上下文组装 | 同一套语义自写 | **产品可用** | `packages/agent`（16 步上限、有界并发 4、工具白名单每轮现查） | — |
+| llm | 适配器 / 流式协议 / 装配 | 自写，语义对齐 | **产品可用** | `packages/llm` + `packages/llm/openai`（含 replayState、tool-addition 原语） | — |
+| session | 持久化、迁移、投影 | 自写，迁移规则沿用上游 | **产品可用** | `packages/session`（SCHEMA_VERSION 12，投影层没有） | — |
+| compaction | 两段压缩 | 同一套口径 | **产品可用** | `packages/agent/src/compact.ts`（预裁剪 + 摘要，fail-closed） | — |
+| context | 指引文件 / @文件 / 时间 / 跨会话快照 | **本轮补上** | **产品可用** | `packages/context`（注入成历史里的 user 消息，不落库） | — |
+| token 计量 | 上下文/输出/缓存分别计 | 自写 | **产品可用** | `packages/llm/llm/src/token-estimate.ts` | — |
+| session-checkpoint | 请求/工具副作用/完成步骤先落盘 | **本轮补上** | **产品可用** | `packages/guard` 的 `CheckpointJournal`（每会话一份追加式 JSONL，崩在工具中途能读回） | — |
+| guard | 重复工具调用提醒、tools/execute 超时强制 | 没有 | **产品可用** | `packages/guard`（重复调用提醒 + 单工具超时 + checkpoint 日志） | 中 |
 
 ## 二、文件系统与执行（上游 fs / shell / sandbox / subprocess 家族）
 
 | 家族 | 上游做什么 | 我们 | 状态 | 落点 / 缺口 | 优先级 |
 |---|---|---|---|---|---|
-| fs（读/写/改） | read / write / edit | read / write + **本轮补 glob/grep/edit** | **已有** | `packages/tools`（`fs_glob`/`fs_grep`/`fs_edit`，精确文字替换 + 原子写） | — |
-| fs-search | glob / grep | 本轮补上 | **已有** | `packages/tools/src/glob.ts`（自写匹配器，不引外部二进制） | — |
-| read-before-edit 策略 | 改前必须先读过 | 用「精确文字匹配」替代 | **已有** | `packages/tools` 的 `fs_edit`（这一轮没读过的文件不让改；要改的那段必须是真看到过的那份） | 低 |
-| shell | bash / pwsh 执行器 | 有 | **已有** | `packages/tools/src/shell.ts`（Git Bash 优先、敏感路径闸、进程树回收） | — |
+| fs（读/写/改） | read / write / edit | read / write + **本轮补 glob/grep/edit** | **产品可用** | `packages/tools`（`fs_glob`/`fs_grep`/`fs_edit`，精确文字替换 + 原子写） | — |
+| fs-search | glob / grep | 本轮补上 | **产品可用** | `packages/tools/src/glob.ts`（自写匹配器，不引外部二进制） | — |
+| read-before-edit 策略 | 改前必须先读过 | 用「精确文字匹配」替代 | **产品可用** | `packages/tools` 的 `fs_edit`（这一轮没读过的文件不让改；要改的那段必须是真看到过的那份） | 低 |
+| shell | bash / pwsh 执行器 | 有 | **产品可用** | `packages/tools/src/shell.ts`（Git Bash 优先、敏感路径闸、进程树回收） | — |
 | subprocess | 统一进程服务 | **本轮补上** | **产品可用** | `packages/subprocess`（可执行查找、托管 spawn、有界输出、环境清洗、进程范围；**长驻服务**走 `spawnManagedStream`）；lsp / mcp / ptc / terminal / voice-piper 五处起进程都收口到它；**Windows 上是 taskkill 收树，不是 Job Object** | — |
-| spill | 超长工具结果落盘 + 定位符 | **本轮补上** | **已有** | `packages/spill`（原文落到模型看不见的地方，模型用 `spill_read` 取回） | — |
+| spill | 超长工具结果落盘 + 定位符 | **本轮补上** | **产品可用** | `packages/spill`（原文落到模型看不见的地方，模型用 `spill_read` 取回） | — |
 | sandbox | read-only / workspace-write / 全权三档 + 提权 | **本轮补上** | **部分** | `packages/sandbox`（POSIX 走 bubblewrap 内核级隔离；**Windows 只有围栏**：清环境 + 限定工作目录 + 拦越界写目标，强度写在 `Confinement.kernelLevel` 上） | — |
-| terminal | 持久 PTY | 没有 | **已有** | `packages/terminal`（持久会话；**Windows 上是管道模式，没有真 PTY**） | 中 |
+| terminal | 持久 PTY | 没有 | **产品可用** | `packages/terminal`（持久会话；**Windows 上是管道模式，没有真 PTY**） | 中 |
 | ssh | 远程 POSIX 一套 fs/subprocess/sandbox | 没有 | **产品可用** | `packages/ssh`（连接接口 + ssh 命令行后端；不引 ssh2 库）+ `apps/server/src/plugins/ssh.ts`（`ssh_exec` / `ssh_read` / `ssh_write` / `ssh_list`；密码走 askpass 不进 argv，凭据从 `packages/credentials` 取） | 低 |
-| lsp | 跳定义/找引用/hover | **本轮补上** | **已有** | `packages/lsp`（按扩展名选 provider、四个归一化只读操作、stdio 语言服务器与自写的 LSP 帧协议） | — |
+| lsp | 跳定义/找引用/hover | **本轮补上** | **产品可用** | `packages/lsp`（按扩展名选 provider、四个归一化只读操作、stdio 语言服务器与自写的 LSP 帧协议） | — |
 | document | Office → PDF | 没有 | **产品可用** | `packages/document`（`document_convert` 工具 + `GET /api/document/engines`；**Windows 走 Word COM**（系统自带，不引 LibreOffice），装了 LibreOffice 则走 soffice；两个都没装时工具直说该装什么） | 低 |
 | attachment | 内容寻址的附件存储 | 只有类型 | **产品可用** | `packages/attachment/storage`（内容寻址：同一份内容只占一份，id 变了内容才变）+ `GET /api/attachments/:id`（按 sha256 取回字节）+ `POST /api/attachments/lookup`（问一份内容存过没有） | 低 |
 
@@ -58,8 +58,8 @@ Web GUI），所以「对账」不是逐行比对，而是**按能力家族核�
 
 | 家族 | 上游做什么 | 我们 | 状态 | 落点 / 缺口 | 优先级 |
 |---|---|---|---|---|---|
-| web | web_search + web_fetch | **本轮补上** | **已有** | `packages/web`（搜索 + 抓取；抓取的私网/重定向/钉 IP 口径与 `read_url` 同一套） | — |
-| mcp | 连外部 MCP server，把工具接进来 | **本轮补上** | **已有** | `packages/mcp` + `apps/server/src/plugins/mcp.ts`（stdio 连接、工具名 `mcp__<server>__<tool>`） | — |
+| web | web_search + web_fetch | **本轮补上** | **产品可用** | `packages/web`（搜索 + 抓取；抓取的私网/重定向/钉 IP 口径与 `read_url` 同一套） | — |
+| mcp | 连外部 MCP server，把工具接进来 | **本轮补上** | **产品可用** | `packages/mcp` + `apps/server/src/plugins/mcp.ts`（stdio 连接、工具名 `mcp__<server>__<tool>`） | — |
 | browser-use | 浏览器自动化 | 没有 | **产品可用** | `packages/browser-use` + `apps/server/src/plugins/browser.ts`（`browser_open` / `browser_act` / `browser_read`；**走 CDP 连本机 Edge / Chrome**，不下载浏览器二进制；默认不去内网、不自动提交表单与下载） | 中 |
 | computer-use | 桌面操作 | 没有 | **产品可用** | `packages/computer-use` + `apps/server/src/plugins/computer.ts`（`computer_screenshot` / `computer_click` / `computer_type` / `computer_key` / `computer_scroll`；Windows 走系统自带 PowerShell + .NET；**点击、打字、按键要走已有的审批链**） | 低 |
 | web-search 后端 | Exa / Perplexity / DeepSeek 三选一 | **通用后端** | **部分** | `packages/web` 支持可配置的 JSON 接口与 HTML 结果页两种后端；**三家厂商的字段名没有逐个校准** | 低 |
@@ -68,32 +68,32 @@ Web GUI），所以「对账」不是逐行比对，而是**按能力家族核�
 
 | 家族 | 上游做什么 | 我们 | 状态 | 落点 / 缺口 | 优先级 |
 |---|---|---|---|---|---|
-| subagent | 委派子代理（进程内 / 跨进程 / ACP） | **本轮在做** | → 已有 | `packages/subagent` | — |
-| jobs | 后台长任务，agent 不阻塞 | **本轮补上** | **已有** | `packages/jobs` 的 `JobService`（进程内运行时；跑完经宿主回调写进会话，不让模型轮询） | — |
-| workflow | 编排脚本 + 扇出 | 没有 | **已有** | `packages/workflow`（编排脚本扇出子代理）+ `packages/ptc`（跑模型写的程序） | 低 |
-| ptc-runtime | 跑模型写的程序（宿主提供异步绑定） | **本轮补上** | **已有** | `packages/ptc`（三种跑法：函数体 / REPL / 脚本；绑定跨进程回宿主执行） | — |
-| plan | plan 模式 + 计划审批 | **本轮补上** | **已有** | `packages/jobs` 的 `PlanModeService`（按会话；待批 → 批/打回，打回后版本 +1）+ `POST /api/plans/:id/approve` | — |
-| goal | 跨重启的目标与续跑 | 没有 | **已有** | `packages/goal`（跨重启的目标 + `/goal` 命令） | 低 |
-| schedule | 一次性/每日/每周/cron 提醒 | 只有每日回顾 | **已有** | `packages/schedule`（五种触发方式 + 自写 cron 解析） | 低 |
-| group（我们的） | 群聊接力 | 上游没有对应物 | **已有** | `packages/group`（交接工具 + A-B-A 回环检测） | — |
-| skill | 技能目录 + 按需加载 + `/name` | 插件自带 skill | **已有** | `packages/skill`（目录发现 + 按需加载；模型只拿目录，正文按名字取） | — |
+| subagent | 委派子代理（进程内 / 跨进程 / ACP） | **本轮在做** | **产品可用** | `packages/subagent` | — |
+| jobs | 后台长任务，agent 不阻塞 | **本轮补上** | **产品可用** | `packages/jobs` 的 `JobService`（进程内运行时；跑完经宿主回调写进会话，不让模型轮询） | — |
+| workflow | 编排脚本 + 扇出 | 没有 | **产品可用** | `packages/workflow`（编排脚本扇出子代理）+ `packages/ptc`（跑模型写的程序） | 低 |
+| ptc-runtime | 跑模型写的程序（宿主提供异步绑定） | **本轮补上** | **产品可用** | `packages/ptc`（三种跑法：函数体 / REPL / 脚本；绑定跨进程回宿主执行） | — |
+| plan | plan 模式 + 计划审批 | **本轮补上** | **产品可用** | `packages/jobs` 的 `PlanModeService`（按会话；待批 → 批/打回，打回后版本 +1）+ `POST /api/plans/:id/approve` | — |
+| goal | 跨重启的目标与续跑 | 没有 | **产品可用** | `packages/goal`（跨重启的目标 + `/goal` 命令） | 低 |
+| schedule | 一次性/每日/每周/cron 提醒 | 只有每日回顾 | **产品可用** | `packages/schedule`（五种触发方式 + 自写 cron 解析） | 低 |
+| group（我们的） | 群聊接力 | 上游没有对应物 | **产品可用** | `packages/group`（交接工具 + A-B-A 回环检测） | — |
+| skill | 技能目录 + 按需加载 + `/name` | 插件自带 skill | **产品可用** | `packages/skill`（目录发现 + 按需加载；模型只拿目录，正文按名字取） | — |
 
 ## 五、人机协作（上游 interaction 家族）
 
 | 家族 | 上游做什么 | 我们 | 状态 | 落点 / 缺口 | 优先级 |
 |---|---|---|---|---|---|
-| 逐条审批 | 敏感操作要人点头 | 有 | **已有** | `apps/server/src/approvals.ts` | — |
-| permission presets | 沙箱档位 + 审批策略绑成一档 | 档位 + 会话覆盖 | **已有** | `@ryharness/agent` 的 `PERMISSION_PRESETS` + `packages/sandbox` 的模式换算 + `POST /api/sandbox/conversations/:id`（会话级覆盖，撤掉就回档位） | — |
-| commands | 斜杠命令 | 没有 | **已有** | `packages/commands`（斜杠命令注册表 + 解析执行；人敲命令不花模型一轮） | 中 |
-| ask-user | 结构化提问 | 有 | **已有** | `apps/server/src/plugins/ask-user.ts` | — |
+| 逐条审批 | 敏感操作要人点头 | 有 | **产品可用** | `apps/server/src/approvals.ts` | — |
+| permission presets | 沙箱档位 + 审批策略绑成一档 | 档位 + 会话覆盖 | **产品可用** | `@ryharness/agent` 的 `PERMISSION_PRESETS` + `packages/sandbox` 的模式换算 + `POST /api/sandbox/conversations/:id`（会话级覆盖，撤掉就回档位） | — |
+| commands | 斜杠命令 | 没有 | **产品可用** | `packages/commands`（斜杠命令注册表 + 解析执行；人敲命令不花模型一轮） | 中 |
+| ask-user | 结构化提问 | 有 | **产品可用** | `apps/server/src/plugins/ask-user.ts` | — |
 
 ## 六、扩展与协议（上游 extensions / preset / bundle / api / typert / sdk / acp 家族）
 
 | 家族 | 上游做什么 | 我们 | 状态 | 落点 / 缺口 | 优先级 |
 |---|---|---|---|---|---|
-| extensions | 模型自己查运行时 API、挂载插件 | 只有用户手动开关 | **已有** | `packages/extensions`（运行时能力目录：助理能查这个运行时有什么；**不提供让模型自己挂插件的口子**） | 低 |
-| preset | 用 cordis.yml 组合能力 | 我们的人格模板不是能力组合 | **已有** | `packages/preset`（助理能力预设：选中即定一版，旧版留着能回看） | 低 |
-| bundle | `--profile` 分层装配 | 没有 | **已有** | `packages/bundle`（分层装配：后一层盖前一层，被覆盖的记下来） | 低 |
+| extensions | 模型自己查运行时 API、挂载插件 | 只有用户手动开关 | **产品可用** | `packages/extensions`（运行时能力目录：助理能查这个运行时有什么；**不提供让模型自己挂插件的口子**） | 低 |
+| preset | 用 cordis.yml 组合能力 | 我们的人格模板不是能力组合 | **产品可用** | `packages/preset`（助理能力预设：选中即定一版，旧版留着能回看） | 低 |
+| bundle | `--profile` 分层装配 | 没有 | **产品可用** | `packages/bundle`（分层装配：后一层盖前一层，被覆盖的记下来） | 低 |
 | typert | 类型图 + 网关 + 生成的客户端 | 只有协议类型 | **产品可用** | `packages/typert/gateway`（类型图 + 网关 + 生成的客户端）——经 `packages/api` 的 Remote 层被 `apps/server/src/rpc/endpoint.ts` 挂到 stdio 端点上 | 低 |
 | api | Remote 层（Client 调 Host） | 没有 | **产品可用** | `packages/api`（Remote 层：Client 调 Host）+ `apps/server/src/rpc/service.ts`（`ryharness.listConversations` / `listMessages` / `listTools` / `recallMemory` / `writeSetting`） | 低 |
 | sdk | 进程外 JSON-RPC | 没有 | **产品可用** | `packages/sdk`（`RyHarnessClient`：起一个 `--rpc` 子进程，一行连上、一行调用）+ `GET /api/rpc/selfcheck`（服务端用 SDK 连自己，验证这条链路真的通） | 低 |
@@ -103,14 +103,14 @@ Web GUI），所以「对账」不是逐行比对，而是**按能力家族核�
 
 | 家族 | 上游做什么 | 我们 | 状态 | 落点 / 缺口 | 优先级 |
 |---|---|---|---|---|---|
-| session-query | 统一查询 + 关系追踪 + 血缘 + 导出 | 只有 FTS5 搜索 | **已有** | `packages/session-query`（统一查询 + 关系追踪 + 血缘 + 导出 ZIP；搜出来的与模型看到的是同一份） | 中 |
-| settings | 插件配置表单 | 没有 | **已有** | `packages/settings`（schema 推出的表单 + 版本化编辑 + 改完热生效） | 中 |
-| credentials | 凭据引用 + 需人授权的取号流 | 明文 api-keys.json | **已有** | `packages/credentials`（只存引用 + 要人点头的取号流 + 审计） | 低 |
+| session-query | 统一查询 + 关系追踪 + 血缘 + 导出 | 只有 FTS5 搜索 | **产品可用** | `packages/session-query`（统一查询 + 关系追踪 + 血缘 + 导出 ZIP；搜出来的与模型看到的是同一份） | 中 |
+| settings | 插件配置表单 | 没有 | **产品可用** | `packages/settings`（schema 推出的表单 + 版本化编辑 + 改完热生效） | 中 |
+| credentials | 凭据引用 + 需人授权的取号流 | 明文 api-keys.json | **产品可用** | `packages/credentials`（只存引用 + 要人点头的取号流 + 审计） | 低 |
 | storage | 非会话数据中枢 | 没有 | **产品可用** | `packages/storage`（非会话数据中枢：JSON 与 SQLite 两种后端 + 带校验的领域类型 + 键值表视图）+ `packages/settings` 的 `StorageSettingsStore`（**插件配置落进统一后端**，老文件自动搬过来） | 低 |
 | workspace | 项目分组 | 只有工作区目录 | **产品可用** | `packages/workspace` + `apps/server/src/routes/workspaces.ts`（`GET/POST /api/workspaces` + `PATCH /api/conversations/:id/workspace`；**会话归的工作区决定工具读写文件的边界**） | 低 |
-| feedback | 人工反馈 | 有 | **已有** | `POST /api/feedback` | — |
-| telemetry | OTel 通道 | 自有遥测 | **已有** | 本地环形缓冲 + `packages/otel` 的 OTLP/HTTP 导出（配了 `config/telemetry.json` 就往外送） | 低 |
-| identity | 匿名安装 id | 没有 | **已有** | `packages/identity`（匿名安装 id，不含任何个人信息） | 低 |
+| feedback | 人工反馈 | 有 | **产品可用** | `POST /api/feedback` | — |
+| telemetry | OTel 通道 | 自有遥测 | **产品可用** | 本地环形缓冲 + `packages/otel` 的 OTLP/HTTP 导出（配了 `config/telemetry.json` 就往外送） | 低 |
+| identity | 匿名安装 id | 没有 | **产品可用** | `packages/identity`（匿名安装 id，不含任何个人信息） | 低 |
 
 ## 八、我们自己的、上游没有的
 

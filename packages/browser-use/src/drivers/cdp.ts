@@ -343,14 +343,38 @@ export class CdpBrowser {
         // 进程已经退了。
       }
     }
+    // **等进程真的退了再删目录**：Windows 上浏览器还在收尾时，它的工作目录句柄
+    // 挂着，这时候 rmSync 会报 EPERM——目录删不掉，就会在系统临时目录里攒下
+    // 一堆几 MB 的浏览器配置目录（跑一轮测试能攒几十个）。
+    await waitForExit(this.#process, 3_000)
     if (this.#ownsUserDataDir) {
       try {
-        rmSync(this.#userDataDir, { recursive: true, force: true })
+        rmSync(this.#userDataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
       } catch {
-        // 临时目录删不掉就留着；它落在系统临时目录里，下次开机自己会清。
+        // 删不掉就留着；它落在系统临时目录里，下次开机自己会清。
       }
     }
   }
+}
+
+/**
+ * 等一个子进程退出。
+ *
+ * **退出码不参与判断**：浏览器被 kill 时退出码非零，那是「按要求退的」，不是失败。
+ * @param child - 子进程。
+ * @param timeoutMs - 等多久。
+ */
+async function waitForExit(child: ChildProcess, timeoutMs: number): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(() => {
+      resolve()
+    }, timeoutMs)
+    child.once('close', () => {
+      clearTimeout(timer)
+      resolve()
+    })
+  })
 }
 
 /**
