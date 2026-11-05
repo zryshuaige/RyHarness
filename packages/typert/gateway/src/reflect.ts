@@ -238,11 +238,32 @@ export function isAsyncFunction(fn: (...args: never[]) => unknown): boolean {
 
 /**
  * 从实例上取出一个方法。
+ *
+ * **返回原函数，不绑定**：反射要读函数的源码（`reflectParameters` 靠
+ * `Function.prototype.toString()` 读参数名与可选性），而 `fn.bind(service)`
+ * 出来的是 `function () { [native code] }`——参数列表没了。
+ *
+ * **调用时自己绑**：调用方要 `fn.apply(service, args)`，否则 `this` 是
+ * undefined，方法读自己的私有字段（`this.#store`）就会报
+ * 「Cannot read from private field」。
  * @param service - 本地对象实例。
  * @param method - 方法名。
  * @returns 方法函数；不是函数时是 undefined。
  */
 export function readMethod(service: object, method: string): ((...args: unknown[]) => unknown) | undefined {
   const value: unknown = Reflect.get(service, method)
-  return isCallable(value) ? value : undefined
+  return isCallable(value) ? (value as (...args: unknown[]) => unknown) : undefined
+}
+
+/**
+ * 调一个本地方法：`this` 绑到实例。
+ *
+ * 与 {@link readMethod} 配对用：那边拿到的裸函数只能这么调。
+ * @param service - 本地对象实例。
+ * @param fn - 方法函数。
+ * @param args - 位置参数。
+ * @returns 方法的返回值。
+ */
+export function callMethod(service: object, fn: (...args: unknown[]) => unknown, args: readonly unknown[]): unknown {
+  return fn.apply(service, [...args])
 }

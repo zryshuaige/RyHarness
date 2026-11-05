@@ -19,3 +19,10 @@ export {
 export type { SdkClientOptions, SdkExit, SdkRequestOptions } from './client.ts'
 export { SdkClient } from './client.ts'
 export { processExitFailure, spawnFailedFailure } from './errors.ts'
+export type {
+  RyHarnessClientOptions,
+  RyHarnessConversation,
+  RyHarnessMessage,
+  RyHarnessTool,
+} from './ryharness.ts'
+export { RyHarnessClient } from './ryharness.ts'

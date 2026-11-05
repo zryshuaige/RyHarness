@@ -8,7 +8,7 @@
 
 import { badRequest, internalFailure, isGatewayError } from './errors.ts'
 import { buildTypeGraphBundle, type TypeGraphBundle } from './graph.ts'
-import { readMethod } from './reflect.ts'
+import { callMethod, readMethod } from './reflect.ts'
 import type { RemoteBinding, TypeGraph } from './types.ts'
 
 /** 登记表的构造选项。 */
@@ -82,7 +82,7 @@ export class RemoteRegistry {
     }
     const callArgs = this.withSignal(args, params, options.signal)
     try {
-      return await fn(...callArgs)
+      return await callMethod(mounted.service, fn, callArgs)
     } catch (error) {
       if (isGatewayError(error)) throw error
       throw internalFailure(error instanceof Error ? error.message : String(error), error)

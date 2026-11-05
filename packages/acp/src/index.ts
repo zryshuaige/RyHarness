@@ -49,3 +49,5 @@ export type {
   AcpPromptResult,
 } from './protocol.ts'
 export { ACP_METHODS, ACP_PROTOCOL_VERSION } from './protocol.ts'
+export type { AcpAgentHandlers, AcpAgentServerOptions } from './server.ts'
+export { AcpAgentServer } from './server.ts'
