@@ -176,6 +176,70 @@ export interface ComputerSessionView {
   readonly createdAt: number
 }
 
+/** 工具执行上下文。 */
+export interface ComputerToolContext {
+  /** 调用方的会话归属者；不给就用工具选项里的默认值。 */
+  readonly owner?: string
+  /** 调用方的取消信号。 */
+  readonly signal?: AbortSignal
+}
+
+/**
+ * 工具需要的会话能力（只要这三个方法）。
+ *
+ * 工具只用到「开一个会话、做一件事、截一次图」，所以它依赖的是**这三个方法**
+ * 而不是整个 {@link ComputerSessionService}。这样宿主可以拿自己的实现顶上，
+ * 测试也能塞一个专门失败的替身。
+ */
+export interface ComputerToolSession {
+  /**
+   * 开一个会话。
+   * @param owner - 会话归属者。
+   * @returns 建好的会话。
+   */
+  open(owner: ComputerOwner): Promise<ComputerSessionView>
+  /**
+   * 做一次动作。
+   * @param owner - 会话归属者。
+   * @param sessionId - 会话 id。
+   * @param action - 动作请求。
+   */
+  act(owner: ComputerOwner, sessionId: string, action: ComputerAction): Promise<void>
+  /**
+   * 截当前屏幕。
+   * @param owner - 会话归属者。
+   * @param sessionId - 会话 id。
+   * @returns 截图。
+   */
+  screenshot(owner: ComputerOwner, sessionId: string): Promise<ComputerScreenshot>
+}
+
+/** 工具返回给模型的结果。 */
+export interface ComputerToolResult {
+  /** 文本内容。 */
+  readonly content: string
+  /** 出错时为 true。 */
+  readonly isError?: boolean
+}
+
+/**
+ * 一个桌面工具。
+ *
+ * 形状（name / description / parameters / execute）与 `@ryharness/agent` 的 `Tool`
+ * 兼容，宿主可以直接注册进自己的工具表；本包不引那个依赖，是为了能单独安装、
+ * 单独测试。
+ */
+export interface ComputerTool {
+  /** 工具名：模型按这个名字调用。 */
+  readonly name: string
+  /** 给模型看的说明。 */
+  readonly description: string
+  /** 入参的 JSON Schema。 */
+  readonly parameters: Record<string, unknown>
+  /** 执行。 */
+  execute(args: unknown, ctx: ComputerToolContext): Promise<ComputerToolResult>
+}
+
 /** 会话服务的构造参数。 */
 export interface ComputerSessionServiceOptions {
   /**
