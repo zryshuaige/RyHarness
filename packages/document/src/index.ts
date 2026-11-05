@@ -19,7 +19,7 @@
 export type { DocumentCacheEntry } from './cache.ts'
 export { DocumentPdfCache } from './cache.ts'
 export type { DetectEngineOptions, DocumentEngineInfo, DocumentEngineKind } from './converters/engine.ts'
-export { createDocumentConverter, detectDocumentEngine } from './converters/engine.ts'
+export { createDocumentConverter, detectDocumentEngine, resetDocumentEngineCache } from './converters/engine.ts'
 export type { SofficeConverterOptions } from './converters/soffice.ts'
 export { findSoffice, hasSofficeInstalled, SofficeConverter } from './converters/soffice.ts'
 export type { WordComConverterOptions } from './converters/word-com.ts'

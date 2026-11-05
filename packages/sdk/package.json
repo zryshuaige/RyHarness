@@ -1,6 +1,6 @@
 {
   "name": "@ryharness/sdk",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "type": "module",
   "license": "MIT",
   "description": "进程外 SDK：起一个子进程，用 JSON-RPC 跟它说话",

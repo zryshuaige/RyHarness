@@ -17,7 +17,7 @@ interface Recorder {
 }
 
 /** 造一个服务端与它的对端（内存传输对）。 */
-function makeServer(options: { waitsForCancel?: boolean } = {}): {
+function makeServer(options: { waitsForCancel?: boolean; promptFails?: boolean } = {}): {
   server: AcpAgentServer
   client: {
     request: (method: string, params?: unknown) => Promise<unknown>
@@ -33,6 +33,9 @@ function makeServer(options: { waitsForCancel?: boolean } = {}): {
     newSession: async () => 'session-1',
     prompt: async (_sessionId, text, signal) => {
       prompts.push(text)
+      if (options.promptFails === true) {
+        throw new Error('这一轮炸了')
+      }
       // **可被取消打断**：编辑器取消这一轮时，abort 一响就该停。
       // 不这么做的话，宿主那一侧的 promise 永远挂着，取消就只是「通知了一声」。
       //
@@ -198,6 +201,76 @@ describe('ACP 服务端', () => {
     try {
       await client.request('session/new')
       await client.request('session/close', { sessionId: 'session-1' })
+    } finally {
+      server.close()
+    }
+  })
+
+  it('prompt 缺 sessionId：回错，不假装能跑', async () => {
+    const { server, client } = makeServer()
+    try {
+      await expect(client.request('session/prompt', { prompt: { type: 'text', text: 'hi' } })).rejects.toThrow()
+    } finally {
+      server.close()
+    }
+  })
+
+  it('prompt 缺正文：回错', async () => {
+    const { server, client } = makeServer()
+    try {
+      await expect(client.request('session/prompt', { sessionId: 'session-1' })).rejects.toThrow()
+    } finally {
+      server.close()
+    }
+  })
+
+  it('prompt 缺 prompt 字段：回错', async () => {
+    const { server, client } = makeServer()
+    try {
+      await expect(client.request('session/prompt', { sessionId: 'session-1', prompt: {} })).rejects.toThrow()
+    } finally {
+      server.close()
+    }
+  })
+
+  it('close 缺 sessionId：回错', async () => {
+    const { server, client } = makeServer()
+    try {
+      await expect(client.request('session/close', {})).rejects.toThrow()
+    } finally {
+      server.close()
+    }
+  })
+
+  it('这一轮出错：推 error 事件，这一轮以 error 收尾', async () => {
+    const { server, client } = makeServer({ promptFails: true })
+    try {
+      await client.request('session/new')
+      const result = (await client.request('session/prompt', {
+        sessionId: 'session-1',
+        prompt: { type: 'text', text: 'hi' },
+      })) as { stopReason: string }
+      expect(result.stopReason).toBe('error')
+      const errors = client.notifications.filter((item) => {
+        const params = item.params as { kind?: string } | undefined
+        return item.method === 'session/update' && params?.kind === 'error'
+      })
+      expect(errors).toHaveLength(1)
+      const params = errors[0]?.params as { code?: string; message?: string }
+      expect(params.code).toBe('PROMPT_FAILED')
+      expect(params.message).toContain('这一轮炸了')
+    } finally {
+      server.close()
+    }
+  })
+
+  it('未开的会话不推事件', async () => {
+    const { server, client } = makeServer()
+    try {
+      // 直接推一个没开过的会话——不该有任何通知出去。
+      server.text('never-opened', '这段不该被发出去')
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(client.notifications.filter((item) => item.method === 'session/update')).toHaveLength(0)
     } finally {
       server.close()
     }

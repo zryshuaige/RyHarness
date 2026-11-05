@@ -8,6 +8,64 @@
 
 暂无。
 
+## [0.5.0] - 2026-11-04
+
+### Added
+
+- **浏览器自动化**（`packages/browser-use` + `browser` 插件）：助理能开网页、点元素、读正文、
+  截图。走 **CDP 连本机已装的 Edge / Chrome**，不下载浏览器二进制（Playwright 那几百 MB
+  装在包依赖里不成比例）。默认不去本机与内网地址、不自动提交表单、不自动下载文件。
+  工具：`browser_open` / `browser_act` / `browser_read`。
+- **桌面操作**（`packages/computer-use` + `computer` 插件）：助理能看屏幕、点击、打字、按键、
+  滚动。用 **Windows 自带的 PowerShell + .NET**（截图走 `CopyFromScreen`，输入走 user32 的
+  P/Invoke），不需要编译原生代码。**点击、打字、按键要走已有的审批链**——桌面上没有天然
+  边界，点错地方就点错地方。
+- **文档转换**（`packages/document` + `document` 插件）：Office 文件 → PDF。Windows 上走
+  **Word COM**（系统自带 Office 就能用），装了 LibreOffice 就走 soffice；两个都没装时工具
+  直说该装什么，不报「转换失败」。
+- **远程机器**（`packages/ssh` + `ssh` 插件）：在另一台 POSIX 机器上跑命令、读写文件、列目录。
+  用本机 ssh 客户端（不引 ssh2 原生模块）；密码走 askpass 助手、**不进 argv**，凭据从
+  `packages/credentials` 取（要人点头）。路径默认关在远端根目录里。
+- **多工作区**（`packages/workspace` + `workspaces` 路由）：会话可以归到某个项目目录，
+  **助理读写文件的边界跟着走**。`GET/POST /api/workspaces` + `PATCH
+  /api/conversations/:id/workspace`；「我的」页能看见工作区清单、能打开目录、能复制路径。
+- **进程外 RPC 入口**（`apps/server/src/rpc/`）：外部程序把本进程当子进程拉起来
+  （`ryharness --rpc`），往 stdin 写 JSON-RPC 帧就能调这个应用——列会话、读消息、列工具、
+  召回记忆、写设置。`packages/sdk` 的 `RyHarnessClient` 让这件事变成「一行连上、一行调用」。
+  **stdout 只跑协议帧**，日志一律走 stderr。
+- **ACP 服务端侧**（`packages/acp`）：编辑器（VS Code / Zed 这类支持 ACP 的）可以把
+  RyHarness 当 agent 驱动——握手、开会话、发消息、取消。`ryharness --acp` 开在同一条
+  stdio 上。
+- **第七道门禁：死代码扫描**（`scripts/verify-no-dead-code.mjs`）：从产品入口（桌面主进程 /
+  渲染层 / 服务端）出发算可达性，**不可达的包与源码文件直接让 CI 变红**；声明了却一次都
+  没 import 的依赖同样变红；没人引用的值导出只报警不拦。
+
+### Changed
+
+- **子进程收口到一处**（`packages/subprocess`）：lsp / mcp / ptc / terminal / voice-piper
+  五处起进程都走同一套——环境清洗（模型服务的 key 不进子进程）、输出有界、进程树收得
+  干净（Windows 走 `taskkill /T /F`）、服务下线时统一收。新增 `spawnManagedStream` 给
+  **长驻服务**用（它们要自己管协议流，`ManagedProcess` 那套「跑完拿结果」装不下）。
+- **插件配置落进统一后端**（`packages/storage` + `packages/settings`）：配置不再单独占一个
+  JSON 文件，而是与应用里其它非会话数据住在同一套后端里（同一份备份、同一个目录、同一种
+  损坏处理）。老版本的那份**自动搬过来**，搬完改名留底（不删）。
+- **附件按内容寻址**（`packages/attachment/storage`）：上传的字节按 sha256 存一份，同一份
+  内容传两次只占一份空间。`GET /api/attachments/:id` 按 id 取回字节，`POST
+  /api/attachments/lookup` 问一份内容存过没有。
+- **对账表状态改成三档**（`docs/dsh-parity.md`）：「已有」拆成**产品可用**（界面能用、模型
+  调得到、代码从产品入口可达）与**部分**。上一轮把 12 个建好却触发不到的包标成「已有」，
+  这轮它们全部接进产品，状态才配得上「产品可用」。
+
+### Fixed
+
+- **文档转换不再每次启动都开一堆 Word 窗口**：探测「本机装没装 Word」原来会创建一个
+  COM 对象却不释放，宿主每起一个实例就漏一个 `WINWORD.EXE`（一轮测试能漏几十个，用户桌面
+  上开出一堆 Word 窗口，还会往临时目录写 10GB 诊断日志）。现在探测只查注册表、不起进程，
+  转换用的那个 Word 实例也会按 pid 精确回收。
+- **远程调用不再丢 `this`**（`packages/typert/gateway`）：从实例上读方法后没有绑定实例，
+  方法读自己的私有字段时会报「Cannot read from private field」。反射读参数签名要靠函数
+  源码，所以不能直接 `bind`——改成调用时再绑。
+
 ## [0.4.0] - 2026-11-01
 
 ### Added

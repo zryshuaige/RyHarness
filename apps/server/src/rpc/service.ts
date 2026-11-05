@@ -51,7 +51,8 @@ export interface RemoteMessageView {
  * @param blocks - 内容块数组。
  * @returns 正文（可能为空串）。
  */
-function textOf(blocks: readonly unknown[]): string {
+function textOf(blocks: readonly unknown[] | undefined): string {
+  if (!Array.isArray(blocks)) return ''
   const parts: string[] = []
   for (const raw of blocks) {
     if (typeof raw !== 'object' || raw === null) continue
@@ -128,8 +129,7 @@ export class RyHarnessRemoteService {
         content: textOf(message.contentBlocks),
         createdAt: message.createdAt,
       }
-    })
-  }
+    })  }
 
   /**
    * 列出当前注册着的工具。

@@ -3,55 +3,64 @@
  *
  * 这一族盯的是「工具给模型的说法」：参数缺了要说清缺哪个，失败要回错误而不是
  * 抛异常，截图太大就不内联（把几兆字节塞进上下文是帮倒忙）。
+ *
+ * 这里的会话能力是**替身**：桌面驱动要真的开窗口、真的点，不适合放在单测里；
+ * 驱动本身另有真机用例（`windows.test.ts`）。
  */
 import { describe, expect, it } from 'vitest'
 import {
   type ComputerAction,
   type ComputerScreenshot,
-  ComputerSessionService,
   type ComputerToolSession,
+  ComputerUseError,
   createComputerTools,
 } from '../src/index.ts'
 
-/** 一个只记动作的假驱动。 */
-class RecordingDriver {
-  readonly name = 'recording'
-  readonly actions: ComputerAction[] = []
-  async screenshot(): Promise<ComputerScreenshot> {
-    return { bytes: Buffer.from('fake-png'), mimeType: 'image/png', width: 100, height: 100 }
-  }
-  async click(): Promise<void> {}
-  async type(): Promise<void> {}
-  async key(): Promise<void> {}
-  async move(): Promise<void> {}
-  async scroll(): Promise<void> {}
-  async close(): Promise<void> {}
+/** 记下收到过什么动作的替身。 */
+interface Recorder {
+  readonly session: ComputerToolSession
+  readonly actions: ComputerAction[]
+  readonly screenshots: number
 }
 
-/** 建一个带假驱动的会话能力。 */
-function makeSession(): { session: ComputerToolSession; actions: ComputerAction[] } {
+/**
+ * 造一个会话替身。
+ * @param options - 截图大小（字节）与失败方式。
+ * @returns 替身与记录。
+ */
+function makeSession(options: { shotBytes?: number; failWith?: Error } = {}): Recorder {
   const actions: ComputerAction[] = []
-  const driver = new RecordingDriver()
-  const original = driver.actions
-  const service = new ComputerSessionService({
-    driverFactory: () => driver,
-    // 高危动作不拦：这个文件测的是工具层，不是审批。
-    policy: { requireApproval: false, allowScreenshot: true },
-    approver: async (request) => {
-      actions.push({ kind: request.kind })
-      return true
-    },
-  })
+  let screenshots = 0
   const session: ComputerToolSession = {
-    open: (owner) => service.open(owner),
-    act: (owner, sessionId, action) => {
+    open: async () => ({
+      id: 'session-1',
+      owner: 'agent-1',
+      driver: 'fake',
+      createdAt: 0,
+    }),
+    act: async (_owner, _sessionId, action) => {
+      if (options.failWith !== undefined) throw options.failWith
       actions.push(action)
-      return service.act(owner, sessionId, action)
     },
-    screenshot: (owner, sessionId) => service.screenshot(owner, sessionId),
+    screenshot: async () => {
+      screenshots += 1
+      if (options.failWith !== undefined) throw options.failWith
+      const size = options.shotBytes ?? 8
+      return {
+        bytes: new Uint8Array(size),
+        mimeType: 'image/png',
+        width: 800,
+        height: 600,
+      } satisfies ComputerScreenshot
+    },
   }
-  void original
-  return { session, actions }
+  return {
+    session,
+    actions,
+    get screenshots() {
+      return screenshots
+    },
+  }
 }
 
 describe('桌面工具', () => {
@@ -71,41 +80,104 @@ describe('桌面工具', () => {
     }
   })
 
-  it('点击要把坐标传给会话，并带上 owner', async () => {
-    const { session } = makeSession()
-    const tool = createComputerTools(session).find((item) => item.name === 'computer_click')
-    const view = await session.open('agent-1')
-    const result = await tool?.execute({ sessionId: view.id, x: 10, y: 20 }, { owner: 'agent-1' })
+  it('点击把坐标传给会话，并带上 owner', async () => {
+    const recorder = makeSession()
+    const tool = createComputerTools(recorder.session).find((item) => item.name === 'computer_click')
+    const result = await tool?.execute({ sessionId: 'session-1', x: 10, y: 20 }, { owner: 'agent-1' })
     expect(result?.isError).toBeUndefined()
-    expect(result?.content).toContain('(10, 20)')
+    expect(recorder.actions[0]).toEqual({ kind: 'click', x: 10, y: 20 })
+  })
+
+  it('坐标是小数时取整（像素是整数）', async () => {
+    const recorder = makeSession()
+    const tool = createComputerTools(recorder.session).find((item) => item.name === 'computer_click')
+    await tool?.execute({ sessionId: 'session-1', x: 10.7, y: 20.2 }, { owner: 'agent-1' })
+    expect(recorder.actions[0]).toEqual({ kind: 'click', x: 10, y: 20 })
   })
 
   it('缺 sessionId 要回错误，不是抛异常', async () => {
-    const { session } = makeSession()
-    const tool = createComputerTools(session).find((item) => item.name === 'computer_click')
+    const recorder = makeSession()
+    const tool = createComputerTools(recorder.session).find((item) => item.name === 'computer_click')
     const result = await tool?.execute({ x: 1, y: 2 }, { owner: 'agent-1' })
     expect(result?.isError).toBe(true)
     expect(result?.content).toContain('sessionId')
   })
 
-  it('截图超上限时不内联，只回一句说明', async () => {
-    const { session } = makeSession()
-    const tools = createComputerTools(session, { maxInlineScreenshotBytes: 1 })
-    const tool = tools.find((item) => item.name === 'computer_screenshot')
-    const view = await session.open('agent-1')
-    const result = await tool?.execute({ sessionId: view.id }, { owner: 'agent-1' })
+  it('缺坐标要回错误', async () => {
+    const recorder = makeSession()
+    const tool = createComputerTools(recorder.session).find((item) => item.name === 'computer_click')
+    const result = await tool?.execute({ sessionId: 'session-1' }, { owner: 'agent-1' })
+    expect(result?.isError).toBe(true)
+    expect(result?.content).toContain('x')
+  })
+
+  it('打字把正文传给会话', async () => {
+    const recorder = makeSession()
+    const tool = createComputerTools(recorder.session).find((item) => item.name === 'computer_type')
+    const result = await tool?.execute({ sessionId: 'session-1', text: '你好' }, { owner: 'agent-1' })
     expect(result?.isError).toBeUndefined()
+    expect(recorder.actions[0]).toEqual({ kind: 'type', text: '你好' })
+  })
+
+  it('打字缺正文要回错误', async () => {
+    const recorder = makeSession()
+    const tool = createComputerTools(recorder.session).find((item) => item.name === 'computer_type')
+    const result = await tool?.execute({ sessionId: 'session-1' }, { owner: 'agent-1' })
+    expect(result?.isError).toBe(true)
+    expect(result?.content).toContain('text')
+  })
+
+  it('按键把键名传给会话', async () => {
+    const recorder = makeSession()
+    const tool = createComputerTools(recorder.session).find((item) => item.name === 'computer_key')
+    const result = await tool?.execute({ sessionId: 'session-1', key: 'Enter' }, { owner: 'agent-1' })
+    expect(result?.isError).toBeUndefined()
+    expect(recorder.actions[0]).toEqual({ kind: 'key', key: 'Enter' })
+  })
+
+  it('滚动：dy 缺了要回错误，dx 缺了按 0 算', async () => {
+    const recorder = makeSession()
+    const tools = createComputerTools(recorder.session)
+    const scroll = tools.find((item) => item.name === 'computer_scroll')
+    const missing = await scroll?.execute({ sessionId: 'session-1' }, { owner: 'agent-1' })
+    expect(missing?.isError).toBe(true)
+    const ok = await scroll?.execute({ sessionId: 'session-1', dy: 120 }, { owner: 'agent-1' })
+    expect(ok?.isError).toBeUndefined()
+    expect(recorder.actions[0]).toEqual({ kind: 'scroll', dx: 0, dy: 120 })
+  })
+
+  it('截图：小图内联进结果', async () => {
+    const recorder = makeSession({ shotBytes: 8 })
+    const tool = createComputerTools(recorder.session).find((item) => item.name === 'computer_screenshot')
+    const result = await tool?.execute({ sessionId: 'session-1' }, { owner: 'agent-1' })
+    const parsed = JSON.parse(result?.content ?? '{}') as { inline?: boolean; dataUrl?: string }
+    expect(parsed.inline).toBe(true)
+    expect(parsed.dataUrl).toContain('data:image/png;base64,')
+  })
+
+  it('截图超上限时不内联，只回一句说明', async () => {
+    const recorder = makeSession({ shotBytes: 64 })
+    const tools = createComputerTools(recorder.session, { maxInlineScreenshotBytes: 1 })
+    const tool = tools.find((item) => item.name === 'computer_screenshot')
+    const result = await tool?.execute({ sessionId: 'session-1' }, { owner: 'agent-1' })
     const parsed = JSON.parse(result?.content ?? '{}') as { inline?: boolean; note?: string }
     expect(parsed.inline).toBe(false)
     expect(parsed.note).toContain('超过内联上限')
   })
 
-  it('会话不属于这个 owner 时回 NO_SESSION，不泄露会话是否存在', async () => {
-    const { session } = makeSession()
-    const tool = createComputerTools(session).find((item) => item.name === 'computer_screenshot')
-    const view = await session.open('agent-1')
-    const result = await tool?.execute({ sessionId: view.id }, { owner: 'agent-2' })
+  it('会话里出的错要变成给模型看的错误结果，不是抛出去', async () => {
+    const recorder = makeSession({ failWith: new ComputerUseError('NO_SESSION', 'computer-use: 没有这个会话') })
+    const tool = createComputerTools(recorder.session).find((item) => item.name === 'computer_click')
+    const result = await tool?.execute({ sessionId: 'session-1', x: 1, y: 2 }, { owner: 'agent-1' })
     expect(result?.isError).toBe(true)
     expect(result?.content).toContain('没有这个会话')
+  })
+
+  it('不是 ComputerUseError 的异常也要变成错误结果', async () => {
+    const recorder = makeSession({ failWith: new Error('驱动崩了') })
+    const tool = createComputerTools(recorder.session).find((item) => item.name === 'computer_click')
+    const result = await tool?.execute({ sessionId: 'session-1', x: 1, y: 2 }, { owner: 'agent-1' })
+    expect(result?.isError).toBe(true)
+    expect(result?.content).toContain('驱动崩了')
   })
 })
