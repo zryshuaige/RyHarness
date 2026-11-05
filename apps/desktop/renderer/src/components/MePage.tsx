@@ -26,6 +26,22 @@ import { ProviderSettings } from './ProviderSettings.tsx'
 import { WorkspaceSection } from './WorkspaceSection.tsx'
 
 interface MeApi extends ProviderApi {
+  /**
+   * 列工作区与未归属会话数。
+   *
+   * **可选**：测试替身不必实现这一条（界面上那一块拿不到就只显示默认目录）。
+   */
+  workspaces?(): Promise<{
+    workspaces: Array<{
+      id: string
+      name: string
+      rootPath: string
+      createdAt: number
+      sessionCount: number
+      rootExists: boolean
+    }>
+    ungroupedSessionCount: number
+  }>
   listAgentMemories(agentId: string): Promise<{ agent: MemoryRow[]; shared: MemoryRow[] }>
   patchAgent(id: string, patch: Record<string, unknown>): Promise<{ agent: AgentDef }>
   workspace(): Promise<{ path: string }>

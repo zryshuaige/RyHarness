@@ -1016,6 +1016,29 @@ export class ApiClient {
     return this.request('/api/workspace')
   }
 
+  /** 列工作区（多个项目目录）与未归属会话数。 */
+  workspaces(): Promise<{
+    workspaces: Array<{
+      id: string
+      name: string
+      rootPath: string
+      createdAt: number
+      sessionCount: number
+      rootExists: boolean
+    }>
+    ungroupedSessionCount: number
+  }> {
+    return this.request('/api/workspaces')
+  }
+
+  /** 把会话归到某个工作区（workspaceId 传 null 就是摘出来）。 */
+  assignWorkspace(conversationId: string, workspaceId: string | null): Promise<{ workspaceId: string | null }> {
+    return this.request(`/api/conversations/${encodeURIComponent(conversationId)}/workspace`, {
+      method: 'PATCH',
+      body: JSON.stringify({ workspaceId }),
+    })
+  }
+
   /**
    * 一键备份整库（会话+记忆+进化，同一个 SQLite 文件）。
    *
