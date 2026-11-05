@@ -17,6 +17,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { join } from 'node:path'
 import type { Duplex } from 'node:stream'
 import type { AgentEvolutionHooks, AgentMemoryHooks } from '@ryharness/agent'
+import { ContentAddressedAttachmentStore } from '@ryharness/attachment-storage'
 import { CommandRegistry } from '@ryharness/commands'
 import { assembleContext } from '@ryharness/context'
 import { Context } from '@ryharness/cordis'
@@ -41,9 +42,11 @@ import { SandboxPolicy } from '@ryharness/sandbox'
 import { ScheduleService } from '@ryharness/schedule'
 import { SessionCoordinator, SessionStore } from '@ryharness/session'
 import { SessionQueryService } from '@ryharness/session-query'
-import { FileSettingsStore, SettingsService } from '@ryharness/settings'
+import { MigratingSettingsStore, SettingsService, StorageSettingsStore } from '@ryharness/settings'
 import { LocalSpillStore, SpillPolicy } from '@ryharness/spill'
+import { JsonBackend, StorageService } from '@ryharness/storage'
 import { ToolRegistry } from '@ryharness/tools'
+import { WorkspaceRegistry } from '@ryharness/workspace'
 import type { WebSocket as WsSocket } from 'ws'
 import { WebSocketServer } from 'ws'
 import { deliverAgentNotice } from './agent-notice.ts'
@@ -65,9 +68,12 @@ import type { WsEvent } from './events.ts'
 import { readServerVersion, readTelemetryConfig } from './otel-config.ts'
 import { ASK_USER_PLUGIN_ID, askUserPlugin } from './plugins/ask-user.ts'
 import { QuestionStore, renderQuestionContext } from './plugins/ask-user-store.ts'
+import { browserPlugin } from './plugins/browser.ts'
 import { commandsPlugin } from './plugins/commands.ts'
+import { computerPlugin } from './plugins/computer.ts'
 import { coreToolsPlugin } from './plugins/core-tools.ts'
 import { credentialsPlugin } from './plugins/credentials.ts'
+import { documentPlugin } from './plugins/document.ts'
 import { extensionsPlugin } from './plugins/extensions.ts'
 import { goalPlugin } from './plugins/goal.ts'
 import { grillMePlugin } from './plugins/grill-me.ts'
@@ -83,6 +89,7 @@ import { sessionQueryPlugin } from './plugins/session-query.ts'
 import { settingsPlugin } from './plugins/settings.ts'
 import { skillPlugin } from './plugins/skill.ts'
 import { spillPlugin } from './plugins/spill.ts'
+import { sshPlugin } from './plugins/ssh.ts'
 import { subagentPlugin } from './plugins/subagent.ts'
 import { terminalPlugin } from './plugins/terminal.ts'
 import { todoPlugin } from './plugins/todo.ts'
@@ -110,6 +117,9 @@ import { registerSettingsRoutes } from './routes/settings.ts'
 import { registerTelemetryRoutes } from './routes/telemetry.ts'
 import { registerUsageRoutes } from './routes/usage.ts'
 import { registerVibeRoutes } from './routes/vibe.ts'
+import { registerWorkspaceRoutes } from './routes/workspaces.ts'
+import { startRpcEndpoint } from './rpc/endpoint.ts'
+import { runRpcSelfCheck, serverEntryPath } from './rpc/selfcheck.ts'
 import { AGENT_TEMPLATES, ensureSeedAgents, migrateBuiltinTools, migrateBuiltinVoice } from './seed.ts'
 import { DEFAULT_TELEMETRY_CAPACITY, Telemetry } from './telemetry.ts'
 import { TurnEngine } from './turn-engine.ts'
@@ -272,6 +282,13 @@ export interface ServerOptions {
    * `true`/省略 = 按 <dataDir>/proactive.json 的设置（默认开）。
    */
   proactive?: boolean
+  /**
+   * 进程外入口模式：`'rpc'` 给程序调，`'acp'` 给编辑器用，`undefined` = 不开。
+   *
+   * 开了之后服务端在**同一条 stdio** 上应答协议帧（stdout 只跑协议，日志走
+   * stderr）。这是外部程序与这个应用对话的唯一入口。
+   */
+  rpcMode?: 'rpc' | 'acp'
   /**
    * 主动消息的检查间隔毫秒；0 = 不起定时器（只保留启动那一次），省略 = 默认 30 分钟。
    * 测试用小值把每日检查拉成毫秒级。
@@ -482,6 +499,21 @@ export interface RyHarnessServerOptions {
   readonly turnEngine: TurnEngine
   /** 沙箱策略：会话级权限覆盖（轮次引擎与沙箱路由共用同一份）。 */
   readonly sandboxPolicy: SandboxPolicy
+  /**
+   * 工作区注册表：有哪些项目目录、每个会话归到哪儿。
+   *
+   * 与会话行上的 `workspace_id` 是同一件事的两处记录，改动时一起写
+   * （见 `routes/workspaces.ts`）。
+   */
+  readonly workspaceRegistry: WorkspaceRegistry
+  /**
+   * 内容寻址的附件存储：上传的字节按 sha256 存一份，同一份内容只占一份空间。
+   *
+   * 工作区里那份**照旧留着**（助理按文件名读它），这里是多出来的一份可去重副本。
+   */
+  readonly attachmentStore: ContentAddressedAttachmentStore
+  /** 进程外端点的关闭函数（rpc / acp 模式才有）。 */
+  readonly closeRpcEndpoint: (() => Promise<void>) | undefined
   /** 能力预设：给助理定一版「能用什么」（助理路由用它）。 */
   readonly presetRegistry: PresetRegistry
 }
@@ -514,6 +546,21 @@ export class RyHarnessServer {
   readonly turnEngine: TurnEngine
   /** 沙箱策略：会话级权限覆盖（沙箱路由与轮次引擎共用这一份）。 */
   readonly sandboxPolicy: SandboxPolicy
+  /**
+   * 工作区注册表：有哪些项目目录、每个会话归到哪儿。
+   *
+   * 与会话行上的 `workspace_id` 是同一件事的两处记录，改动时一起写
+   * （见 `routes/workspaces.ts`）。
+   */
+  readonly workspaceRegistry: WorkspaceRegistry
+  /**
+   * 内容寻址的附件存储：上传的字节按 sha256 存一份，同一份内容只占一份空间。
+   *
+   * 工作区里那份**照旧留着**（助理按文件名读它），这里是多出来的一份可去重副本。
+   */
+  readonly attachmentStore: ContentAddressedAttachmentStore
+  /** 进程外端点的关闭函数（rpc / acp 模式才有）。 */
+  readonly closeRpcEndpoint: (() => Promise<void>) | undefined
   /** 能力预设注册表（助理路由与设置页共用这一份）。 */
   readonly presetRegistry: PresetRegistry
 
@@ -543,6 +590,9 @@ export class RyHarnessServer {
     this.hub = options.hub
     this.dataDir = options.dataDir
     this.workspaceRoot = options.workspaceRoot
+    this.workspaceRegistry = options.workspaceRegistry
+    this.attachmentStore = options.attachmentStore
+    this.closeRpcEndpoint = options.closeRpcEndpoint
     this.providers = options.providers
     this.llm = options.llm
     this.tools = options.tools
@@ -738,6 +788,25 @@ export class RyHarnessServer {
      */
     const sandboxPolicy = new SandboxPolicy({ workspaceRoot })
     /**
+     * 工作区注册表：有哪些项目目录、每个会话归到哪儿。
+     *
+     * 落盘在 `config/workspaces.json`。**允许的根范围不给**——用户能加任何
+     * 存在的目录作为工作区（那本来就是他自己的机器），但文件系统根（`C:\`）
+     * 仍然拒绝：把它当工作区等于把整台机器交给助理。
+     */
+    const workspaceRegistry = new WorkspaceRegistry({
+      storePath: join(dataDir, 'config', 'workspaces.json'),
+    })
+    /**
+     * 内容寻址的附件存储：上传的字节按 sha256 存一份，同一份内容只占一份空间。
+     *
+     * 落在 `storage/attachments/`（统一后端那个目录旁边的专用目录——附件的字节
+     * 很大且要按 id 直取，不适合摊进通用记录模型）。
+     */
+    const attachmentStore = new ContentAddressedAttachmentStore({
+      root: join(dataDir, 'storage', 'attachments'),
+    })
+    /**
      * 斜杠命令注册表：组合根持有一份，插件与别的插件往同一张表里登记。
      *
      * 为什么在组合根而不是插件里 new：命令是**应用级**的东西（别的插件也要往
@@ -767,12 +836,27 @@ export class RyHarnessServer {
      */
     const installationId = new IdentityStore({ dataDir }).ensure().id
     /**
+     * 存储服务：应用数据里**非会话数据**的统一后端。
+     *
+     * 插件配置、工作区清单、文档转换索引……这些以前各写各的文件，每种一套格式、
+     * 出问题没处统一查。现在统一落在这里（`storage/` 目录，JSON 后端，一条记录
+     * 一个文件），备份与排障只看一个地方。
+     */
+    const storageService = new StorageService({
+      backends: [new JsonBackend({ root: join(dataDir, 'storage') })],
+    })
+    /**
      * 插件配置表单服务：把插件的配置变成能填的表单，改完热生效。
      *
-     * 落盘在 `config/plugin-settings.json`（存的是**值**，不是密钥）。
+     * 落盘在统一后端里（`storage/plugin-settings/`）。老版本写在
+     * `config/plugin-settings.json` 的那份会**自动搬过来**（搬完老文件改名留底，
+     * 不删）。
      */
     const settingsService = new SettingsService({
-      store: new FileSettingsStore({ filePath: join(dataDir, 'config', 'plugin-settings.json') }),
+      store: new MigratingSettingsStore({
+        target: new StorageSettingsStore(storageService),
+        legacyFilePath: join(dataDir, 'config', 'plugin-settings.json'),
+      }),
       /**
        * 热生效：把新值写进插件自己的配置文件，再把那个插件**重挂一遍**。
        *
@@ -818,6 +902,13 @@ export class RyHarnessServer {
      * 建好的索引扔掉。
      */
     const sessionQueryService = new SessionQueryService({ store })
+    // hub 与审批桥先于其它服务建：提醒投递与桌面操作都要用它们。
+    // 通知出口用一个可变量而不是直接引用后面的 `hub`：直接引用会在「插件清单」
+    // 这一行就把一个还没初始化的常量捕获进去，排查时看到的是 undefined 而不是
+    // 「还没建好」。
+    const hub = new EventHub()
+    const approvals = new ApprovalBroker(hub)
+    let noticeHub: EventHub | undefined = hub
     /**
      * 目标与提醒服务：都是**跨重启**的东西，存储路径是应用级的事。
      *
@@ -872,7 +963,6 @@ export class RyHarnessServer {
      * 用一个可变量而不是直接引用后面的 `hub`：直接引用会在「插件清单」这一行就把
      * 一个还没初始化的常量捕获进去，排查时看到的是 undefined 而不是「还没建好」。
      */
-    let noticeHub: EventHub | undefined
     let adoptOpenAi: ((handle: AdapterRegistrationHandle, config: OpenAiAdapterConfig) => void) | undefined
     if (options.mountLlm === undefined) {
       const openAiConfig: OpenAiPluginConfig = toAdapterConfig(providers)
@@ -915,6 +1005,14 @@ export class RyHarnessServer {
       webReadPlugin(),
       // 搜索与抓网页：搜索要配后端（config/web.json），抓网页开箱可用。
       webPlugin({ dataDir }),
+      // 浏览器自动化：用本机已装的 Edge / Chrome（CDP，不下载浏览器二进制）。
+      browserPlugin({ dataDir }),
+      // 桌面操作：Windows 自带的 PowerShell + .NET；高危动作走已有的审批链。
+      computerPlugin({ dataDir, approvals }),
+      // 文档转换：Windows 上用 Word COM，装了 LibreOffice 就用 soffice。
+      documentPlugin({ dataDir, workspaceRoot }),
+      // 远程机器：本机的 ssh 客户端；密码与私钥走凭据注册表。
+      sshPlugin({ dataDir, credentials: credentialRegistry }),
       // 代码导航：语言服务器要用户自己装并配（config/lsp.json），没配时工具直说。
       lspPlugin({ dataDir, workspaceRoot }),
       spillPlugin({
@@ -1115,11 +1213,6 @@ export class RyHarnessServer {
     }
     // 记忆钩子套一层计时：召回耗时/条数是首 token 路径上最值得盯的一段。
     const coordinatorMemory = memoryOption === undefined ? undefined : timedMemoryHooks(memoryOption, telemetry)
-    // hub 与审批桥先于协调器建：协调器的 approver 挂点要用它发 approval-request。
-    const hub = new EventHub()
-    // 通知出口这时才算真的通：后台任务与计划的回调要往会话里写消息。
-    noticeHub = hub
-    const approvals = new ApprovalBroker(hub)
     const coordinator = new SessionCoordinator({
       store,
       llm: ctx.llm,
@@ -1258,12 +1351,22 @@ export class RyHarnessServer {
       hub,
       telemetry,
       workspaceRoot,
+      // 工具的文件边界跟着会话走：会话归了工作区就用那个工作区的根目录。
+      resolveWorkspaceRoot: (conversationId) => {
+        const workspaceId = store.getConversation(conversationId)?.workspaceId
+        if (workspaceId === undefined) return workspaceRoot
+        const workspace = workspaceRegistry.get(workspaceId)
+        // 工作区被删了或根目录没了：退回默认根目录，不把边界放开到整台机器。
+        if (workspace === undefined || !existsSync(workspace.rootPath)) return workspaceRoot
+        return workspace.rootPath
+      },
       vibeStore,
       ...(memoryService === undefined ? {} : { memory: memoryService }),
       questionStore,
       approvals,
       sandboxPolicy,
     })
+    let closeRpcEndpoint: (() => Promise<void>) | undefined
     const server = new RyHarnessServer({
       store,
       presetRegistry,
@@ -1289,6 +1392,9 @@ export class RyHarnessServer {
       approvals,
       turnEngine,
       sandboxPolicy,
+      workspaceRegistry,
+      attachmentStore,
+      closeRpcEndpoint,
       tools: ctx.tools,
       routes: ctx.routes,
       plugins: pluginHost,
@@ -1296,6 +1402,29 @@ export class RyHarnessServer {
       questionStore,
       todoStore,
     })
+    /**
+     * 进程外端点：外部程序把本进程当子进程拉起来，往 stdio 写协议帧。
+     *
+     * **stdout 只跑协议**：日志一律走 stderr（stdio.ts 的说明）。这一条是硬的。
+     */
+    if (options.rpcMode !== undefined) {
+      closeRpcEndpoint = startRpcEndpoint(
+        {
+          store,
+          listTools: () => ctx.tools.list().map((tool) => ({ name: tool.name, description: tool.description })),
+          recallMemory: async (agentId: string, query: string) => {
+            if (memoryService === undefined) return []
+            const recalled = await memoryService.recall(agentId, query)
+            return recalled === undefined ? [] : [recalled]
+          },
+          writeSetting: async (key: string, value: string) => {
+            await settingsService.update('app', { values: { [key]: value } })
+          },
+        },
+        options.rpcMode,
+      )
+    }
+
     adoptOpenAi = (handle, config) => {
       server.adoptOpenAiRegistration(handle, config)
     }
@@ -1433,6 +1562,8 @@ export class RyHarnessServer {
     if (this.heartbeat !== undefined) clearInterval(this.heartbeat)
     if (this.consolidationTimer !== undefined) clearInterval(this.consolidationTimer)
     this.proactiveDigest.close()
+    // 进程外端点先收：外面连着的那条连接不该在库里都关了之后还醒着。
+    await this.closeRpcEndpoint?.()
     const pending = this.turnEngine.pendingTurns()
     if (pending.length > 0) {
       let timer: ReturnType<typeof setTimeout> | undefined
@@ -1632,6 +1763,7 @@ export class RyHarnessServer {
     registerConversationRoutes(router, {
       store,
       workspaceRoot: this.workspaceRoot,
+      attachmentStore: this.attachmentStore,
       conversationStates: this.conversationStates,
       persistConversationStates: () => {
         this.saveConversationStates()
@@ -1702,6 +1834,21 @@ export class RyHarnessServer {
       store,
       providers: this.providers,
       conversationStates: this.conversationStates,
+    })
+
+    registerWorkspaceRoutes(router, {
+      registry: this.workspaceRegistry,
+      store,
+    })
+
+    // 进程外链路的自检：起一个自己的 --rpc 子进程，用 SDK 连上去。
+    // 这是 SDK 的真实用法——库被用上了，而不是躺在那儿。
+    router.get('/api/rpc/selfcheck', async (_req, res) => {
+      const result = await runRpcSelfCheck({
+        command: process.execPath,
+        args: [serverEntryPath(), '--rpc'],
+      })
+      json(res, 200, result)
     })
 
     registerVibeRoutes(router, {

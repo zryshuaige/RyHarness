@@ -22,12 +22,13 @@
  * @module @ryharness/server/plugins/voice-piper
  */
 
-import { execFile, spawn } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs'
 import { open, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { Context } from '@ryharness/cordis'
+import { spawnManaged } from '@ryharness/subprocess'
 import { type SpeakResult, VOICE_ERROR_CODES, VoiceError, type VoiceProfile } from '@ryharness/voice'
 import { createVoiceInstallHandlers, type VoiceInstallStatus } from '../routes/voice.ts'
 import type { PluginEntry } from './host.ts'
@@ -173,28 +174,28 @@ function psQuote(value: string): string {
   return `'${value.replaceAll("'", "''")}'`
 }
 
-/** 默认解压：只支持 Windows；别的平台在启动安装前就被挡下了。 */
-function defaultExtractZip(zipPath: string, destination: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    execFile(
-      'powershell.exe',
-      [
-        '-NoProfile',
-        '-NonInteractive',
-        '-Command',
-        `$ErrorActionPreference='Stop'; Expand-Archive -LiteralPath ${psQuote(zipPath)} -DestinationPath ${psQuote(destination)} -Force`,
-      ],
-      { windowsHide: true, timeout: 120_000 },
-      (error, _stdout, stderr) => {
-        if (error !== null) {
-          const detail = stderr.trim()
-          reject(new Error(`解压失败：${detail.length > 0 ? detail : error.message}`))
-          return
-        }
-        resolve()
-      },
-    )
+/**
+ * 默认解压：只支持 Windows；别的平台在启动安装前就被挡下了。
+ *
+ * **走 `@ryharness/subprocess`**：输出有界（解压脚本刷屏不会把宿主内存吃穿）、
+ * 环境清洗、到点自动收掉——全仓库只有那一处实现。
+ */
+async function defaultExtractZip(zipPath: string, destination: string): Promise<void> {
+  const started = spawnManaged({
+    command: 'powershell.exe',
+    args: [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      `$ErrorActionPreference='Stop'; Expand-Archive -LiteralPath ${psQuote(zipPath)} -DestinationPath ${psQuote(destination)} -Force`,
+    ],
+    timeoutMs: 120_000,
+    label: 'piper:解压',
   })
+  const result = await started.done
+  if (result.status === 'completed') return
+  const detail = result.stderr.trim()
+  throw new Error(`解压失败：${detail.length > 0 ? detail : (result.error?.message ?? '命令没成功')}`)
 }
 
 /** 递归找文件（zip 里可能是 `piper/piper.exe`，不能写死层级）。 */

@@ -18,7 +18,9 @@
     "dev": "tsx src/main.ts"
   },
   "dependencies": {
+    "@ryharness/acp": "workspace:*",
     "@ryharness/agent": "workspace:*",
+    "@ryharness/api": "workspace:*",
     "@ryharness/attachment-storage": "workspace:*",
     "@ryharness/browser-use": "workspace:*",
     "@ryharness/bundle": "workspace:*",
@@ -43,18 +45,23 @@
     "@ryharness/ptc": "workspace:*",
     "@ryharness/sandbox": "workspace:*",
     "@ryharness/schedule": "workspace:*",
+    "@ryharness/sdk": "workspace:*",
     "@ryharness/session": "workspace:*",
     "@ryharness/session-query": "workspace:*",
     "@ryharness/settings": "workspace:*",
     "@ryharness/skill": "workspace:*",
     "@ryharness/spill": "workspace:*",
     "@ryharness/ssh": "workspace:*",
+    "@ryharness/storage": "workspace:*",
     "@ryharness/subagent": "workspace:*",
+    "@ryharness/subprocess": "workspace:*",
     "@ryharness/terminal": "workspace:*",
     "@ryharness/tools": "workspace:*",
+    "@ryharness/typert-protocol": "workspace:*",
     "@ryharness/voice": "workspace:*",
     "@ryharness/web": "workspace:*",
     "@ryharness/workflow": "workspace:*",
+    "@ryharness/workspace": "workspace:*",
     "ws": "^8.18.0"
   },
   "devDependencies": {

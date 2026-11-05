@@ -8,8 +8,10 @@
  * @module @ryharness/server/routes/conversations
  */
 
+import { createHash } from 'node:crypto'
 import { createReadStream, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
 import { extname, join } from 'node:path'
+import type { ContentAddressedAttachmentStore } from '@ryharness/attachment-storage'
 import type { Conversation, SessionStore, StoredMessage } from '@ryharness/session'
 import { ARTIFACTS_DIR, guessMime, PathEscapeError, resolveTarget } from '@ryharness/tools'
 import type { ApprovalBroker } from '../approvals.ts'
@@ -41,6 +43,13 @@ export interface ConversationRoutes {
   store: SessionStore
   /** 工具读写文件的工作区根目录（产物目录在其下）。 */
   workspaceRoot: string
+  /**
+   * 内容寻址的附件存储（可选）。
+   *
+   * 给了就把上传的字节**按内容哈希**存一份：同一份文件传两次只占一份空间。
+   * 不给就只落工作区产物目录（老行为）。
+   */
+  attachmentStore?: ContentAddressedAttachmentStore
   /** 界面态覆盖表：路由就地读写，落盘交给 persistConversationStates。 */
   conversationStates: Map<string, ConversationState>
   /** 把界面态覆盖表原子落盘。 */
@@ -1021,6 +1030,12 @@ export function registerConversationRoutes(router: Router, deps: ConversationRou
    *
    * 三道闸：文件名只放行叶子名且同名不覆盖（附件目录是全会话共享的）；
    * 体积上限 20MB；base64 必须规范（非规范尾部会被 Buffer 悄悄少解字节）。
+   *
+   * **额外存一份到内容寻址存储**（给了 `attachmentStore` 时）：字节按 sha256
+   * 存，同一份文件传两次只占一份空间。回执里多给一个 `attachmentId`——
+   * 那是内容寻址的 id，可以拿它再取回字节（`GET /api/attachments/:id`）。
+   * 工作区那份**照旧留着**：助理是按文件名读它的（正文里的 `[附件] xxx`），
+   * 只存一份哈希副本的话助理就看不见附件了。
    */
   router.post('/api/conversations/:id/files', async (req, res) => {
     const conversationId = req.params.id as string
@@ -1043,6 +1058,13 @@ export function registerConversationRoutes(router: Router, deps: ConversationRou
     const name = sanitizeUploadName(rawName)
     const bytes = decodeUploadPayload(rawData)
     const mime = resolveUploadMime(record.mime, name)
+    // 内容寻址存储：同一份内容只占一份空间。这里失败**不阻断上传**——工作区那份
+    // 才是助理要读的那份，存不进去只是少了一次去重，不该让用户传不上去。
+    try {
+      deps.attachmentStore?.put({ data: bytes, mediaType: mime, name })
+    } catch {
+      // 去重存储满了或写盘失败：上传照常进行。
+    }
     const dir = artifactsDir()
     mkdirSync(dir, { recursive: true })
     const stored = uniqueArtifactName(dir, name)
@@ -1053,7 +1075,66 @@ export function registerConversationRoutes(router: Router, deps: ConversationRou
       json(res, 500, { error: `write failed: ${error instanceof Error ? error.message : String(error)}` })
       return
     }
+    // 回执**只有**这三个字段：它与产物卡片同构，渲染层那份形状靠它。内容寻址的
+    // id 不进回执——id 就是字节的 sha256，客户端自己算得出来（见 /api/attachments/lookup）。
     json(res, 200, { name: stored, size: statSync(target).size, mime })
+  })
+
+  /**
+   * 问一份内容存过没有。
+   *
+   * **id 由内容决定**（字节的 sha256），所以客户端自己算得出来，不必让服务端在
+   * 回执里回传——回执的形状要与产物卡片同构，不能为了多带一个字段就破坏它。
+   *
+   * body `{data(base64)}` → `{id, exists, bytes, mediaType?}`。`exists: false` 时
+   * `id` 照样给：客户端可以拿它去别处比对。
+   */
+  router.post('/api/attachments/lookup', async (req, res) => {
+    const store = deps.attachmentStore
+    if (store === undefined) {
+      json(res, 404, { error: 'attachment store not enabled' })
+      return
+    }
+    const body = await req.body()
+    const record = (typeof body === 'object' && body !== null ? body : {}) as Record<string, unknown>
+    const rawData = typeof record.data === 'string' ? record.data : ''
+    if (rawData.trim().length === 0) {
+      json(res, 400, { error: 'data is required' })
+      return
+    }
+    const bytes = decodeUploadPayload(rawData)
+    const id = createHash('sha256').update(bytes).digest('hex')
+    const exists = store.has(id)
+    json(res, 200, {
+      id,
+      exists,
+      bytes: bytes.byteLength,
+      ...(exists ? { mediaType: store.get(id).ref.mediaType } : {}),
+    })
+  })
+
+  /**
+   * 按内容寻址的 id 取回附件字节。
+   *
+   * id 是字节的 sha256，所以「同一个 id」一定对应同一份内容——不存在「id 对不上
+   * 内容」的情况（存储被改坏了会报 mismatch，不给旧内容）。
+   */
+  router.get('/api/attachments/:id', async (req, res) => {
+    const store = deps.attachmentStore
+    if (store === undefined) {
+      json(res, 404, { error: 'attachment store not enabled' })
+      return
+    }
+    try {
+      const found = store.get(req.params.id as string)
+      res.writeHead(200, {
+        'content-type': found.ref.mediaType,
+        'content-length': String(found.data.byteLength),
+      })
+      res.end(Buffer.from(found.data))
+    } catch (error) {
+      json(res, 404, { error: error instanceof Error ? error.message : String(error) })
+    }
   })
 
   /**

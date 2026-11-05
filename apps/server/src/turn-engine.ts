@@ -74,6 +74,16 @@ export interface TurnEngineOptions {
   readonly telemetry: Telemetry
   /** 工具读写文件的工作区根目录（RunContext.workspaceRoot）。 */
   readonly workspaceRoot: string
+  /**
+   * 按会话解析工作区根目录。
+   *
+   * **有归属的会话用它自己的根目录，没归属的用默认那个**。这是「多个工作区」
+   * 这件事的落点：同一个助理在不同项目里干活，工具读写文件的边界落在哪个目录，
+   * 取决于这个会话归到哪儿。
+   *
+   * 缺省（不给）就一律用 `workspaceRoot`——行为与之前完全一样。
+   */
+  readonly resolveWorkspaceRoot?: (conversationId: string) => string
   /** RyVibe 会话存储：runTurn 开跑置 building、收工按结局置 done/asking/failed。 */
   readonly vibeStore: VibeStore
   /** 共同交付写入共享记忆；记忆关闭时不影响交付。 */
@@ -130,6 +140,25 @@ export class TurnEngine {
   /** 各会话链条上尚未收口的 Promise（优雅停机等在途 turn 完成用）。 */
   pendingTurns(): Promise<void>[] {
     return [...this.turnChains.values()]
+  }
+
+  /**
+   * 这一轮的工作区根目录。
+   *
+   * 会话归了工作区就用那个工作区的根目录，否则用默认的。解析失败（工作区被删了、
+   * 根目录不存在）时**退回默认根目录**——报错不该让整轮对话跑不起来，但也不能
+   * 因此把边界放开到整台机器。
+   * @param conversationId - 会话 id。
+   * @returns 工作区根目录。
+   */
+  resolveWorkspaceRoot(conversationId: string): string {
+    const resolve = this.options.resolveWorkspaceRoot
+    if (resolve === undefined) return this.options.workspaceRoot
+    try {
+      return resolve(conversationId)
+    } catch {
+      return this.options.workspaceRoot
+    }
   }
 
   /**
@@ -435,7 +464,7 @@ export class TurnEngine {
      */
     const sandboxMode = this.options.sandboxPolicy?.conversationMode(conversation.id)
     const runContext: RunContext = {
-      workspaceRoot: this.options.workspaceRoot,
+      workspaceRoot: this.resolveWorkspaceRoot(conversation.id),
       signal: controller.signal,
       ...(sandboxMode === undefined ? {} : { sandboxMode }),
       onUsage: (report) => {

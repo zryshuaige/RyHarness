@@ -107,7 +107,10 @@ describe('附件上传', () => {
     })
 
     expect(status).toBe(200)
-    expect(body).toEqual({ name: 'note.md', size: 5_000, mime: 'text/markdown' })
+    // 顶层**恰好**是这三个键：渲染层那份形状靠它（附件回执与产物卡片同构，
+    // 多一个顶层字段就要改两处）。
+    expect(Object.keys(body).sort()).toEqual(['mime', 'name', 'size'])
+    expect(body).toMatchObject({ name: 'note.md', size: 5_000, mime: 'text/markdown' })
     const onDisk = readFileSync(join(artifactsDir, 'note.md'))
     expect(Buffer.compare(onDisk, Buffer.from(bytes))).toBe(0)
     expect(onDisk.byteLength).toBe(5_000)
@@ -126,6 +129,37 @@ describe('附件上传', () => {
     expect(response.status).toBe(200)
     expect(response.headers.get('content-type')).toBe('text/plain')
     expect(await response.text()).toBe('你好，世界')
+  })
+
+  it('内容寻址：同一份内容传两次，去重存储里只有一份，且能按 id 取回字节', async () => {
+    const { server } = await startServer()
+    const conversationId = await newConversation(server)
+    const data = Buffer.from('同样的内容', 'utf8').toString('base64')
+
+    await upload(server, conversationId, { name: 'a.txt', mime: 'text/plain', data })
+    await upload(server, conversationId, { name: 'b.txt', mime: 'text/plain', data })
+
+    // id 就是字节的 sha256：客户端自己算得出来，不必让服务端在回执里回传。
+    const lookup = await fetch(`${server.url}/api/attachments/lookup`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ data }),
+    })
+    expect(lookup.status).toBe(200)
+    const looked = (await lookup.json()) as { id: string; exists: boolean; bytes: number }
+    expect(looked.exists).toBe(true)
+    expect(looked.bytes).toBe(Buffer.from('同样的内容', 'utf8').byteLength)
+    expect(looked.id).toMatch(/^[0-9a-f]{64}$/)
+
+    const response = await fetch(`${server.url}/api/attachments/${looked.id}`)
+    expect(response.status).toBe(200)
+    expect(await response.text()).toBe('同样的内容')
+  })
+
+  it('按 id 取一个不存在的附件回 404', async () => {
+    const { server } = await startServer()
+    const response = await fetch(`${server.url}/api/attachments/${'0'.repeat(64)}`)
+    expect(response.status).toBe(404)
   })
 
   it('未给 mime 时按扩展名推断；mime 不是 type/subtype 也退回推断值', async () => {
