@@ -1,0 +1,37 @@
+{
+  "$comment": "死代码门禁的豁免清单。要豁免一个包或一段路径，得写清理由——没有理由的豁免等于把门禁关掉。",
+  "packages": [
+    "@ryharness/typert-protocol",
+    "@ryharness/brand",
+    "@ryharness/util-values",
+    "@ryharness/util-crypto",
+    "@ryharness/timeout",
+    "@ryharness/util-llm-json",
+    "@ryharness/attachment",
+    "@ryharness/desktop",
+    "@ryharness/cosmokit",
+    "@ryharness/schemastery"
+  ],
+  "paths": [
+    "vendor",
+    "packages/typert/protocol",
+    "packages/util",
+    "packages/attachment/types"
+  ],
+  "reasons": {
+    "@ryharness/typert-protocol": "协议层的类型与装饰器：被 gateway 与 acp 在编译期引用，产品入口到不了它（它是库不是应用的一部分）。",
+    "@ryharness/brand": "品牌类型工具：只被别的包在编译期引用。",
+    "@ryharness/util-values": "通用值工具：只被别的包在编译期引用。",
+    "@ryharness/util-crypto": "通用加密工具：只被别的包在编译期引用。",
+    "@ryharness/timeout": "通用超时工具：只被别的包在编译期引用。",
+    "@ryharness/util-llm-json": "LLM JSON 解析工具：只被别的包在编译期引用。",
+    "@ryharness/attachment": "附件类型词汇表：只被 llm 在编译期引用。",
+    "@ryharness/desktop": "桌面应用本身：它就是产品入口之一（Electron 主进程），不由别处 import。",
+    "@ryharness/cosmokit": "上游代码（vendor）：cordis 的依赖。",
+    "@ryharness/schemastery": "上游代码（vendor）：cordis 的依赖。",
+    "vendor": "上游代码（cordis / cosmokit / schemastery）：不归我们管，也不该由产品入口走到。",
+    "packages/typert/protocol": "协议层类型与装饰器：编译期依赖。",
+    "packages/util": "通用工具包：编译期依赖。",
+    "packages/attachment/types": "附件类型词汇表：编译期依赖。"
+  }
+}

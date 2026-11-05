@@ -100,9 +100,15 @@ importers:
 
   apps/server:
     dependencies:
+      '@ryharness/acp':
+        specifier: workspace:*
+        version: link:../../packages/acp
       '@ryharness/agent':
         specifier: workspace:*
         version: link:../../packages/agent
+      '@ryharness/api':
+        specifier: workspace:*
+        version: link:../../packages/api
       '@ryharness/attachment-storage':
         specifier: workspace:*
         version: link:../../packages/attachment/storage
@@ -175,6 +181,9 @@ importers:
       '@ryharness/schedule':
         specifier: workspace:*
         version: link:../../packages/schedule
+      '@ryharness/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
       '@ryharness/session':
         specifier: workspace:*
         version: link:../../packages/session
@@ -193,15 +202,24 @@ importers:
       '@ryharness/ssh':
         specifier: workspace:*
         version: link:../../packages/ssh
+      '@ryharness/storage':
+        specifier: workspace:*
+        version: link:../../packages/storage
       '@ryharness/subagent':
         specifier: workspace:*
         version: link:../../packages/subagent
+      '@ryharness/subprocess':
+        specifier: workspace:*
+        version: link:../../packages/subprocess
       '@ryharness/terminal':
         specifier: workspace:*
         version: link:../../packages/terminal
       '@ryharness/tools':
         specifier: workspace:*
         version: link:../../packages/tools
+      '@ryharness/typert-protocol':
+        specifier: workspace:*
+        version: link:../../packages/typert/protocol
       '@ryharness/voice':
         specifier: workspace:*
         version: link:../../packages/voice
@@ -211,6 +229,9 @@ importers:
       '@ryharness/workflow':
         specifier: workspace:*
         version: link:../../packages/workflow
+      '@ryharness/workspace':
+        specifier: workspace:*
+        version: link:../../packages/workspace
       ws:
         specifier: ^8.18.0
         version: 8.22.0
@@ -361,7 +382,11 @@ importers:
         specifier: workspace:*
         version: link:../../util/brand
 
-  packages/lsp: {}
+  packages/lsp:
+    dependencies:
+      '@ryharness/subprocess':
+        specifier: workspace:*
+        version: link:../subprocess
 
   packages/mcp:
     dependencies:
@@ -371,6 +396,9 @@ importers:
       '@ryharness/cordis':
         specifier: workspace:*
         version: link:../../vendor/cordis
+      '@ryharness/subprocess':
+        specifier: workspace:*
+        version: link:../subprocess
 
   packages/memory:
     dependencies:
@@ -385,7 +413,11 @@ importers:
 
   packages/preset: {}
 
-  packages/ptc: {}
+  packages/ptc:
+    dependencies:
+      '@ryharness/subprocess':
+        specifier: workspace:*
+        version: link:../subprocess
 
   packages/sandbox:
     dependencies:
@@ -435,7 +467,11 @@ importers:
         specifier: workspace:*
         version: link:../session
 
-  packages/settings: {}
+  packages/settings:
+    dependencies:
+      '@ryharness/storage':
+        specifier: workspace:*
+        version: link:../storage
 
   packages/skill:
     dependencies:
@@ -467,7 +503,11 @@ importers:
 
   packages/subprocess: {}
 
-  packages/terminal: {}
+  packages/terminal:
+    dependencies:
+      '@ryharness/subprocess':
+        specifier: workspace:*
+        version: link:../subprocess
 
   packages/tools:
     dependencies:
@@ -2509,7 +2549,7 @@ packages:
 
   glob@7.2.3:
     resolution: {integrity: sha512-nFR0zLpU2YCaRxwoCJvL6UvCH2JFyFVIvwTLsIf21AuHlMskA1hhTdk+LlYJtOlYt9v6dvszD2BGRqBL+iQK9Q==}
-    deprecated: Glob versions prior to v9 are no longer supported
+    deprecated: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
 
   global-agent@3.0.0:
     resolution: {integrity: sha512-PT6XReJ+D07JvGoxQMkT6qji/jVNfX/h364XHZOWeRzy64sSFr+xJ5OX7LI3b4MPQzdL4H8Y8M0xzPpsVMwA8Q==}
