@@ -104,4 +104,29 @@ describe('RyHarnessClient', () => {
     },
     30_000,
   )
+
+  it(
+    'attach：用现成的连接也能调（同一个进程内的两端）',
+    async () => {
+      const { createMemoryTransportPair } = await import('@ryharness/api')
+      const [clientSide, serverSide] = createMemoryTransportPair()
+      // 服务端那一头回一句能认的话。
+      serverSide.onData((chunk) => {
+        for (const line of chunk.split('\n')) {
+          const trimmed = line.trim()
+          if (trimmed.length === 0) continue
+          const message = JSON.parse(trimmed) as { id?: number; method?: string }
+          if (message.id === undefined) continue
+          serverSide.write(
+            `${JSON.stringify({ jsonrpc: '2.0', id: message.id, result: { namespaces: ['ryharness'] } })}\n`,
+          )
+        }
+      })
+      const client = await RyHarnessClient.attach(clientSide)
+      const graph = (await client.graph()) as { namespaces?: string[] }
+      expect(graph.namespaces).toContain('ryharness')
+      await client.close()
+    },
+    30_000,
+  )
 })

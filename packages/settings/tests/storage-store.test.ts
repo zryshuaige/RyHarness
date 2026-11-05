@@ -73,6 +73,29 @@ describe('配置的 storage 后端', () => {
     const store = new StorageSettingsStore(makeService())
     expect(store.load()).toEqual([])
   })
+
+  it('坏记录被丢掉，不把整个配置带崩', () => {
+    const service = makeService()
+    // 塞三条坏数据进去：不是对象、版本号不是数、值不是对象。
+    service.put('plugin-settings', 'bad-1', '这不是对象')
+    service.put('plugin-settings', 'bad-2', { revision: '不是数', values: {} })
+    service.put('plugin-settings', 'bad-3', { revision: 1, values: '不是对象' })
+    service.put('plugin-settings', 'good', { revision: 2, values: { a: 1 } })
+
+    const loaded = new StorageSettingsStore(service).load()
+    expect(loaded).toHaveLength(1)
+    expect(loaded[0]?.pluginId).toBe('good')
+  })
+
+  it('值里不是布尔/字符串/数字的键被丢掉', () => {
+    const service = makeService()
+    service.put('plugin-settings', 'mixed', {
+      revision: 1,
+      values: { good: '行', bad: { nested: true }, alsoBad: null },
+    })
+    const loaded = new StorageSettingsStore(service).load()
+    expect(loaded[0]?.values).toEqual({ good: '行' })
+  })
 })
 
 describe('从老文件迁移', () => {

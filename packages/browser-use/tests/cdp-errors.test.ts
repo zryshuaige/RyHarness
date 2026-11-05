@@ -53,4 +53,19 @@ describe('CDP 驱动的错误路径', () => {
     },
     90_000,
   )
+
+  it(
+    '页面加载不完：报 TIMEOUT，不是干等着',
+    async () => {
+      // 时限给 1 毫秒——页面肯定来不及加载完。
+      const factory = createCdpDriverFactory({ navigateTimeoutMs: 1 })
+      try {
+        const driver = await factory.driverFactory()
+        await expect(driver.open('https://example.com')).rejects.toMatchObject({ code: 'TIMEOUT' })
+      } finally {
+        await factory.close()
+      }
+    },
+    90_000,
+  )
 })

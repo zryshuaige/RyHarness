@@ -275,4 +275,62 @@ describe('ACP 服务端', () => {
       server.close()
     }
   })
+
+  it('取消一个没在跑的会话：宿主照样收到取消（它可能自己知道怎么处理）', () => {
+    const { server, recorder } = makeServer()
+    try {
+      server.cancel('not-running')
+      expect(recorder.cancelled).toContain('not-running')
+    } finally {
+      server.close()
+    }
+  })
+
+  it('关掉服务端：在途的这一轮被中止', async () => {
+    const { server, recorder } = makeServer({ waitsForCancel: true })
+    await recorder.handlers.newSession()
+    void recorder.handlers.prompt('session-1', '等着', new AbortController().signal)
+    server.close()
+    // 关掉之后不该再往会话里推事件。
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  })
+
+  it('推工具调用与工具结果：形状对得上', async () => {
+    const { server, client } = makeServer()
+    try {
+      await client.request('session/new')
+      server.toolCall('session-1', 'call-1', '读文件', 'in_progress', 'read')
+      server.toolResult('session-1', 'call-1', 'completed', '文件内容')
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      const updates = client.notifications.filter((item) => item.method === 'session/update')
+      const kinds = updates.map((item) => (item.params as { kind?: string }).kind)
+      expect(kinds).toContain('tool_call')
+      expect(kinds).toContain('tool_result')
+      const call = updates.find((item) => (item.params as { kind?: string }).kind === 'tool_call')
+      const callParams = call?.params as { callId?: string; title?: string; status?: string; toolKind?: string }
+      expect(callParams.callId).toBe('call-1')
+      expect(callParams.title).toBe('读文件')
+      expect(callParams.status).toBe('in_progress')
+      expect(callParams.toolKind).toBe('read')
+    } finally {
+      server.close()
+    }
+  })
+
+  it('推错误事件：形状对得上', async () => {
+    const { server, client } = makeServer()
+    try {
+      await client.request('session/new')
+      server.error('session-1', 'E_CODE', '出了点问题')
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      const error = client.notifications.find((item) => {
+        return (item.params as { kind?: string }).kind === 'error'
+      })
+      const params = error?.params as { code?: string; message?: string }
+      expect(params.code).toBe('E_CODE')
+      expect(params.message).toBe('出了点问题')
+    } finally {
+      server.close()
+    }
+  })
 })

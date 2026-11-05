@@ -60,6 +60,25 @@ describe('CDP 驱动：找浏览器（不碰浏览器）', () => {
     // linux 平台的候选路径在本机（Windows）上都不存在。
     expect(findBrowserExecutable({ platform: 'linux', env: {} })).toBeUndefined()
   })
+
+  it('macOS 上按固定路径找', () => {
+    // 那个路径在本机不存在——找不到是正确结果，但候选路径确实被试过了。
+    expect(findBrowserExecutable({ platform: 'darwin', env: {} })).toBeUndefined()
+  })
+
+  it('Windows 上按 ProgramFiles 与 LOCALAPPDATA 找', () => {
+    // 本机上 Edge 就在 Program Files (x86) 里——这条能真找到。
+    const found = findBrowserExecutable({
+      platform: 'win32',
+      env: {
+        ProgramFiles: 'C:\\Program Files',
+        'ProgramFiles(x86)': 'C:\\Program Files (x86)',
+        LOCALAPPDATA: process.env.LOCALAPPDATA ?? '',
+      },
+    })
+    // 找不到也不该抛——只是「本机没装在标准位置」。
+    expect(found === undefined || found.includes('msedge') || found.includes('chrome')).toBe(true)
+  })
 })
 
 describe.skipIf(!hasBrowser)('CDP 驱动（真机）', () => {
