@@ -68,7 +68,7 @@ export interface ScrubEnvironmentOptions {
   /** 「像密钥」的名字（正则）；命中就不传。 */
   readonly deny?: readonly RegExp[]
   /** 调用方明确要追加的变量；这些原样传下去。 */
-  readonly extra?: Readonly<Record<string, string>>
+  readonly extra?: Readonly<Record<string, string | undefined>>
   /** 按哪个平台查环境变量（Windows 上名字大小写不敏感）。 */
   readonly platform?: NodeJS.Platform
 }

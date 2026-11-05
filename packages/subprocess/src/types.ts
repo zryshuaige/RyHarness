@@ -1,3 +1,5 @@
+import type { ChildProcess, SpawnOptions } from 'node:child_process'
+
 /**
  * 子进程服务的类型契约。
  *
@@ -200,6 +202,38 @@ export interface SubprocessProvider {
    * @returns 进程句柄。
    */
   spawn(options: SubprocessSpawnOptions): ManagedProcess
+  /**
+   * 原始 spawn：不管输出、不管时限，只把进程跑起来。
+   *
+   * **给长驻服务用**（见 {@link SubprocessRawSpawnOptions}）：它们要自己管
+   * stdin/stdout 的协议流，`ManagedProcess` 那套「跑完拿结果」的形状装不下。
+   * 环境清洗由调用方做（用 `scrubEnvironment`）。
+   *
+   * **可选**：provider 不实现它时，长驻进程就起不来（报一条清楚的错误），而不是
+   * 悄悄退回到「不管输出上限、不管树回收」的裸 spawn。
+   * @param options - 启动参数。
+   * @returns 子进程句柄。
+   */
+  spawnRaw?(options: SubprocessRawSpawnOptions): ChildProcess
+}
+
+/**
+ * 原始 spawn 的参数。
+ *
+ * **这条口子只给「长驻服务」用**（语言服务器、MCP 服务器、持久终端、子代理
+ * 后端）。普通命令走 {@link SubprocessSpawnOptions}。
+ */
+export interface SubprocessRawSpawnOptions {
+  /** 要跑的命令（路径或名字）。 */
+  readonly command: string
+  /** 参数。 */
+  readonly args?: readonly string[]
+  /** 工作目录。 */
+  readonly cwd?: string
+  /** 子进程的环境（已经清过）。 */
+  readonly env?: NodeJS.ProcessEnv
+  /** stdio 配置。 */
+  readonly stdio?: SpawnOptions['stdio']
 }
 
 /** 找可执行文件的参数。 */
@@ -242,6 +276,29 @@ export type ManagedRangeSupport =
   /** 管不了：只能各管各的。 */
   | 'none'
 
+/**
+ * 进程范围里的一员。
+ *
+ * **只要「能查活、能终止」**：范围提供的是整体动作，不需要知道每个进程是
+ * 「跑完拿结果」那种（{@link ManagedProcess}）还是「一直活着自己管协议流」那种
+ * （`ManagedStreamProcess`）。两者都满足这一条，所以都能进同一个范围。
+ */
+export interface RangeMember {
+  /** 本次 spawn 的 id。 */
+  readonly id: string
+  /** 标签（给人看的）。 */
+  readonly label: string
+  /** 进程 id；压根没启动起来时没有。 */
+  readonly pid: number | undefined
+  /** 结束了没有。 */
+  readonly finished: boolean
+  /**
+   * 收掉这个进程**以及它的整棵子进程树**。
+   * @param reason - 收掉的理由（写进错误信息，给人看）。
+   */
+  kill(reason?: string): Promise<void>
+}
+
 /** 进程范围：一组进程归谁管。 */
 export interface ProcessRange {
   /** 范围 id。 */
@@ -253,13 +310,13 @@ export interface ProcessRange {
   /** 降级说明（中文）；没有降级就是空数组。 */
   readonly notes: readonly string[]
   /** 登记一个进程。 */
-  add(process: ManagedProcess): void
+  add(process: RangeMember): void
   /** 移出一个进程。 */
-  remove(process: ManagedProcess): void
+  remove(process: RangeMember): void
   /** 组里的全部进程。 */
-  list(): readonly ManagedProcess[]
+  list(): readonly RangeMember[]
   /** 组里还活着的进程。 */
-  alive(): readonly ManagedProcess[]
+  alive(): readonly RangeMember[]
   /**
    * 整组终止。
    * @param reason - 终止理由（写进每个进程的错误信息）。

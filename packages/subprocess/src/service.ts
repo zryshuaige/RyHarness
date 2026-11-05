@@ -14,6 +14,7 @@
 
 import { localProvider } from './local.ts'
 import { createProcessRange } from './range.ts'
+import { addStreamToRange, type ManagedStreamProcess, type SpawnStreamOptions, spawnManagedStream } from './stream.ts'
 import type {
   ExecutableResolution,
   ManagedProcess,
@@ -49,6 +50,7 @@ export class SubprocessService {
   readonly provider: SubprocessProvider
   private readonly options: SubprocessServiceOptions
   private readonly tracked = new Set<ManagedProcess>()
+  private readonly trackedStreams = new Set<ManagedStreamProcess>()
   private readonly ranges = new Map<string, ProcessRange>()
 
   constructor(options: SubprocessServiceOptions = {}) {
@@ -122,6 +124,32 @@ export class SubprocessService {
     return range
   }
 
+  /**
+   * 起一个**长驻**的带原始流的进程（语言服务器、MCP 服务器、持久终端这类）。
+   *
+   * 与 {@link SubprocessService.spawn} 的区别：那个是「跑一条命令、拿结果」，
+   * 这个是「一直活着、调用方自己管协议流」。两者都归这个服务管，所以服务下线时
+   * 两种都会被收掉。
+   * @param options - 启动参数。
+   * @returns 托管句柄。
+   */
+  spawnStream(options: SpawnStreamOptions): ManagedStreamProcess {
+    const started = spawnManagedStream(this.provider, {
+      ...options,
+      ...(options.envAllowlist === undefined && this.options.envAllowlist !== undefined
+        ? { envAllowlist: this.options.envAllowlist }
+        : {}),
+    })
+    this.trackedStreams.add(started)
+    void started.done.then(() => {
+      this.trackedStreams.delete(started)
+    })
+    if (options.rangeId !== undefined) {
+      addStreamToRange(this.ensureRange(options.rangeId), started)
+    }
+    return started
+  }
+
   /** 服务里还活着的进程。 */
   listAlive(): readonly ManagedProcess[] {
     return [...this.tracked].filter((started) => !started.finished)
@@ -146,6 +174,11 @@ export class SubprocessService {
     const alive = this.listAlive()
     await Promise.all(alive.map((started) => started.kill('服务下线')))
     this.tracked.clear()
+    // 长驻的也要收：语言服务器与 MCP 服务器挂着不走的话，桌面应用退出后它们
+    // 还活着，下一次启动就多一份，端口还可能占着。
+    const streams = [...this.trackedStreams]
+    await Promise.all(streams.map((started) => started.kill('服务下线')))
+    this.trackedStreams.clear()
   }
 
   /** 按 id 取范围；没有就现建一个（并登记）。 */

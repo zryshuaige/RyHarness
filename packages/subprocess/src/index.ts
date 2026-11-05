@@ -32,6 +32,8 @@ export type { CreateProcessRangeOptions } from './range.ts'
 export { createProcessRange } from './range.ts'
 export type { SubprocessServiceOptions } from './service.ts'
 export { SubprocessService } from './service.ts'
+export type { ManagedStreamProcess, SpawnStreamOptions } from './stream.ts'
+export { addStreamToRange, DEFAULT_MAX_STREAM_OUTPUT_BYTES, spawnManagedStream } from './stream.ts'
 export type {
   ExecutableResolution,
   ManagedProcess,
@@ -42,6 +44,7 @@ export type {
   SubprocessError,
   SubprocessErrorCode,
   SubprocessProvider,
+  SubprocessRawSpawnOptions,
   SubprocessResult,
   SubprocessSpawnOptions,
   SubprocessStatus,

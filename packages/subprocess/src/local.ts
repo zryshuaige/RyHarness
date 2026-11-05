@@ -26,6 +26,7 @@ import type {
   SubprocessCapabilities,
   SubprocessError,
   SubprocessProvider,
+  SubprocessRawSpawnOptions,
   SubprocessResult,
   SubprocessSpawnOptions,
   SubprocessStatus,
@@ -504,6 +505,25 @@ export class LocalSubprocessProvider implements SubprocessProvider {
    */
   spawn(options: SubprocessSpawnOptions): ManagedProcess {
     return startManagedProcess(options, this.deps)
+  }
+
+  /**
+   * 原始 spawn：只把进程跑起来。
+   *
+   * **POSIX 上开新进程组**：这样关它的时候 `kill(-pgid)` 能把孙子进程一起收掉。
+   * Windows 上没有 Job Object（见 `capabilities.notes`），树回收靠 `taskkill /T /F`。
+   * @param options - 启动参数。
+   * @returns 子进程句柄。
+   */
+  spawnRaw(options: SubprocessRawSpawnOptions): ChildProcess {
+    const isWindows = this.deps.platform === 'win32'
+    return spawn(options.command, [...(options.args ?? [])], {
+      ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+      env: options.env ?? this.deps.hostEnv,
+      stdio: options.stdio ?? ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+      detached: !isWindows,
+    })
   }
 }
 

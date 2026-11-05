@@ -11,7 +11,8 @@
  * @module @ryharness/mcp/client
  */
 
-import { type ChildProcess, spawn } from 'node:child_process'
+import type { ChildProcess } from 'node:child_process'
+import { localProvider, type ManagedStreamProcess, scrubEnvironment, spawnManagedStream } from '@ryharness/subprocess'
 import {
   readPromptDescriptors,
   readResourceContents,
@@ -40,38 +41,6 @@ const DEFAULT_PROTOCOL_VERSION = '2024-11-05'
 
 /** stderr 只留这么多字符——它只是失败时的佐证，不是日志存档。 */
 const STDERR_KEEP_CHARS = 4_000
-
-/**
- * 子进程默认能看到的宿主环境变量白名单。
- *
- * 为什么不把 process.env 整个递过去：MCP server 是外部程序，它能读到哪些环境
- * 变量，就等于我们把哪些凭据递到了它手上（代理、token、云厂商的 key 都在里面）。
- * 白名单里的这几个是「跑起一个普通进程」真正需要的；其余要用的，由宿主在配置
- * 的 env 里显式写出来——显式写出来的东西，是人看过之后决定给的。
- */
-const ENV_ALLOWLIST = new Set([
-  'PATH',
-  'PATHEXT',
-  'HOME',
-  'USERPROFILE',
-  'HOMEDRIVE',
-  'HOMEPATH',
-  'SHELL',
-  'SYSTEMROOT',
-  'WINDIR',
-  'COMSPEC',
-  'TMPDIR',
-  'TMP',
-  'TEMP',
-  'APPDATA',
-  'LOCALAPPDATA',
-  'PROGRAMFILES',
-  'PROGRAMFILES(X86)',
-  'LANG',
-  'LC_ALL',
-  'TZ',
-  'NODE_PATH',
-])
 
 /** 客户端的构造选项。 */
 export interface McpClientOptions {
@@ -102,6 +71,14 @@ interface PendingRequest {
 /**
  * 组装子进程的环境变量。
  *
+ * **两条路**：
+ * - `inherit: true` → 宿主环境**整个**带过去（用户显式要求的，配置里写明了的）；
+ * - `inherit: false`（缺省）→ 走 `@ryharness/subprocess` 的 `scrubEnvironment`：
+ *   白名单之外的一律不传，名字像密钥的（`*_API_KEY` / `*_TOKEN` 之类）也不传。
+ *
+ * MCP 服务器是**模型能触发启动**的进程，宿主环境里的模型服务 key 不该跟着
+ * 进去；但用户显式说「继承」时是他的选择，不替他做主。
+ *
  * @param extra - 配置里显式写的环境变量（盖过一切）。
  * @param inherit - 是否把宿主环境变量整个带过去。
  */
@@ -109,20 +86,16 @@ export function buildChildEnv(
   extra: Record<string, string> | undefined,
   inherit: boolean,
 ): Record<string, string | undefined> {
-  const env: Record<string, string | undefined> = {}
   if (inherit) {
-    Object.assign(env, process.env)
-  } else {
-    for (const [key, value] of Object.entries(process.env)) {
-      // Windows 的环境变量名大小写不敏感，所以比对用大写形式。
-      if (value === undefined || !ENV_ALLOWLIST.has(key.toUpperCase())) continue
-      env[key] = value
-    }
+    const env: Record<string, string | undefined> = { ...process.env }
+    for (const [key, value] of Object.entries(extra ?? {})) env[key] = value
+    return env
   }
-  for (const [key, value] of Object.entries(extra ?? {})) {
-    env[key] = value
-  }
-  return env
+  const scrubbed = scrubEnvironment({
+    base: process.env,
+    ...(extra === undefined ? {} : { extra }),
+  })
+  return scrubbed.env
 }
 
 /** 一条 MCP stdio 连接。 */
@@ -133,6 +106,8 @@ export class McpStdioClient {
   private readonly pending = new Map<number, PendingRequest>()
   private readonly splitter = new LineSplitter()
   private child: ChildProcess | undefined
+  /** 托管句柄：关连接时用它把整棵进程树收掉。 */
+  private managed: ManagedStreamProcess | undefined
   private nextId = 1
   private info: McpServerInfo | undefined
   private closed = false
@@ -169,16 +144,16 @@ export class McpStdioClient {
     if (this.child !== undefined) {
       throw new McpError('startup', this.serverName, `MCP 服务器「${this.serverName}」已经连接过了`)
     }
-    const child = spawn(this.config.command, this.config.args ?? [], {
-      cwd: this.options.cwd,
+    const managed = spawnManagedStream(localProvider, {
+      command: this.config.command,
+      args: this.config.args ?? [],
+      ...(this.options.cwd === undefined ? {} : { cwd: this.options.cwd }),
       env: buildChildEnv(this.config.env, this.options.inheritEnv === true),
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true,
-      // POSIX 下开新进程组：关连接时能一次把 server 及其子孙一起收掉，
-      // 而不是只杀直接子进程、留下一堆还在跑的孙进程。
-      detached: process.platform !== 'win32',
+      label: `mcp:${this.config.command}`,
     })
+    const child = managed.child
     this.child = child
+    this.managed = managed
     child.stdout?.setEncoding('utf8')
     child.stdout?.on('data', (chunk: string) => {
       this.onStdout(chunk)
@@ -262,7 +237,9 @@ export class McpStdioClient {
       request.reject(new McpError('closed', this.serverName, `MCP 服务器「${this.serverName}」的连接已关闭`))
     }
     const child = this.child
+    const managed = this.managed
     this.child = undefined
+    this.managed = undefined
     if (child === undefined) return
     child.stdout?.removeAllListeners('data')
     child.stderr?.removeAllListeners('data')
@@ -274,7 +251,9 @@ export class McpStdioClient {
     } catch {
       // 管道已经断了，关不上也无所谓——下面照样杀。
     }
-    await terminateMcpProcess(child)
+    // 收整棵树：server 自己会拉起子进程，只杀直接子进程会留下它们继续跑。
+    // 树回收交给 `@ryharness/subprocess`（全仓库只有那一处实现）。
+    await managed?.kill('MCP 连接关闭')
   }
 
   /** stdout 上的一行到了：要么是回包，要么是协议违规。 */
@@ -391,69 +370,4 @@ export class McpStdioClient {
     child.stdin.write(encodeLine(payload))
     return true
   }
-}
-
-/**
- * 把 server 进程连同它的子孙收干净。
- *
- * 「收干净再返回」是硬要求：Windows 的 taskkill /T 是从父进程往下枚举的，父进程
- * 一先死，这棵树就再也拼不出来，里面的孙进程会以孤儿身份继续跑（用户机器 CPU
- * 被吃满就是这么来的）。POSIX 侧靠 spawn 时开出的进程组，一次带走整组。
- */
-async function terminateMcpProcess(child: ChildProcess): Promise<void> {
-  const pid = child.pid
-  if (pid === undefined) return
-  // 先把等待挂上再杀：'close' 事件是子进程退出后才发的，等杀完再挂就永远等不到。
-  const closed = waitForChildClose(child)
-  /* v8 ignore start -- 两个平台各走一条，只有当前平台那条会被跑到 */
-  if (process.platform === 'win32') {
-    const killed = await taskkillTree(pid)
-    if (!killed) child.kill('SIGKILL')
-    await closed
-    return
-  }
-  try {
-    // 负号表示整个进程组：server 自己拉起的子进程一起收掉。
-    process.kill(-pid, 'SIGKILL')
-  } catch {
-    child.kill('SIGKILL')
-  }
-  await closed
-  /* v8 ignore stop */
-}
-
-/** Windows 上按父子关系强杀整棵树；进程已经不在、taskkill 自己卡住，都算失败。 */
-function taskkillTree(pid: number, timeoutMs = 5_000): Promise<boolean> {
-  return new Promise((resolve) => {
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
-    /* v8 ignore next 3 -- taskkill 不会卡住，这是兜底 */
-    timer = setTimeout(() => {
-      killer.kill('SIGKILL')
-      resolve(false)
-    }, timeoutMs)
-    /* v8 ignore next -- taskkill 自己起不来时的兜底 */
-    killer.on('error', () => {
-      if (timer !== undefined) clearTimeout(timer)
-      resolve(false)
-    })
-    killer.on('close', (code) => {
-      if (timer !== undefined) clearTimeout(timer)
-      resolve(code === 0)
-    })
-  })
-}
-
-/** 等子进程的 'close'，但只等到时限：收尾不能无限期挂着。 */
-function waitForChildClose(child: ChildProcess, timeoutMs = 2_000): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve()
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      resolve(undefined)
-    }, timeoutMs)
-    child.once('close', () => {
-      clearTimeout(timer)
-      resolve(undefined)
-    })
-  })
 }

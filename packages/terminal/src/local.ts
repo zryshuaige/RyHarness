@@ -33,6 +33,7 @@
 
 import { type ChildProcess, spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
+import { localProvider, type ManagedStreamProcess, spawnManagedStream } from '@ryharness/subprocess'
 import { TerminalBuffer } from './buffer.ts'
 import {
   dialectOf,
@@ -239,6 +240,8 @@ class LocalShellSession implements TerminalBackendSession {
   readonly #dialect: ShellDialect
   /** 顶层进程。 */
   #child: ChildProcess | undefined
+  /** 托管句柄：起进程走 `@ryharness/subprocess`（环境与启动只有那一处实现）。 */
+  #managed: ManagedStreamProcess | undefined
   /** 输出缓冲。 */
   readonly #buffer: TerminalBuffer
   /** 已退出。 */
@@ -284,13 +287,20 @@ class LocalShellSession implements TerminalBackendSession {
    * @param signal - 取消信号。
    */
   async start(signal?: AbortSignal): Promise<void> {
-    const child = spawn(this.#file, [...this.#args], {
+    const managed = spawnManagedStream(localProvider, {
+      command: this.#file,
+      args: [...this.#args],
       cwd: this.#cwd,
-      env: { ...process.env, ...this.#envOverrides },
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true,
+      // 终端就是**用户自己的 shell**：他要的是自己的完整环境（`JAVA_HOME`、
+      // `GOPATH`、各种 profile 都不在白名单里）。这一层的边界由沙箱管
+      // （`packages/sandbox` 有自己的一份环境清洗）。
+      inheritEnv: true,
+      env: this.#envOverrides,
+      label: `terminal:${this.#file}`,
     })
+    const child = managed.child
     this.#child = child
+    this.#managed = managed
 
     const spawnFailure = new Promise<never>((_resolve, reject) => {
       child.once('error', (error) => {
@@ -451,10 +461,19 @@ class LocalShellSession implements TerminalBackendSession {
    */
   async close(): Promise<void> {
     const child = this.#child
+    const managed = this.#managed
+    this.#child = undefined
+    this.#managed = undefined
     if (child === undefined) return
     if (!this.#exited) {
-      const pid = child.pid
-      if (pid !== undefined) await killProcessTree(pid)
+      // 树回收走托管句柄（`@ryharness/subprocess` 那一处实现）：shell 自己起的
+      // 子进程要一起收掉，只杀直接子进程会留下还在跑的孙进程。
+      if (managed !== undefined) {
+        await managed.kill('终端会话关闭')
+      } else {
+        const pid = child.pid
+        if (pid !== undefined) await killProcessTree(pid)
+      }
       // 等进程真正退出，最多 5 秒。超了就再上 SIGKILL——还不行就如实报错。
       const exited = await this.#waitExit(5_000)
       if (!exited) {

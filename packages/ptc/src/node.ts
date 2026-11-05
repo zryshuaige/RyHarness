@@ -15,9 +15,9 @@
  * @module @ryharness/ptc/node
  */
 
-import { spawn } from 'node:child_process'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { localProvider, scrubEnvironment, spawnManagedStream } from '@ryharness/subprocess'
 import { createFileBindings } from './bindings.ts'
 import { resolveFilePolicy } from './policy.ts'
 import { type ChildOutcome, PtcSession } from './session.ts'
@@ -59,7 +59,6 @@ function childScript(): string {
 }
 
 /** 子进程继承的环境变量：只留跑 node 需要的，不把宿主的密钥递过去。 */
-const ENV_ALLOWLIST = ['PATH', 'SystemRoot', 'COMSPEC', 'TEMP', 'TMP', 'HOME', 'USERPROFILE', 'LANG']
 
 /** Node 后端的构造参数。 */
 export interface NodePtcRuntimeOptions {
@@ -139,11 +138,15 @@ export class NodePtcRuntime implements PtcRuntime {
 
   /** 起一个子进程会话。 */
   private spawn(mode: PtcMode): PtcSession {
-    const child = spawn(this.options.nodePath ?? process.execPath, [childScript()], {
+    const managed = spawnManagedStream(localProvider, {
+      command: this.options.nodePath ?? process.execPath,
+      args: [childScript()],
+      // IPC 通道：程序与宿主之间的绑定调用走它（不传函数句柄，只传名字与说明）。
       stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
       env: scrubbedEnv(),
-      windowsHide: true,
+      label: 'ptc',
     })
+    const child = managed.child
     return new PtcSession(child, mode, (session) => {
       this.forget(session)
     })
@@ -247,17 +250,20 @@ function toResult(message: ChildOutcome, durationMs: number): PtcResult {
   }
 }
 
+/**
+ * 子进程能看到的环境变量。
+ *
+ * **走 `@ryharness/subprocess` 的 `scrubEnvironment`**：白名单之外的一律不传，
+ * 名字像密钥的（`*_API_KEY` / `*_TOKEN` 之类）也不传。模型写的程序跑在这个子
+ * 进程里，宿主环境里的模型服务 key 不该跟着进去。
+ */
+function scrubbedEnv(): NodeJS.ProcessEnv {
+  return scrubEnvironment().env
+}
+
 /** 一个失败结果。 */
 function failureResult(kind: PtcFailureKind, message: string, started: number): PtcResult {
   return { ok: false, output: [], failure: { kind, message }, durationMs: Date.now() - started }
 }
 
 /** 子进程只继承跑 node 需要的那几个环境变量，别把宿主的密钥递过去。 */
-function scrubbedEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {}
-  for (const key of ENV_ALLOWLIST) {
-    const value = process.env[key]
-    if (value !== undefined) env[key] = value
-  }
-  return env
-}

@@ -15,5 +15,8 @@
   },
   "scripts": {
     "build": "tsdown"
+  },
+  "dependencies": {
+    "@ryharness/subprocess": "workspace:*"
   }
 }

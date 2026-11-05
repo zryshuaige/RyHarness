@@ -13,7 +13,8 @@
  * @module @ryharness/lsp/connection
  */
 
-import { type ChildProcess, spawn } from 'node:child_process'
+import type { ChildProcess } from 'node:child_process'
+import { localProvider, type ManagedStreamProcess, spawnManagedStream } from '@ryharness/subprocess'
 import { LspError } from './errors.ts'
 import { encodeFrame, LspFrameDecoder } from './framing.ts'
 import { planSpawn } from './spawn.ts'
@@ -103,6 +104,8 @@ export class LspConnection {
   private readonly decoder = new LspFrameDecoder()
   private readonly pending = new Map<number, PendingRequest>()
   private child: ChildProcess | undefined
+  /** 托管句柄：关连接时用它把整棵进程树收掉。 */
+  private managed: ManagedStreamProcess | undefined
   private nextId = 1
   /** 判死之后的错误：在途请求与后续请求都以它失败。 */
   private fatal: LspError | undefined
@@ -128,19 +131,25 @@ export class LspConnection {
   /**
    * 起进程。
    *
+   * **走 `@ryharness/subprocess`**：环境清洗（模型服务的 key 不进语言服务器）、
+   * 输出有界、进程树收得干净，全仓库只有那一处实现。
+   *
    * 命令不存在时不会在这里抛——`spawn` 的失败是异步事件，真正的失败要等到
    * 第一个请求超时的瞬间才浮上来，那条路径会把 `command-not-found` 说清楚。
    */
   start(): void {
     if (this.child !== undefined) return
     const plan = planSpawn(this.options.command, this.options.args ?? [])
-    const child = spawn(plan.command, plan.args, {
-      cwd: this.options.cwd,
-      env: { ...process.env, ...this.options.env },
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true,
+    const managed: ManagedStreamProcess = spawnManagedStream(localProvider, {
+      command: plan.command,
+      args: plan.args,
+      ...(this.options.cwd === undefined ? {} : { cwd: this.options.cwd }),
+      env: this.options.env,
+      label: `lsp:${plan.command}`,
     })
+    const child = managed.child
     this.child = child
+    this.managed = managed
     child.stdout?.on('data', (chunk: Buffer) => {
       this.onStdout(chunk)
     })
@@ -218,7 +227,9 @@ export class LspConnection {
    */
   async close(): Promise<void> {
     const child = this.child
+    const managed = this.managed
     this.child = undefined
+    this.managed = undefined
     this.closedByUs = true
     this.fail(new LspError('server-unavailable', '语言服务器连接已经关闭'))
     if (child === undefined) return
@@ -229,7 +240,9 @@ export class LspConnection {
     }
     const closed = waitForClose(child, CLOSE_WAIT_MS)
     const timer = setTimeout(() => {
-      child.kill('SIGKILL')
+      // 到点就强杀**整棵树**：语言服务器自己会起子进程（有些语言服务器会拉起
+      // 自己的索引进程），只杀直接子进程会留下它们继续跑。
+      void managed?.kill('语言服务器连接关闭')
     }, CLOSE_GRACE_MS)
     try {
       await closed

@@ -17,7 +17,8 @@
     "build": "tsdown"
   },
   "dependencies": {
-    "@ryharness/agent": "workspace:*"
+    "@ryharness/agent": "workspace:*",
+    "@ryharness/subprocess": "workspace:*"
   },
   "peerDependencies": {
     "@ryharness/cordis": "workspace:*"
