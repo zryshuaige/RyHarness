@@ -30,7 +30,7 @@ Web GUI），所以「对账」不是逐行比对，而是**按能力家族核�
 |---|---|---|---|---|---|
 | core（agent 循环） | 消息+工具循环、上下文组装 | 同一套语义自写 | **产品可用** | `packages/agent`（16 步上限、有界并发 4、工具白名单每轮现查） | — |
 | llm | 适配器 / 流式协议 / 装配 | 自写，语义对齐 | **产品可用** | `packages/llm` + `packages/llm/openai`（含 replayState、tool-addition 原语） | — |
-| session | 持久化、迁移、投影 | 自写，迁移规则沿用上游 | **产品可用** | `packages/session`（SCHEMA_VERSION 12，投影层没有） | — |
+| session | 持久化、迁移、投影 | 自写，迁移规则沿用上游 | **产品可用** | `packages/session`（SCHEMA_VERSION 13，投影层没有） | — |
 | compaction | 两段压缩 | 同一套口径 | **产品可用** | `packages/agent/src/compact.ts`（预裁剪 + 摘要，fail-closed） | — |
 | context | 指引文件 / @文件 / 时间 / 跨会话快照 | **本轮补上** | **产品可用** | `packages/context`（注入成历史里的 user 消息，不落库） | — |
 | token 计量 | 上下文/输出/缓存分别计 | 自写 | **产品可用** | `packages/llm/llm/src/token-estimate.ts` | — |
@@ -68,7 +68,7 @@ Web GUI），所以「对账」不是逐行比对，而是**按能力家族核�
 
 | 家族 | 上游做什么 | 我们 | 状态 | 落点 / 缺口 | 优先级 |
 |---|---|---|---|---|---|
-| subagent | 委派子代理（进程内 / 跨进程 / ACP） | **本轮在做** | **产品可用** | `packages/subagent` | — |
+| subagent | 委派子代理（进程内 / 跨进程 / ACP） | **本轮补上** | **产品可用** | `packages/subagent`（契约支持 provider；目前只有 `in-process` 一种实现，跨进程与 ACP 后端待写） | — |
 | jobs | 后台长任务，agent 不阻塞 | **本轮补上** | **产品可用** | `packages/jobs` 的 `JobService`（进程内运行时；跑完经宿主回调写进会话，不让模型轮询） | — |
 | workflow | 编排脚本 + 扇出 | 没有 | **产品可用** | `packages/workflow`（编排脚本扇出子代理）+ `packages/ptc`（跑模型写的程序） | 低 |
 | ptc-runtime | 跑模型写的程序（宿主提供异步绑定） | **本轮补上** | **产品可用** | `packages/ptc`（三种跑法：函数体 / REPL / 脚本；绑定跨进程回宿主执行） | — |
@@ -123,13 +123,26 @@ Web GUI），所以「对账」不是逐行比对，而是**按能力家族核�
 - **RyVibe**：一句话 → 盘问 → 落盘 → 验收 → 快照 → 回滚（上游的 deliverables 只有 present 与 git 变更记录）。
 - **桌面应用**：Electron 外壳、托盘、离线语音、四位助理的启动小队。
 
-## 九、下一轮该做什么（按"缺了会挡住日常干活"排）
+## 九、还差什么（按"缺了会挡住日常干活"排）
 
-1. **sandbox 三档 + 权限档位**（最高）：内核级隔离与用户可见的权限口径要一起做——上游把这两件事绑在一个 preset 里，我们分开做会留下不一致（档位已经做了工具面那一半，沙箱那半还空着）。
-2. **web_search**：助理现在只能抓给定的 URL，「查一下」这件事做不了。
-3. **崩溃可恢复**：工具调用与副作用先落盘（session-checkpoint）。
-4. **会话检索的关系追踪与导出**、**后台任务**、**plan 模式**、**LSP**、**重复调用提醒**。
-5. 之后再碰协议面（typert 网关 / SDK / ACP）与多端形态。
+上一版这一节列的五件事（sandbox 三档、web_search、崩溃可恢复、会话检索与后台任务、协议面）
+**都已在本轮做完**，留着会变成一份假的待办清单——和上一轮把死代码标成「已有」是同一类毛病。
+下面是现在真实剩下的：
+
+1. **Windows 上的沙箱只有围栏，没有内核级隔离**（最高）：`packages/sandbox` 在 POSIX 上走
+   bubblewrap，Windows 上只有「清环境 + 限定工作目录 + 拦越界写目标」，强度写在
+   `Confinement.kernelLevel` 上。绕过的办法是**改工具实现**，不是绕过一个策略——要内核级得
+   接 Job Object 或 AppContainer。
+2. **web_search 的厂商字段没逐个校准**：`packages/web/src/search.ts` 是通用后端（可配 JSON
+   接口 / HTML 结果页），Exa / Perplexity / DeepSeek 三家的字段名没有对过一遍，扣分项
+   （price / score 之类）在不同厂商下可能取不到。
+3. **terminal 在 Windows 上不是真 PTY**：`packages/terminal` 走管道模式（不引 node-pty 这个
+   原生模块），所以跑不了 vim / top 这类全屏交互程序。
+4. **subagent 只有进程内一种实现**：`packages/subagent` 的契约支持 provider（`in-process`），
+   跨进程与 ACP 委派的后端还没写。
+5. **session 没有投影层**：能存能查，没有「同一份会话的另一套视图」。
+
+这五条都**不是**「建好了但触发不到」——每一件都写明了落点与边界。
 
 ## 十、哪些接口只有模型与程序走，界面不碰
 
