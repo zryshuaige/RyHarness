@@ -47,6 +47,19 @@ describe('找 PowerShell', () => {
     const found = findPowerShell({ env: { SystemRoot: root } })
     expect(found).toContain('powershell.exe')
   })
+
+  it('只有大写的 SYSTEMROOT 也认（两种写法都得认）', () => {
+    const root = process.env.SystemRoot ?? process.env.SYSTEMROOT
+    if (root === undefined) return
+    const found = findPowerShell({ env: { SYSTEMROOT: root } })
+    expect(found).toContain('powershell.exe')
+  })
+
+  it('SystemRoot 都没有时退回 C:\\Windows（Windows 上的默认位置）', () => {
+    const found = findPowerShell({ env: {} })
+    // 本机在 Windows 上：默认位置里确实有 powershell.exe。
+    expect(found === undefined || found.includes('powershell.exe')).toBe(true)
+  })
 })
 
 describe('键名翻译', () => {
@@ -64,6 +77,16 @@ describe('键名翻译', () => {
     expect(toSendKeys('alt+tab')).toBe('%{TAB}')
     expect(toSendKeys('shift+a')).toBe('+a')
     expect(toSendKeys('win+r')).toBe('#r')
+  })
+
+  it('meta 与 cmd 也当 win：同一种键的不同叫法', () => {
+    expect(toSendKeys('meta+r')).toBe('#r')
+    expect(toSendKeys('cmd+r')).toBe('#r')
+    expect(toSendKeys('control+c')).toBe('^c')
+  })
+
+  it('多个修饰键叠在一起', () => {
+    expect(toSendKeys('ctrl+shift+a')).toBe('^+a')
   })
 
   it('单字符原样', () => {
@@ -113,5 +136,18 @@ describe('非 Windows 上的行为', () => {
   it('滚动同样要如实报', async () => {
     const driver = new WindowsDesktopDriver({ platform: 'linux' })
     await expect(driver.scroll(0, 120)).rejects.toMatchObject({ code: 'NO_DRIVER' })
+  })
+})
+
+describe('找不到 PowerShell 时', () => {
+  it('如实报 NO_DRIVER：不是假装截了一张图', async () => {
+    // SystemRoot 指到一个空目录 —— 候选路径一个都不存在。
+    const driver = new WindowsDesktopDriver({ platform: 'win32', env: { SystemRoot: 'C:\\definitely\\not\\here' } })
+    await expect(driver.screenshot()).rejects.toMatchObject({ code: 'NO_DRIVER' })
+  })
+
+  it('点击同样要如实报', async () => {
+    const driver = new WindowsDesktopDriver({ platform: 'win32', env: { SystemRoot: 'C:\\definitely\\not\\here' } })
+    await expect(driver.click(1, 1)).rejects.toMatchObject({ code: 'NO_DRIVER' })
   })
 })

@@ -71,8 +71,12 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: Test
-        run: npx vitest run
+      - name: Test & Coverage
+        # 测试与覆盖率跑在同一轮：`--coverage` 跑的就是全部测试（coverage 需要重新
+        # 统计执行数据，所以它自己就是一次全量）。分成两轮等于把全量跑两遍，本仓
+        # 的用例会真起浏览器与 Word，两遍下来 25 分钟的上限不够用（实测单轮 247 秒，
+        # CI runner 更慢）。合在一轮后，测试失败与覆盖率不达标都会让这一步变红。
+        run: npx vitest run --coverage
 
       - name: Guardrails (类型逃逸 / 包依赖缺失 / 重复代码 / lint 棘轮 / NOTICE 总账 / 死代码)
         # 与 CI 同一套硬门禁：发布构建不允许带着「PR 通道会拦下」的问题出厂。
@@ -81,11 +85,6 @@ jobs:
         run: |
           pnpm verify
           node scripts/verify-notice.mjs
-
-      - name: Coverage
-        # 覆盖率棘轮同样只在 CI 里跑。发布路径必须过它：棘轮拦下的正是
-        # "新写的文件一行测试都没有"这类退化。
-        run: npx vitest run --coverage
 
       - name: Version consistency
         # 根 package.json / 20 个工作区包 / 「我的」页展示版本 / CHANGELOG 四处必须

@@ -14,6 +14,7 @@ import {
   type ComputerToolSession,
   ComputerUseError,
   createComputerTools,
+  isComputerActionKind,
 } from '../src/index.ts'
 
 /** 记下收到过什么动作的替身。 */
@@ -28,7 +29,7 @@ interface Recorder {
  * @param options - 截图大小（字节）与失败方式。
  * @returns 替身与记录。
  */
-function makeSession(options: { shotBytes?: number; failWith?: Error } = {}): Recorder {
+function makeSession(options: { shotBytes?: number; failWith?: unknown; shotWithoutSize?: boolean } = {}): Recorder {
   const actions: ComputerAction[] = []
   let screenshots = 0
   const session: ComputerToolSession = {
@@ -46,6 +47,10 @@ function makeSession(options: { shotBytes?: number; failWith?: Error } = {}): Re
       screenshots += 1
       if (options.failWith !== undefined) throw options.failWith
       const size = options.shotBytes ?? 8
+      // 有些截图驱动给不出屏幕尺寸（截的是窗口而不是整屏）：那就不写尺寸。
+      if (options.shotWithoutSize === true) {
+        return { bytes: new Uint8Array(size), mimeType: 'image/png' } satisfies ComputerScreenshot
+      }
       return {
         bytes: new Uint8Array(size),
         mimeType: 'image/png',
@@ -179,5 +184,137 @@ describe('桌面工具', () => {
     const result = await tool?.execute({ sessionId: 'session-1', x: 1, y: 2 }, { owner: 'agent-1' })
     expect(result?.isError).toBe(true)
     expect(result?.content).toContain('驱动崩了')
+  })
+
+  it('抛的不是 Error（比如驱动扔了字符串）：也不能把模型看到的东西弄崩', async () => {
+    const recorder = makeSession({ failWith: '就是一句话' })
+    const tool = createComputerTools(recorder.session).find((item) => item.name === 'computer_click')
+    const result = await tool?.execute({ sessionId: 'session-1', x: 1, y: 2 }, { owner: 'agent-1' })
+    expect(result?.isError).toBe(true)
+    expect(result?.content).toContain('内部错误')
+  })
+
+  it('截图那一步出的错也要变成错误结果', async () => {
+    const recorder = makeSession({ failWith: new ComputerUseError('NO_SESSION', 'computer-use: 没有这个会话') })
+    const tool = createComputerTools(recorder.session).find((item) => item.name === 'computer_screenshot')
+    const result = await tool?.execute({ sessionId: 'session-1' }, { owner: 'agent-1' })
+    expect(result?.isError).toBe(true)
+    expect(result?.content).toContain('没有这个会话')
+  })
+})
+
+/**
+ * 参数读不出来的那几种形状。
+ *
+ * 模型给的参数不一定是对象，也不一定给全。这些都要变成一句说清的话回给模型，
+ * 而不是抛异常——工具层抛出去，模型这一轮就白跑了。
+ */
+describe('参数读不出来的时候', () => {
+  it('参数整个不是对象：说清缺 sessionId，不抛异常', async () => {
+    const recorder = makeSession()
+    const tools = createComputerTools(recorder.session)
+    for (const tool of tools) {
+      const result = await tool.execute('这不是对象', { owner: 'agent-1' })
+      expect(result.isError).toBe(true)
+      expect(result.content).toContain('sessionId')
+    }
+  })
+
+  it('sessionId 是空串或全是空格：当成没给', async () => {
+    const recorder = makeSession()
+    const tool = createComputerTools(recorder.session).find((item) => item.name === 'computer_click')
+    const result = await tool?.execute({ sessionId: '   ', x: 1, y: 2 }, { owner: 'agent-1' })
+    expect(result?.isError).toBe(true)
+    expect(result?.content).toContain('sessionId')
+  })
+
+  it('坐标不是数字：说清 x 与 y 要数字', async () => {
+    const recorder = makeSession()
+    const tool = createComputerTools(recorder.session).find((item) => item.name === 'computer_click')
+    const result = await tool?.execute({ sessionId: 'session-1', x: '十', y: 2 }, { owner: 'agent-1' })
+    expect(result?.isError).toBe(true)
+    expect(result?.content).toContain('x')
+  })
+
+  it('打字那一步参数不是对象：说清缺 text', async () => {
+    const recorder = makeSession()
+    const tool = createComputerTools(recorder.session).find((item) => item.name === 'computer_type')
+    const result = await tool?.execute('这不是对象', { owner: 'agent-1' })
+    expect(result?.isError).toBe(true)
+    expect(result?.content).toContain('sessionId')
+  })
+
+  it('打字时正文是空串：说清 text 要非空', async () => {
+    const recorder = makeSession()
+    const tool = createComputerTools(recorder.session).find((item) => item.name === 'computer_type')
+    const result = await tool?.execute({ sessionId: 'session-1', text: '' }, { owner: 'agent-1' })
+    expect(result?.isError).toBe(true)
+    expect(result?.content).toContain('text')
+  })
+
+  it('按键缺 sessionId、缺 key：各自说清缺哪个', async () => {
+    const recorder = makeSession()
+    const tool = createComputerTools(recorder.session).find((item) => item.name === 'computer_key')
+    const noSession = await tool?.execute({ key: 'Enter' }, { owner: 'agent-1' })
+    expect(noSession?.isError).toBe(true)
+    expect(noSession?.content).toContain('sessionId')
+    const noKey = await tool?.execute({ sessionId: 'session-1' }, { owner: 'agent-1' })
+    expect(noKey?.isError).toBe(true)
+    expect(noKey?.content).toContain('key')
+  })
+
+  it('滚动缺 sessionId：说清缺 sessionId', async () => {
+    const recorder = makeSession()
+    const tool = createComputerTools(recorder.session).find((item) => item.name === 'computer_scroll')
+    const result = await tool?.execute({ dy: 10 }, { owner: 'agent-1' })
+    expect(result?.isError).toBe(true)
+    expect(result?.content).toContain('sessionId')
+  })
+})
+
+describe('出错的几条路都走一遍', () => {
+  it('打字、按键、滚动出的错都要变成错误结果', async () => {
+    for (const name of ['computer_type', 'computer_key', 'computer_scroll']) {
+      const recorder = makeSession({ failWith: new ComputerUseError('NO_SESSION', 'computer-use: 没有这个会话') })
+      const tool = createComputerTools(recorder.session).find((item) => item.name === name)
+      const args =
+        name === 'computer_type'
+          ? { sessionId: 'session-1', text: '你好' }
+          : name === 'computer_key'
+            ? { sessionId: 'session-1', key: 'Enter' }
+            : { sessionId: 'session-1', dy: 10 }
+      const result = await tool?.execute(args, { owner: 'agent-1' })
+      expect(result?.isError).toBe(true)
+      expect(result?.content).toContain('没有这个会话')
+    }
+  })
+})
+
+describe('归属与截图渲染的边角', () => {
+  it('上下文里没有 owner 时用兜底归属者', async () => {
+    const recorder = makeSession()
+    const tool = createComputerTools(recorder.session, { defaultOwner: 'fallback-owner' }).find(
+      (item) => item.name === 'computer_click',
+    )
+    // 没有 ctx（undefined）与 ctx 里 owner 是空串，两种都该走兜底。
+    const result = await tool?.execute({ sessionId: 'session-1', x: 1, y: 2 }, {})
+    expect(result?.isError).toBeUndefined()
+  })
+
+  it('截图给不出屏幕尺寸时，结果里就不写尺寸', async () => {
+    const recorder = makeSession({ shotWithoutSize: true })
+    const tool = createComputerTools(recorder.session).find((item) => item.name === 'computer_screenshot')
+    const result = await tool?.execute({ sessionId: 'session-1' }, { owner: 'agent-1' })
+    const parsed = JSON.parse(result?.content ?? '{}') as { size?: string; inline?: boolean }
+    expect(parsed.inline).toBe(true)
+    expect(parsed.size).toBe('')
+  })
+
+  it('动作种类认得全，认不得的要拒掉', () => {
+    for (const kind of ['click', 'type', 'key', 'move', 'scroll']) {
+      expect(isComputerActionKind(kind)).toBe(true)
+    }
+    expect(isComputerActionKind('drag')).toBe(false)
+    expect(isComputerActionKind('')).toBe(false)
   })
 })

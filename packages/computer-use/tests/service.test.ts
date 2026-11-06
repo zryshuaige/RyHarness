@@ -5,7 +5,7 @@
  * 拿真桌面来测只会让用例变慢又脆（本包本来也不带桌面自动化）。
  */
 import { describe, expect, it } from 'vitest'
-import type { ComputerApprovalRequest, ComputerDriver } from '../src/index.ts'
+import type { ComputerAction, ComputerApprovalRequest, ComputerDriver } from '../src/index.ts'
 import {
   ComputerSessionService,
   ComputerUseError,
@@ -316,6 +316,25 @@ describe('安全边界：坐标与参数', () => {
         expect((error as ComputerUseError).code).toBe('INVALID_ARGUMENT')
       }
     }
+  })
+
+  it('不认识的 action.kind 报 INVALID_ARGUMENT，不当成「什么都没做也算成功」', async () => {
+    const { service, drivers } = makeService({ approver: async () => true })
+    const session = await service.open('agent-1')
+    // 动作可能来自宿主解析出来的 JSON——编译期管不到 kind 的取值。
+    // 认不出来的 kind 必须报错：下面那个分发 switch 没有 default 分支，
+    // 放过去就会「什么都不做就返回」，调用方以为点成功了。
+    for (const kind of ['drag', 'double-click', '', 'CLICK']) {
+      try {
+        await service.act('agent-1', session.id, { kind } as unknown as ComputerAction)
+        expect.unreachable(`不认识的 kind「${kind}」就该报错`)
+      } catch (error) {
+        expect((error as ComputerUseError).code).toBe('INVALID_ARGUMENT')
+        expect((error as ComputerUseError).message).toContain('不认识的动作种类')
+      }
+    }
+    // 认不出来的时候也不能真的去驱动桌面。
+    expect(drivers[0]?.calls ?? []).toEqual([])
   })
 })
 

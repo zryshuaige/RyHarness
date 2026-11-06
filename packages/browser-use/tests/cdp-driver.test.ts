@@ -133,6 +133,55 @@ describe.skipIf(!hasBrowser)('CDP 驱动（真机）', () => {
     },
     REAL_TIMEOUT_MS,
   )
+
+  it(
+    '真能往页面里打字：点一下聚焦，再输入，文字真的进到页面里',
+    async () => {
+      const factory = createCdpDriverFactory()
+      try {
+        const driver = await factory.driverFactory()
+        await driver.open(`data:text/html;charset=utf-8,${encodeURIComponent(TYPING_PAGE)}`)
+        await driver.click('#pad')
+        await driver.type('你好世界')
+        expect(await driver.readText()).toContain('你好世界')
+      } finally {
+        await factory.close()
+      }
+    },
+    REAL_TIMEOUT_MS,
+  )
+
+  it(
+    '关掉这个标签页之后就读不到东西了（不是假装还开着）',
+    async () => {
+      const factory = createCdpDriverFactory()
+      try {
+        const driver = await factory.driverFactory()
+        await driver.open(`data:text/html;charset=utf-8,${encodeURIComponent(CLICKABLE_PAGE)}`)
+        await driver.close()
+        await expect(driver.readText()).rejects.toThrow()
+      } finally {
+        await factory.close()
+      }
+    },
+    REAL_TIMEOUT_MS,
+  )
+
+  it(
+    '正文太长会被截断：模型看到的是有界的文本，不是整页',
+    async () => {
+      const factory = createCdpDriverFactory()
+      try {
+        const driver = await factory.driverFactory()
+        await driver.open(`data:text/html;charset=utf-8,${encodeURIComponent(LONG_PAGE)}`)
+        const text = await driver.readText()
+        expect(text.length).toBe(100_000)
+      } finally {
+        await factory.close()
+      }
+    },
+    REAL_TIMEOUT_MS,
+  )
 })
 
 /** 自带的测试页：点一下按钮，文字会变。 */
@@ -140,3 +189,12 @@ const CLICKABLE_PAGE =
   '<html><body><h1>CDP 真机自测页</h1>' +
   '<button id="mark" onclick="this.textContent=\'已点击\'">标记</button>' +
   '</body></html>'
+
+/** 自带的测试页：一个可编辑的输入区。 */
+const TYPING_PAGE =
+  '<html><body><h1>CDP 打字自测页</h1>' +
+  '<div id="pad" contenteditable="true" style="width:320px;height:120px;border:1px solid #333">输入区</div>' +
+  '</body></html>'
+
+/** 自带的测试页：正文长到会被截断。 */
+const LONG_PAGE = `<html><body><p>${'长'.repeat(150_000)}</p></body></html>`

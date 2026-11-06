@@ -31,8 +31,10 @@
  */
 
 export {
+  COMPUTER_ACTION_KINDS,
   DANGEROUS_COMPUTER_ACTIONS,
   describeComputerAction,
+  isComputerActionKind,
   isDangerousComputerAction,
 } from './dangerous.ts'
 export type { WindowsDesktopOptions } from './drivers/windows.ts'

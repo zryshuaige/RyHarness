@@ -16,7 +16,6 @@
 
 import { ComputerUseError } from './errors.ts'
 import type {
-  ComputerActionKind,
   ComputerOwner,
   ComputerScreenshot,
   ComputerTool,
@@ -307,9 +306,4 @@ function renderScreenshot(shot: ComputerScreenshot, maxInline: number): Computer
       dataUrl: `data:${shot.mimeType};base64,${base64}`,
     }),
   }
-}
-
-/** 这个字符串是不是一个动作种类。 */
-export function isComputerActionKind(value: string): value is ComputerActionKind {
-  return value === 'click' || value === 'type' || value === 'key' || value === 'move' || value === 'scroll'
 }

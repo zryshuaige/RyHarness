@@ -18,7 +18,7 @@
  */
 
 import { randomBytes } from 'node:crypto'
-import { describeComputerAction, isDangerousComputerAction } from './dangerous.ts'
+import { describeComputerAction, isComputerActionKind, isDangerousComputerAction } from './dangerous.ts'
 import { ComputerUseError } from './errors.ts'
 import type {
   ComputerAction,
@@ -158,6 +158,16 @@ export class ComputerSessionService {
    */
   async act(owner: ComputerOwner, sessionId: string, action: ComputerAction): Promise<void> {
     const record = this.#require(owner, sessionId)
+    // kind 的类型是联合类型，但这个值**可能来自宿主解析出来的 JSON**（配置、
+    // HTTP 请求体、别的进程发过来的消息）——编译期管不到的那些路径上，
+    // 运行时要自己把关。
+    //
+    // 不把关的后果很具体：下面那个 switch 没有 default 分支，认不出来的 kind
+    // 会**什么都不做就返回**，调用方以为动作执行成功了——点了个寂寞。
+    const kind: unknown = action.kind
+    if (typeof kind !== 'string' || !isComputerActionKind(kind)) {
+      throw new ComputerUseError('INVALID_ARGUMENT', `computer-use: 不认识的动作种类「${String(kind)}」`)
+    }
     await this.#ensureApproved(action)
     switch (action.kind) {
       case 'click': {

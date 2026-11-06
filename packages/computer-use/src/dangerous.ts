@@ -24,6 +24,27 @@ import type { ComputerActionKind, ComputerApprovalRequest } from './types.ts'
 export const DANGEROUS_COMPUTER_ACTIONS: readonly ComputerActionKind[] = ['click', 'type', 'key']
 
 /**
+ * 全部合法的动作种类。
+ *
+ * 这是 kind 的**唯一权威清单**：判定「这个字符串是不是一种动作」时看它，不在别处
+ * 另写一份——写两份就会走偏（漏了一种、或多认了一种）。
+ */
+export const COMPUTER_ACTION_KINDS: readonly ComputerActionKind[] = ['click', 'type', 'key', 'move', 'scroll']
+
+/**
+ * 这个字符串是不是一种合法的动作种类。
+ *
+ * **为什么需要运行时判定**：{@link ComputerActionKind} 是编译期的联合类型，但动作
+ * 也可能来自宿主解析出来的 JSON、来自别的进程发过来的消息——那些路径上编译期
+ * 管不到。判定不出来时必须报错，不能让它一路走到分发逻辑里。
+ * @param value - 待判定的字符串。
+ * @returns 合法则 true。
+ */
+export function isComputerActionKind(value: string): value is ComputerActionKind {
+  return (COMPUTER_ACTION_KINDS as readonly string[]).includes(value)
+}
+
+/**
  * 这个动作是不是高危动作（默认要人点头）。
  * @param kind - 动作种类。
  * @returns 高危返回 true。

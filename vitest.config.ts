@@ -140,6 +140,25 @@ export default defineConfig({
     // 传第三个参数或 per-test timeout 收紧，这里的 30s 只是不再把负载误判成缺陷。
     testTimeout: 30_000,
     /**
+     * 并发上限写死为 2，不跟着机器核数走。
+     *
+     * 为什么：本仓有一批用例会**真起外部进程**——开 Edge（CDP 驱动）、起 Word（document
+     * 转换器）、起 PowerShell（computer-use）、起 shell 与语言服务器。它们的内存与句柄
+     * 都是实打实的，而 vitest 默认按核数起 worker（20 核机器上就是 19 个）。19 个 worker
+     * 里只要有两个同时开浏览器和 Word，别的 worker 就会被挤到申请内存失败，进程直接
+     * 消失——报出来的是 `Worker exited unexpectedly`，看不出是谁杀谁。
+     *
+     * 实测（2026-11-04，20 核 / 16 GB）：
+     * - `--maxWorkers=4`：381 个文件里有 2 个 worker 猝死（`plugins.test.ts`、
+     *   `evolve-observability.test.ts`），整轮没有覆盖率结论；
+     * - `--maxWorkers=2`：381 个文件全过，247 秒。
+     *
+     * 为什么写进配置而不是靠命令行：本地 20 核、CI runner 4 核，两边默认并行度差 5 倍。
+     * 写死之后**本地与 CI 跑的是同一件事**，不会出现「本地绿、CI 红」那种最难查的差异。
+     * 代价是本地全量从 3 分钟变 4 分钟，换来的是这条通道不再随机红。
+     */
+    maxWorkers: 2,
+    /**
      * 失败重试一次（本仓的墙钟口径就定在这里）。
      *
      * 为什么值 1 而不是 0：全量测试里散着几条**量机器**的断言——`packages/memory/tests/

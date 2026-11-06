@@ -62,15 +62,18 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: Test
+      - name: Test & Coverage
         # 根 vitest.config.ts 是唯一 runner：包级 test 脚本并不存在，
         # 在这里写 `pnpm test` 会依赖根脚本转发，等于绕一圈。
-        run: npx vitest run
-
-      - name: Coverage
-        # 根 vitest.config.ts 的 thresholds 是逐文件「未覆盖条数上限」的棘轮：新写一个
-        # 不带测试的文件进来会红，回头补存量债不会。单独一轮而不是复用上面的 Test：
-        # coverage 需要重新统计执行数据。
+        #
+        # 覆盖率与测试**跑在同一轮**里，不是两轮：`--coverage` 跑的就是全部测试
+        # （coverage 需要重新统计执行数据，所以它自己就是一次全量）。分成两轮会让
+        # 这条通道跑两遍全量——本仓的用例会真起浏览器与 Word，两轮下来 20 分钟的
+        # 上限不够用（实测单轮 247 秒，CI runner 更慢）。合在一轮后，测试失败与
+        # 覆盖率不达标都会让这一步变红，日志里各说各的。
+        #
+        # 并发度由 vitest.config.ts 的 maxWorkers 定死（2），不跟机器核数走——
+        # 真机用例互相踩是这条通道随机红的主因，理由写在那份配置里。
         run: npx vitest run --coverage
 
       - name: Guardrails (类型逃逸 / 包依赖缺失 / 重复代码 / lint 棘轮 / NOTICE 总账 / 死代码)
