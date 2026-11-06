@@ -1561,9 +1561,11 @@ export class RyHarnessServer {
   private async doClose(): Promise<void> {
     if (this.heartbeat !== undefined) clearInterval(this.heartbeat)
     if (this.consolidationTimer !== undefined) clearInterval(this.consolidationTimer)
-    this.proactiveDigest.close()
+    await this.closeQuietly(() => this.proactiveDigest.close())
     // 进程外端点先收：外面连着的那条连接不该在库里都关了之后还醒着。
-    await this.closeRpcEndpoint?.()
+    await this.closeQuietly(async () => {
+      await this.closeRpcEndpoint?.()
+    })
     const pending = this.turnEngine.pendingTurns()
     if (pending.length > 0) {
       let timer: ReturnType<typeof setTimeout> | undefined
@@ -1577,17 +1579,39 @@ export class RyHarnessServer {
     }
     for (const client of this.wss.clients) client.terminate()
     this.wss.close()
-    await new Promise<void>((resolve, reject) => {
+    await new Promise<void>((resolve) => {
       this.http.close((error) => {
-        return error === undefined || error === null ? resolve() : reject(error)
+        // 关不掉就如实记一笔，但停机继续往下走：后面的收尾（插件、记忆、演进、
+        // 库）漏掉任何一件，后果比「http 没关干净」严重得多。
+        if (error !== undefined && error !== null) console.error('[ryharness] HTTP 服务没关干净：', error)
+        resolve()
       })
     })
     // 插件在数据库关闭之前逆序卸载：工具/路由的 disposer 里若还要读 store，
     // 此时仍拿得到连接。
-    await this.plugins.close()
-    this.store.close()
-    this.memoryService?.close()
-    this.evolutionService?.close()
+    await this.closeQuietly(() => this.plugins.close())
+    // **记忆与演进服务要在库关闭之前收**：它们的收尾要写库（记忆落盘、巩固结算）。
+    // 先关库再关它们，就是让它们去写一个已经关掉的连接——SQLite 在 native 层
+    // 直接把进程带走（不抛异常，进程就没了）。
+    await this.closeQuietly(() => this.memoryService?.close())
+    await this.closeQuietly(() => this.evolutionService?.close())
+    // 关库放在最后：上面那些收尾都要它。
+    await this.closeQuietly(() => this.store.close())
+  }
+
+  /**
+   * 收一个可能失败的东西，失败不打断后面的收尾。
+   *
+   * 停机流程里每一件都要做完：前面的失败会让后面的都不做，而那些「后面的」
+   * （记忆服务、演进服务）留在后台，就是它们去碰已经关掉的库。
+   * @param action - 要收的东西。
+   */
+  private async closeQuietly(action: () => void | Promise<void>): Promise<void> {
+    try {
+      await action()
+    } catch {
+      // 收不干净的东西由它自己记下原因（见各服务的 close 注释）；停机不能因为它失败。
+    }
   }
 
   // ---- WS ----

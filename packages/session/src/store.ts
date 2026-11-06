@@ -335,9 +335,16 @@ export class SessionStore {
     return SCHEMA_VERSION
   }
 
-  /** 关闭数据库句柄。 */
+  /**
+   * 关闭数据库句柄。
+   *
+   * **幂等**：关过一次之后再关不报错。关库这件事常会来两遍——宿主的停机流程
+   * 走一遍，异常路径上（比如某个用例故意提前关库来制造写失败）又会走一遍。
+   * 第二次抛 `ERR_INVALID_STATE` 会把停机流程**从中间截断**：后面的清理
+   * （记忆服务、演进服务的收尾）就都不执行了，它们留在后台继续写一个已经关掉的库。
+   */
   close(): void {
-    this.db.close()
+    if (this.db.open) this.db.close()
   }
 
   // ---- agents ----

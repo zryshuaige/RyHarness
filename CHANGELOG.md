@@ -65,6 +65,16 @@
 - **远程调用不再丢 `this`**（`packages/typert/gateway`）：从实例上读方法后没有绑定实例，
   方法读自己的私有字段时会报「Cannot read from private field」。反射读参数签名要靠函数
   源码，所以不能直接 `bind`——改成调用时再绑。
+- **桌面上认不出来的动作不再「静默成功」**（`packages/computer-use`）：动作的 `kind`
+  可能是宿主从 JSON 里读出来的，编译期管不到。原来那个分发 `switch` 没有 `default`
+  分支，认不出来的 kind 会**什么都不做就返回**，调用方以为动作执行成功了。现在
+  运行时会校验 kind，不认得就报 `INVALID_ARGUMENT`。
+- **全量测试不再随机红**：本仓有一批用例会真起 Edge / Word / PowerShell / shell，
+  vitest 默认按核数起 worker（20 核机器上 19 个），并发时会把别的 worker 挤到申请
+  内存失败，进程直接消失（报 `Worker exited unexpectedly`，看不出是谁杀谁）。并发上限
+  现在写死在配置里（2），本地与 CI 跑的是同一件事。CI 与发布的「测试」与「覆盖率」
+  也合成一轮——coverage 跑的就是全量测试，分两轮等于把全量跑两遍，20 分钟的上限
+  不够用。
 
 ## [0.4.0] - 2026-11-01
 

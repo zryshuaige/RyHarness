@@ -159,6 +159,23 @@ export default defineConfig({
      */
     maxWorkers: 2,
     /**
+     * worker 的堆上限写死 1GB。
+     *
+     * **为什么**：堆溢出时 V8 会打印 "JavaScript heap out of memory" 并带着栈退出——
+     * 那是一条**能读懂**的线索。而没有上限时，进程走到系统提交的边界会被 Windows
+     * 直接带走，vitest 那边只看到「Worker exited unexpectedly」，既没有断言失败，
+     * 也没有任何日志指向是谁杀谁（这种红最费时间）。写死上限之后，真超了会变成
+     * 「heap out of memory」——能定位。
+     *
+     * 1GB 够本仓的用例用：单个 worker 装下整个服务端装配（实测 114MB RSS）再加
+     * 测试自身的开销，离这个上限还远。
+     */
+    poolOptions: {
+      forks: {
+        execArgv: ['--max-old-space-size=1024'],
+      },
+    },
+    /**
      * 失败重试一次（本仓的墙钟口径就定在这里）。
      *
      * 为什么值 1 而不是 0：全量测试里散着几条**量机器**的断言——`packages/memory/tests/
