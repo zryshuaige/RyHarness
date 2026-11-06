@@ -23,8 +23,8 @@
  * @module @ryharness/server/rpc/service
  */
 
-import { Remote } from '@ryharness/typert-protocol'
 import type { SessionStore } from '@ryharness/session'
+import { Remote } from '@ryharness/typert-protocol'
 
 /** 一个会话的摘要。 */
 export interface RemoteConversationView {
@@ -129,7 +129,8 @@ export class RyHarnessRemoteService {
         content: textOf(message.contentBlocks),
         createdAt: message.createdAt,
       }
-    })  }
+    })
+  }
 
   /**
    * 列出当前注册着的工具。

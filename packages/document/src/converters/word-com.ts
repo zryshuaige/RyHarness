@@ -16,10 +16,9 @@
  */
 
 import { type ChildProcess, execFileSync, spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { DocumentError } from '../errors.ts'
 import type { DocumentConverter, DocumentConvertInput, DocumentConvertResult } from '../types.ts'
 

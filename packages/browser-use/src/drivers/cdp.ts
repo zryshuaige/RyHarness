@@ -136,7 +136,10 @@ class CdpConnection {
   #pending = new Map<number, { resolve: (value: CdpReply) => void; reject: (error: Error) => void }>()
   #onEvent: (method: string, params: Record<string, unknown>, sessionId?: string) => void
 
-  constructor(socket: WebSocket, onEvent: (method: string, params: Record<string, unknown>, sessionId?: string) => void) {
+  constructor(
+    socket: WebSocket,
+    onEvent: (method: string, params: Record<string, unknown>, sessionId?: string) => void,
+  ) {
     this.#socket = socket
     this.#onEvent = onEvent
     this.#socket.addEventListener('message', (event: MessageEvent) => {
@@ -174,7 +177,8 @@ class CdpConnection {
     if (this.#socket.readyState !== WebSocket.OPEN) {
       return Promise.reject(new BrowserUseError('DRIVER_FAILED', `browser-use: CDP 连接已断开（${method}）`))
     }
-    const id = (this.#nextId += 1)
+    this.#nextId += 1
+    const id = this.#nextId
     return new Promise<CdpReply>((resolve, reject) => {
       this.#pending.set(id, { resolve, reject })
       this.#socket.send(JSON.stringify({ id, method, params, ...(sessionId === undefined ? {} : { sessionId }) }))
@@ -511,10 +515,7 @@ export class CdpTabDriver implements BrowserDriver {
       this.#tab.sessionId,
     )
     const value = reply.result?.result
-    const text =
-      typeof value === 'object' && value !== null
-        ? (value as { value?: unknown }).value
-        : undefined
+    const text = typeof value === 'object' && value !== null ? (value as { value?: unknown }).value : undefined
     if (typeof text !== 'string') return ''
     return text.length > MAX_TEXT_CHARS ? text.slice(0, MAX_TEXT_CHARS) : text
   }
@@ -534,8 +535,7 @@ export class CdpTabDriver implements BrowserDriver {
         this.#tab.sessionId,
       )
       const value = reply.result?.result
-      const state =
-        typeof value === 'object' && value !== null ? (value as { value?: unknown }).value : undefined
+      const state = typeof value === 'object' && value !== null ? (value as { value?: unknown }).value : undefined
       if (state === 'complete') return
       await delay(150)
     }
@@ -568,7 +568,10 @@ export class CdpTabDriver implements BrowserDriver {
     const width = typeof record.width === 'number' ? record.width : 0
     const height = typeof record.height === 'number' ? record.height : 0
     if (width === 0 || height === 0) {
-      throw new BrowserUseError('DRIVER_FAILED', `browser-use: 元素「${selector}」没有可见区域（宽 ${width}、高 ${height}）。`)
+      throw new BrowserUseError(
+        'DRIVER_FAILED',
+        `browser-use: 元素「${selector}」没有可见区域（宽 ${width}、高 ${height}）。`,
+      )
     }
     return { x, y, width, height }
   }

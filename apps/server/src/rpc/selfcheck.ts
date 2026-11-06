@@ -65,9 +65,10 @@ export interface RpcSelfCheckResult {
  * @param options - 起子进程用的命令与参数。
  * @returns 自检结果（**不抛异常**：失败也是一条结果，端点据此回 200 与失败说明）。
  */
-export async function runRpcSelfCheck(
-  options: { command: string; args: readonly string[] },
-): Promise<RpcSelfCheckResult> {
+export async function runRpcSelfCheck(options: {
+  command: string
+  args: readonly string[]
+}): Promise<RpcSelfCheckResult> {
   let client: RyHarnessClient | undefined
   try {
     client = await RyHarnessClient.spawn({

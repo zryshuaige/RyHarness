@@ -13,8 +13,8 @@
  * @module @ryharness/server/rpc/endpoint
  */
 
-import { RemoteHost } from '@ryharness/api'
 import { AcpAgentServer } from '@ryharness/acp'
+import { RemoteHost } from '@ryharness/api'
 import type { SessionStore } from '@ryharness/session'
 import { RyHarnessRemoteService } from './service.ts'
 import { createRpcLogger, createStdioTransport } from './stdio.ts'
@@ -40,10 +40,7 @@ export interface RpcEndpointOptions {
  * @param mode - 模式：`rpc` 给程序调，`acp` 给编辑器用。
  * @returns 关掉端点的函数。
  */
-export function startRpcEndpoint(
-  options: RpcEndpointOptions,
-  mode: 'rpc' | 'acp',
-): () => Promise<void> {
+export function startRpcEndpoint(options: RpcEndpointOptions, mode: 'rpc' | 'acp'): () => Promise<void> {
   const log = createRpcLogger(`ryharness:${mode}`)
   const transport = createStdioTransport()
 

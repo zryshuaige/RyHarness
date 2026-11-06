@@ -18,6 +18,7 @@ import { RightPanel } from './components/RightPanel.tsx'
 import { RyVibePage } from './components/RyVibePage.tsx'
 import { ToastHost } from './components/ToastHost.tsx'
 import { DEMO_CONVERSATION_PREFIX, WelcomeHome, type WelcomeTarget } from './components/WelcomeHome.tsx'
+import { WorkspacePicker } from './components/WorkspacePicker.tsx'
 import { agentById } from './lib/agents.ts'
 import { useApiBase } from './lib/boot.ts'
 import { markFirstInteractive } from './lib/boot-trace.ts'
@@ -276,6 +277,8 @@ export function App() {
   }, [])
   /** 正在改设置的群（群设置弹窗）；建群走 modal='group'。 */
   const [editingGroup, setEditingGroup] = useState<Conversation | undefined>(undefined)
+  /** 「归到项目」弹窗针对的会话。 */
+  const [pickingWorkspace, setPickingWorkspace] = useState<Conversation | undefined>(undefined)
   /** 待确认删除的 agent（确认弹窗内完成，避免 window.confirm 割裂界面）。 */
   const [deletingAgent, setDeletingAgent] = useState<AgentDef | undefined>(undefined)
   /** 新建 agent 时的初始模板（通讯录模板轨带入）。 */
@@ -988,6 +991,9 @@ export function App() {
             onEditGroup={(conversation) => {
               setEditingGroup(conversation)
             }}
+            onPickWorkspace={(conversation) => {
+              setPickingWorkspace(conversation)
+            }}
             // 宿主自己的 ApiClient：列表自己 new 一个的话，置顶/静音/删除会绕过
             // 壳的刷新与错误处理。onChanged 让操作后的真值重新落到列表上。
             api={api}
@@ -1302,6 +1308,19 @@ export function App() {
               toast.success('群设置已保存')
             }
             await refresh()
+          }}
+        />
+      )}
+      {pickingWorkspace !== undefined && (
+        <WorkspacePicker
+          api={api}
+          conversation={pickingWorkspace}
+          onCancel={() => {
+            setPickingWorkspace(undefined)
+          }}
+          onAssigned={() => {
+            setPickingWorkspace(undefined)
+            void refresh()
           }}
         />
       )}

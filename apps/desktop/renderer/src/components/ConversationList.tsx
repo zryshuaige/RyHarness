@@ -238,6 +238,7 @@ export function ConversationList({
   api,
   onChanged,
   onEditGroup,
+  onPickWorkspace,
   onJumpToMessage,
   collapsed,
   onToggleCollapsed,
@@ -255,6 +256,12 @@ export function ConversationList({
   onChanged?: () => void
   /** 行尾「群设置」：只有群聊才给这个入口；不传则整项不渲染。 */
   onEditGroup?: (conversation: Conversation) => void
+  /**
+   * 「归到项目」：把这个会话挂到某个工作区（助理读写文件的边界跟着走）。
+   *
+   * 不传则整项不渲染——旧版服务端没有工作区这个概念，给个点不动的按钮更糟。
+   */
+  onPickWorkspace?: (conversation: Conversation) => void
   /** 搜索命中跳转：除切会话外，把定位交给聊天视图。 */
   onJumpToMessage?: (conversationId: string, messageId: string) => void
   /** 左栏收起态（宿主持有状态与持久化）。 */
@@ -987,6 +994,18 @@ export function ConversationList({
                         >
                           {conversation.muted === true ? '取消静音' : '静音'}
                         </button>
+                        {onPickWorkspace !== undefined && (
+                          <button
+                            type="button"
+                            className="btn btn-mini"
+                            onClick={() => {
+                              closeMenu(false)
+                              onPickWorkspace(conversation)
+                            }}
+                          >
+                            归到项目
+                          </button>
+                        )}
                         <button
                           type="button"
                           className="btn btn-mini btn-danger"

@@ -6,8 +6,8 @@
  */
 import { Readable, Writable } from 'node:stream'
 import { describe, expect, it } from 'vitest'
-import { createStdioTransport } from '../src/rpc/stdio.ts'
 import { RyHarnessRemoteService } from '../src/rpc/service.ts'
+import { createStdioTransport } from '../src/rpc/stdio.ts'
 
 /** 一个能读的内存流。 */
 function readableOf(text: string): Readable {
@@ -76,9 +76,7 @@ describe('stdio 传输', () => {
 describe('远程服务', () => {
   /** 建一个带替身依赖的服务。 */
   function makeService(): RyHarnessRemoteService {
-    const conversations = [
-      { id: 'c1', kind: 'direct', title: '会话一', memberAgentIds: ['ryen'], updatedAt: 10 },
-    ]
+    const conversations = [{ id: 'c1', kind: 'direct', title: '会话一', memberAgentIds: ['ryen'], updatedAt: 10 }]
     const messages = [
       {
         seq: 1,

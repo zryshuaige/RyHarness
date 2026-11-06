@@ -12,121 +12,97 @@ import { RyHarnessClient } from '../src/index.ts'
 const FAKE_SERVER = fileURLToPath(new URL('./fake-ryharness.mjs', import.meta.url))
 
 describe('RyHarnessClient', () => {
-  it(
-    '连上之后能调通一个方法：拿到的是服务端给的东西',
-    async () => {
-      const client = await RyHarnessClient.spawn({
-        command: process.execPath,
-        args: [FAKE_SERVER],
-        timeoutMs: 10_000,
-      })
-      try {
-        const conversations = await client.listConversations(3)
-        expect(Array.isArray(conversations)).toBe(true)
-        expect(conversations.length).toBe(1)
-        expect(conversations[0]?.id).toBe('conv-1')
-        expect(conversations[0]?.title).toBe('假会话')
-      } finally {
-        await client.close()
-      }
-    },
-    30_000,
-  )
-
-  it(
-    '类型图能拿到：上面挂着 ryharness 这个命名空间',
-    async () => {
-      const client = await RyHarnessClient.spawn({
-        command: process.execPath,
-        args: [FAKE_SERVER],
-        timeoutMs: 10_000,
-      })
-      try {
-        const graph = (await client.graph()) as { namespaces?: string[] }
-        expect(graph.namespaces).toContain('ryharness')
-      } finally {
-        await client.close()
-      }
-    },
-    30_000,
-  )
-
-  it(
-    '工具清单能拿到',
-    async () => {
-      const client = await RyHarnessClient.spawn({
-        command: process.execPath,
-        args: [FAKE_SERVER],
-        timeoutMs: 10_000,
-      })
-      try {
-        const tools = await client.listTools()
-        expect(tools.length).toBeGreaterThan(0)
-        expect(tools[0]?.name).toBe('fs_read')
-      } finally {
-        await client.close()
-      }
-    },
-    30_000,
-  )
-
-  it(
-    '服务端回的东西形状不对时，给的是空数组而不是崩掉',
-    async () => {
-      const client = await RyHarnessClient.spawn({
-        command: process.execPath,
-        args: [FAKE_SERVER],
-        timeoutMs: 10_000,
-      })
-      try {
-        // 假服务端对 writeSetting 回的不是数组——那一层要能扛住。
-        const messages = await client.listMessages('conv-1', 10)
-        expect(Array.isArray(messages)).toBe(true)
-      } finally {
-        await client.close()
-      }
-    },
-    30_000,
-  )
-
-  it(
-    '关掉之后子进程真的不在了',
-    async () => {
-      const client = await RyHarnessClient.spawn({
-        command: process.execPath,
-        args: [FAKE_SERVER],
-        timeoutMs: 10_000,
-      })
-      await client.listTools()
+  it('连上之后能调通一个方法：拿到的是服务端给的东西', async () => {
+    const client = await RyHarnessClient.spawn({
+      command: process.execPath,
+      args: [FAKE_SERVER],
+      timeoutMs: 10_000,
+    })
+    try {
+      const conversations = await client.listConversations(3)
+      expect(Array.isArray(conversations)).toBe(true)
+      expect(conversations.length).toBe(1)
+      expect(conversations[0]?.id).toBe('conv-1')
+      expect(conversations[0]?.title).toBe('假会话')
+    } finally {
       await client.close()
-      // 再调一次就该失败——连接真的断了。
-      await expect(client.listTools()).rejects.toThrow()
-    },
-    30_000,
-  )
+    }
+  }, 30_000)
 
-  it(
-    'attach：用现成的连接也能调（同一个进程内的两端）',
-    async () => {
-      const { createMemoryTransportPair } = await import('@ryharness/api')
-      const [clientSide, serverSide] = createMemoryTransportPair()
-      // 服务端那一头回一句能认的话。
-      serverSide.onData((chunk) => {
-        for (const line of chunk.split('\n')) {
-          const trimmed = line.trim()
-          if (trimmed.length === 0) continue
-          const message = JSON.parse(trimmed) as { id?: number; method?: string }
-          if (message.id === undefined) continue
-          serverSide.write(
-            `${JSON.stringify({ jsonrpc: '2.0', id: message.id, result: { namespaces: ['ryharness'] } })}\n`,
-          )
-        }
-      })
-      const client = await RyHarnessClient.attach(clientSide)
+  it('类型图能拿到：上面挂着 ryharness 这个命名空间', async () => {
+    const client = await RyHarnessClient.spawn({
+      command: process.execPath,
+      args: [FAKE_SERVER],
+      timeoutMs: 10_000,
+    })
+    try {
       const graph = (await client.graph()) as { namespaces?: string[] }
       expect(graph.namespaces).toContain('ryharness')
+    } finally {
       await client.close()
-    },
-    30_000,
-  )
+    }
+  }, 30_000)
+
+  it('工具清单能拿到', async () => {
+    const client = await RyHarnessClient.spawn({
+      command: process.execPath,
+      args: [FAKE_SERVER],
+      timeoutMs: 10_000,
+    })
+    try {
+      const tools = await client.listTools()
+      expect(tools.length).toBeGreaterThan(0)
+      expect(tools[0]?.name).toBe('fs_read')
+    } finally {
+      await client.close()
+    }
+  }, 30_000)
+
+  it('服务端回的东西形状不对时，给的是空数组而不是崩掉', async () => {
+    const client = await RyHarnessClient.spawn({
+      command: process.execPath,
+      args: [FAKE_SERVER],
+      timeoutMs: 10_000,
+    })
+    try {
+      // 假服务端对 writeSetting 回的不是数组——那一层要能扛住。
+      const messages = await client.listMessages('conv-1', 10)
+      expect(Array.isArray(messages)).toBe(true)
+    } finally {
+      await client.close()
+    }
+  }, 30_000)
+
+  it('关掉之后子进程真的不在了', async () => {
+    const client = await RyHarnessClient.spawn({
+      command: process.execPath,
+      args: [FAKE_SERVER],
+      timeoutMs: 10_000,
+    })
+    await client.listTools()
+    await client.close()
+    // 再调一次就该失败——连接真的断了。
+    await expect(client.listTools()).rejects.toThrow()
+  }, 30_000)
+
+  it('attach：用现成的连接也能调（同一个进程内的两端）', async () => {
+    const { createMemoryTransportPair } = await import('@ryharness/api')
+    const [clientSide, serverSide] = createMemoryTransportPair()
+    // 服务端那一头回一句能认的话。
+    serverSide.onData((chunk) => {
+      for (const line of chunk.split('\n')) {
+        const trimmed = line.trim()
+        if (trimmed.length === 0) continue
+        const message = JSON.parse(trimmed) as { id?: number; method?: string }
+        if (message.id === undefined) continue
+        serverSide.write(
+          `${JSON.stringify({ jsonrpc: '2.0', id: message.id, result: { namespaces: ['ryharness'] } })}\n`,
+        )
+      }
+    })
+    const client = await RyHarnessClient.attach(clientSide)
+    const graph = (await client.graph()) as { namespaces?: string[] }
+    expect(graph.namespaces).toContain('ryharness')
+    await client.close()
+  }, 30_000)
 })

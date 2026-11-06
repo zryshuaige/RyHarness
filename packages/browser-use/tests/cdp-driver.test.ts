@@ -90,7 +90,7 @@ describe.skipIf(!hasBrowser)('CDP 驱动（真机）', () => {
         const driver = await factory.driverFactory()
         expect(driver.name).toBe('cdp')
 
-        await driver.open('data:text/html;charset=utf-8,' + encodeURIComponent(CLICKABLE_PAGE))
+        await driver.open(`data:text/html;charset=utf-8,${encodeURIComponent(CLICKABLE_PAGE)}`)
         const text = await driver.readText()
         expect(text).toContain('CDP 真机自测页')
 
@@ -112,7 +112,7 @@ describe.skipIf(!hasBrowser)('CDP 驱动（真机）', () => {
     async () => {
       const factory = createCdpDriverFactory()
       const driver = await factory.driverFactory()
-      await driver.open('data:text/html;charset=utf-8,' + encodeURIComponent(CLICKABLE_PAGE))
+      await driver.open(`data:text/html;charset=utf-8,${encodeURIComponent(CLICKABLE_PAGE)}`)
       await factory.close()
       await expect(driver.readText()).rejects.toThrow()
     },
@@ -125,7 +125,7 @@ describe.skipIf(!hasBrowser)('CDP 驱动（真机）', () => {
       const factory = createCdpDriverFactory()
       try {
         const driver = await factory.driverFactory()
-        await driver.open('data:text/html;charset=utf-8,' + encodeURIComponent(CLICKABLE_PAGE))
+        await driver.open(`data:text/html;charset=utf-8,${encodeURIComponent(CLICKABLE_PAGE)}`)
         await expect(driver.click('#definitely-not-there')).rejects.toThrow(/找不到元素/)
       } finally {
         await factory.close()

@@ -13,9 +13,9 @@
  */
 
 import { DocumentError } from '../errors.ts'
-import { SofficeConverter, findSoffice } from './soffice.ts'
-import { WordComConverter, hasWordInstalled } from './word-com.ts'
 import type { DocumentConverter } from '../types.ts'
+import { findSoffice, SofficeConverter } from './soffice.ts'
+import { hasWordInstalled, WordComConverter } from './word-com.ts'
 
 /** 引擎的种类。 */
 export type DocumentEngineKind = 'word' | 'libreoffice' | 'none'

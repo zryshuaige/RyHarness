@@ -6,29 +6,8 @@
  * - 输出超过上限时**收掉进程**而不是截断——截断会破坏协议流；
  * - 服务下线时统一收。
  */
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { SubprocessService, spawnManagedStream } from '../src/index.ts'
-
-const tmpDirs: string[] = []
-
-function tempDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'ryharness-stream-'))
-  tmpDirs.push(dir)
-  return dir
-}
-
-afterEach(() => {
-  while (tmpDirs.length > 0) {
-    try {
-      rmSync(tmpDirs.pop() as string, { recursive: true, force: true, maxRetries: 5 })
-    } catch {
-      // Windows 上句柄释放可能滞后；残留目录在临时区，不强求。
-    }
-  }
-})
 
 /** 起一个会一直待着的子进程。 */
 function longLivedScript(): string {
@@ -55,15 +34,12 @@ describe('长驻进程的托管', () => {
 
   it('输出超过上限时收掉进程，而不是截断', async () => {
     // 这个子进程疯狂打印——协议流被截断就废了，只能收掉。
-    const managed = spawnManagedStream(
-      new SubprocessService().provider,
-      {
-        command: process.execPath,
-        args: ['-e', 'while (true) { process.stdout.write("x".repeat(4096)) }'],
-        maxOutputBytes: 8 * 1024,
-        label: '刷屏的进程',
-      },
-    )
+    const managed = spawnManagedStream(new SubprocessService().provider, {
+      command: process.execPath,
+      args: ['-e', 'while (true) { process.stdout.write("x".repeat(4096)) }'],
+      maxOutputBytes: 8 * 1024,
+      label: '刷屏的进程',
+    })
     await new Promise((resolve) => setTimeout(resolve, 1500))
     expect(managed.finished).toBe(true)
   })
