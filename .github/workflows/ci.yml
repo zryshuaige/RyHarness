@@ -28,8 +28,10 @@ jobs:
     # runner，而且真出问题时当天就该红，不必等到晚上。
     if: github.event_name != 'schedule'
     runs-on: windows-latest
-    # 硬性上限：依赖安装 + 构建 + 测试不应超过 20 分钟，超了就是卡死。
-    timeout-minutes: 20
+    # 硬性上限：依赖安装 + 构建 + 测试不应超过 30 分钟，超了就是卡死。
+    # 2026-11-04 从 20 提到 30：测试改成文件之间串行（见 vitest.config.ts 的
+    # fileParallelism），全量从 220 秒变成 440 秒左右，20 分钟的余量不够用了。
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 

@@ -25,7 +25,9 @@ jobs:
   # ---- 1. 质量门禁：与 CI 同一套，另加版本一致性 ----
   verify:
     runs-on: windows-latest
-    timeout-minutes: 25
+    # 2026-11-04 从 25 提到 40：测试改成文件之间串行（见 vitest.config.ts 的
+    # fileParallelism），全量比并行慢一倍，25 分钟的余量不够用了。
+    timeout-minutes: 40
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
     steps:
