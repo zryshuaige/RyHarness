@@ -319,11 +319,13 @@ export default defineConfig({
         'packages/workspace/src/**': { lines: 0, statements: 0, functions: 0, branches: -7 },
         'packages/identity/src/**': { lines: 0, statements: 0, functions: 0, branches: 0 },
         'packages/ssh/src/**': { lines: -3, statements: -6, functions: -2, branches: -18 },
-        // 2026-11-04：本地实测 + 2 行余量（历史上本地与 Windows runner 的实测差 1~2 行，
-        // 两次都是 +2；取本地值会让 CI 那边偶尔差一两行就红）。
-        // soffice.ts 的 23 条分支是「本机没装 LibreOffice，转换器整条路径跑不到」——
-        // 这不是漏测，是环境里没有那个依赖；阈值按实测记着，装了就自然降下来。
-        'packages/document/src/**': { lines: 0, statements: 0, functions: 0, branches: -25 },
+        // 2026-11-04：阈值取 **CI runner 的实测**（不是本机的）。这包的未覆盖数
+        // 本机与 CI 差得远，原因是**环境不一样**：本机装了 Office，Word COM 那条
+        // 转换路径真的走得到，未覆盖分支只有 20；CI 的 windows-latest runner 没装
+        // Office，整条路径跑不到，未覆盖分支是 36（差 16 条，全是「路径没走到」的
+        // 分支，不是漏测的用例）。按本机填会让 CI 必红。
+        // soffice.ts 的 23 条分支同理：本机没装 LibreOffice、CI 也没装，两边一样。
+        'packages/document/src/**': { lines: 0, statements: 0, functions: 0, branches: -38 },
         'packages/settings/src/**': { lines: 0, statements: 0, functions: 0, branches: -1 },
         'packages/credentials/src/**': { lines: 0, statements: 0, functions: 0, branches: -2 },
         // browser-use 的 CDP 驱动：真机用例覆盖了开页面、读正文、截图、点击、打字、
