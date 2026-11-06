@@ -119,7 +119,7 @@ import { registerUsageRoutes } from './routes/usage.ts'
 import { registerVibeRoutes } from './routes/vibe.ts'
 import { registerWorkspaceRoutes } from './routes/workspaces.ts'
 import { startRpcEndpoint } from './rpc/endpoint.ts'
-import { runRpcSelfCheck, serverEntryPath } from './rpc/selfcheck.ts'
+import { runRpcSelfCheck } from './rpc/selfcheck.ts'
 import { AGENT_TEMPLATES, ensureSeedAgents, migrateBuiltinTools, migrateBuiltinVoice } from './seed.ts'
 import { DEFAULT_TELEMETRY_CAPACITY, Telemetry } from './telemetry.ts'
 import { TurnEngine } from './turn-engine.ts'
@@ -516,6 +516,40 @@ export interface RyHarnessServerOptions {
   readonly closeRpcEndpoint: (() => Promise<void>) | undefined
   /** 能力预设：给助理定一版「能用什么」（助理路由用它）。 */
   readonly presetRegistry: PresetRegistry
+  /** 插件配置服务（设置路由与进程外自检都要用它）。 */
+  readonly settingsService: SettingsService
+}
+
+/**
+ * 监听一个端口，**失败要说清楚**。
+ *
+ * `http.listen` 的 'error' 事件默认没有监听器：端口被占用时它不会 reject，而是变成
+ * **未捕获异常**，把整个进程带走——症状是「进程莫名其妙没了」，日志里一行都没有，
+ * 外面只看到「Worker exited unexpectedly」这种没有线索的报错。
+ *
+ * 桌面端是靠「先探测再 listen」绕开这个坑的（见 `apps/desktop/electron/main.ts`），
+ * 但服务端自己更应该有兜底：端口被占是**可预期的**失败，得变成一句能照着做的说明。
+ *
+ * @param http - 要监听的 HTTP 服务。
+ * @param port - 端口（0 = 由系统分配）。
+ * @param host - 地址。
+ */
+async function listenOrFail(http: Server, port: number, host: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const onError = (error: NodeJS.ErrnoException): void => {
+      http.removeListener('listening', onListening)
+      const hint =
+        error.code === 'EADDRINUSE' ? `端口 ${port} 已经被别的进程占着（换个端口，或把占着的那个关掉）` : error.message
+      reject(new Error(`服务端监听 ${host}:${port} 失败：${hint}`))
+    }
+    const onListening = (): void => {
+      http.removeListener('error', onError)
+      resolve()
+    }
+    http.once('error', onError)
+    http.once('listening', onListening)
+    http.listen(port, host)
+  })
 }
 
 /** RyHarness 本地后端服务。 */
@@ -563,6 +597,8 @@ export class RyHarnessServer {
   readonly closeRpcEndpoint: (() => Promise<void>) | undefined
   /** 能力预设注册表（助理路由与设置页共用这一份）。 */
   readonly presetRegistry: PresetRegistry
+  /** 插件配置服务（设置路由与进程外自检都要用它）。 */
+  readonly settingsService: SettingsService
 
   private readonly memoryService: MemoryService | undefined
   private readonly evolutionService: EvolveService | undefined
@@ -612,6 +648,7 @@ export class RyHarnessServer {
     this.turnEngine = options.turnEngine
     this.sandboxPolicy = options.sandboxPolicy
     this.presetRegistry = options.presetRegistry
+    this.settingsService = options.settingsService
   }
 
   /** 第二次及以后的 close() 直接复用首次的停机 Promise（幂等）。 */
@@ -641,7 +678,11 @@ export class RyHarnessServer {
 
   /** 实际监听地址（端口 0 时取系统分配值）。 */
   get url(): string {
-    const address = this.http.address() as { port: number; address: string }
+    // **进程外入口模式没有 HTTP 端口**（协议走 stdio）：那时 address() 返回 null，
+    // 直接取会抛 TypeError——而这行在 main.ts 的启动日志里，一抛就是未捕获异常，
+    // 整个进程带着一句 TypeError 消失。返回空串，调用方自己判断。
+    const address = this.http.address() as { port: number; address: string } | null
+    if (address === null) return ''
     return `http://${address.address}:${address.port}`
   }
 
@@ -1370,6 +1411,7 @@ export class RyHarnessServer {
     const server = new RyHarnessServer({
       store,
       presetRegistry,
+      settingsService,
       coordinator,
       memory: memoryOption,
       memoryService,
@@ -1414,8 +1456,10 @@ export class RyHarnessServer {
           listTools: () => ctx.tools.list().map((tool) => ({ name: tool.name, description: tool.description })),
           recallMemory: async (agentId: string, query: string) => {
             if (memoryService === undefined) return []
-            const recalled = await memoryService.recall(agentId, query)
-            return recalled === undefined ? [] : [recalled]
+            // 契约要的是**记忆条目数组**，不是一段拼好的注入文本——
+            // 注入文本是给模型看的，拼过的；条目是给程序看的，原样的。
+            const rows = await memoryService.hybridRecall(agentId, query)
+            return rows.map((row) => row.content)
           },
           writeSetting: async (key: string, value: string) => {
             await settingsService.update('app', { values: { [key]: value } })
@@ -1449,9 +1493,17 @@ export class RyHarnessServer {
     // 启动那一次的主动消息排在 listen 之前：桌面端是先起服务再开窗口，渲染层的
     // 第一次 `GET /api/conversations` 就该看见这条回顾，而不是等下一轮刷新才冒出来。
     proactiveDigest.start()
-    await new Promise<void>((resolve) => {
-      server.http.listen(options.port ?? DEFAULT_PORT, options.host ?? DEFAULT_HOST, resolve)
-    })
+    // **进程外入口模式不占 HTTP 端口**。
+    //
+    // `--rpc` / `--acp` 是 stdio 协议：外面拿一根管道跟这个进程说话，HTTP 端口对它
+    // 一点用都没有。占着它有两个坏处：一是白占一个端口（桌面端的后端已经占着
+    // 32100，撞上就是 listen 失败）；二是「服务端起自己的 --rpc 子进程做自检」
+    // 这条链路**必然**撞端口——主服务占着 32100，子进程再要同一个端口就只有一条
+    // 路：listen 失败，而 listen 失败在没有 error 监听时是**未捕获异常**，进程直接
+    // 消失。
+    if (options.rpcMode === undefined) {
+      await listenOrFail(server.http, options.port ?? DEFAULT_PORT, options.host ?? DEFAULT_HOST)
+    }
     return server
   }
 
@@ -1464,7 +1516,6 @@ export class RyHarnessServer {
     this.closing ??= this.doClose()
     return this.closing
   }
-
   /** 启动周期巩固（默认 6 小时）。定时器不拖住进程退出，与 WS 心跳一致。 */
   private startConsolidation(intervalMs: number): void {
     this.consolidationIntervalMs = intervalMs
@@ -1579,14 +1630,18 @@ export class RyHarnessServer {
     }
     for (const client of this.wss.clients) client.terminate()
     this.wss.close()
-    await new Promise<void>((resolve) => {
-      this.http.close((error) => {
-        // 关不掉就如实记一笔，但停机继续往下走：后面的收尾（插件、记忆、演进、
-        // 库）漏掉任何一件，后果比「http 没关干净」严重得多。
-        if (error !== undefined && error !== null) console.error('[ryharness] HTTP 服务没关干净：', error)
-        resolve()
+    // **进程外入口模式压根没监听**（协议走 stdio）：关一个没监听的 server 会报
+    // ERR_SERVER_NOT_RUNNING——那不是故障，是本来就没起。
+    if (this.http.listening) {
+      await new Promise<void>((resolve) => {
+        this.http.close((error) => {
+          // 关不掉就如实记一笔，但停机继续往下走：后面的收尾（插件、记忆、演进、
+          // 库）漏掉任何一件，后果比「http 没关干净」严重得多。
+          if (error !== undefined && error !== null) console.error('[ryharness] HTTP 服务没关干净：', error)
+          resolve()
+        })
       })
-    })
+    }
     // 插件在数据库关闭之前逆序卸载：工具/路由的 disposer 里若还要读 store，
     // 此时仍拿得到连接。
     await this.closeQuietly(() => this.plugins.close())
@@ -1865,12 +1920,23 @@ export class RyHarnessServer {
       store,
     })
 
-    // 进程外链路的自检：起一个自己的 --rpc 子进程，用 SDK 连上去。
+    // 进程外链路的自检：把同一套远程服务挂上内存管道，用 SDK 连上去。
     // 这是 SDK 的真实用法——库被用上了，而不是躺在那儿。
     router.get('/api/rpc/selfcheck', async (_req, res) => {
       const result = await runRpcSelfCheck({
-        command: process.execPath,
-        args: [serverEntryPath(), '--rpc'],
+        store,
+        listTools: () => this.tools.list().map((tool) => ({ name: tool.name, description: tool.description })),
+        recallMemory: async (agentId: string, query: string) => {
+          const service = this.memoryService
+          if (service === undefined) return []
+          // 契约要的是**记忆条目数组**，不是一段拼好的注入文本——
+          // 注入文本是给模型看的，拼过的；条目是给程序看的，原样的。
+          const rows = await service.hybridRecall(agentId, query)
+          return rows.map((row) => row.content)
+        },
+        writeSetting: async (key: string, value: string) => {
+          await this.settingsService.update('app', { values: { [key]: value } })
+        },
       })
       json(res, 200, result)
     })

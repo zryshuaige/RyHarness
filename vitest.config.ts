@@ -170,11 +170,7 @@ export default defineConfig({
      * 1GB 够本仓的用例用：单个 worker 装下整个服务端装配（实测 114MB RSS）再加
      * 测试自身的开销，离这个上限还远。
      */
-    poolOptions: {
-      forks: {
-        execArgv: ['--max-old-space-size=1024'],
-      },
-    },
+    execArgv: ['--max-old-space-size=1024'],
     /**
      * 失败重试一次（本仓的墙钟口径就定在这里）。
      *

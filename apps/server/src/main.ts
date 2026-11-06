@@ -31,10 +31,10 @@ const log = (message: string): void => {
   process.stderr.write(`[ryharness] ${message}\n`)
 }
 
-log(`server listening at ${server.url}`)
+// 进程外入口模式没有 HTTP 端口（协议走 stdio），这时没有地址可报。
+if (server.url.length > 0) log(`server listening at ${server.url}`)
 log(`data dir: ${server.dataDir}`)
 if (rpcMode !== undefined) log(`进程外入口已开：${rpcMode}（stdio）`)
-
 let shuttingDown = false
 const shutdown = (): void => {
   if (shuttingDown) return

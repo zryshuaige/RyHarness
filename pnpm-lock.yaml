@@ -217,6 +217,9 @@ importers:
       '@ryharness/tools':
         specifier: workspace:*
         version: link:../../packages/tools
+      '@ryharness/typert-gateway':
+        specifier: workspace:*
+        version: link:../../packages/typert/gateway
       '@ryharness/typert-protocol':
         specifier: workspace:*
         version: link:../../packages/typert/protocol

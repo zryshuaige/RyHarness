@@ -51,7 +51,7 @@ Web GUI），所以「对账」不是逐行比对，而是**按能力家族核�
 | terminal | 持久 PTY | 没有 | **产品可用** | `packages/terminal`（持久会话；**Windows 上是管道模式，没有真 PTY**） | 中 |
 | ssh | 远程 POSIX 一套 fs/subprocess/sandbox | 没有 | **产品可用** | `packages/ssh`（连接接口 + ssh 命令行后端；不引 ssh2 库）+ `apps/server/src/plugins/ssh.ts`（`ssh_exec` / `ssh_read` / `ssh_write` / `ssh_list`；密码走 askpass 不进 argv，凭据从 `packages/credentials` 取） | 低 |
 | lsp | 跳定义/找引用/hover | **本轮补上** | **产品可用** | `packages/lsp`（按扩展名选 provider、四个归一化只读操作、stdio 语言服务器与自写的 LSP 帧协议） | — |
-| document | Office → PDF | 没有 | **产品可用** | `packages/document`（`document_convert` 工具 + `GET /api/document/engines`；**Windows 走 Word COM**（系统自带，不引 LibreOffice），装了 LibreOffice 则走 soffice；两个都没装时工具直说该装什么） | 低 |
+| document | Office → PDF | 没有 | **产品可用** | `packages/document`（`document_convert` 工具 + `GET /api/document/engines`；**Windows 走 Word COM**（系统自带，不引 LibreOffice），装了 LibreOffice 则走 soffice；两个都没装时工具直说该装什么）+ 「我的」页的**文档转换**区块（直接说这台电脑现在用哪个引擎） | 低 |
 | attachment | 内容寻址的附件存储 | 只有类型 | **产品可用** | `packages/attachment/storage`（内容寻址：同一份内容只占一份，id 变了内容才变）+ `GET /api/attachments/:id`（按 sha256 取回字节）+ `POST /api/attachments/lookup`（问一份内容存过没有） | 低 |
 
 ## 三、外部世界（上游 web / mcp / browser-use / computer-use 家族）
@@ -154,5 +154,7 @@ Web GUI），所以「对账」不是逐行比对，而是**按能力家族核�
 | `GET /api/spills/:id` | 溢出文本的定位符是给**模型**取回长结果用的，人看不到也不需要看。 |
 | `GET /api/questions`、`POST /api/questions/:id/answer` | 问答是**助理在会话里问**、人在会话里答；单独的列表页没有意义。 |
 | `GET /api/commands`、`POST /api/commands/execute` | 界面的斜杠命令是**本地命令表**（每条要拿到应用级动作），服务端这份是给程序与模型用的同一套注册表。 |
+| `GET /api/computer/sessions` | 桌面会话是**助理自己在用**的连接（助理开了几个屏幕会话、归在谁名下）。人不会主动去翻「我的桌面会话列表」——要收掉一个会话，助理自己会收。 |
+| `GET /api/attachments/:id`、`POST /api/attachments/lookup` | 按内容寻址存取，**给程序用**：id 就是字节的 sha256，客户端自己算得出来。界面拿附件走的是工作区里那份（带文件名的），界面上显示的就是那个文件名与大小。 |
 
 **判据**：一个接口要有界面入口，得先说清「人在什么时候会主动去看它」。上面这四组都答不上来——它们的触发时机全在会话内部。

@@ -57,6 +57,7 @@
     "@ryharness/subprocess": "workspace:*",
     "@ryharness/terminal": "workspace:*",
     "@ryharness/tools": "workspace:*",
+    "@ryharness/typert-gateway": "workspace:*",
     "@ryharness/typert-protocol": "workspace:*",
     "@ryharness/voice": "workspace:*",
     "@ryharness/web": "workspace:*",

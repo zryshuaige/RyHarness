@@ -5,10 +5,23 @@
  *
  * `@ryharness/sdk` 是**给外部程序用的库**——它被外部程序 import，服务端不会
  * import 它。但「库写好了没人用过」是本轮要消灭的那类死代码，所以这里给它一个
- * 真实的用法：**服务端起一个自己的 `--rpc` 子进程，用 SDK 连上去，问它一句话**。
+ * 真实的用法：**把同一套远程服务挂上一条内存管道，用 SDK 连上去，问它一句话**。
  *
  * 这条链路一旦坏了（协议改了、分帧错了、SDK 与服务端对不上），这个端点就会
- * 报错——而它是**真的跑一遍**，不是模拟。
+ * 报错——而它是**真的跑一遍**，不是模拟：请求真的走 JSON-RPC 帧、真的过网关、
+ * 真的按人写的方法签名注解校验参数。
+ *
+ * ## 为什么在进程内而不是起子进程
+ *
+ * 起子进程那条路**在任何环境下都跑不起来**：
+ * - 源码下 `node main.ts` 起不来（Node 的 type stripping 不支持参数属性这种写法）；
+ * - 打包后 `main.ts` 根本不在（dist 里是 `main.js`）；
+ * - 而且子进程默认还要抢 32100 端口——主服务正占着它，撞上就是 listen 失败，
+ *   而 listen 失败在没有 error 监听时是**未捕获异常**，进程直接消失。
+ *
+ * 进程内这条路的代价是「测不到被外部程序拉起」这一段；那一段由 `--rpc` 开关本身
+ * 保证（外部程序走的就是同一条 `startRpcEndpoint`），selfcheck 要保证的是
+ * **协议对得上**。
  *
  * ## 它不做什么
  *
@@ -17,36 +30,22 @@
  * @module @ryharness/server/rpc/selfcheck
  */
 
-import { resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { RemoteHost } from '@ryharness/api'
 import { RyHarnessClient } from '@ryharness/sdk'
+import type { SessionStore } from '@ryharness/session'
+import { createMemoryTransportPair } from '@ryharness/typert-gateway'
+import { RyHarnessRemoteService } from './service.ts'
 
-/**
- * 服务端自己的入口脚本路径。
- *
- * **按本文件的位置算，不按 cwd**：服务端可能被从任何目录拉起（桌面端内嵌时
- * cwd 是用户的工作目录）。`src/rpc/selfcheck.ts` 往上两级是 `src/`，那里有
- * `main.ts`。
- *
- * **算的时候要防住 jsdom**：vitest 的 jsdom 环境里 `import.meta.url` 是
- * `http://localhost/...` 而不是 `file://`，`fileURLToPath` 会抛「The URL must
- * be of scheme file」。所以这里**不急着算**，等到真要用时再算；真要用的时候
- * 一定是 node 环境，路径是对的。
- */
-function computeServerEntry(): string {
-  const url = import.meta.url
-  if (!url.startsWith('file:')) {
-    throw new Error('rpc: 只能在 Node 环境里算出服务端入口路径。')
-  }
-  return resolve(fileURLToPath(new URL('../main.ts', url)))
-}
-
-/**
- * 服务端自己的入口脚本路径（给组合根用）。
- * @returns 入口脚本的绝对路径。
- */
-export function serverEntryPath(): string {
-  return computeServerEntry()
+/** 自检需要的依赖（与服务端跑的是同一套）。 */
+export interface RpcSelfCheckDeps {
+  /** 会话存储（远程服务要用）。 */
+  readonly store: SessionStore
+  /** 列当前注册着的工具。 */
+  readonly listTools: () => readonly { name: string; description: string }[]
+  /** 召回一位助理的长期记忆。 */
+  readonly recallMemory: (agentId: string, query: string) => Promise<readonly string[]>
+  /** 写一条应用设置。 */
+  readonly writeSetting: (key: string, value: string) => Promise<void>
 }
 
 /** 自检的结果。 */
@@ -60,25 +59,68 @@ export interface RpcSelfCheckResult {
 }
 
 /**
- * 跑一次自检：起一个 `--rpc` 子进程，用 SDK 连上去，取一张类型图。
+ * 跑一次自检：挂上远程服务，用 SDK 连上去，取一张类型图。
  *
- * @param options - 起子进程用的命令与参数。
+ * @param deps - 与服务端跑的是同一套依赖。
  * @returns 自检结果（**不抛异常**：失败也是一条结果，端点据此回 200 与失败说明）。
  */
-export async function runRpcSelfCheck(options: {
-  command: string
-  args: readonly string[]
-}): Promise<RpcSelfCheckResult> {
-  let client: RyHarnessClient | undefined
+export async function runRpcSelfCheck(deps: RpcSelfCheckDeps): Promise<RpcSelfCheckResult> {
+  let host: RemoteHost | undefined
   try {
-    client = await RyHarnessClient.spawn({
-      command: options.command,
-      args: options.args,
-      timeoutMs: 20_000,
+    const [hostSide, clientSide] = createMemoryTransportPair()
+    host = new RemoteHost({ onError: () => {} })
+    host.mount({
+      namespace: 'ryharness',
+      service: new RyHarnessRemoteService({
+        store: deps.store,
+        listTools: deps.listTools,
+        recallMemory: deps.recallMemory,
+        writeSetting: deps.writeSetting,
+      }),
+      serviceKey: 'RyHarness',
+      // 方法签名注解：**类型必须由人写**（运行时不读 TS 类型）。
+      // 参数名要和实际签名对上——对不上时网关会拒这次调用。
+      methods: {
+        listConversations: {
+          params: [{ name: 'limit', type: 'number', optional: true }],
+          returns: 'RyHarnessConversation[]',
+        },
+        listMessages: {
+          params: [
+            { name: 'conversationId', type: 'string' },
+            { name: 'limit', type: 'number', optional: true },
+          ],
+          returns: 'RyHarnessMessage[]',
+        },
+        listTools: { params: [], returns: 'RyHarnessTool[]' },
+        recallMemory: {
+          params: [
+            { name: 'agentId', type: 'string' },
+            { name: 'query', type: 'string' },
+          ],
+          returns: 'string[]',
+        },
+        writeSetting: {
+          params: [
+            { name: 'key', type: 'string' },
+            { name: 'value', type: 'string' },
+          ],
+          returns: 'void',
+        },
+      },
     })
-    const graph = (await client.graph()) as { services?: unknown[] } | undefined
-    const serviceCount = Array.isArray(graph?.services) ? graph.services.length : 0
-    return { ok: true, serviceCount }
+    host.serve(hostSide)
+
+    const client = await RyHarnessClient.attach(clientSide, { timeoutMs: 10_000 })
+    try {
+      const graph = (await client.graph()) as { services?: unknown[] } | undefined
+      const serviceCount = Array.isArray(graph?.services) ? graph.services.length : 0
+      return { ok: true, serviceCount }
+    } finally {
+      await client.close().catch(() => {
+        // 收尾失败不影响自检结论。
+      })
+    }
   } catch (error) {
     return {
       ok: false,
@@ -86,12 +128,6 @@ export async function runRpcSelfCheck(options: {
       error: error instanceof Error ? error.message : String(error),
     }
   } finally {
-    if (client !== undefined) {
-      try {
-        await client.close()
-      } catch {
-        // 收尾失败不影响自检结论。
-      }
-    }
+    host?.close()
   }
 }

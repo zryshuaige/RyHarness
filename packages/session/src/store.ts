@@ -243,6 +243,8 @@ function prunePreMigrateSnapshots(dbPath: string): void {
 /** RyHarness 会话存储。构造时打开（必要时创建）数据库并应用缺失迁移。 */
 export class SessionStore {
   private readonly db: DatabaseSync
+  /** 库是否已经关过（关库是幂等的，见 {@link SessionStore.close}）。 */
+  private closed = false
   /**
    * 预编译语句缓存：`DatabaseSync.prepare()` 每次都要重新解析 SQL 并向 SQLite 要一份
    * 执行计划，而这里的语句全是固定 SQL + 变长参数（长会话里每翻一页消息、每写一条
@@ -344,7 +346,9 @@ export class SessionStore {
    * （记忆服务、演进服务的收尾）就都不执行了，它们留在后台继续写一个已经关掉的库。
    */
   close(): void {
-    if (this.db.open) this.db.close()
+    if (this.closed) return
+    this.closed = true
+    this.db.close()
   }
 
   // ---- agents ----

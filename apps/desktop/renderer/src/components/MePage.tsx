@@ -18,6 +18,7 @@ import { Avatar } from './avatars/Avatar.tsx'
 import { Avatar3D } from './avatars/Avatar3D.tsx'
 import { BRAND_AVATAR } from './avatars/avatars.tsx'
 import { AvatarPicker } from './ContactsPage.tsx'
+import { DocumentEngineSection } from './DocumentEngineSection.tsx'
 import { Icon } from './Icon.tsx'
 import { KIND_LABELS, MemoryHealth } from './MemoryPanel.tsx'
 import { Modal } from './Modal.tsx'
@@ -26,6 +27,14 @@ import { ProviderSettings } from './ProviderSettings.tsx'
 import { WorkspaceSection } from './WorkspaceSection.tsx'
 
 interface MeApi extends ProviderApi {
+  /**
+   * 读本机的文档转换引擎状态。
+   *
+   * **可选**：测试替身不必实现——读不到时那一块显示一句说明，不该让整页报错。
+   */
+  documentEngines?(): Promise<{
+    engine: { kind: 'word' | 'libreoffice' | 'none'; converterId: string; label: string }
+  }>
   /**
    * 列工作区与未归属会话数。
    *
@@ -409,6 +418,7 @@ export function MePage({
             <h3 className="me-group-title">这台电脑</h3>
             <div className="me-list">
               <WorkspaceSection api={api} />
+              <DocumentEngineSection api={api} />
               {api.backup !== undefined && (
                 <div className="me-row me-row-block">
                   <div className="me-row-body">

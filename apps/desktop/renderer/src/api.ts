@@ -1031,6 +1031,18 @@ export class ApiClient {
     return this.request('/api/workspaces')
   }
 
+  /**
+   * 本机的文档转换引擎状态（Word / LibreOffice / 没有）。
+   *
+   * 文档转换是**可以关掉的插件**：插件关着时这条路由不存在（404），界面要把
+   * 「功能被关了」与「本机没装引擎」分开说——两者的下一步不一样。
+   */
+  documentEngines(): Promise<{
+    engine: { kind: 'word' | 'libreoffice' | 'none'; converterId: string; label: string }
+  }> {
+    return this.request('/api/document/engines')
+  }
+
   /** 把会话归到某个工作区（workspaceId 传 null 就是摘出来）。 */
   assignWorkspace(conversationId: string, workspaceId: string | null): Promise<{ workspaceId: string | null }> {
     return this.request(`/api/conversations/${encodeURIComponent(conversationId)}/workspace`, {

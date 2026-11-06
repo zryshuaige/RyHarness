@@ -5,7 +5,7 @@
  * 拿真桌面来测只会让用例变慢又脆（本包本来也不带桌面自动化）。
  */
 import { describe, expect, it } from 'vitest'
-import type { ComputerAction, ComputerApprovalRequest, ComputerDriver } from '../src/index.ts'
+import type { ComputerApprovalRequest, ComputerDriver } from '../src/index.ts'
 import {
   ComputerSessionService,
   ComputerUseError,
@@ -324,9 +324,12 @@ describe('安全边界：坐标与参数', () => {
     // 动作可能来自宿主解析出来的 JSON——编译期管不到 kind 的取值。
     // 认不出来的 kind 必须报错：下面那个分发 switch 没有 default 分支，
     // 放过去就会「什么都不做就返回」，调用方以为点成功了。
+    //
+    // 用 JSON.parse 造这个非法值：它返回的就是「从外面读进来的、类型管不到的东西」，
+    // 与真实的出错路径一模一样，也不需要任何类型断言。
     for (const kind of ['drag', 'double-click', '', 'CLICK']) {
       try {
-        await service.act('agent-1', session.id, { kind } as unknown as ComputerAction)
+        await service.act('agent-1', session.id, JSON.parse(`{"kind":${JSON.stringify(kind)}}`))
         expect.unreachable(`不认识的 kind「${kind}」就该报错`)
       } catch (error) {
         expect((error as ComputerUseError).code).toBe('INVALID_ARGUMENT')
