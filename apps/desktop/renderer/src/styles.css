@@ -484,6 +484,17 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
 .list-panel-toggle:hover { background: var(--hover-bg); color: var(--amber-text); }
 .list-panel:has(.list-panel-toggle) .search-box { padding-right: 40px; }
 .list-panel.is-collapsed .list-panel-toggle { right: auto; left: 7px; }
+/* 新对话按钮：列表头部第一行，右边让出折叠键的绝对定位区（44px = 30px 键 + 两侧留白）。
+   与托盘「新对话」/Ctrl+N 走同一事件（App.tsx 的 NEW_CHAT_EVENT），三种入口一个行为。 */
+.list-new-chat {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin: 0 44px var(--space-2) 0;
+  padding: 5px 10px; border: 1px solid var(--edge); border-radius: var(--radius-sm);
+  background: transparent; color: var(--text-secondary); cursor: pointer;
+  font-size: var(--fs-sm); line-height: 1.4;
+  transition: background var(--dur-hover) var(--ease-out), color var(--dur-hover) var(--ease-out), border-color var(--dur-hover) var(--ease-out);
+}
+.list-new-chat:hover { background: var(--hover-bg); color: var(--amber-text); border-color: var(--amber-text); }
 .search-box-wrap { position: relative; display: block; }
 .search-box-icon {
   position: absolute; left: 11px; top: 50%; transform: translateY(-50%);

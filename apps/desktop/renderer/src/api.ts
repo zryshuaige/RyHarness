@@ -1068,7 +1068,12 @@ export class ApiClient {
         // 重连成功：断开期间的事件已丢失，要求调用方补齐。
         if (attempts > 0) opts.onGap?.()
         attempts = 0
-        setReconnecting(false)
+        // 'open' 必须显式发，不能依赖 setReconnecting 的翻转守卫：新订阅的本地
+        // 标志从 false 起步，首连成功时它是 no-op——而桶视图里的 conn 是跨挂载
+        // 持久的，上一段生命周期留下的 'reconnecting' 就永远没人清（实测：断线
+        // 恢复后横幅僵死，点关闭也没用，尽管流式事件一直在正常到达）。
+        reconnecting = false
+        opts.onStatus?.('open')
       }
       ws.onclose = () => {
         if (closed) return

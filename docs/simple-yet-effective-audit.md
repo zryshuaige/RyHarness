@@ -75,7 +75,7 @@
 
 | 维度 | dsh | kimicode | RyHarness（我们） | 判定 |
 |---|---|---|---|---|
-| 流式与事件面 | 每 delta 一帧瞬态帧（attemptId/revision/index 单调），终帧携带持久 seq 回执；客户端折叠器五类决策（publish/settlement/abandonment/transient/rebaseline），断线 replace+baseline 重放活跃 attempt；WS 多路复用逻辑流 | 闭包 splitter 归一四类 delta；**广播侧微任务合帧 + 快照 diff 只发变化字段**（conversationFeed.ts:290-446）；WS 按订阅分级 | 每 delta 透传不合并；seq 缺口→**重拉历史**（服务器不重放事件，bus.ts 单调 seq + conversations.ts since= 补页）；无瞬态/持久帧之分 | ⚠️ 机制最简但代价真实：弱网/长会话下重拉历史贵；「合帧+快照 diff」「事件重放或瞬态帧」是两个现成可抄的模式 |
+| 流式与事件面 | 每 delta 一帧瞬态帧（attemptId/revision/index 单调），终帧携带持久 seq 回执；客户端折叠器五类决策（publish/settlement/abandonment/transient/rebaseline），断线 replace+baseline 重放活跃 attempt；WS 多路复用逻辑流 | 闭包 splitter 归一四类 delta；**广播侧微任务合帧 + 快照 diff 只发变化字段**（conversationFeed.ts:290-446）；WS 按订阅分级 | 每 delta 透传不合并；seq 缺口→按 `fetchSince(lastSeq)` **增量补页**（ChatView resumeFromGap，非整页重拉——本文初版「重拉历史」的表述在第六波 debug 时勘误）；服务器不重放事件（bus.ts 单调 seq，断线窗口事件即丢）；无瞬态/持久帧之分 | ⚠️ 机制最简但代价真实：断线窗口只能靠 REST 补、无精确补帧；「合帧+快照 diff」「事件重放窗口」仍是两个现成可抄的模式 |
 | 请求装配与提示词 | **section 注册表**（system-prompt 698 行：order 排序、重名抛错、变量严格插值）；工具集 diff 记 developer/message；request/header 四态落盘；AGENTS.md 双候选 + 双全局根去重 + watcher | md 模板 raw 导入 + **单一 vars 函数** + 单一 render 入口；**AGENTS.md 双通道**（进 system prompt + 每次工具调用后探测目录链上「未注入的 AGENTS.md」经 reminder 队列补注）；deferred 工具在装配层裁剪 | 四段直拼（loop.ts:596-601）；AGENTS.md 每轮现读（无缓存，天然热更新，8k 截断）；无工具集 diff 事件、无后置提醒通道 | ⚠️ 功能等价、结构最粗：prompt 变更不可审计（没有 header/context 事件）；模板+变量槽与 section 注册表是现成升级路径 |
 | LLM 适配层 | seam + 适配器不可变快照（换模型不污染在途请求）；normal/always 两态重试（5 次 500ms→10s cap，jitter 0.1）；cache 用量计量（无主动打点） | **SDK maxRetries=0、重试收归统一 policy**（10 次 500ms×2^n cap 32s + 25% jitter，尊重 Retry-After）；**cache_control 实装**（anthropic annotateCache）+ **cache break 遥测**（对比上次请求用量 + tools/prompt/history 三哈希归因） | retry-policy 同代（3 次 500ms→10s cap，jitter 0.1，Retry-After，**仅重试未产出内容的 attempt**——两家报告均无此细节，可能独有）；budget 三段式注释明说对齐 dsh compaction-basic；**无 cache_control 打点**、仅 usage 记账 | 🆚 结构同代；差距集中在 prompt cache 主动打点与失效遥测（长会话成本直接相关） |
 | 沙箱与隔离 | **真内核级**：Linux bwrap→Landlock 链、macOS Seatbelt（探测真收档）、**Windows 受限 token + Job Object（FFI 实装）**；native 模块按平台 optionalDependencies；fs read-before-write 观测策略 | 无内核隔离；安全靠 permissionPolicy + **tree-sitter AST 静态分析**（timeout 500ms/maxNodes 1 万预算，识别 sudo 包装/嵌套深度） | 无内核隔离；ShellGuardPolicy 词面黑名单 + sandboxMode 工具面收窄 + guard；无 AST 级命令分析；进程树清理靠 taskkill | 🆚 与 kimicode 同档、大幅落后 dsh；dsh 的 Windows Job Object 是 FFI 真实现——我们 taskkill 树杀是应用层尽力而为 |
@@ -86,16 +86,20 @@
 
 ### 差距清单（按性价比排序，全部有现成可抄的实现）
 
+> 第六波（2026-11-07 用户视角 debug，`docs/user-debug-2026-11-07.md`）落地后更新状态：
+> #8 性能预算门（perf gate 升为挡合并）与 #9 `~/.agents/skills` 通用根已落地；
+> #10 签名/公证/自动更新经用户裁定**不做**。其余按四档排期记在第六波方案里。
+
 1. **流式广播的合帧 + 快照 diff**（kimicode conversationFeed）：弱网/长会话的带宽与渲染抖动，一次改造全端受益。
 2. **prompt cache 主动打点 + 失效遥测**（kimicode annotateCache + cache_break_detected）：长会话成本直接相关；我们已有 usage 记账，缺最后一步。
 3. **AGENTS.md 后置提醒通道**（kimicode agentsMdReminder）：子目录指令「碰到才生效」，不改 system prompt 结构就能拿到。
-4. **事件重放或瞬态帧**（dsh attempt/rebaseline）：重连体验从「重拉历史」升级为「精确补帧」。
+4. **事件重放或瞬态帧**（dsh attempt/rebaseline）：重连体验从「REST 增量补页」升级为「精确补帧」。
 5. **Windows Job Object 硬隔离**（dsh sandbox-windows-acl FFI）：把 taskkill 树杀升级为内核级约束。
 6. **MCP streamable-http transport**（两家都有）：接远端 MCP server 的前置。
 7. **hooks 事件系统**（kimicode 20 事件）：外部集成的标准面，也是 shell 审批策略的外挂点。
-8. **性能预算门**（dsh）：把 bench 数字变成 CI 断言，perf 从夜间参考变成挡合并的闸。
-9. **~/.agents/skills 通用根**（kimicode）：与 agents 生态互通，改动量≈一个目录项。
-10. **签名/公证/自动更新**（两家）：产品化分发，单人项目可缓，自动更新优先于签名。
+8. ~~**性能预算门**~~（✅ 第六波落地：build-test 增设 Perf gate 挡合并，夜间通道留档）。
+9. ~~**~/.agents/skills 通用根**~~（✅ 第六波落地：defaultSkillRoots 优先级 250，目录存在才收根）。
+10. ~~**签名/公证/自动更新**~~（用户裁定不做）。
 
 ### 我们领先、两家没有的（保持别丢）
 

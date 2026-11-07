@@ -16,6 +16,7 @@
  */
 
 import { type Dirent, existsSync, type FSWatcher, readdirSync, readFileSync, watch } from 'node:fs'
+import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { describeSkillFailure } from './errors.ts'
 import { frontmatterList, frontmatterText, parseFrontmatter } from './frontmatter.ts'
@@ -51,17 +52,20 @@ export interface FileSystemSkillProviderOptions {
 }
 
 /**
- * 按常见约定拼出默认的三个根目录。
+ * 按常见约定拼出默认的技能根目录。
  *
  * 顺序就是优先级：项目里的技能最该赢（它是**这个项目**的做法），自定义目录
- * 居中，用户目录垫底（它是全局的，可能跟项目冲突）。
- * @param options - 项目目录、数据目录与自定义目录。
+ * 居中，`~/.agents/skills` 通用根其次（跨工具共享的全局技能），应用自带用户
+ * 目录垫底（它是全局的，可能跟项目冲突）。
+ * @param options - 项目目录、数据目录与自定义目录；homeDir 供测试注入主目录。
  * @returns 根目录列表（按优先级排好）。
  */
 export function defaultSkillRoots(options: {
   readonly workspaceRoot?: string
   readonly dataDir?: string
   readonly customDirs?: readonly string[]
+  /** 测试注入口：覆盖「用户主目录」（缺省用 os.homedir()）。 */
+  readonly homeDir?: string
 }): SkillRoot[] {
   const roots: SkillRoot[] = []
   if (options.workspaceRoot !== undefined) {
@@ -69,6 +73,13 @@ export function defaultSkillRoots(options: {
   }
   for (const dir of options.customDirs ?? []) {
     roots.push({ path: dir, label: 'custom', priority: 200 })
+  }
+  // ~/.agents/skills 是跨工具的通用技能根（agents 生态的约定位置，kimicode 同款）：
+  // 生态互通靠的就是大家都认这一个目录。只在目录真的存在时收进来——不存在的根
+  // 没有可扫的东西，还省得白挂一个 watcher；用户后来建了目录，重启应用即生效。
+  const universalRoot = join(options.homeDir ?? homedir(), '.agents', 'skills')
+  if (existsSync(universalRoot)) {
+    roots.push({ path: universalRoot, label: 'agents', priority: 250 })
   }
   if (options.dataDir !== undefined) {
     roots.push({ path: join(options.dataDir, 'skills'), label: 'user', priority: 300 })

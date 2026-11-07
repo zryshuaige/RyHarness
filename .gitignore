@@ -110,3 +110,4 @@ vendor/*/*/lib/
 # 用通配收所有 .tmp-*：逐个列过一次，.tmp-icons/ 漏在规则外就被一次 git add -A 带进了仓库。
 /.tmp-*/
 /.zwork/
+.zcode/

@@ -26,7 +26,7 @@ import type { Command } from './lib/commands.ts'
 import { openInFileManager, reportTheme } from './lib/desktop.ts'
 import { errorDetail, humanError } from './lib/error-text.ts'
 import { type AffinityTier, affinityTier, normalizePersona } from './lib/persona.ts'
-import { readSetting, writeSetting } from './lib/storage.ts'
+import { readSetting, removeSetting, writeSetting } from './lib/storage.ts'
 import { toast } from './lib/toast.ts'
 import type { TurnErrorTarget } from './lib/turn-errors.ts'
 import { withViewTransition } from './lib/view-transition.ts'
@@ -91,6 +91,8 @@ export function applyTheme(theme: Theme): void {
 const PANEL_COLLAPSED_KEY = 'ryharness-panel-collapsed'
 /** 左栏（会话列表）收起态的存储键：与右栏同一层，界面偏好而已。 */
 const LIST_COLLAPSED_KEY = 'ryharness-list-collapsed'
+/** 上次选中的会话 id：重启/刷新后回到正在聊的那条（会话已删则忽略）。 */
+const ACTIVE_CONVERSATION_KEY = 'ryharness-active-conversation'
 
 /**
  * 右栏（信息板）默认收起。
@@ -148,6 +150,25 @@ export function loadListCollapsed(): boolean {
     // 隐私模式下 localStorage 不可用，这一版就按默认的展开走。
   }
   return false
+}
+
+/**
+ * 上次选中的会话 id（存在才返回）。
+ *
+ * 聊天应用重启/刷新后落回欢迎页、要用户自己在列表里翻出刚才那条，是把「我在哪」
+ * 这个最基本的状态丢了（2026-11-07 用户视角 debug F5）。恢复发生在会话列表首次
+ * 读到手时：id 对得上才选，对不上（已删除/别处清掉）就静默留在欢迎页。
+ *
+ * 导出供测试与 App 共用：读与写必须同一套口径。
+ */
+export function loadLastConversationId(): string | undefined {
+  try {
+    const stored = readSetting(ACTIVE_CONVERSATION_KEY)
+    if (stored !== null && stored.length > 0) return stored
+  } catch {
+    // 隐私模式下没有存储，这一次回到欢迎页。
+  }
+  return undefined
 }
 
 const RAIL_TABS: { key: Tab; icon: IconName; label: string; beta?: boolean }[] = [
@@ -259,7 +280,14 @@ export function App() {
    * 用户看到的是「没数据」，而实际是「没读出来」。两件事该分开说。
    */
   const [agentsError, setAgentsError] = useState<{ text: string; detail?: string } | undefined>(undefined)
-  const [activeId, setActiveId] = useState<string | undefined>(undefined)
+  /**
+   * 选中的会话：**惰性初始化**自存储（上次会话恢复，F5）。
+   *
+   * 不能先用 undefined 再等刷新后补写——挂载时「持久化选中态」的 effect 会跑在
+   * 刷新之前，把存的键先删掉，恢复就读了个空（实测踩过）。这里直接带上上次
+   * 的值；是否有效（会话还在不在）由 refresh 的第一份会话列表校验。
+   */
+  const [activeId, setActiveId] = useState<string | undefined>(() => loadLastConversationId())
   const [modal, setModal] = useState<'agent' | 'group' | undefined>(undefined)
   /** 正在预览的产物。气泡里的文件卡与右栏的产物行共用这一个出口。 */
   const [preview, setPreview] = useState<ArtifactTarget | undefined>(undefined)
@@ -342,6 +370,18 @@ export function App() {
       // 忽略持久化失败。
     }
   }, [panelCollapsed])
+
+  // 上次会话跟着用户走：选中即记，回欢迎页（托盘「新对话」/Ctrl+N）即清。
+  // 恢复侧在 refresh 的第一份会话列表处（对得上才选）。存不上只是下次启动回到
+  // 欢迎页——旧行为，无害。
+  useEffect(() => {
+    try {
+      if (activeId === undefined) removeSetting(ACTIVE_CONVERSATION_KEY)
+      else writeSetting(ACTIVE_CONVERSATION_KEY, activeId)
+    } catch {
+      // 忽略持久化失败。
+    }
+  }, [activeId])
 
   const togglePanel = useCallback(() => {
     setPanelCollapsed((v) => {
@@ -565,21 +605,35 @@ export function App() {
         setConversations((prev) => {
           return sameList(prev, conversationRes.value.conversations) ? prev : conversationRes.value.conversations
         })
+        // 上次会话校验：activeId 已由惰性初始化带上（见 useState 处），这里只在
+        // 第一份会话列表到手时核对一次——对得上就留在那条会话，对不上（已删除/
+        // 别处清掉）就回欢迎页。之后用户点谁就是谁，刷新不能把人拽走。
+        if (!restoredActiveRef.current) {
+          restoredActiveRef.current = true
+          const list = conversationRes.value.conversations
+          setActiveId((prev) => {
+            return prev !== undefined && list.some((c) => c.id === prev) ? prev : undefined
+          })
+        }
       }
       const failures = [agentRes, templateRes, providerRes, conversationRes].filter((result) => {
         return result.status === 'rejected'
       })
       if (failures.length === 0) {
+        everLoadedRef.current = true
         setLoadError(undefined)
       } else {
-        // 首屏一份数据都没拿到，才是真的连不上；此时报错文案才有意义。
+        // 全屏错误页只属于「首屏一份数据都没拿到」：会话进行中的后台刷新若恰逢
+        // 停机窗口（agents+templates 双失败），界面正开着、WS 横幅正在重连——这时
+        // 把整个应用收走，等于把用户正在看的对话换成一张死胡同（2026-11-07 用户
+        // 视角 debug 实测 F3），恢复还得靠手动点重试。中途失败一律 toast。
         const first = failures[0] as PromiseRejectedResult
-        if (agentRes.status === 'rejected' && templateRes.status === 'rejected') {
+        if (!everLoadedRef.current && agentRes.status === 'rejected' && templateRes.status === 'rejected') {
           // 这里是**原文**：它要喂给 startupFailureHint 判现象（那边按 HTTP 状态与
           // fetch 原话正则），并且只出现在错误页折起来的「详情」里。
           setLoadError(errorDetail(first.reason) ?? '未知原因')
         } else {
-          // 只挂了一项：应用还能用，说一声就好，不该把界面整个收走。
+          // 只挂了一项（或已加载过、中途全挂）：应用还能用，说一声就好。
           toast.error(`有些内容没刷新出来：${humanError(first.reason, '稍后会自动重试')}`)
         }
       }
@@ -596,6 +650,10 @@ export function App() {
     inflight: null,
     queued: false,
   })
+  /** 是否成功加载过一整轮数据：决定刷新失败时「收走界面」还是「说一声就好」（见 F3）。 */
+  const everLoadedRef = useRef(false)
+  /** 上次会话恢复只做一次：后续刷新不再覆盖用户此刻的选择。 */
+  const restoredActiveRef = useRef(false)
   const apiRef = useRef<ApiClient | undefined>(api)
   apiRef.current = api
   const refreshRef = useRef<(() => Promise<void>) | undefined>(undefined)
@@ -980,6 +1038,10 @@ export function App() {
             loading={listLoading}
             collapsed={listCollapsed}
             onToggleCollapsed={toggleList}
+            // 与托盘菜单 / Ctrl+N 同一事件：三种入口，一个行为（回欢迎页选去向）。
+            onNewChat={() => {
+              window.dispatchEvent(new CustomEvent(NEW_CHAT_EVENT))
+            }}
             onSelect={(id) => {
               setActiveId(id)
               // 用户改主意去别的会话：欢迎页那条待发消息就此作废，不在别处冒出来。

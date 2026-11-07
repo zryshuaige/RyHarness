@@ -242,6 +242,7 @@ export function ConversationList({
   onJumpToMessage,
   collapsed,
   onToggleCollapsed,
+  onNewChat,
 }: {
   conversations: Conversation[]
   agents: AgentDef[]
@@ -250,6 +251,13 @@ export function ConversationList({
   onSelect: (id: string) => void
   /** 空态里的"去通讯录"入口（此前只有一句提示，用户不知道往哪走）。 */
   onGoContacts?: () => void
+  /**
+   * 「新对话」按钮：回到欢迎页选去向。
+   *
+   * 不传就不渲染这个按钮。此前开新对话的唯一入口是托盘菜单和 Ctrl+N——窗口里
+   * 没有任何看得见摸得着的按钮（2026-11-07 用户视角 debug F4），浏览器态更是死路。
+   */
+  onNewChat?: () => void
   /** 未传时用内置客户端；测试注入 mock。 */
   api?: ConversationApi
   /** 置顶/静音/删除成功后通知宿主重拉列表。 */
@@ -797,6 +805,18 @@ export function ConversationList({
         </button>
       )}
       <div className="list-panel-header">
+        {onNewChat !== undefined && (
+          <button
+            type="button"
+            className="list-new-chat"
+            title="新对话（回到欢迎页选去向）"
+            aria-label="新对话"
+            onClick={onNewChat}
+          >
+            <Icon name="plus" size={16} />
+            新对话
+          </button>
+        )}
         <span className="search-box-wrap">
           <Icon name="search" size={16} className="search-box-icon" />
           <input

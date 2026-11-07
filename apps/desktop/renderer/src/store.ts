@@ -286,6 +286,27 @@ function replaceAt<T>(items: readonly T[], index: number, value: T): T[] {
   return next
 }
 
+/** 轮次收口时，还没等到结果的工具行被补上的说明（折叠行展开后可见）。 */
+const SEALED_TOOL_CONTENT = '这一轮已经结束，没有等到这条工具调用的结果——它可能被截断、超时，或所在机器断线。'
+
+/**
+ * 把消息里仍处于 running 的工具行就地封成失败态，返回**同一引用或新消息**。
+ *
+ * 轮次结束（message-done / error / 中止 / 断口续接）后再也不该有转圈的工具行：
+ * 那行「正在执行命令」对应的 tool-result 永远不会来了（上游截断、MAX_STEPS、
+ * 断线缺口）。不封口的话，红条都弹了用户还看着一行行转圈，误以为活还在干。
+ * 没有可封项时原样返回，调用方据此保持结构共享。
+ */
+function sealRunningTools(message: UiMessage): UiMessage {
+  let changed = false
+  const parts = message.parts.map((part) => {
+    if (part.kind !== 'tool' || part.status !== 'running') return part
+    changed = true
+    return { ...part, status: 'done' as const, isError: true, content: SEALED_TOOL_CONTENT }
+  })
+  return changed ? { ...message, parts } : message
+}
+
 /**
  * 工具结果正文的截断上限。
  *
@@ -588,7 +609,8 @@ export class ChatStore {
     const messages = this.snapshot.messages.map((message) => {
       if (message.done) return message
       changed = true
-      return { ...message, done: true, version: (message.version ?? 0) + 1 }
+      const sealed = sealRunningTools(message)
+      return { ...sealed, done: true, version: (message.version ?? 0) + 1 }
     })
     // 已经是空的就不换身份：否则一次「什么都没收」的 error 会凭空重绘整棵消息树。
     const typing = Object.keys(this.snapshot.typing).length === 0 ? this.snapshot.typing : {}
@@ -735,18 +757,24 @@ export class ChatStore {
         for (const index of indices) {
           const message = messages[index]
           if (message === undefined) continue
-          const partIndex = message.parts.findIndex((part) => {
-            return part.kind === 'tool' && part.callId === event.callId
+          // 同一 callId 可能对应**多个** part：模型重试后复用同一 id、或劣质供应商
+          // 干脆每轮回同一个 id——只标第一个的话，其余的会永远转圈（实测见过 15 行
+          // 「正在执行命令」挂在已失败的轮次上）。所以要扫全部匹配位。
+          const partIndices: number[] = []
+          message.parts.forEach((part, partIndex) => {
+            if (part.kind === 'tool' && part.callId === event.callId) partIndices.push(partIndex)
           })
-          if (partIndex < 0) continue
+          if (partIndices.length === 0) continue
           const parts = message.parts.slice()
-          parts[partIndex] = {
-            ...(parts[partIndex] as Extract<MessagePart, { kind: 'tool' }>),
-            status: 'done',
-            isError: event.isError,
-            // 结果正文留在这条消息里（见 MessagePart.content）：折叠时丢掉它，气泡就只剩
-            // 一行「已读文件」，用户无从判断 agent 做了什么、错在哪。
-            content: clipToolContent(event.content),
+          for (const partIndex of partIndices) {
+            parts[partIndex] = {
+              ...(parts[partIndex] as Extract<MessagePart, { kind: 'tool' }>),
+              status: 'done',
+              isError: event.isError,
+              // 结果正文留在这条消息里（见 MessagePart.content）：折叠时丢掉它，气泡就只剩
+              // 一行「已读文件」，用户无从判断 agent 做了什么、错在哪。
+              content: clipToolContent(event.content),
+            }
           }
           messages = replaceAt(messages, index, withParts(message, parts))
         }
@@ -838,7 +866,11 @@ export class ChatStore {
           this.streamKeyIndex.delete(sealedKey)
           if (this.streamingIndex.get(event.senderId) === index) this.streamingIndex.delete(event.senderId)
           if (message !== undefined) {
-            messages = replaceAt(messages, index, { ...message, done: true, version: (message.version ?? 0) + 1 })
+            // done 位与工具行收口在同一帧：正常轮次此刻不该有 running 的工具行，
+            // 有就是上游丢了 tool-result（弱网缺口 / MAX_STEPS 截断）——留着它，
+            // 气泡 done 了那行还转圈，比「话没说完」更让人误会还在干活。
+            const sealed = sealRunningTools(message)
+            messages = replaceAt(messages, index, { ...sealed, done: true, version: (message.version ?? 0) + 1 })
           }
         }
         // 兜底清 typing：键可能已在首个 text-delta 就被摘掉，这里对缺失的键

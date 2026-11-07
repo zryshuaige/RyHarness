@@ -102,10 +102,22 @@ jobs:
         run: pnpm bench
         continue-on-error: true
 
+      - name: Perf gate（性能预算门）
+        # 性能清单挡合并（2026-11-07 第六波 #8）：此前 perf 只有 continue-on-error 的
+        # 夜间通道——「数字没变成门」，退化只能靠人翻 artifact 才发现。perf 用例里的
+        # 断言盘点过（docs/user-debug-2026-11-07.md 同期）：除一条余量极大的绝对时间
+        # 外全是**同机互比的比值**与**与机器快慢无关的计数上界**，对 CI runner 负载
+        # 鲁棒，挡得住合并。写新的 *.perf.ts 时遵守同一纪律：比值/计数进断言，纯
+        # 趋势数字进 scripts/bench.ts。
+        #
+        # 与 perf-nightly 的分工：这里管「退化了必须红」，夜间管「数字留档可追溯」
+        # （继续 continue-on-error，只上传 artifact），两不耽误。
+        run: npx vitest run --config vitest.perf.config.ts
+
   # ---- 夜间：性能清单 ----
-  # vitest.perf.config.ts 自己写明「不进默认 CI 通道」，而一个从不运行的脚本会腐烂到
-  # 没人发现它已经坏了。所以给它一条夜间通道：continue-on-error 让它永远不挡住任何人，
-  # 数字作为 artifact 留下来，让「它退化了」变成一件看得见的事。
+  # 夜间性能清单：挡合并的职责已由 build-test 的 Perf gate 承担（比值/计数断言在那边
+  # 是硬门），这里继续跑同一条清单的价值只剩**留档**——数字按 run 存成 artifact，
+  # 「这周比上周慢了多少」有处可查；continue-on-error 让环境抖动不制造噪声红灯。
   perf-nightly:
     if: github.event_name == 'schedule'
     runs-on: windows-latest

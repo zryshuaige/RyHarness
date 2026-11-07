@@ -63,11 +63,12 @@ describe('ApiClient.subscribe 断线重连与 seq 缺口', () => {
     expect(FakeWebSocket.instances).toHaveLength(1)
     FakeWebSocket.instances[0]!.open()
     FakeWebSocket.instances[0]!.serverClose()
-    expect(statuses).toEqual(['reconnecting'])
+    // 首连成功也发 open（2026-11-07 F2 修复）：桶视图持久化的 conn 依赖它归位。
+    expect(statuses).toEqual(['open', 'reconnecting'])
     await sleep(30)
     expect(FakeWebSocket.instances).toHaveLength(2)
     FakeWebSocket.instances[1]!.open()
-    expect(statuses).toEqual(['reconnecting', 'open'])
+    expect(statuses).toEqual(['open', 'reconnecting', 'open'])
     unsubscribe()
   })
 
@@ -141,6 +142,66 @@ describe('ApiClient.subscribe 断线重连与 seq 缺口', () => {
     expect(FakeWebSocket.instances).toHaveLength(3) // 仍用末值 20ms
     await sleep(30)
     expect(FakeWebSocket.instances).toHaveLength(4)
+    unsubscribe()
+  })
+})
+
+/**
+ * 首连成功也要发 'open'（2026-11-07 用户视角 debug F2）：
+ *
+ * setReconnecting 的翻转守卫让「新订阅第一次就连上」变成 no-op——而桶视图里的
+ * conn 是跨挂载持久的，上一段生命周期留下的 'reconnecting' 永远没人清：断线恢复
+ * 后横幅僵死、点关闭也没用，尽管流式事件一直在正常到达。
+ */
+describe('ApiClient.subscribe 首连状态', () => {
+  const api = new ApiClient('http://127.0.0.1:9')
+  const realWs = globalThis.WebSocket
+  /** 取第 n 个连接；没有就炸（比 `!` 非空断言多一句人话，也不给 lint 基线添数）。 */
+  function socketAt(index: number): FakeWebSocket {
+    const ws = FakeWebSocket.instances[index]
+    if (ws === undefined) throw new Error(`FakeWebSocket.instances[${index}] 不存在`)
+    return ws
+  }
+
+  beforeEach(() => {
+    FakeWebSocket.instances = []
+    ;(globalThis as { WebSocket?: unknown }).WebSocket = FakeWebSocket
+  })
+
+  afterEach(() => {
+    ;(globalThis as { WebSocket?: unknown }).WebSocket = realWs
+  })
+
+  it('第一次连接成功就发 open（此前不发，遗留的 reconnecting 没人清）', () => {
+    const statuses: WsConnectionStatus[] = []
+    const unsubscribe = api.subscribe('c-first', () => {}, {
+      onStatus: (status) => {
+        statuses.push(status)
+      },
+    })
+    socketAt(0).open()
+    expect(statuses).toContain('open')
+    unsubscribe()
+  })
+
+  it('open 与物理 onopen 一一对应；重复 open 也不炸（ChatView 侧 patch 幂等）', async () => {
+    const statuses: WsConnectionStatus[] = []
+    const unsubscribe = api.subscribe('c-flap', () => {}, {
+      reconnectDelays: [5],
+      onStatus: (status) => {
+        statuses.push(status)
+      },
+    })
+    socketAt(0).open()
+    socketAt(0).serverClose()
+    socketAt(0).open() // 竞态：close 后旧连接又 open
+    await sleep(30)
+    socketAt(1).open()
+    socketAt(1).open() // 同一 socket 二次 open：再发一次也无害
+    const openCount = statuses.filter((status) => {
+      return status === 'open'
+    }).length
+    expect(openCount).toBe(4)
     unsubscribe()
   })
 })

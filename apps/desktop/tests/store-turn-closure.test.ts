@@ -340,3 +340,94 @@ describe('message-done 的 sender 兜底：度量与护栏', () => {
     expect(store.getSnapshot().messages).toHaveLength(1)
   })
 })
+
+/**
+ * 工具行的收口约定（2026-11-07 用户视角 debug F1，docs/user-debug-2026-11-07.md）：
+ *
+ * 实测一轮工具循环跑到 MAX_STEPS 后，气泡里 15 个「正在执行命令…」行永远转圈——
+ * 轮已失败、红条已弹，这些行却挂着。根因两个，测试各钉一条：
+ * 1. **同 callId 多 part**：模型重试/劣质供应商复用同一 callId 时，tool-result 只标
+ *    第一个匹配 part，其余永远 running。
+ * 2. **轮末不封口**：收口（done / error / 断口续接）只翻 done 位，running 的工具行
+ *    原样留着——结果永远不会来的那一行，比「话没说完」更让人误会活还在干。
+ */
+describe('工具行收口', () => {
+  /** 发一个工具调用行（参数与结果形状对齐 events.ts 的 wire 定义）。 */
+  function toolStart(store: ChatStore, senderId: string, callId: string, name = 'shell_exec'): void {
+    store.apply({
+      type: 'tool-call-start',
+      conversationId: 'c',
+      senderId,
+      callId,
+      name,
+      arguments: '{"command":"echo"}',
+    })
+  }
+
+  function toolResult(store: ChatStore, senderId: string, callId: string, isError = false, content = 'ok'): void {
+    store.apply({ type: 'tool-result', conversationId: 'c', senderId, callId, name: 'shell_exec', isError, content })
+  }
+
+  function toolParts(store: ChatStore): Array<Extract<UiMessage['parts'][number], { kind: 'tool' }>> {
+    return store
+      .getSnapshot()
+      .messages.flatMap((message) => {
+        return message.parts
+      })
+      .filter((part) => {
+        return part.kind === 'tool'
+      })
+  }
+
+  it('同一 callId 的多个工具行：一条 tool-result 全部标到（不再只标第一个）', () => {
+    const store = new ChatStore()
+    start(store, 'ryen', 'Ryen', 0)
+    toolStart(store, 'ryen', 'call-1')
+    toolStart(store, 'ryen', 'call-1')
+    toolResult(store, 'ryen', 'call-1', true, 'unknown tool')
+
+    const rows = toolParts(store)
+    expect(rows).toHaveLength(2)
+    for (const row of rows) {
+      expect(row.status).toBe('done')
+      expect(row.isError).toBe(true)
+      expect(row.content).toBe('unknown tool')
+    }
+  })
+
+  it('message-done 时仍有 running 的工具行：就地封成失败态，不转圈', () => {
+    const store = new ChatStore()
+    start(store, 'ryen', 'Ryen', 0)
+    delta(store, 'ryen', '先说半句')
+    toolStart(store, 'ryen', 'call-lost')
+    done(store, 'ryen', 0)
+
+    const message = store.getSnapshot().messages[0]
+    expect(message?.done).toBe(true)
+    const rows = toolParts(store)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.status).toBe('done')
+    expect(rows[0]?.isError).toBe(true)
+    // 说明文案要让用户能看懂「为什么这行没有结果」。
+    expect(rows[0]?.content).toContain('没有等到')
+  })
+
+  it('error 收口同样封工具行：红条弹出时不再有转圈的「正在执行」', () => {
+    const store = new ChatStore()
+    start(store, 'ryen', 'Ryen', 0)
+    toolStart(store, 'ryen', 'call-a')
+    toolResult(store, 'ryen', 'call-a', true, 'boom')
+    toolStart(store, 'ryen', 'call-b')
+    fail(store, 'MAX_STEPS', 'agent loop exceeded maxSteps')
+
+    const message = store.getSnapshot().messages[0]
+    expect(message?.done).toBe(true)
+    const rows = toolParts(store)
+    expect(rows).toHaveLength(2)
+    expect(
+      rows.every((row) => {
+        return row.status === 'done' && row.isError === true
+      }),
+    ).toBe(true)
+  })
+})

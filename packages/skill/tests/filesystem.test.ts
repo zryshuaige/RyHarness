@@ -123,10 +123,31 @@ describe('文件系统技能来源', () => {
   })
 
   it('默认根目录：项目是 .skills，用户是 skills', () => {
-    const roots = defaultSkillRoots({ workspaceRoot: '/ws', dataDir: '/data', customDirs: ['/custom'] })
+    // homeDir 指到不存在的目录：~/.agents/skills 通用根只在真存在时收进来，
+    // 测试不该依赖开发机上有没有建过这个目录。
+    const roots = defaultSkillRoots({
+      workspaceRoot: '/ws',
+      dataDir: '/data',
+      customDirs: ['/custom'],
+      homeDir: '/nonexistent-home',
+    })
 
     expect(roots.map((item) => item.path)).toEqual([join('/ws', '.skills'), '/custom', join('/data', 'skills')])
     expect(roots.map((item) => item.label)).toEqual(['project', 'custom', 'user'])
+  })
+
+  it('~/.agents/skills 通用根：目录存在才收进来，优先级在 custom 与 user 之间', () => {
+    const home = tempDir()
+    try {
+      mkdirSync(join(home, '.agents', 'skills'), { recursive: true })
+      const roots = defaultSkillRoots({ dataDir: '/data', homeDir: home })
+
+      expect(roots.map((item) => item.label)).toEqual(['agents', 'user'])
+      expect(roots[0]?.priority).toBe(250)
+      expect(roots[0]?.path).toBe(join(home, '.agents', 'skills'))
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
   })
 
   it('正文每次都重读：改了文件立刻能取到新的', async () => {

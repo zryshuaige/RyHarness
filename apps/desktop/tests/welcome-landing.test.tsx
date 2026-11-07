@@ -53,6 +53,9 @@ let root: ReturnType<typeof createRoot> | undefined
 beforeEach(() => {
   container = document.createElement('div')
   document.body.appendChild(container)
+  // 上次会话恢复（App 的惰性初始化）读这个键：前序用例建过会话就会留下它，
+  // 后面的用例开局就落到会话里而不是欢迎页——每个用例都从「没选中」开始。
+  localStorage.removeItem('ryharness-active-conversation')
   vi.stubGlobal('matchMedia', (query: string) => {
     return {
       matches: false,
@@ -260,6 +263,8 @@ describe('壳：多 agent 场景真的落进群会话', () => {
   beforeEach(() => {
     seq = 0
     FakeWebSocket.instances = []
+    // 同上：惰性初始化的上次会话恢复会把前序用例的选中态带进来，开局先清掉。
+    localStorage.removeItem('ryharness-active-conversation')
     recorded = { calls: [], conversations: [demoGroup, directChat] }
     ;(window as unknown as Record<string, unknown>).__RYHARNESS_API_BASE__ = 'http://127.0.0.1:4200'
     ;(globalThis as { WebSocket?: unknown }).WebSocket = FakeWebSocket
