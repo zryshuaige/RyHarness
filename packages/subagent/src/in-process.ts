@@ -82,6 +82,9 @@ export function createInProcessSubagentProvider(options: InProcessSubagentProvid
         llm: options.llm,
         tools: input.tools,
         maxSteps: input.maxSteps,
+        // 审批闸从父代理一路穿进来：子代理跑 shell_exec 一族时与父代理落到同一张
+        // 审批卡。这里不给，内层的 requiresApproval 就是摆设。
+        ...(input.approver === undefined ? {} : { approver: input.approver }),
         onAssistantMessage: (message) => {
           const text = textOf(message.content)
           if (text.trim().length > 0) lastText = text

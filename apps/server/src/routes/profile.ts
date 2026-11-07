@@ -9,6 +9,8 @@
  */
 
 import type { SessionStore } from '@ryharness/session'
+import { ProfilePatchBody } from '../contract/profile.ts'
+import { route } from '../route.ts'
 import type { Router } from '../router.ts'
 import { HttpRequestError, json } from '../router.ts'
 
@@ -120,7 +122,9 @@ export function registerProfileRoutes(router: Router, deps: { store: SessionStor
     json(res, 200, { profile: readProfile(deps.store) })
   })
 
-  router.patch('/api/profile', async (req, res) => {
+  // body 形状由契约 schema 兜住；writeProfile 自己的守卫继续给非 HTTP 调用方（测试
+  // 与工具脚本）兜底——那些调用方拿到的输入没有过 schema。
+  route(router, 'PATCH', '/api/profile', { body: ProfilePatchBody }, async (req, res) => {
     json(res, 200, { profile: writeProfile(deps.store, await req.body()) })
   })
 }

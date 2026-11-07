@@ -18,9 +18,11 @@
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import type { Conversation, SessionStore, StoredMessage } from '@ryharness/session'
 import { normalizePersona, TOOL_RESULT_PREFIX } from '@ryharness/session'
+import { VibeAnswerBody, type VibeAnswerInput, VibeCreateBody, VibeRestoreBody } from '../contract/vibe.ts'
 import { QuestionError, type QuestionStore } from '../plugins/ask-user-store.ts'
 import { GRILL_ME_SKILL_ID } from '../plugins/skills.ts'
 import type { TodoItem, TodoStore } from '../plugins/todo-store.ts'
+import { route } from '../route.ts'
 import { HttpRequestError, json, type Router, strField } from '../router.ts'
 import type { DeliverableKind } from '../vibe/project.ts'
 import {
@@ -257,8 +259,10 @@ interface AnswerItem {
  * 从请求体里取出这一批答案。
  *
  * 两种形态都认：一张卡一次交（`answers: [...]`）与一道一交（`questionId` + `selected`）。
+ * 解析刻意保持宽容——非对象条目跳过、selected 里混进的非字符串被滤掉——「传了
+ * 也当没传」是这张卡与旧客户端的兼容约定，schema 化会把它变成 400。
  */
-function answerItemsOf(body: Record<string, unknown>): AnswerItem[] {
+function answerItemsOf(body: VibeAnswerInput): AnswerItem[] {
   const raw = body.answers
   if (Array.isArray(raw)) {
     const items: AnswerItem[] = []
@@ -402,9 +406,9 @@ export function registerVibeRoutes(router: Router, deps: VibeRoutesDeps): void {
   }
 
   /** 开一次新的 RyVibe。 */
-  router.post('/api/vibe', async (req, res) => {
+  route(router, 'POST', '/api/vibe', { body: VibeCreateBody }, async (req, res) => {
     const body = await req.body()
-    const requirement = strField(isRecord(body) ? body : {}, 'requirement')?.trim()
+    const requirement = strField(body, 'requirement')?.trim()
     if (requirement === undefined || requirement.length === 0) {
       throw new HttpRequestError(400, '说一句话就行：把你要做的东西写在这里', 'VIBE_BAD_REQUIREMENT')
     }
@@ -529,10 +533,10 @@ export function registerVibeRoutes(router: Router, deps: VibeRoutesDeps): void {
     json(res, 200, { name: file.name, size, content: readFileSync(file.path, 'utf8') })
   })
 
-  router.post('/api/vibe/:id/restore', async (req, res) => {
+  route(router, 'POST', '/api/vibe/:id/restore', { body: VibeRestoreBody }, async (req, res) => {
     const id = req.params.id ?? ''
     const body = await req.body()
-    const versionId = strField(isRecord(body) ? body : {}, 'versionId')
+    const versionId = strField(body, 'versionId')
     if (versionId === undefined || versionId.length === 0) {
       throw new HttpRequestError(400, '选一个要恢复的版本', 'VIBE_BAD_VERSION')
     }
@@ -550,15 +554,16 @@ export function registerVibeRoutes(router: Router, deps: VibeRoutesDeps): void {
    * `skipped` = 用户点了「按你们的默认方案来」：答案照旧落库（他们选的就是
    * 预选项），只是给小队的话术不同。
    */
-  router.post('/api/vibe/:id/answer', async (req, res) => {
+  route(router, 'POST', '/api/vibe/:id/answer', { body: VibeAnswerBody }, async (req, res) => {
     const id = req.params.id ?? ''
     const session = vibe.get(id)
     if (session === undefined) {
       json(res, 404, { error: '没有这次 RyVibe' })
       return
     }
+    // 「body 是 JSON 对象」由契约 schema 兜住；答案的宽容解析（answerItemsOf）与
+    // skipped 的「非 true 即假」保持手写时代的原样。
     const body = await req.body()
-    if (!isRecord(body)) throw new HttpRequestError(400, '请求体必须是 JSON 对象', 'VIBE_BAD_ANSWER')
     const items = answerItemsOf(body)
     if (items.length === 0) {
       throw new HttpRequestError(400, '没有要回答的问题', 'VIBE_BAD_ANSWER')

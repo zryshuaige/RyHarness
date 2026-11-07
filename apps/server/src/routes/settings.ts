@@ -5,8 +5,16 @@
 
 import type { ProvidersConfigFile } from '../config.ts'
 import { deleteApiKey, loadApiKeys, mergeApiKeys, saveApiKey } from '../config.ts'
+import { ApiKeyBody } from '../contract/settings.ts'
 import type { RetargetedAgent } from '../provider-routing.ts'
+import { route } from '../route.ts'
 import { json, type Router } from '../router.ts'
+
+/** DELETE /api/settings/api-key/:id 的回执（渲染层同名类型的真源）。 */
+export interface DeletedApiKeyResult {
+  providerId: string
+  configured: boolean
+}
 
 /** 设置路由的依赖。 */
 export interface SettingsRoutes {
@@ -37,11 +45,12 @@ export function registerSettingsRoutes(router: Router, deps: SettingsRoutes): vo
   })
 
   /** 应用内配置 API key：写 config/api-keys.json（0600）并热注册适配器。 */
-  router.post('/api/settings/api-key', async (req, res) => {
+  route(router, 'POST', '/api/settings/api-key', { body: ApiKeyBody }, async (req, res) => {
+    // 字段类型由契约 schema 兜住；缺省（含 null 透传）一律按空串处理，与手写
+    // 时代的「非字符串视同没填」同一个落点。
     const body = await req.body()
-    const record = body as Record<string, unknown>
-    const providerId = typeof record.providerId === 'string' ? record.providerId : ''
-    const apiKey = typeof record.apiKey === 'string' ? record.apiKey.trim() : ''
+    const providerId = body.providerId ?? ''
+    const apiKey = (body.apiKey ?? '').trim()
     if (providerId.length === 0 || apiKey.length === 0) {
       json(res, 400, { error: 'providerId and apiKey are required' })
       return

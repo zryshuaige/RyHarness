@@ -8,7 +8,7 @@
  * @module @ryharness/subagent/types
  */
 
-import type { ToolContext, ToolSource } from '@ryharness/agent'
+import type { AgentLoopOptions, ToolContext, ToolSource } from '@ryharness/agent'
 
 /**
  * 子代理的四种状态。
@@ -54,6 +54,14 @@ export interface SubagentRunInput {
   signal?: AbortSignal
   /** 工具执行上下文（工作区根目录、会话 id 等）——子代理与父代理共用同一份。 */
   context: ToolContext
+  /**
+   * 工具审批入口（`AgentLoopOptions.approver` 同款）。
+   *
+   * 不给的话，内层 loop 的 `requiresApproval` 工具（shell_exec 一族）会**静默跳过
+   * 审批**——那正是「父代理要点头、子代理随便跑」的旁路。宿主必须把外层那条闸
+   * 穿透进来，让子代理的每条命令跟父代理一样落到同一张审批卡上。
+   */
+  approver?: AgentLoopOptions['approver']
   /** 子代理的系统提示词；缺省用包内那段。 */
   systemPrompt?: string
   /**

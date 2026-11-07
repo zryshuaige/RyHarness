@@ -6,6 +6,10 @@
  * @module @ryharness/server
  */
 
+// 权限档位规格的真源在内核（@ryharness/agent），server 面转出给渲染层。
+export type { PermissionPresetSpec } from '@ryharness/agent'
+// 私网判定收归 @ryharness/web 单源（与 web_fetch 同一份），server 面只转出口径。
+export { isPrivateAddress } from '@ryharness/web'
 export type { ServerOptions } from './app.ts'
 export { RyHarnessServer } from './app.ts'
 export { EventHub } from './bus.ts'
@@ -110,7 +114,6 @@ export {
   createReadUrlTool,
   decodeHtmlEntities,
   htmlToText,
-  isPrivateAddress,
   pinnedRequestOptions,
   READ_URL_MAX_BYTES,
   READ_URL_MAX_CHARS,
@@ -120,10 +123,11 @@ export {
 } from './plugins/web-read.ts'
 export type { ProactiveRun, ProactiveSettings, ProactiveSnapshot } from './proactive.ts'
 export { composeProactiveMessage, localDayKey, PROACTIVE_AGENT_ID, PROACTIVE_BLOCK_TYPE } from './proactive.ts'
-export type { ConversationState } from './routes/conversations.ts'
+export type { ConversationState, PreviewFile, SearchResult } from './routes/conversations.ts'
 export type { MemoryHealthReport, MemoryRecall } from './routes/memory.ts'
 export type { UserProfile } from './routes/profile.ts'
-export type { ProviderUsage } from './routes/providers.ts'
+export type { ProviderInfo, ProviderUsage, VerifyOutcome } from './routes/providers.ts'
+export type { DeletedApiKeyResult } from './routes/settings.ts'
 export type {
   ConversationUsageRow,
   ProviderAgentUsage,

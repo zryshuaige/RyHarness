@@ -37,6 +37,9 @@ import { SHARED_SPACE } from './schema.ts'
 import type { MemoryRow } from './store.ts'
 import { MemoryStore } from './store.ts'
 
+/** 带排序分的召回行：score = RRF × 时间衰减 × 访问增益（rankRecall 的最终排序键）。 */
+export type ScoredMemoryRow = MemoryRow & { score: number }
+
 /** RRF 常数（调研 §3.4）。 */
 const RRF_K = 60
 /** 语义与 BM25 各取的条数。 */
@@ -75,6 +78,8 @@ const DECAY_DAYS = 30
 const DECAY_FLOOR = 0.15
 /** 默认 embedding 请求超时（毫秒）。 */
 const DEFAULT_EMBED_TIMEOUT_MS = 800
+/** 停机 drain 的收敛窗口（毫秒）：抽取是尽力而为的后台工作，不拖住停机。 */
+const SHUTDOWN_DRAIN_MS = 3_000
 /** 默认 recall 整体预算（毫秒）——保障首 token 延迟。 */
 const DEFAULT_RECALL_BUDGET_MS = 1_200
 /**
@@ -447,8 +452,8 @@ export class MemoryService implements AgentMemory, MemoryRecallMany {
     return out
   }
 
-  /** 混合检索：embedding + BM25 → RRF(k=60) → 访问基准衰减 → top-N。 */
-  async hybridRecall(agentId: string, input: string, limit = this.topN): Promise<MemoryRow[]> {
+  /** 混合检索：embedding + BM25 → RRF(k=60) → 访问基准衰减 → top-N。分数随行返回。 */
+  async hybridRecall(agentId: string, input: string, limit = this.topN): Promise<ScoredMemoryRow[]> {
     return this.rankRecall(await this.recallContext(input, false, this.recallBudgetMs), agentId, limit)
   }
 
@@ -627,7 +632,7 @@ export class MemoryService implements AgentMemory, MemoryRecallMany {
   }
 
   /** 两通道融合 + 衰减 + top-N（RRF(k=60) 与访问基准衰减，配方见调研 §3.4）。 */
-  private rankRecall(context: RecallContext, agentId: string, limit = this.topN): MemoryRow[] {
+  private rankRecall(context: RecallContext, agentId: string, limit = this.topN): ScoredMemoryRow[] {
     const candidates = new Map<string, { memory: MemoryRow; rrf: number }>()
     const addRanked = (ranked: readonly MemoryRow[]): void => {
       ranked.forEach((memory, index) => {
@@ -703,7 +708,9 @@ export class MemoryService implements AgentMemory, MemoryRecallMany {
         })
         .slice(0, limit)
         .map((hit) => {
-          return hit.memory
+          // 排序分随行带走：注入路径只读正文不受影响，程序消费方（RPC 的
+          // recallMemory）则能拿到「为什么是这几条」的排序键。
+          return { ...hit.memory, score: hit.score }
         })
     )
   }
@@ -906,6 +913,28 @@ export class MemoryService implements AgentMemory, MemoryRecallMany {
   /** 测试用：等队列排空。 */
   async flush(): Promise<void> {
     await this.queue
+  }
+
+  /**
+   * 停机用：带截止时间等在途抽取收敛（kimicode 的 settled()+deadline 模式）。
+   *
+   * 没有 drain 时，close() 直接丢弃队列——「聊完 30 秒内退出，当轮记忆蒸发」。
+   * 到点没跑完的仍然放弃（抽取是尽力而为的后台工作，不该拖住停机），调用方
+   * 随后的 close() 照旧。
+   * @param deadlineMs - 收敛窗口（毫秒），默认 3 秒。
+   */
+  async drain(deadlineMs = SHUTDOWN_DRAIN_MS): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([
+        this.flush(),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, deadlineMs)
+        }),
+      ])
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
+    }
   }
 
   private async runExtractionWithRetry(

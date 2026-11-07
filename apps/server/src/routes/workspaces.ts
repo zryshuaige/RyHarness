@@ -21,6 +21,8 @@ import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type { SessionStore } from '@ryharness/session'
 import type { Workspace, WorkspaceRegistry } from '@ryharness/workspace'
+import { WorkspaceAssignBody, WorkspaceCreateBody } from '../contract/workspaces.ts'
+import { route } from '../route.ts'
 import { HttpRequestError, json, type Router } from '../router.ts'
 
 /** 工作区路由的依赖。 */
@@ -76,13 +78,13 @@ export function registerWorkspaceRoutes(router: Router, deps: WorkspaceRoutesDep
   /**
    * 新建一个工作区。
    *
-   * 根目录必须存在且像个根目录；不合法回 400 并说清是哪一条不过。
+   * 字段类型由契约 schema 兜住；名字与根目录非空、目录真实存在、根目录合法
+   * 是业务规则，各自的 400 与机器码保持原样。
    */
-  router.post('/api/workspaces', async (req, res) => {
+  route(router, 'POST', '/api/workspaces', { body: WorkspaceCreateBody }, async (req, res) => {
     const body = await req.body()
-    const record = (typeof body === 'object' && body !== null ? body : {}) as Record<string, unknown>
-    const name = typeof record.name === 'string' ? record.name.trim() : ''
-    const rootPath = typeof record.rootPath === 'string' ? record.rootPath.trim() : ''
+    const name = (body.name ?? '').trim()
+    const rootPath = (body.rootPath ?? '').trim()
     if (name.length === 0) {
       throw new HttpRequestError(400, '工作区需要一个名字。', 'MISSING_NAME')
     }
@@ -112,15 +114,15 @@ export function registerWorkspaceRoutes(router: Router, deps: WorkspaceRoutesDep
    * 出现「界面与工具看到的不是同一个工作区」——那种错位极难查，所以这里宁可
    * 回滚也不能只写一半。
    */
-  router.patch('/api/conversations/:id/workspace', async (req, res) => {
+  route(router, 'PATCH', '/api/conversations/:id/workspace', { body: WorkspaceAssignBody }, async (req, res) => {
     const conversationId = req.params.id as string
     if (store.getConversation(conversationId) === undefined) {
       json(res, 404, { error: 'conversation not found' })
       return
     }
     const body = await req.body()
-    const record = (typeof body === 'object' && body !== null ? body : {}) as Record<string, unknown>
-    const raw = record.workspaceId
+    // 空串与 null 都视同「摘出来」——与手写时代「没给就是摘」同一个落点。
+    const raw = body.workspaceId
     const workspaceId = typeof raw === 'string' && raw.length > 0 ? raw : undefined
     if (workspaceId !== undefined && registry.get(workspaceId) === undefined) {
       json(res, 404, { error: 'workspace not found' })

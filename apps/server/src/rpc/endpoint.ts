@@ -14,7 +14,7 @@
  */
 
 import { AcpAgentServer } from '@ryharness/acp'
-import { RemoteHost } from '@ryharness/api'
+import { RemoteHost, type RemoteMemoryHit } from '@ryharness/api'
 import type { SessionStore } from '@ryharness/session'
 import { RyHarnessRemoteService } from './service.ts'
 import { createRpcLogger, createStdioTransport } from './stdio.ts'
@@ -25,8 +25,8 @@ export interface RpcEndpointOptions {
   readonly store: SessionStore
   /** 列当前注册着的工具。 */
   readonly listTools: () => readonly { name: string; description: string }[]
-  /** 召回一位助理的长期记忆。 */
-  readonly recallMemory: (agentId: string, query: string) => Promise<readonly string[]>
+  /** 召回一位助理的长期记忆（条目带分数/时间/来源，见 RemoteMemoryHit）。 */
+  readonly recallMemory: (agentId: string, query: string) => Promise<readonly RemoteMemoryHit[]>
   /** 写一条应用设置。 */
   readonly writeSetting: (key: string, value: string) => Promise<void>
   /** ACP 模式下的 agent 能力（只有 ACP 模式要）。 */

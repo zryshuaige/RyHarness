@@ -14,6 +14,8 @@
 
 import { isSandboxMode, type SandboxMode } from '@ryharness/sandbox'
 import type { SessionStore } from '@ryharness/session'
+import { SandboxOverrideBody } from '../contract/sandbox.ts'
+import { route } from '../route.ts'
 import { HttpRequestError, json, type Router } from '../router.ts'
 
 /** 沙箱路由的依赖。 */
@@ -110,16 +112,16 @@ export function registerSandboxRoutes(router: Router, deps: SandboxRoutesDeps): 
    * 设 / 撤一个会话的覆盖。
    *
    * `mode` 传 `null` 表示撤掉覆盖（回到助理自己的档位）；传字符串就设。
-   * 非法值报 400，不静默忽略——静默忽略会让人以为已经收紧了。
+   * 「字符串或 null」由契约 schema 兜住；取值白名单是业务规则，报 400 并带
+   * 机器码，不静默忽略——静默忽略会让人以为已经收紧了。
    */
-  router.post('/api/sandbox/conversations/:id', async (req, res) => {
+  route(router, 'POST', '/api/sandbox/conversations/:id', { body: SandboxOverrideBody }, async (req, res) => {
     const conversationId = req.params.id ?? ''
     const conversation = deps.store.getConversation(conversationId)
     if (conversation === undefined) {
       throw new HttpRequestError(404, `没有这个会话：${conversationId}`, 'SANDBOX_UNKNOWN_CONVERSATION')
     }
-    const body = (await req.body()) as { mode?: unknown }
-    const raw = body === null || typeof body !== 'object' ? undefined : body.mode
+    const raw = (await req.body()).mode
     if (raw === null) {
       deps.policy.clearConversationMode(conversationId)
       json(res, 200, { conversationId, override: null })

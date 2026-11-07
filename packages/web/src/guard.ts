@@ -161,7 +161,7 @@ function isPrivateIpv6(groups: number[]): boolean {
 }
 
 /** 去掉 IPv6 字面量的方括号与末尾的点，统一成小写。 */
-function normalizeHost(hostname: string): string {
+export function normalizeHost(hostname: string): string {
   return hostname.trim().replace(/^\[/, '').replace(/\]$/, '').replace(/\.$/, '').toLowerCase()
 }
 

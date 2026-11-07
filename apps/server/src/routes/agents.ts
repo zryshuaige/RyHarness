@@ -3,7 +3,7 @@
  * @module @ryharness/server/routes/agents
  */
 
-import type { AgentDefinition, PermissionPreset } from '@ryharness/agent'
+import type { AgentDefinition } from '@ryharness/agent'
 import { applyPermissionPreset, PERMISSION_PRESETS, permissionPreset } from '@ryharness/agent'
 import { PresetError, type PresetRegistry, type PresetRevision } from '@ryharness/preset'
 import type { AgentPersona, SessionStore } from '@ryharness/session'
@@ -11,6 +11,15 @@ import { VOICE_PRESETS } from '@ryharness/session'
 import type { ToolRegistry } from '@ryharness/tools'
 import type { ProvidersConfigFile } from '../config.ts'
 import { resolveSidecarLlm } from '../config.ts'
+import {
+  AgentAffinityBody,
+  AgentCreateBody,
+  AgentMutationBody,
+  type AgentMutationInput,
+  AgentPresetBody,
+  type PersonaPatchInput,
+} from '../contract/agents.ts'
+import { route } from '../route.ts'
 import { HttpRequestError, json, type Router, strField } from '../router.ts'
 import { AGENT_TEMPLATES, instantiateTemplate } from '../seed.ts'
 
@@ -47,47 +56,46 @@ function assertNameFree(store: SessionStore, name: string, selfId: string): void
   }
 }
 
-/** POST/PATCH 共用的 agent 字段白名单校验：类型不符抛 400，未知键丢弃。 */
+/**
+ * POST/PATCH 共用的 agent 字段白名单校验：字段类型由契约 schema 兜住，这里只留
+ * 语义校验（档位是否存在）与 schema 拦不住的两个洞（见 contract/agents.ts 的
+ * 头注），未知键丢弃。
+ */
 function agentFieldOverrides(
-  body: unknown,
+  body: AgentMutationInput,
 ): Partial<Omit<AgentDefinition, 'id' | 'isBuiltin'>> & { persona?: Partial<AgentPersona> } {
   const overrides: Partial<Omit<AgentDefinition, 'id' | 'isBuiltin'>> & { persona?: Partial<AgentPersona> } = {}
-  if (typeof body !== 'object' || body === null) return overrides
-  const record = body as Record<string, unknown>
   for (const key of ['name', 'avatar', 'systemPrompt', 'provider', 'model', 'reasoningEffort'] as const) {
-    const value = record[key]
+    const value = body[key]
     if (value === undefined) continue
+    // null 会从 schema 的可缺省通道里透传（缺省语义优先于类型），落库前在这里挡下。
     if (typeof value !== 'string') throw new HttpRequestError(400, `field "${key}" must be a string`)
     overrides[key] = value
   }
-  if (record.temperature !== undefined) {
-    if (typeof record.temperature !== 'number' || !Number.isFinite(record.temperature)) {
+  if (body.temperature !== undefined) {
+    // Infinity 是合法的 JSON number（1e999 解析即得），schema 的 number 拦不住它。
+    if (!Number.isFinite(body.temperature)) {
       throw new HttpRequestError(400, 'field "temperature" must be a finite number')
     }
-    overrides.temperature = record.temperature
+    overrides.temperature = body.temperature
   }
-  if (record.tools !== undefined) {
-    if (
-      !Array.isArray(record.tools) ||
-      record.tools.some((tool) => {
-        return typeof tool !== 'string'
-      })
-    ) {
+  if (body.tools !== undefined) {
+    if (!Array.isArray(body.tools)) {
       throw new HttpRequestError(400, 'field "tools" must be an array of strings')
     }
-    overrides.tools = record.tools as string[]
+    overrides.tools = body.tools
   }
-  if (record.permissionPreset !== undefined) {
-    if (typeof record.permissionPreset !== 'string') {
-      throw new HttpRequestError(400, 'field "permissionPreset" must be a string')
+  if (body.permissionPreset !== undefined) {
+    // 档位是否存在是业务规则：不认识的名字 400，并且不写库。
+    const preset = permissionPreset(body.permissionPreset)
+    if (preset === undefined) {
+      throw new HttpRequestError(400, `未知的权限档位：${body.permissionPreset}`)
     }
-    if (permissionPreset(record.permissionPreset) === undefined) {
-      throw new HttpRequestError(400, `未知的权限档位：${record.permissionPreset}`)
-    }
-    overrides.permissionPreset = record.permissionPreset as PermissionPreset
+    // 命中档位后取它的 id——就是那三个字面量之一，不需要再收窄。
+    overrides.permissionPreset = preset.id
   }
-  if (record.persona !== undefined) {
-    overrides.persona = personaOverrides(record.persona)
+  if (body.persona !== undefined) {
+    overrides.persona = personaOverrides(body.persona)
   }
   return overrides
 }
@@ -111,15 +119,19 @@ function routeLockedAfterEdit(
   return providerChanged || modelChanged
 }
 
-/** 人格字段：按 partial 收，类型不对抛 400。归一在存储层做（缺字段按旧值/默认值补）。 */
-function personaOverrides(value: unknown): Partial<AgentPersona> {
+/**
+ * 人格字段：按 partial 收。归一在存储层做（缺字段按旧值/默认值补）。
+ *
+ * 数值与字符串的类型由契约 schema 兜住；这里的守卫拦的是 schema 拦不住的洞——
+ * `null` 透传与 `Infinity`（后者是合法的 JSON number）。
+ */
+function personaOverrides(value: PersonaPatchInput): Partial<AgentPersona> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new HttpRequestError(400, 'field "persona" must be an object')
   }
-  const record = value as Record<string, unknown>
   const persona: Partial<AgentPersona> = {}
   for (const key of ['extroversion', 'rigor', 'humor', 'initiative', 'affinity'] as const) {
-    const trait = record[key]
+    const trait = value[key]
     if (trait === undefined) continue
     if (typeof trait !== 'number' || !Number.isFinite(trait)) {
       throw new HttpRequestError(400, `persona.${key} must be a finite number`)
@@ -127,7 +139,7 @@ function personaOverrides(value: unknown): Partial<AgentPersona> {
     persona[key] = trait
   }
   for (const key of ['birthday', 'catchphrase', 'appearance', 'voiceId'] as const) {
-    const field = record[key]
+    const field = value[key]
     if (field === undefined) continue
     if (typeof field !== 'string') throw new HttpRequestError(400, `persona.${key} must be a string`)
     persona[key] = field
@@ -174,7 +186,7 @@ export function registerAgentRoutes(router: Router, deps: AgentRoutes): void {
    * 改的是这位助理的**工具白名单**：预设给的那一套盖过原来那份。改完给这位助理
    * 记一版（版本号 +1），旧版留在注册表里能回看。
    */
-  router.post('/api/agents/:id/preset', async (req, res) => {
+  route(router, 'POST', '/api/agents/:id/preset', { body: AgentPresetBody }, async (req, res) => {
     const body = await req.body()
     const presetId = strField(body, 'presetId')
     if (presetId === undefined) {
@@ -240,7 +252,7 @@ export function registerAgentRoutes(router: Router, deps: AgentRoutes): void {
     })
   })
 
-  router.post('/api/agents', async (req, res) => {
+  route(router, 'POST', '/api/agents', { body: AgentCreateBody }, async (req, res) => {
     const body = await req.body()
     const templateKey = strField(body, 'templateKey')
     // 白名单校验失败抛 HttpRequestError，由 dispatch 统一回 400。
@@ -307,7 +319,7 @@ export function registerAgentRoutes(router: Router, deps: AgentRoutes): void {
     })
     json(res, 201, { agent: stored })
   })
-  router.patch('/api/agents/:id', async (req, res) => {
+  route(router, 'PATCH', '/api/agents/:id', { body: AgentMutationBody }, async (req, res) => {
     const existing = store.getAgent(req.params.id as string)
     if (existing === undefined) {
       json(res, 404, { error: `agent not found: ${req.params.id}` })
@@ -348,7 +360,7 @@ export function registerAgentRoutes(router: Router, deps: AgentRoutes): void {
    * bump（反馈被接受才涨，且按 messageId+signal 去重）；这条留给手动调参与外部脚本。
    * 回包是更新后的 agent——界面据此刷新卡片上的亲密度，不用再拉一次列表。
    */
-  router.post('/api/agents/:id/affinity', async (req, res) => {
+  route(router, 'POST', '/api/agents/:id/affinity', { body: AgentAffinityBody }, async (req, res) => {
     const body = await req.body()
     const signal = strField(body, 'signal')
     if (signal !== 'thumb_up' && signal !== 'thumb_down') {

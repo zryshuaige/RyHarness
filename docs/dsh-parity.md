@@ -95,7 +95,7 @@ Web GUI），所以「对账」不是逐行比对，而是**按能力家族核�
 | preset | 用 cordis.yml 组合能力 | 我们的人格模板不是能力组合 | **产品可用** | `packages/preset`（助理能力预设：选中即定一版，旧版留着能回看） | 低 |
 | bundle | `--profile` 分层装配 | 没有 | **产品可用** | `packages/bundle`（分层装配：后一层盖前一层，被覆盖的记下来） | 低 |
 | typert | 类型图 + 网关 + 生成的客户端 | 只有协议类型 | **产品可用** | `packages/typert/gateway`（类型图 + 网关 + 生成的客户端）——经 `packages/api` 的 Remote 层被 `apps/server/src/rpc/endpoint.ts` 挂到 stdio 端点上 | 低 |
-| api | Remote 层（Client 调 Host） | 没有 | **产品可用** | `packages/api`（Remote 层：Client 调 Host）+ `apps/server/src/rpc/service.ts`（`ryharness.listConversations` / `listMessages` / `listTools` / `recallMemory` / `writeSetting`；`recallMemory` 返回**记忆条目数组** `string[]`——`row.content` 原文，不是拼好的注入文本，分数/时间等元数据不带，要带是将来的 v2 方法） | 低 |
+| api | Remote 层（Client 调 Host） | 没有 | **产品可用** | `packages/api`（Remote 层：Client 调 Host；线上视图 `RemoteConversationView` / `RemoteMessageView` / `RemoteMemoryHit` 以它为**唯一真源**，server 与 sdk 都从这里 `import type`）+ `apps/server/src/rpc/service.ts`（`ryharness.listConversations` / `listMessages` / `listTools` / `recallMemory` / `writeSetting`；`recallMemory` 返回**结构化命中数组**——正文 + 分数/时间/来源元数据，形状抄 dsh session_query 的命中对象；此前只回 `row.content` 的 v1 已被替换） | 低 |
 | sdk | 进程外 JSON-RPC | 没有 | **产品可用** | `packages/sdk`（`RyHarnessClient`：起一个 `--rpc` 子进程，一行连上、一行调用）+ `GET /api/rpc/selfcheck`（服务端把同一套远程服务挂上内存管道、用 SDK 连自己：取类型图 + **真发一次** `listConversations`；「外部程序拉起本进程」那一段由 `apps/server/tests/rpc.test.ts` 真起子进程兜底） | 低 |
 | acp | 标准 Agent Client Protocol | 没有 | **产品可用** | `packages/acp`（客户端 + **服务端侧** `AcpAgentServer`：编辑器把 RyHarness 当 agent 驱动；`--acp` 开关开在同一条 stdio 上） | 低 |
 

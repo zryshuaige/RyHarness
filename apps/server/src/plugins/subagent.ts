@@ -9,7 +9,7 @@
  * @module @ryharness/server/plugins/subagent
  */
 
-import type { ToolContext } from '@ryharness/agent'
+import type { AgentLoopOptions, ToolContext } from '@ryharness/agent'
 import type { LlmRuntime } from '@ryharness/llm'
 import type { SessionStore } from '@ryharness/session'
 import { SubagentService } from '@ryharness/subagent'
@@ -26,6 +26,8 @@ export interface SubagentPluginOptions {
   tools: ToolRegistry
   /** 会话存储：按 agentId 查发起者用的是哪条模型路由。 */
   store: SessionStore
+  /** 工具审批入口：穿进子代理的内层 loop，让 shell_exec 一族跟父代理同闸。 */
+  approver?: AgentLoopOptions['approver']
 }
 
 /** 子代理插件入口：把 `subagent` 与 `subagent_list` 两个工具注册进工具表。 */
@@ -47,6 +49,8 @@ export function subagentPlugin(options: SubagentPluginOptions): PluginEntry {
           const agent = toolCtx.agentId === undefined ? undefined : options.store.getAgent(toolCtx.agentId)
           return { provider: agent?.provider ?? '', model: agent?.model ?? '' }
         },
+        // 审批闸穿透：子代理的每条命令与父代理落同一张审批卡（见 approvals.ts）。
+        ...(options.approver === undefined ? {} : { approver: options.approver }),
       })
       for (const tool of service.modelTools) ctx.tools.register(tool)
       // 子代理的进程/轮次要收干净：工具随 fiber 消失，在跑的子代理不会自己消失。

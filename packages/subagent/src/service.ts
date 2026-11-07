@@ -11,7 +11,7 @@
  * @module @ryharness/subagent/service
  */
 
-import type { Tool, ToolContext, ToolSource } from '@ryharness/agent'
+import type { AgentLoopOptions, Tool, ToolContext, ToolSource } from '@ryharness/agent'
 import { listTools } from '@ryharness/agent'
 import type { LlmRuntime } from '@ryharness/llm'
 import { messageOf, summary } from './format.ts'
@@ -60,6 +60,8 @@ export interface SubagentServiceOptions {
   timeoutMs?: number
   /** 子代理的系统提示词。 */
   systemPrompt?: string
+  /** 工具审批入口：透传给 provider，让内层 loop 与父代理共用同一张审批卡。 */
+  approver?: AgentLoopOptions['approver']
 }
 
 /** 服务内部的可变记录。 */
@@ -208,6 +210,7 @@ export class SubagentService {
         timeoutMs,
         signal,
         context: ctx,
+        ...(this.options.approver === undefined ? {} : { approver: this.options.approver }),
         ...(this.options.systemPrompt === undefined ? {} : { systemPrompt: this.options.systemPrompt }),
         onProgress: (progress) => {
           // 结算之后不再改：超时先到、provider 后到的顺序很常见。

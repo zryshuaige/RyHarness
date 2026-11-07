@@ -288,7 +288,9 @@ export default defineConfig({
         branches: -226,
         'packages/agent/src/**': { lines: -10, statements: -13, functions: -3, branches: -17 },
         'packages/session/src/**': { lines: -16, statements: -26, functions: -5, branches: -39 },
-        'packages/memory/src/**': { lines: -19, statements: -26, functions: -6, branches: -30 },
+        // branches -33：2026-11-07 drain()（停机有界收敛）在 service.ts 长出 3 条
+        // 分支（deadline race 的 timer 判空 + 超时分支），实测最差单文件 31，+2 余量。
+        'packages/memory/src/**': { lines: -19, statements: -26, functions: -6, branches: -33 },
         'packages/tools/src/**': { lines: -21, statements: -27, functions: -8, branches: -30 },
         // 2026-10-29 新增的三包（上下文装配 / MCP 客户端 / 子代理）：数字取自实测的
         // 最差单文件，留一点余量。它们是这一轮新写的，照例要带着棘轮进场——

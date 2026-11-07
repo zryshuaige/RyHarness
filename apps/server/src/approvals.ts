@@ -32,6 +32,9 @@ export interface ApprovalDecision {
   remember?: boolean
 }
 
+/** 会话级审批策略：'ask' 逐条问（缺省），'never' 本会话直接放行。 */
+export type ApprovalPolicy = 'ask' | 'never'
+
 /** 默认审批等待上限：超时按拒绝收口。 */
 export const DEFAULT_APPROVAL_TIMEOUT_MS = 120_000
 
@@ -39,19 +42,40 @@ export class ApprovalBroker {
   private readonly pending = new Map<string, PendingApproval>()
   /** 会话内白名单（键 = 会话|工具名 → 参数原文集合）。进程内有效。 */
   private readonly remembered = new Map<string, Set<string>>()
+  /** 会话级审批策略（'ask' 缺省）。进程内有效——重启回到逐条问，与白名单同一个保守口径。 */
+  private readonly policies = new Map<string, ApprovalPolicy>()
 
   constructor(
     private readonly hub: EventHub,
     private readonly timeoutMs = DEFAULT_APPROVAL_TIMEOUT_MS,
   ) {}
 
+  /** 这个会话现在的审批策略（没有覆盖就是 'ask'）。 */
+  policyOf(conversationId: string): ApprovalPolicy {
+    return this.policies.get(conversationId) ?? 'ask'
+  }
+
+  /**
+   * 覆盖一个会话的审批策略；传 undefined 撤销覆盖。
+   *
+   * 'never' = 这个会话里 requiresApproval 的工具直接放行。这是**用户对本会话的
+   * 显式信任**（对应 dsh 的 approval/policy 事件），不是系统缺省——所以只放
+   * 进程内存、不落盘：重启后重新逐条问，忘了它存在也不会背叛用户。
+   */
+  setPolicy(conversationId: string, policy: ApprovalPolicy | undefined): void {
+    if (policy === undefined) this.policies.delete(conversationId)
+    else this.policies.set(conversationId, policy)
+  }
+
   /**
    * AgentLoop 挂进来的审批入口。
    * @returns true=放行（白名单命中或用户允许）；false=拒绝（用户拒绝/超时/取消）。
    */
   request(input: { conversationId: string; agentId: string; toolName: string; args: string }): Promise<boolean> {
+    // 会话级 'never'：用户对这个会话显式放行，逐条卡不再出。白名单命中也在这里。
+    if (this.policyOf(input.conversationId) === 'never') return Promise.resolve(true)
     const rememberedSet = this.remembered.get(this.rememberKey(input.conversationId, input.toolName))
-    if (rememberedSet !== undefined && rememberedSet.has(input.args)) return Promise.resolve(true)
+    if (rememberedSet?.has(input.args) === true) return Promise.resolve(true)
     return new Promise<boolean>((resolve) => {
       const approvalId = randomUUID()
       const timer = setTimeout(() => {

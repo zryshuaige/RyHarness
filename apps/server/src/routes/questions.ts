@@ -6,12 +6,14 @@
  * @module @ryharness/server/routes/questions
  */
 
+import { QuestionAnswerBody } from '../contract/questions.ts'
 import {
   MAX_CONVERSATION_ID_LENGTH,
   QuestionError,
   type QuestionStatus,
   type QuestionStore,
 } from '../plugins/ask-user-store.ts'
+import { withBody } from '../route.ts'
 import { type Handler, HttpRequestError, json } from '../router.ts'
 
 /** 提问路由的依赖。 */
@@ -24,10 +26,6 @@ export interface QuestionRoutesDeps {
 export interface QuestionHandlers {
   list: Handler
   answer: Handler
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -74,13 +72,13 @@ export function createQuestionHandlers(deps: QuestionRoutesDeps): QuestionHandle
     json(res, 200, { questions: deps.store.list(conversationId, requested as QuestionStatus) })
   }
 
-  const answer: Handler = async (req, res) => {
+  // body 必须是 JSON 对象、text/selected 的类型由契约 schema 兜住（对象与否是
+  // 形状问题，schema 的报错统一回 400）；这里的守卫拦的是 null——schema 的可缺省
+  // 通道会放它透传。
+  const answer: Handler = withBody({ body: QuestionAnswerBody }, async (req, res) => {
     const id = req.params.id ?? ''
     if (id.length === 0) throw new HttpRequestError(400, '提问 id 是必填的', 'QUESTION_BAD_REQUEST')
     const body = await req.body()
-    if (!isRecord(body)) {
-      throw new HttpRequestError(400, '请求体必须是 JSON 对象', 'QUESTION_BAD_REQUEST')
-    }
     const text = typeof body.text === 'string' ? body.text : ''
     if (text.trim().length === 0) {
       throw new HttpRequestError(400, '回答内容不能为空', 'QUESTION_BAD_REQUEST')
@@ -98,7 +96,7 @@ export function createQuestionHandlers(deps: QuestionRoutesDeps): QuestionHandle
     } catch (error) {
       sendQuestionFailure(error)
     }
-  }
+  })
 
   return { list, answer }
 }

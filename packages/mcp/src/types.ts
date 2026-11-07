@@ -122,4 +122,10 @@ export interface McpServerConfig {
 /** 一整组 MCP server 配置。 */
 export interface McpConfig {
   servers: Record<string, McpServerConfig>
+  /**
+   * true = 每次调用 MCP 工具都要用户点头（宿主读取配置后转成登记处选项）。
+   * 配置文件里没写就当 true：外部 server 的工具能做什么没有边界，与 shell 同权
+   * ——先问；确认过没问题的调用有「记住这条命令」兜着，不会问到死。
+   */
+  requiresApproval?: boolean
 }

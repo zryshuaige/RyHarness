@@ -181,6 +181,9 @@ importers:
       '@ryharness/schedule':
         specifier: workspace:*
         version: link:../../packages/schedule
+      '@ryharness/schemastery':
+        specifier: workspace:*
+        version: link:../../vendor/schemastery
       '@ryharness/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk

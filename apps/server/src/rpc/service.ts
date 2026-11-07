@@ -23,25 +23,13 @@
  * @module @ryharness/server/rpc/service
  */
 
+import type { RemoteConversationView, RemoteMemoryHit, RemoteMessageView } from '@ryharness/api'
 import type { SessionStore } from '@ryharness/session'
 import { Remote } from '@ryharness/typert-protocol'
 
-/** 一个会话的摘要。 */
-export interface RemoteConversationView {
-  readonly id: string
-  readonly kind: string
-  readonly title: string
-  readonly memberAgentIds: readonly string[]
-  readonly updatedAt: number
-}
-
-/** 一条消息的摘要。 */
-export interface RemoteMessageView {
-  readonly seq: number
-  readonly senderType: string
-  readonly content: string
-  readonly createdAt: number
-}
+// 线上视图的唯一真源在 @ryharness/api（跟着线协议走）：这里只 re-export 给老
+// 消费方，不要再在这里手抄形状——SDK 侧同批改成了从真源导入。
+export type { RemoteConversationView, RemoteMessageView }
 
 /**
  * 从内容块里取出正文。
@@ -73,7 +61,7 @@ function textOf(blocks: readonly unknown[] | undefined): string {
 export class RyHarnessRemoteService {
   #store: SessionStore
   #listTools: () => readonly { name: string; description: string }[]
-  #recallMemory: (agentId: string, query: string) => Promise<readonly string[]>
+  #recallMemory: (agentId: string, query: string) => Promise<readonly RemoteMemoryHit[]>
   #writeSetting: (key: string, value: string) => Promise<void>
 
   /**
@@ -82,7 +70,7 @@ export class RyHarnessRemoteService {
   constructor(options: {
     store: SessionStore
     listTools: () => readonly { name: string; description: string }[]
-    recallMemory: (agentId: string, query: string) => Promise<readonly string[]>
+    recallMemory: (agentId: string, query: string) => Promise<readonly RemoteMemoryHit[]>
     writeSetting: (key: string, value: string) => Promise<void>
   }) {
     this.#store = options.store
@@ -149,10 +137,12 @@ export class RyHarnessRemoteService {
    *
    * @param agentId - 助理 id。
    * @param query - 查什么。
-   * @returns 召回的条目。
+   * @returns 召回的条目（正文 + 分数/时间/来源元数据——排序键在，调用方才知道
+   * 「为什么是这几条」；形状见 {@link RemoteMemoryHit}，与 dsh 的 session_query
+   * 命中对象同一设计）。
    */
   @Remote
-  async recallMemory(agentId: string, query: string): Promise<string[]> {
+  async recallMemory(agentId: string, query: string): Promise<RemoteMemoryHit[]> {
     return [...(await this.#recallMemory(agentId, query))]
   }
 

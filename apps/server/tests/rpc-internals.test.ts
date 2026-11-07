@@ -91,7 +91,17 @@ describe('远程服务', () => {
         listMessages: () => messages,
       } as never,
       listTools: () => [{ name: 'fs_read', description: '读文件' }],
-      recallMemory: async () => ['记得你喜欢猫'],
+      recallMemory: async () => [
+        {
+          id: 'm1',
+          kind: 'fact',
+          content: '记得你喜欢猫',
+          agentId: 'a1',
+          createdAt: 1,
+          updatedAt: 2,
+          score: 0.42,
+        },
+      ],
       writeSetting: async () => undefined,
     })
   }
@@ -119,7 +129,9 @@ describe('远程服务', () => {
 
   it('召回记忆', async () => {
     const service = makeService()
-    expect(await service.recallMemory('ryen', '喜欢什么')).toEqual(['记得你喜欢猫'])
+    expect(await service.recallMemory('ryen', '喜欢什么')).toEqual([
+      { id: 'm1', kind: 'fact', content: '记得你喜欢猫', agentId: 'a1', createdAt: 1, updatedAt: 2, score: 0.42 },
+    ])
   })
 
   it('写设置', async () => {

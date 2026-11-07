@@ -28,7 +28,7 @@
     "@ryharness/attachment": "附件类型词汇表：只被 llm 在编译期引用。",
     "@ryharness/desktop": "桌面应用本身：它就是产品入口之一（Electron 主进程），不由别处 import。",
     "@ryharness/cosmokit": "上游代码（vendor）：cordis 的依赖。",
-    "@ryharness/schemastery": "上游代码（vendor）：cordis 的依赖。",
+    "@ryharness/schemastery": "上游代码（vendor）：REST 契约层从第四波起 import 它做校验；它是对我们暴露 API 的上游库，但其内部导出面仍归上游管理，不由本门禁说三道四。",
     "vendor": "上游代码（cordis / cosmokit / schemastery）：不归我们管，也不该由产品入口走到。",
     "packages/typert/protocol": "协议层类型与装饰器：编译期依赖。",
     "packages/util": "通用工具包：编译期依赖。",

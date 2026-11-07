@@ -3,17 +3,33 @@
  * API 地址从窗口 URL query（?api=...，主进程注入）读取。
  */
 
-import type { PlaybookEntry, ReflectionRow } from '@ryharness/evolve'
+import type {
+  EvolutionRoundMetrics,
+  EvolveMetricsSnapshot,
+  PlaybookEntry,
+  ReflectionRow,
+  RoundTotals,
+} from '@ryharness/evolve'
 import type { PublicMemoryRow } from '@ryharness/memory'
+/**
+ * 回包真源（第四批收口）：产物预览 / 搜索命中 / 供应商行与探测结论的路由侧接口
+ * 已在服务端导出，渲染层换名重导出或派生，不再手抄。
+ */
 import type {
   AgentTemplate,
+  PreviewFile as ArtifactInfo,
   ConversationState,
   ConversationUsageRow,
+  DeletedApiKeyResult,
   MemoryRecall,
+  PermissionPresetSpec as PermissionPresetView,
   PluginView,
   ProviderAgentUsage,
   ProviderPreset,
   ProviderUsageRow,
+  SearchResult as SearchResultRow,
+  MemoryHealthReport as ServerMemoryHealthReport,
+  ProviderInfo as ServerProviderInfo,
   StampedWsEvent,
   TelemetrySnapshot,
   TodoGroup,
@@ -21,6 +37,7 @@ import type {
   TurnTiming,
   UsageReport,
   UserProfile,
+  VerifyOutcome,
   VibeOutputView,
   VibeProjectView,
   VibeQuestionView,
@@ -70,12 +87,14 @@ const REST_HINT = '这次操作没能完成，再试一次。'
  */
 export type {
   AgentTemplate,
+  ArtifactInfo,
   ConversationUsageRow,
   MemoryRecall,
   PluginView,
   ProviderAgentUsage,
   ProviderPreset,
   ProviderUsageRow,
+  SearchResultRow,
   StampedWsEvent,
   TelemetrySnapshot,
   TodoGroup,
@@ -127,35 +146,17 @@ export type AgentDef = Omit<StoredAgent, 'persona' | 'createdAt' | 'updatedAt'> 
 }
 
 /**
- * 产物预览的元数据（GET /api/files/:name/info）。
- *
- * 手抄原因：形状是 apps/server/src/routes/conversations.ts 的 statArtifact 返回的
- * 模块私有接口 PreviewFile（未导出），没有可 import 的真源；字段以那条路由为准。
- */
-export interface ArtifactInfo {
-  name: string
-  /** 工作区内的绝对路径：「用系统程序打开 / 复制路径」两个动作的唯一原料。 */
-  path: string
-  size: number
-  mime: string
-}
-
-/**
  * GET /api/providers 的行。
  *
- * 手抄原因：形状是 apps/server/src/routes/providers.ts 的 providerInfo 的**内联返回
- * 类型**（未命名、未导出），且它声明的返回类型漏列了 reasoningEfforts（运行时按
- * 路由的 reasoningControl 条件带上）——没有可 import 的完整真源。渲染层按「有才
- * 展示」的容错读模型声明可选字段；服务端实际恒回 protocol/baseUrl/custom/usedBy。
+ * 真源：@ryharness/server 的 ProviderInfo（routes/providers.ts 已导出，此前它还是
+ * providerInfo 的内联返回类型）。渲染层保留「缺省容错」读模型——旧服务端与测试
+ * 替身不全带可选字段，所以四项恒在字段用 Pick、其余按可缺省派生，不再手抄字段名。
  */
-/** 一个权限档位（服务端 /api/permission-presets 给出，渲染层不自己编一份）。 */
-export interface PermissionPresetView {
-  id: string
-  name: string
-  summary: string
-  /** 这一档允许的内置工具名。 */
-  tools: string[]
-}
+export type ProviderInfo = Pick<ServerProviderInfo, 'id' | 'displayName' | 'apiKeyConfigured' | 'models'> &
+  Partial<Pick<ServerProviderInfo, 'custom' | 'protocol' | 'baseUrl' | 'reasoningEfforts' | 'usedBy'>>
+
+/** 一个权限档位（服务端 /api/permission-presets 给出）。真源：@ryharness/agent 的 PermissionPresetSpec，server 面转出，渲染层换名重导出。 */
+export type { PermissionPresetView }
 
 /** 一个注册着的工具（服务端 /api/tools 给出，渲染层不自己编一份）。 */
 export interface ToolInfo {
@@ -165,66 +166,26 @@ export interface ToolInfo {
   description: string
 }
 
-export interface ProviderInfo {
-  id: string
-  displayName: string
-  apiKeyConfigured: boolean
-  models: { id: string; name?: string; contextWindow?: number }[] /** 用户手动添加的供应商（可删除）；缺省视为内置。 */
-  custom?: boolean
-  /** 接入协议（openai / ollama），徽标展示用。 */
-  protocol?: string
-  baseUrl?: string
-  /**
-   * 这条路由支持哪些思考强度档位（`low` / `medium` / `high`）。
-   *
-   * 缺省或空数组 = 该路由不认思考参数，UI 就不给选择器——给一个选了会被端点
-   * 静默忽略的控件，比没有更糟。
-   */
-  reasoningEfforts?: string[]
-  /** 正在使用它的 agent：删除前要先把它们改绑（缺省 = 没人用）。 */
-  usedBy?: { agentId: string; agentName: string }[]
-}
-
 /**
  * 测连接的结果（POST /api/providers/:id/verify）。
  *
- * 手抄原因：服务端的探测结论 VerifyOutcome 是 routes/providers.ts 的模块私有接口，
- * 回包实际还带 code（机器可读分类）与 discovered（顺带发现的模型目录）——渲染层
- * 只读 ok/message/latencyMs 三项，按子集声明；要读 code/discovered 时再补。
+ * 真源：@ryharness/server 的 VerifyOutcome（routes/providers.ts 已导出）。渲染层只读
+ * ok/message/latencyMs 三项，按子集 Pick 派生；要读 code/discovered 时再补。
  */
-export interface ProviderVerifyResult {
-  ok: boolean
-  /** ok=false 时的原因；服务端给什么就显示什么（渲染层另有中文归类）。 */
-  message: string
-  latencyMs: number
-}
+export type ProviderVerifyResult = Pick<VerifyOutcome, 'ok' | 'message' | 'latencyMs'>
 
 /**
  * DELETE /api/settings/api-key/:id 的响应体（见 ApiClient.deleteApiKey）。
  *
- * 手抄原因：形状是 routes/settings.ts 那条路由的内联字面量 `{providerId, configured:
- * false}`，没有命名真源。
+ * 真源：@ryharness/server 的 DeletedApiKeyResult（routes/settings.ts 已命名导出）。
  */
-export interface DeletedApiKeyResult {
-  providerId: string
-  configured: boolean
-}
+export type { DeletedApiKeyResult }
 
 /**
  * 全文搜索命中的一行（GET /api/search）。
  *
- * 手抄原因：真源是 routes/conversations.ts 的 SearchResult 接口（未导出），字段与其
- * 逐一对齐；服务端加字段时以那边为准。
+ * 真源：@ryharness/server 的 SearchResult（routes/conversations.ts 已导出），换名重导出。
  */
-export interface SearchResultRow {
-  conversationId: string
-  conversationTitle: string
-  messageId: string
-  /** 命中片段（服务端已按关键词截断）。 */
-  snippet: string
-  agentId: string
-  createdAt: number
-}
 
 /**
  * 会话可改的元信息（PATCH /api/conversations/:id 的入参）。
@@ -1230,57 +1191,19 @@ export function messageText(row: MessageRow): string {
 // 一一对齐；服务端关闭某子系统时回 {enabled:false} 而不是报错，面板据此说明原因。
 // 用量账单那组 DTO 已随顶部一起改为对 @ryharness/server 的纯类型导入。 ----
 
-/** GET /api/memory/health：记忆系统关闭时只有 enabled:false。 */
-export type MemoryHealthReport =
-  | { enabled: false }
-  | {
-      enabled: true
-      /** 记忆总行数（含归档与软删链）。 */
-      total: number
-      /** 已归档条数。 */
-      archived: number
-      /** 缺当前 embedding 向量的条数（active + inactive）。 */
-      missingVectors: number
-      /** 各空间（agent 私有 + 共享画像）的记忆条数。 */
-      bySpace: Record<string, number>
-      /** 记忆库文件占用字节（含 WAL）。 */
-      dbBytes: number
-      embeddings: { label: string; model: string; dim?: number }
-      lastRecall?: MemoryRecall
-    }
+/** GET /api/memory/health：记忆系统关闭时只有 enabled:false。真源：@ryharness/server 的 MemoryHealthReport（enabled:true 分支），关闭分支由渲染层并入。 */
+export type MemoryHealthReport = { enabled: false } | ServerMemoryHealthReport
 
-/** 进化轮次种类：对话轮计分 / 反馈归因 / 定期巩固。 */
-export type EvolveRoundKind = 'turn' | 'feedback' | 'consolidate'
+/** 进化轮次种类：对话轮计分 / 反馈归因 / 定期巩固。真源：@ryharness/evolve 的 RoundKind（随 EvolutionRoundMetrics 走）。 */
+export type EvolveRoundKind = EvolutionRoundMetrics['kind']
 
-/** 一轮进化工作的记账（耗时 + 处理条数 + 成败）。 */
-export interface EvolutionRoundMetrics {
-  kind: EvolveRoundKind
-  startedAt: number
-  durationMs: number
-  /** 处理条目数：轮=计分/写库条目，consolidate=扫描的向量与记忆行。 */
-  processed: number
-  ok: boolean
-  error?: string
-}
+/** 一轮进化工作的记账（耗时 + 处理条数 + 成败）。真源：@ryharness/evolve 的 metrics.ts。 */
+export type { EvolutionRoundMetrics, RoundTotals }
 
-/** 累计口径（按种类分列）。 */
-export interface RoundTotals {
-  rounds: number
-  failures: number
-  durationMs: number
-  processed: number
-}
-
-/** GET /api/evolve/stats：进化系统关闭时只有 enabled:false。 */
+/** GET /api/evolve/stats：进化系统关闭时只有 enabled:false。真源：@ryharness/evolve 的 EvolveMetricsSnapshot + 关闭分支与 droppedTurns 标记。 */
 export type EvolveStatsReport =
   | { enabled: false }
-  | {
-      enabled: true
-      last?: EvolutionRoundMetrics
-      /** 最近若干轮，新的在前。 */
-      rounds: EvolutionRoundMetrics[]
-      totals: RoundTotals
-      byKind: Record<EvolveRoundKind, RoundTotals>
-      /** 因环形缓冲上限被丢弃的轮数。 */
-      droppedTurns?: number
-    }
+  | ({ enabled: true } & EvolveMetricsSnapshot & {
+        /** 因环形缓冲上限被丢弃的轮数（缺省 = 没丢过）。 */
+        droppedTurns?: number
+      })

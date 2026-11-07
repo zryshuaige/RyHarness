@@ -15,8 +15,18 @@ import type { ContentAddressedAttachmentStore } from '@ryharness/attachment-stor
 import type { Conversation, SessionStore, StoredMessage } from '@ryharness/session'
 import { ARTIFACTS_DIR, guessMime, PathEscapeError, resolveTarget } from '@ryharness/tools'
 import type { ApprovalBroker } from '../approvals.ts'
+import {
+  ApprovalDecisionBody,
+  AttachmentLookupBody,
+  BranchBody,
+  ConversationPatchBody,
+  CreateConversationBody,
+  SendTextBody,
+  UploadArtifactBody,
+} from '../contract/conversations.ts'
 import type { WsEvent } from '../events.ts'
 import { PROACTIVE_BLOCK_TYPE } from '../proactive.ts'
+import { route } from '../route.ts'
 import { HttpRequestError, json, type Router, strField } from '../router.ts'
 
 /** 投递一轮对话所需的会话形状（组合根的调度链按它排程）。 */
@@ -128,8 +138,8 @@ const MAX_UPLOAD_NAME_ATTEMPTS = 1000
 /** 内嵌预览的单文件字节上限（比上传宽一档：预览要的是既有产物，不是新收的东西）。 */
 const MAX_PREVIEW_BYTES = 32 * 1024 * 1024
 
-/** 预览两条路由共享的文件解析结果。 */
-interface PreviewFile {
+/** 预览两条路由共享的文件解析结果（渲染层 `ArtifactInfo` 的真源）。 */
+export interface PreviewFile {
   name: string
   path: string
   size: number
@@ -224,8 +234,8 @@ function parseMemberAgentIds(store: SessionStore, value: unknown): string[] {
   return ids
 }
 
-/** 搜索命中的一行（GET /api/search 的结果项）。 */
-interface SearchResult {
+/** 搜索命中的一行（GET /api/search 的结果项；渲染层 `SearchResultRow` 的真源）。 */
+export interface SearchResult {
   conversationId: string
   conversationTitle: string
   messageId: string
@@ -547,15 +557,14 @@ export function registerConversationRoutes(router: Router, deps: ConversationRou
    * 以 UNKNOWN_AGENT 报错（"群一进去就哑"），这里直接 400 不落盘。置顶/静音/
    * 改名不进会话表（没有这些列），落在 <dataDir>/conversation-state.json。
    */
-  router.patch('/api/conversations/:id', async (req, res) => {
+  route(router, 'PATCH', '/api/conversations/:id', { body: ConversationPatchBody }, async (req, res) => {
     const conversationId = req.params.id as string
     const existing = store.getConversation(conversationId)
     if (existing === undefined) {
       json(res, 404, { error: 'conversation not found' })
       return
     }
-    const body = await req.body()
-    const record = (typeof body === 'object' && body !== null ? body : {}) as Record<string, unknown>
+    const record = await req.body()
     const current = conversationStates.get(conversationId) ?? {}
     const next: ConversationState = { ...current }
     const patchable = ['title', 'pinned', 'muted', 'memberAgentIds'] as const
@@ -563,13 +572,11 @@ export function registerConversationRoutes(router: Router, deps: ConversationRou
       return record[key] !== undefined
     })
     if (record.title !== undefined) {
-      if (typeof record.title !== 'string') throw new HttpRequestError(400, 'field "title" must be a string')
       next.title = record.title
     }
     for (const flag of ['pinned', 'muted'] as const) {
       const value = record[flag]
       if (value === undefined) continue
-      if (typeof value !== 'boolean') throw new HttpRequestError(400, `field "${flag}" must be a boolean`)
       next[flag] = value
     }
     if (record.memberAgentIds !== undefined) {
@@ -590,14 +597,14 @@ export function registerConversationRoutes(router: Router, deps: ConversationRou
     json(res, 200, { conversation: updated === undefined ? undefined : viewOf(updated) })
   })
 
-  router.post('/api/conversations', async (req, res) => {
+  route(router, 'POST', '/api/conversations', { body: CreateConversationBody }, async (req, res) => {
     const body = await req.body()
-    const kind = strField(body, 'kind')
+    const kind = body.kind
     // 校验一律抛 HttpRequestError（400 + 机器码），由 dispatch 统一成响应；
     // 落库失败不再 catch 成 400——那是服务端故障，冒成 400 会让调用方
     // 以为改改请求体就能成。
     if (kind === 'direct') {
-      const agentId = strField(body, 'agentId')
+      const agentId = body.agentId
       if (agentId === undefined) throw new HttpRequestError(400, 'direct conversation requires agentId')
       if (store.getAgent(agentId) === undefined) throw new HttpRequestError(400, `unknown agent "${agentId}"`)
       const conversation = store.createConversation({
@@ -609,18 +616,10 @@ export function registerConversationRoutes(router: Router, deps: ConversationRou
       return
     }
     if (kind === 'group') {
-      const memberIds = (body as { memberAgentIds?: unknown })?.memberAgentIds
-      if (!Array.isArray(memberIds) || memberIds.length === 0) {
+      const members = body.memberAgentIds
+      if (members === undefined || members.length === 0) {
         throw new HttpRequestError(400, 'group conversation requires non-empty memberAgentIds')
       }
-      if (
-        memberIds.some((id) => {
-          return typeof id !== 'string'
-        })
-      ) {
-        throw new HttpRequestError(400, 'memberAgentIds must be an array of agent ids')
-      }
-      const members = memberIds as string[]
       for (const id of members) {
         if (store.getAgent(id) === undefined) throw new HttpRequestError(400, `unknown agent "${id}"`)
       }
@@ -725,28 +724,34 @@ export function registerConversationRoutes(router: Router, deps: ConversationRou
    * 404 的语义是「这张审批卡已经不在了」——超时与轮次取消都会走到这里，
    * 渲染层按 approval-resolved 事件撤卡，这里只是把迟到的点击如实回掉。
    */
-  router.post('/api/conversations/:id/approvals/:approvalId', async (req, res) => {
-    const conversationId = req.params.id as string
-    if (store.getConversation(conversationId) === undefined) {
-      json(res, 404, { error: 'conversation not found' })
-      return
-    }
-    const body = (await req.body()) as { decision?: unknown; remember?: unknown }
-    const decision = body.decision === 'allow' ? 'allow' : body.decision === 'deny' ? 'deny' : undefined
-    if (decision === undefined) {
-      json(res, 400, { error: 'body.decision must be "allow" or "deny"' })
-      return
-    }
-    const applied = deps.approvals.decide(conversationId, req.params.approvalId as string, {
-      decision,
-      remember: body.remember === true,
-    })
-    if (!applied) {
-      json(res, 404, { error: 'approval not pending (resolved, timed out, or cancelled)' })
-      return
-    }
-    json(res, 200, { approvalId: req.params.approvalId, decision })
-  })
+  route(
+    router,
+    'POST',
+    '/api/conversations/:id/approvals/:approvalId',
+    { body: ApprovalDecisionBody },
+    async (req, res) => {
+      const conversationId = req.params.id as string
+      if (store.getConversation(conversationId) === undefined) {
+        json(res, 404, { error: 'conversation not found' })
+        return
+      }
+      const body = await req.body()
+      const decision = body.decision
+      if (decision === undefined) {
+        json(res, 400, { error: 'body.decision must be "allow" or "deny"' })
+        return
+      }
+      const applied = deps.approvals.decide(conversationId, req.params.approvalId as string, {
+        decision,
+        remember: body.remember === true,
+      })
+      if (!applied) {
+        json(res, 404, { error: 'approval not pending (resolved, timed out, or cancelled)' })
+        return
+      }
+      json(res, 200, { approvalId: req.params.approvalId as string, decision })
+    },
+  )
 
   /** 调度事件历史（右栏调度轨迹）。 */
   router.get('/api/conversations/:id/dispatch', async (req, res) => {
@@ -804,7 +809,7 @@ export function registerConversationRoutes(router: Router, deps: ConversationRou
     json(res, 200, { messages: rows })
   })
 
-  router.post('/api/conversations/:id/messages', async (req, res) => {
+  route(router, 'POST', '/api/conversations/:id/messages', { body: SendTextBody }, async (req, res) => {
     const conversationId = req.params.id as string
     const stored = store.getConversation(conversationId)
     if (stored === undefined) {
@@ -826,7 +831,8 @@ export function registerConversationRoutes(router: Router, deps: ConversationRou
       json(res, 409, { error: '这个会话里的助理已经被删除了，没法再发消息' })
       return
     }
-    const text = strField(await req.body(), 'text')
+    const body = await req.body()
+    const text = strField(body, 'text')
     if (text === undefined) {
       json(res, 400, { error: 'body.text is required' })
       return
@@ -857,7 +863,7 @@ export function registerConversationRoutes(router: Router, deps: ConversationRou
    * 消息，把库里那一条原样交给模型再答一次），所以模型看到的历史与第一次
    * 逐条相同。
    */
-  router.post('/api/conversations/:id/messages/:seq/edit', async (req, res) => {
+  route(router, 'POST', '/api/conversations/:id/messages/:seq/edit', { body: SendTextBody }, async (req, res) => {
     const conversationId = req.params.id as string
     const seq = Number(req.params.seq)
     const stored = store.getConversation(conversationId)
@@ -866,7 +872,8 @@ export function registerConversationRoutes(router: Router, deps: ConversationRou
       return
     }
     if (!Number.isInteger(seq) || seq < 1) throw new HttpRequestError(400, 'seq must be a message sequence number')
-    const text = strField(await req.body(), 'text')
+    const body = await req.body()
+    const text = strField(body, 'text')
     if (text === undefined || text.trim().length === 0) throw new HttpRequestError(400, 'body.text is required')
     const message = store.getMessage(conversationId, seq)
     if (message === undefined) {
@@ -957,16 +964,16 @@ export function registerConversationRoutes(router: Router, deps: ConversationRou
    * LibreChat / Open WebUI 的 fork）。复制的是内容不是引用，之后改一边不影响
    * 另一边。
    */
-  router.post('/api/conversations/:id/branch', async (req, res) => {
+  route(router, 'POST', '/api/conversations/:id/branch', { body: BranchBody }, async (req, res) => {
     const conversationId = req.params.id as string
     const stored = store.getConversation(conversationId)
     if (stored === undefined) {
       json(res, 404, { error: 'conversation not found' })
       return
     }
-    const body = (await req.body()) as { atSeq?: unknown; title?: unknown }
-    const atSeq = Number(body.atSeq)
-    if (!Number.isInteger(atSeq) || atSeq < 1) throw new HttpRequestError(400, 'body.atSeq is required')
+    const body = await req.body()
+    const atSeq = body.atSeq
+    if (atSeq === undefined) throw new HttpRequestError(400, 'body.atSeq is required')
     if (store.getMessage(conversationId, atSeq) === undefined) {
       json(res, 404, { error: 'message not found' })
       return
@@ -1037,16 +1044,15 @@ export function registerConversationRoutes(router: Router, deps: ConversationRou
    * 工作区那份**照旧留着**：助理是按文件名读它的（正文里的 `[附件] xxx`），
    * 只存一份哈希副本的话助理就看不见附件了。
    */
-  router.post('/api/conversations/:id/files', async (req, res) => {
+  route(router, 'POST', '/api/conversations/:id/files', { body: UploadArtifactBody }, async (req, res) => {
     const conversationId = req.params.id as string
     if (store.getConversation(conversationId) === undefined) {
       json(res, 404, { error: 'conversation not found' })
       return
     }
-    const body = await req.body()
-    const record = (typeof body === 'object' && body !== null ? body : {}) as Record<string, unknown>
-    const rawName = typeof record.name === 'string' ? record.name : ''
-    const rawData = typeof record.data === 'string' ? record.data : ''
+    const record = await req.body()
+    const rawName = record.name ?? ''
+    const rawData = record.data ?? ''
     if (rawName.trim().length === 0) {
       json(res, 400, { error: 'name is required' })
       return
@@ -1089,15 +1095,14 @@ export function registerConversationRoutes(router: Router, deps: ConversationRou
    * body `{data(base64)}` → `{id, exists, bytes, mediaType?}`。`exists: false` 时
    * `id` 照样给：客户端可以拿它去别处比对。
    */
-  router.post('/api/attachments/lookup', async (req, res) => {
+  route(router, 'POST', '/api/attachments/lookup', { body: AttachmentLookupBody }, async (req, res) => {
     const store = deps.attachmentStore
     if (store === undefined) {
       json(res, 404, { error: 'attachment store not enabled' })
       return
     }
-    const body = await req.body()
-    const record = (typeof body === 'object' && body !== null ? body : {}) as Record<string, unknown>
-    const rawData = typeof record.data === 'string' ? record.data : ''
+    const record = await req.body()
+    const rawData = record.data ?? ''
     if (rawData.trim().length === 0) {
       json(res, 400, { error: 'data is required' })
       return

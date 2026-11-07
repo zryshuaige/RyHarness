@@ -7,6 +7,8 @@ import { readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { type MemoryService, toPublicMemories, toPublicMemory } from '@ryharness/memory'
 import type { SessionStore } from '@ryharness/session'
+import { EmbeddingBody, MemoryPatchBody, MemoryRestoreBody } from '../contract/memory.ts'
+import { route } from '../route.ts'
 import { json, type Router, strField } from '../router.ts'
 import type { Telemetry } from '../telemetry.ts'
 
@@ -212,7 +214,7 @@ export function registerMemoryRoutes(router: Router, deps: MemoryRoutes): void {
    * 下一轮把错的学回来。FTS 与向量由服务层同步换新；不存在或非 active 的行
    * 一律 404（归档行走 restore，软删行不该被 id 复活改写）。
    */
-  router.patch('/api/memories/:id', async (req, res) => {
+  route(router, 'PATCH', '/api/memories/:id', { body: MemoryPatchBody }, async (req, res) => {
     const service = memoryService()
     if (service === undefined) {
       json(res, 409, { error: 'memory system disabled' })
@@ -317,7 +319,7 @@ export function registerMemoryRoutes(router: Router, deps: MemoryRoutes): void {
   })
 
   /** 恢复一条归档记忆：回到 active，重新参与检索与注入。 */
-  router.post('/api/memory/restore', async (req, res) => {
+  route(router, 'POST', '/api/memory/restore', { body: MemoryRestoreBody }, async (req, res) => {
     const service = memoryService()
     if (service === undefined) {
       json(res, 409, { error: 'memory system disabled' })
@@ -376,7 +378,7 @@ export function registerMemoryRoutes(router: Router, deps: MemoryRoutes): void {
    * 换模型等于换向量空间：旧向量与新模型不同维也不同义，检索侧按模型过滤，
    * 旧记忆要靠 POST /api/memory/reembed 回填。
    */
-  router.post('/api/memory/embedding', async (req, res) => {
+  route(router, 'POST', '/api/memory/embedding', { body: EmbeddingBody }, async (req, res) => {
     const embedding = deps.embedding
     if (embedding === undefined) {
       json(res, 404, { error: 'embedding configuration is not available' })

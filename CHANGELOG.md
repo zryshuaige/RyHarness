@@ -6,7 +6,62 @@
 
 ## [Unreleased]
 
+### Added
+
+- **REST 契约单源化落地（对齐 dsh 的 schemastery 手法）**：vendor 里躺了三个版本的
+  schemastery（与 dsh 用的是同一份上游代码，此前产品零引用）正式接线。新增
+  `apps/server/src/route.ts` 的 `route()`/`withBody()`（形状抄 kimicode 的
+  defineRoute：一份 schema 同时是运行时校验与 handler 入参类型）与
+  `apps/server/src/contract/`（16 个域文件，接口人写 + `z<Input>` 双注解互检，
+  dsh 的 `z<Partial<Config>, Config>` 手法）。18 个路由文件 34 处手写 body 解析
+  （13 处同样的 cast 样板、几十处手写 throw）全部迁移，**测试零断言改动**（464
+  用例全绿即为迁移未改行为）。渲染层 9 个手抄接口换名重导出或从真源派生
+  （ArtifactInfo/SearchResultRow/ProviderInfo/ProviderVerifyResult/
+  PermissionPresetView/DeletedApiKeyResult/MemoryHealthReport/进化指标三件套），
+  SDK 手抄的线上视图下沉 `@ryharness/api` 为唯一真源（server 与 sdk 同源导入）。
+  为什么值得做：手抄 drift 已经真实发生两次（dispatcherAgentId 三处口径、
+  AgentTemplate.persona），schemastery 的 `array` 工厂还带着隐式 `default: []`
+  ——「没传字段」会被变成「传了空列表」，`contract/util.ts` 的 `optionalArrayOf`
+  用字面量构造把这个坑钉死并写明缘由。
+
 ### Changed
+
+- **审批从「只有 shell 有门」补完到 dsh 形态**：`ssh_exec` 标上逐条审批、MCP 外部
+  工具**默认逐条问**（配置显式 `requiresApproval: false` 才放行——外部工具能做
+  什么没有边界，与 shell 同权）；**子代理的内层 loop 此前根本没接审批桥**，父代理
+  点头、子代理随便跑，现在把外层 approver 一路穿透进去，子代理的每条命令与父代理
+  落同一张审批卡；无会话上下文的工具调用从「放行」（自辩是装配缺口兜底）改为
+  **拒绝**——对齐 dsh ApprovalService「无答题者 → unavailable → 拒」的 fail-closed
+  裁决序，任何漏带会话的装配路径不再静默变成免批通道；新增会话级
+  `POST /api/conversations/:id/approval-policy`（'ask' | 'never'，照 sandbox 会话级
+  覆盖的先例，进程内存、重启回逐条问）。
+- **recallMemory 的 wire 从 `string[]` 升级为结构化命中数组**：正文之外带
+  id/kind/归属空间/创建与更新时间/排序分（`RemoteMemoryHit`，形状抄 dsh
+  session_query 的命中对象——排序键在，调用方才知道「为什么是这几条」）；
+  `@ryharness/memory` 的 `hybridRecall` 相应返回带分的 `ScoredMemoryRow`。破坏性
+  wire 变更：0.5.0 拿旧形状写死的外部客户端需要跟 SDK 一起更新（SDK 同轮首发）。
+- **web 出站防护收归单源**：`read_url` 与 `web_fetch` 各写一份的私网判定/解析
+  序列合并进 `@ryharness/web/guard`（web-read 插件改 import，删掉「两边口径一致、
+  实现各写各的」的注释——现在是真的一份）。对比摸底确认这套钉 IP 防护**强于
+  dsh 与 kimicode**（两家的 fetch 都没有私网封锁与 DNS pin），合并后这个优势只有
+  一份实现可丢。
+- **自检与对账文档跟着事实走**：`docs/simple-yet-effective-audit.md` 勘误（审批门
+  其实早已端到端、钉 IP 强于标杆、api.ts 真身在 renderer、路由统计 18 文件/83
+  注册/34 处 body）；`docs/dsh-parity.md` 的 api 行更新 recallMemory v2 形状；
+  NOTICE 的 schemastery 从「无包依赖」进闭包（56 个工作区包）；覆盖率棘轮
+  `packages/memory` branches -30 → -33（drain() 长出的 3 条分支，实测 31 + 2）。
+
+### Fixed
+
+- **关机不再蒸发刚聊出来的记忆**：`doClose` 原来直接丢掉记忆抽取队列与演化任务
+  队列（聊完 30 秒内退出，当轮记忆不会入库）。现在按 kimicode 的
+  settled()+deadline 模式给两个服务各加 `drain(deadlineMs)`（默认 3 秒收敛窗口）：
+  到点没跑完的仍随 close 放弃——后台增强不该拖住停机，但跑得完的先落库。
+- **覆盖率棘轮的隐式默认踩坑记录**：schemastery 工厂给 array/object/bitset 塞
+  隐式默认值，PATCH 类「只在传了才改」的端点若直接用 `z.array(...)` 会把「没传」
+  判成「传了空列表」——`contract/util.ts` 收口了正确写法，后续域照抄即可。
+
+
 
 - **自检端点真的调一次业务方法**（`apps/server/src/rpc/selfcheck.ts`）：自检原来只问了
   一张类型图（`remote/graph`）——五个业务方法一个都没发过，`remote/call` 那条分发
@@ -31,12 +86,15 @@
 - **三仓工程质量对比落盘**（`docs/simple-yet-effective-audit.md`）：把 RyHarness 放在
   dsh（DeepSeek Harness）与 kimicode（Kimi Code）两个标杆旁边，按 16 个维度实测对比，
   回答两个问题——是不是屎山、够不够 simple yet effective。为什么现在做：第三轮评审
-  的遗留项（契约手抄、shell 审批、ChatView/组合根）在仓库内部只有自我判断，缺外部锚；
-  对比后两个 P0 都拿到了标杆证据背书（dsh 用 Schemastery 单源 + 67 个 verify 门、
-  kimicode 用 zod defineRoute 一路生成 openapi，且两家都有完整审批防线）。结论一句话：
-  非屎山，effective 成立（1/6 于 dsh、1/3.6 于 kimicode 的代码量做到三家独有的记忆
-  演化/多人格/群聊/桌面端/spill），simple 在包级成立、四处集中债（god 组件、组合根、
-  手抄契约、测试基建 bespoke）。本文只记录事实与判定，修复项仍在遗留路线图排期。
+  的遗留项（契约手抄、审批覆盖、ChatView/组合根）在仓库内部只有自我判断，缺外部锚。
+  对比还纠正了两条旧账：审批桥其实早已端到端（ea1fa31，卡片/决议/记住/超时即拒），
+  真缺口是工具覆盖面与档位；出站请求的钉 IP 防护我们反而**强于两家**（dsh/kimicode
+  的 fetch 都没有私网封锁与 DNS pin）。真正的 P0 只剩契约手抄——renderer api.ts
+  手抄 16 个接口 + 18 个路由文件 34 处手写校验，而 vendor 里的 schemastery 与 dsh
+  用的是同一份上游代码。结论一句话：非屎山，effective 成立（1/6 于 dsh、1/3.6 于
+  kimicode 的代码量做到三家独有的记忆演化/多人格/群聊/桌面端/spill），simple 在包级
+  成立、四处集中债（god 组件、组合根、手抄契约、测试基建 bespoke）。本文只记录事实
+  与判定，修复项随第四波落地。
 
 ### Fixed
 

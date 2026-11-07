@@ -4,8 +4,8 @@
  * `read_url` 把一段 http/https 页面抓成纯文本交给模型。它同时是这台机器上
  * 唯一由模型直接控制出站请求的地方，因此边界要写死：
  * - 协议只允许 http/https（file:/ftp: 等一律拒绝）；
- * - 字面地址与 DNS 结果都必须落在公网：localhost、127/8、::1、10/8、
- *   172.16/12、192.168/16、169.254/16 全部挡掉，避免变成访问本机服务的跳板；
+ * - 字面地址与 DNS 结果都必须落在公网（判定与解析在 `@ryharness/web/guard`
+ *   **单源**维护——web_fetch 与这里共用同一份口径，不再各写各的清单）；
  * - 校验通过的那次解析结果就是连接目标（钉 IP）：默认取回器把已校验 IP 写进
  *   请求参数，连接层不再做第二次 DNS——否则短 TTL 记录可以在「校验通过」与
  *   「真正建连」之间换成 127.0.0.1（DNS rebinding），把内网正文送进模型上下文；
@@ -18,10 +18,10 @@ import { lookup } from 'node:dns/promises'
 import { request as httpRequest } from 'node:http'
 import type { RequestOptions } from 'node:https'
 import { request as httpsRequest } from 'node:https'
-import { isIP } from 'node:net'
 import { Readable } from 'node:stream'
 import type { Tool, ToolContext, ToolResult } from '@ryharness/agent'
 import type { Context } from '@ryharness/cordis'
+import { defaultResolveHost, type HostResolver, normalizeHost, resolveSafeTarget } from '@ryharness/web'
 import type { PluginEntry } from './host.ts'
 
 export const WEB_READ_PLUGIN_ID = 'web-read'
@@ -51,8 +51,8 @@ export type ConnectLookup = (
   options: { family?: number | 'IPv4' | 'IPv6' },
 ) => Promise<{ address: string; family: number }>
 
-/** 解析主机名到地址列表；测试注入固定结果，生产走 node:dns。 */
-export type ResolveHost = (hostname: string) => Promise<readonly string[]>
+/** 解析主机名到地址列表；测试注入固定结果，生产走 node:dns（判定真源在 @ryharness/web/guard）。 */
+export type ResolveHost = HostResolver
 
 /** 工具返回对象（以 JSON 文本作为工具结果）。 */
 export interface ReadUrlResult {
@@ -71,13 +71,6 @@ export interface ReadUrlOptions {
   timeoutMs?: number
   maxBytes?: number
   maxChars?: number
-}
-
-const defaultResolveHost: ResolveHost = async (hostname) => {
-  const records = await lookup(hostname, { all: true, verbatim: true })
-  return records.map((record) => {
-    return record.address
-  })
 }
 
 const defaultConnectLookup: ConnectLookup = async (hostname, options) => {
@@ -162,115 +155,14 @@ export function createPinnedFetch(connectLookup: ConnectLookup = defaultConnectL
   }
 }
 
-/** 去掉 IPv6 字面量的方括号与末尾的点，统一成小写再判断。 */
-function normalizeHost(hostname: string): string {
-  return hostname.trim().replace(/^\[/, '').replace(/\]$/, '').replace(/\.$/, '').toLowerCase()
-}
-
-/** 点分四段；不是合法 IPv4 返回 undefined（IPv6/域名也走这里返回 undefined）。 */
-function ipv4Parts(address: string): number[] | undefined {
-  const parts = address.split('.')
-  if (parts.length !== 4) return undefined
-  const numbers: number[] = []
-  for (const part of parts) {
-    if (!/^\d{1,3}$/.test(part)) return undefined
-    const value = Number(part)
-    if (value < 0 || value > 255) return undefined
-    numbers.push(value)
-  }
-  return numbers
-}
-
-/**
- * 私网/本机地址判定。
- *
- * 覆盖需求列出的网段，并顺手挡掉 0/8、IPv6 的 ::、fc00::/7、fe80::/10 与
- * IPv4-mapped 形式——它们都是同一类「从外面看起来是个普通地址，实际打回本机/
- * 局域网」的入口。
- */
-export function isPrivateAddress(address: string): boolean {
-  const host = normalizeHost(address)
-  const v4 = ipv4Parts(host)
-  if (v4 !== undefined) {
-    const [a, b] = v4 as [number, number, number, number]
-    return (
-      a === 0 ||
-      a === 10 ||
-      a === 127 ||
-      (a === 169 && b === 254) ||
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168)
-    )
-  }
-  if (host === '::' || host === '::1') return true
-  if (/^f[cd][0-9a-f]{0,2}:/.test(host)) return true
-  if (/^fe[89ab][0-9a-f]?:/.test(host)) return true
-  const mapped = /^::ffff:(.+)$/.exec(host)?.[1] ?? /^(?:0:){5}ffff:(.+)$/.exec(host)?.[1]
-  if (mapped !== undefined) {
-    const mappedV4 = ipv4Parts(mapped)
-    if (mappedV4 !== undefined) return isPrivateAddress(mapped)
-    // ::ffff:7f00:1 这类十六进制写法：还原成四段十进制再判。
-    const groups = mapped.split(':')
-    if (
-      groups.length === 2 &&
-      /^[0-9a-f]{1,4}$/.test(groups[0] as string) &&
-      /^[0-9a-f]{1,4}$/.test(groups[1] as string)
-    ) {
-      const high = Number.parseInt(groups[0] as string, 16)
-      const low = Number.parseInt(groups[1] as string, 16)
-      return isPrivateAddress(`${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`)
-    }
-  }
-  return false
-}
-
-/** 主机名层面的拒绝：localhost 与各种本地域，不依赖 DNS 结果。 */
-function isForbiddenHost(hostname: string): boolean {
-  const host = normalizeHost(hostname)
-  if (host.length === 0) return true
-  if (host === 'localhost' || host.endsWith('.localhost')) return true
-  return isPrivateAddress(host)
-}
-
 /**
  * 校验一个 URL 是否可以抓取，并带回本次连接要钉住的 IP；不通过时抛出带原因的错误。
  *
- * 对域名会先解析再检查每一个地址：只查字面量的话，`http://internal.example`
- * 这种指向 192.168 的域名会直接放行。放行的同时把解析结果交回去——校验用一次
- * 解析、建连用另一次解析，中间就是 DNS rebinding 的窗口；返回 IP 让调用方把
- * 连接钉在上面，窗口不复存在。
+ * 实现收归 `@ryharness/web/guard` 单源（协议白名单、私网判定、解析逐地址检查、
+ * 返回钉子）——这里只保留调用点，别再手写第二份清单。
  */
 async function assertAllowedUrl(raw: string, resolveHost: ResolveHost): Promise<{ url: URL; ip: string }> {
-  let url: URL
-  try {
-    url = new URL(raw)
-  } catch {
-    throw new Error('链接格式不正确')
-  }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new Error('只允许 http/https 链接')
-  }
-  const host = normalizeHost(url.hostname)
-  if (isForbiddenHost(host)) {
-    throw new Error(`拒绝访问本机或内网地址：${host}`)
-  }
-  let ip = host
-  if (isIP(host) === 0) {
-    let addresses: readonly string[]
-    try {
-      addresses = await resolveHost(host)
-    } catch {
-      throw new Error(`无法解析主机名：${host}`)
-    }
-    if (addresses.length === 0) throw new Error(`无法解析主机名：${host}`)
-    for (const address of addresses) {
-      if (isPrivateAddress(address)) {
-        throw new Error(`拒绝访问本机或内网地址：${host}`)
-      }
-    }
-    ip = addresses[0] as string
-  }
-  return { url, ip }
+  return resolveSafeTarget(raw, resolveHost)
 }
 
 /** 常用命名实体；不追求完整 HTML5 实体表，覆盖正文里最常见的那些。 */

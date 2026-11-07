@@ -6,6 +6,8 @@
 
 import type { EvolveService } from '@ryharness/evolve'
 import type { SessionStore } from '@ryharness/session'
+import { FeedbackBody, PlaybookStatusBody } from '../contract/evolve.ts'
+import { route } from '../route.ts'
 import { json, type Router, strField } from '../router.ts'
 
 /** 巩固一跑的结论（runUntilIdle 的口径：整轮跑完，不是第一片）。 */
@@ -38,7 +40,7 @@ export function registerEvolveRoutes(router: Router, deps: EvolveRoutes): void {
    * 才涨（渲染层因此不再单独调 /api/agents/:id/affinity）；回包带上更新后的
    * agent，界面据此刷新卡片，不用再拉一次列表。
    */
-  router.post('/api/feedback', async (req, res) => {
+  route(router, 'POST', '/api/feedback', { body: FeedbackBody }, async (req, res) => {
     const service = evolutionService()
     if (service === undefined) {
       json(res, 409, { error: 'evolution system disabled' })
@@ -87,7 +89,7 @@ export function registerEvolveRoutes(router: Router, deps: EvolveRoutes): void {
   })
 
   /** 手动 deprecate / 恢复条目。 */
-  router.post('/api/playbook/:id/status', async (req, res) => {
+  route(router, 'POST', '/api/playbook/:id/status', { body: PlaybookStatusBody }, async (req, res) => {
     const service = evolutionService()
     if (service === undefined) {
       json(res, 409, { error: 'evolution system disabled' })

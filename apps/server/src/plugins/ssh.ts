@@ -251,6 +251,9 @@ export function sshPlugin(deps: SshPluginDeps): PluginEntry {
       const execTool: Tool = {
         name: 'ssh_exec',
         description: '在远程 POSIX 机器上跑一条命令（交给远端 shell 解释，管道与重定向都能用），返回退出码与输出。',
+        // 远端命令交给远端 shell 解释，能做的事跟 shell_exec 一样多——只是换了台
+        // 机器。每条命令同样要经用户批准（见 approvals.ts）。
+        requiresApproval: true,
         parameters: {
           type: 'object',
           properties: {

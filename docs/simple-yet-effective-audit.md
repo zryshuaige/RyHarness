@@ -30,11 +30,11 @@
 | 核心 loop | `ReactLoopAgent` 745 行类，三态相位状态机（idle/maintenance/running），loop 组 6 文件 2,127 行；维护相位与循环解耦 | `AgentLoopService` 2,490 行 DI 服务类（15 服务注入）+ engine 635 + requester 1,028；steer/nudge 双队列、quiescence 计数、9 分支收尾状态机纠缠 | `loop.ts` 1,110 行单文件函数式 + compact/budget 同包；注册表 dispatch | ✅ 结构最简单；缺权限拦截层（见审批行）⚠️ |
 | 上下文管理 | compaction 独立插件组 ≈2,858 行（basic/image-offload/tool-result-pruner/command-compact） | fullCompaction 1,261 行：0.85 触发、预留 50k token、5 重试、[0.7,0.5,0.35] 收缩 | budget + 工具结果剪枝 + compactHistory + **spill 溢出文本落盘分页取回（三家独有）** | ✅ spill 是真设计亮点 |
 | 工具定义 | `defineTool` + 自研 JSON-Schema DSL + 自写校验器，强制 output schema；35 工具包 100+ 工具 | DI 服务类 + zod → toJSONSchema；15 内置 + Tower 13 | 每域一包自注册（shell/document/browser-use/lsp/ssh…），无统一 schema DSL | ⚠️ 面窄但无 schema 约束，是契约债的一部分 |
-| 权限/审批 | interaction/user-approval + permission-presets + sandbox-policy 事件瀑布 | manual/yolo/auto 三模式 + 16 个有序策略文件 + 异步裁决 | guard + dangerous.ts 黑名单；loop 直通，无逐命令审批 | 🔴 P0，两家都有完整防线我们没有 |
+| 权限/审批 | interaction/user-approval + permission-presets + sandbox-policy 事件瀑布 | manual/yolo/auto 三模式 + 16 个有序策略文件 + 异步裁决 | **审批门已在**（approvals.ts：WS 卡片 + 决议路由 + 进程内精确白名单 + 120s 超时即拒；2026-10-24 ea1fa31 落地）；初测时误报「无审批」，实际缺口是覆盖面（当时仅 shell_exec/terminal_exec 标了审批）与策略档位 | ⚠️ 门已在，补覆盖与档位 |
 | 会话持久化 | append-only 事件日志 + 不可变 generation + 自实现 zstd + 迁移链 v0→v4 | JSONL wire 分支树（fork/undo）+ 5 级迁移 + fs/memory/minidb 三后端 | node:sqlite WAL 单库三句柄（session/memory/evolve），schema v1→v7，FTS | 🆚 持平；sqlite 强在查询、弱在可手救 |
 | 记忆/演化 | 无 | 无（AGENTS.md 注入 + skills + compaction handoff） | memory+evolve ≈3.6k 行：抽取/矛盾处理/衰减/importance/休眠归档 | ✅ 三家唯一，产品差异点 |
 | 子代理 | 8 包 9.9k 行，6 provider（in-process/acp/claude-code/codex/sdk）+ team 任务板 | 1.7k 基础 + AgentSwarm 2k + Tower 3.2k（git worktree 并行） | in-process 单一实现 | ⚠️ 已知缺口（dsh-parity §9） |
-| 配置/契约 | Schemastery 单源 + 19 个 gen-* + 67 个 verify-* 全带 --check | zod 全链 + config/wire/state manifest 同源生成；REST 115 路由 defineRoute→openapi | api.ts 手抄 ~20 接口（drift 已发生：dispatcherAgentId）+ 15 路由手写校验；typert 是运行时反射阉割版（包头自述与上游差距） | 🔴 P0，两家都单源化了 |
+| 配置/契约 | Schemastery 单源 + 19 个 gen-* + 67 个 verify-* 全带 --check | zod 全链 + config/wire/state manifest 同源生成；REST 115 路由 defineRoute→openapi | renderer `apps/desktop/renderer/src/api.ts`（1,286 行）手抄 16 个接口（drift 已发生：dispatcherAgentId 三处口径）+ 18 个路由文件 83 处注册、34 处手写 body 校验；typert 是运行时反射阉割版（包头自述与上游差距） | 🔴 P0，两家都单源化了 |
 | 测试门禁 | per-file 100% 覆盖率 + 150 行豁免清单 + 10 个 vitest 配置 + 32 个 CI workflow + jscpd + casts 棘轮 453 文件 | 无覆盖率阈值 + 5-shard 矩阵 + check-no-comments AST 门 + import 边界门 | per-file 负阈值棘轮（数十条实测+2）+ incompleteRunGuard + 7 道自研门禁 + biome 550 冻结基线；串行 440s | ✅ 门禁密度三家最高；棘轮 bespoke 复杂度 ⚠️；测试量偏薄 ⚠️ |
 | 类型卫生 | src `as any`=6 / `as unknown as`=101；非空断言 ~5k | 主 src `as unknown as`=179，全仓 1,894；lint 直接关掉 no-explicit-any / no-non-null-assertion | `as any`=0 / `as unknown as`=6，casts 棘轮只减不增 | ✅ 三家最干净 |
 | god 文件 | api-catalog.ts 10,408（生成）、TrajectoryTable 3,607、typert analyzer 3,468、手写 i18n 字典 4×2k+ | kimi-tui.ts 5,463、tower store 3,255、loopService 2,490 | ChatView.tsx 2,396（全仓最大）、app.ts 1,967（组合根埋 670 行 turn 逻辑 + 两套同构事件 switch） | ⚠️ 相对最轻，但这两处是真债 |
@@ -46,8 +46,8 @@
 
 ## 三、我们做得不好的地方（按伤害排序，均有标杆对照）
 
-1. **契约手抄（P0，性价比最高的债）**——`apps/server/src/api.ts` 手抄 ~20 接口 + 15 路由手写校验，drift 已发生。dsh 用 Schemastery 单源 + 67 个 verify 门；kimicode 用 zod `defineRoute` 一路生成到 openapi，连自家 SDK 都强制走同一契约层「不抄近路」。我们 vendor 里已经躺着 schemastery，就差接线。→ 路线图遗留 #3。
-2. **shell 无审批（P0，安全）**——kimicode 三模式 + 16 个有序策略文件；dsh user-approval 事件瀑布 + sandbox-policy。我们 `packages/agent/src/loop.ts` 直接 `tool.execute`。→ 路线图遗留 #1。注意别学 kimicode 的 16 层策略（过度工程）：在 loop 里加一个 beforeExecute 拦截点就能挡住大部分伤害。
+1. **契约手抄（P0，性价比最高的债）**——`apps/desktop/renderer/src/api.ts` 手抄 16 个接口 + 18 个路由文件 34 处手写 body 校验，drift 已发生。dsh 用 Schemastery 单源 + 67 个 verify 门；kimicode 用 zod `defineRoute` 一路生成到 openapi，连自家 SDK 都强制走同一契约层「不抄近路」。我们 vendor 里已经躺着 schemastery（与 dsh 3.19.0 同一份上游代码，diff 仅 2 行 import），就差接线。→ 第四波已开工（route() helper + contract/ 目录，见 CHANGELOG）。
+2. **审批覆盖面（初测误报为「无审批」，实情是门已在、覆盖不全）**——审批桥 `apps/server/src/approvals.ts` 已端到端（卡片/决议/记住/超时即拒），但 56 个工具里只有 shell_exec 与 terminal_exec 标了审批，ssh_exec、MCP 工具没标；子代理内层 loop 没接 approver（内层命令绕过审批）；无会话上下文的调用是 fail-open。dsh 的裁决序（无答题者 → unavailable → deny）与 fail-closed 是对的方向。→ 第四波已修（ssh_exec/MCP 默认问、approver 穿透子代理、无会话改拒绝、会话级 'never' 覆盖路由）。
 3. **app.ts 1,967 行组合根 + ChatView.tsx 2,396 行**——turn 逻辑埋在组合根、两套同构事件 switch。dsh 证明 client 拆 77 子包可行（但也付了协调税）；kimicode 的教训是 loopService 揉到 2,490 行后 steer/nudge/settle 互相纠缠——拆要趁早、拆要有度。→ 路线图遗留 #4。
 4. **死导出 108 条**——门禁和审计都齐（dead-code-rule-c-audit.md），只欠清理那一波。kimicode 连死代码门禁都没有，我们领先，只差执行。→ 路线图遗留 #6。
 5. **测试量偏薄 + 基建 bespoke**——test:src 0.62（两家 1.1-1.3）；覆盖率棘轮数十条 per-file 负阈值是自造复杂度，dsh 的规则一句话：「per-file 100% 或不合并」。我们的棘轮是增量采纳期的务实选择，长期该往「更少规则」收敛；串行 440s 待 vitest ≥5.0.5 修。→ 路线图遗留 #2/#3。
@@ -56,6 +56,7 @@
 
 - **dsh**：src 101 处 `as unknown as`、~5k 个 `!` 非空断言；17.8 万行 client 是 100% 覆盖率门的最大豁免来源（150 行豁免清单全带 TODO(gui)）；10,408 行生成目录文件进 review 面；10 个 vitest 配置 + 32 个 CI workflow + 659 个双语文档的维护税极高。
 - **kimicode**：主 src 179 处 `as unknown as`（全仓 1,894）、lint 关掉类型安全规则；无覆盖率阈值；核心包禁注释 = 自文档性全押在命名上；v1/v2 双轨 + migration-legacy 4,113 行兼容胶水；自研 minidb 18,980 行 + bash 解析器 3,787 行重轮子；dist-web bundle force-add 入库、flake.nix 手抄列表靠人工同步（AGENTS.md 自己承认绿色 CI 不代表同步）。
+- **两家 fetch 工具都没有私网封锁**：dsh 的 web_fetch 与 kimicode 的 FetchURL 都只做 scheme 白名单 + 手动重定向 + 体量上限——dsh 的本地 provider 明说「允许内网」（隔离靠 provider 二分），kimicode 同样只校 scheme。RyHarness 的 read_url（解析逐地址检查 + 钉 IP + 逐跳复核）在同类防护上**强于两家**；这块不是我们抄他们，是他们该抄我们。
 
 ## 五、判定
 
@@ -66,7 +67,7 @@
 - **effective：成立，且是三家里功能密度最高的。** 1/6 于 dsh、1/3.6 于 kimicode 的代码量，做到两家都没有的记忆演化、多人格、群聊接力、桌面端、spill 取回，外加 2,176 测试 + 77% 分支覆盖（per-file 棘轮）+ 7 门禁 + 类型卫生三家最干净。
 - **simple：包级成立，四处集中不 simple。** 45 包各自小、面窄、依赖 ≈10、叙事注释——都是 simple 的证据。不 simple 的四处：ChatView god 组件、app.ts 组合根埋 turn 逻辑、api.ts 手抄契约、测试基建（棘轮+guard+串行）的 bespoke 复杂度。前两个是「还没拆」，后两个是「为小团队纪律自造的机器」——都是有界债务，不是结构性腐烂。
 
-一句话总评：**我们用 1/6 的代码做到了别人 2-3 倍体量才有的功能面，卫生指标全面好于两个标杆；真正的差距不在「脏」，在「契约层没单源化」和「执行权限没有拦截层」这两个两家都有而我们没有的防线上。**
+一句话总评：**我们用 1/6 的代码做到了别人 2-3 倍体量才有的功能面，卫生指标全面好于两个标杆；真正的差距不在「脏」，在「契约层没单源化」（唯一未动的 P0）——而出站请求防护（钉 IP）与工具审批门这两块，我们要么强于标杆（两家 fetch 均无私网封锁与 DNS pin，read_url 都有），要么已经追平（审批桥端到端，缺口只在覆盖面）。**
 
 ## 附：复测口径
 

@@ -22,7 +22,17 @@ import {
   saveApiKey,
   writeProvidersConfig,
 } from '../config.ts'
+import {
+  DiscoverBody,
+  type DiscoverBodyInput,
+  NewProviderBody,
+  type NewProviderBodyInput,
+  type ProviderModelEntries,
+  ProviderPatchBody,
+  type ProviderPatchBodyInput,
+} from '../contract/providers.ts'
 import type { RetargetedAgent } from '../provider-routing.ts'
+import { route } from '../route.ts'
 import { HttpRequestError, json, type Router } from '../router.ts'
 
 /** 供应商路由的依赖。 */
@@ -87,22 +97,15 @@ function sameBaseUrl(a: string, b: string): boolean {
  * 请求预算里去（见 {@link ProviderModelInput}），所以这里必须给它一条通路。裸 id 与对象
  * 可以混在一份数组里，多余的键一律丢弃。
  */
-function parseModels(value: unknown): ProviderModelInput[] {
-  if (!Array.isArray(value) || value.length === 0) {
+function parseModels(value: ProviderModelEntries): ProviderModelInput[] {
+  if (value.length === 0) {
     throw new HttpRequestError(400, 'models must be a non-empty array of model ids')
   }
   const models: ProviderModelInput[] = []
   for (const entry of value) {
-    let id: unknown
-    let declaredWindow: unknown
-    if (typeof entry === 'string') {
-      id = entry
-    } else if (typeof entry === 'object' && entry !== null) {
-      const record = entry as Record<string, unknown>
-      id = record.id
-      declaredWindow = record.contextWindow
-    }
-    if (typeof id !== 'string' || id.trim().length === 0) {
+    const id = typeof entry === 'string' ? entry : entry.id
+    const declaredWindow = typeof entry === 'string' ? undefined : entry.contextWindow
+    if (id === undefined || id.trim().length === 0) {
       throw new HttpRequestError(400, 'models must be a non-empty array of model ids')
     }
     // 给了却不能用（0、小数、超出上下限）一律 400：宁可让用户当场看见自己敲错，也不能把一个
@@ -127,20 +130,18 @@ function parseModels(value: unknown): ProviderModelInput[] {
   return models
 }
 
-/** POST /api/providers 的白名单校验：类型/取值不合法抛错（调用方回 400）。 */
-function parseNewProviderInput(body: unknown): NewProviderInput {
-  const record = (typeof body === 'object' && body !== null ? body : {}) as Record<string, unknown>
-  const displayName = typeof record.displayName === 'string' ? record.displayName.trim() : ''
+/** POST /api/providers 的白名单校验：取值不合法抛错（调用方回 400）；类型由契约 schema 兜住。 */
+function parseNewProviderInput(body: NewProviderBodyInput): NewProviderInput {
+  const displayName = (body.displayName ?? '').trim()
   if (displayName.length === 0) throw new HttpRequestError(400, 'displayName is required')
-  const protocol = record.protocol === undefined ? 'openai' : String(record.protocol).trim().toLowerCase()
+  const protocol = body.protocol === undefined ? 'openai' : body.protocol.trim().toLowerCase()
   if (!PROVIDER_PROTOCOLS.includes(protocol as ProviderProtocol)) {
     throw new HttpRequestError(400, `protocol must be one of ${PROVIDER_PROTOCOLS.join('|')}`)
   }
-  const baseUrl = typeof record.baseUrl === 'string' ? record.baseUrl.trim() : ''
-  const models = parseModels(record.models)
-  const apiKey = typeof record.apiKey === 'string' ? record.apiKey.trim() : ''
-  const presetId =
-    typeof record.presetId === 'string' && record.presetId.trim().length > 0 ? record.presetId.trim() : undefined
+  const baseUrl = (body.baseUrl ?? '').trim()
+  const models = parseModels(body.models ?? [])
+  const apiKey = (body.apiKey ?? '').trim()
+  const presetId = body.presetId !== undefined && body.presetId.trim().length > 0 ? body.presetId.trim() : undefined
   return {
     displayName,
     protocol: protocol as ProviderProtocol,
@@ -168,26 +169,24 @@ export interface ProviderPatchInput {
  * 写进 providers.json 让适配器再也起不来。凭据 / custom / presetId 不在白名单里：
  * 前两个是归属标记（改了就等于伪造一条新的），凭据另有 settings 路由管。
  */
-function parseProviderPatch(body: unknown): ProviderPatchInput {
-  const record = (typeof body === 'object' && body !== null ? body : {}) as Record<string, unknown>
+function parseProviderPatch(body: ProviderPatchBodyInput): ProviderPatchInput {
   const patch: ProviderPatchInput = {}
-  if (record.displayName !== undefined) {
-    const displayName = typeof record.displayName === 'string' ? record.displayName.trim() : ''
+  if (body.displayName !== undefined) {
+    const displayName = body.displayName.trim()
     if (displayName.length === 0) throw new HttpRequestError(400, 'displayName must not be empty')
     patch.displayName = displayName
   }
-  if (record.protocol !== undefined) {
-    const protocol = String(record.protocol).trim().toLowerCase()
+  if (body.protocol !== undefined) {
+    const protocol = body.protocol.trim().toLowerCase()
     if (!PROVIDER_PROTOCOLS.includes(protocol as ProviderProtocol)) {
       throw new HttpRequestError(400, `protocol must be one of ${PROVIDER_PROTOCOLS.join('|')}`)
     }
     patch.protocol = protocol as ProviderProtocol
   }
-  if (record.baseUrl !== undefined) {
-    if (typeof record.baseUrl !== 'string') throw new HttpRequestError(400, 'baseUrl must be a string')
-    patch.baseUrl = normalizeBaseUrl(record.baseUrl.trim())
+  if (body.baseUrl !== undefined) {
+    patch.baseUrl = normalizeBaseUrl(body.baseUrl.trim())
   }
-  if (record.models !== undefined) patch.models = parseModels(record.models)
+  if (body.models !== undefined) patch.models = parseModels(body.models)
   return patch
 }
 
@@ -205,14 +204,13 @@ interface DiscoverInput {
  * 不校验"这家供应商是不是已经有了"：发现只是替用户问一句话，问错了用户自己会
  * 看到返回的地址与诊断，不必在这里拦住。
  */
-function parseDiscoverInput(body: unknown): DiscoverInput {
-  const record = (typeof body === 'object' && body !== null ? body : {}) as Record<string, unknown>
-  const protocol = record.protocol === undefined ? 'openai' : String(record.protocol).trim().toLowerCase()
+function parseDiscoverInput(body: DiscoverBodyInput): DiscoverInput {
+  const protocol = body.protocol === undefined ? 'openai' : body.protocol.trim().toLowerCase()
   if (!PROVIDER_PROTOCOLS.includes(protocol as ProviderProtocol)) {
     throw new HttpRequestError(400, `protocol must be one of ${PROVIDER_PROTOCOLS.join('|')}`)
   }
-  const baseUrl = typeof record.baseUrl === 'string' ? record.baseUrl.trim() : ''
-  const apiKey = typeof record.apiKey === 'string' ? record.apiKey.trim() : ''
+  const baseUrl = (body.baseUrl ?? '').trim()
+  const apiKey = (body.apiKey ?? '').trim()
   return {
     baseUrl: normalizeBaseUrl(baseUrl),
     protocol: protocol as ProviderProtocol,
@@ -233,11 +231,8 @@ export interface ProviderUsage {
  * 显示端点的依据；凭据只回答"配没配"，绝不回显值。usedBy 回答"谁在用这条
  * 路由"——删除前据此拦下（否则被引用的 agent 会静默变砖）。
  */
-export function providerInfo(
-  id: string,
-  provider: ProviderConfig,
-  usedBy: ProviderUsage[],
-): {
+/** GET /api/providers 的对外形状（渲染层 `ProviderInfo` 的真源；凭据只回答配没配，绝不回显值）。 */
+export interface ProviderInfo {
   id: string
   displayName: string
   protocol: string
@@ -246,7 +241,11 @@ export function providerInfo(
   apiKeyConfigured: boolean
   models: { id: string; name?: string; contextWindow?: number }[]
   usedBy: ProviderUsage[]
-} {
+  /** 思考档位随路由一起告诉前端：路由没声明就没有这个键。 */
+  reasoningEfforts?: ('low' | 'medium' | 'high')[]
+}
+
+export function providerInfo(id: string, provider: ProviderConfig, usedBy: ProviderUsage[]): ProviderInfo {
   return {
     id,
     displayName: provider.displayName ?? id,
@@ -369,8 +368,8 @@ export type ProviderFailureCode =
   | 'timeout'
   | 'error'
 
-/** 连通性探测的结论：ok + 诊断分类 + 中文人话 message + 探测耗时。 */
-interface VerifyOutcome {
+/** 连通性探测的结论：ok + 诊断分类 + 中文人话 message + 探测耗时（渲染层 `ProviderVerifyResult` 的真源）。 */
+export interface VerifyOutcome {
   ok: boolean
   code: ProviderFailureCode
   message: string
@@ -721,8 +720,8 @@ export function registerProviderRoutes(router: Router, deps: ProviderRoutes): vo
    * `custom-xxxxxxxx`，用户会得到一条丢品牌图标的重复项，还得分不清哪条才是
    * 生效的。所以这里回 409 并点名已存在的那条，界面据此提示"去编辑它"。
    */
-  router.post('/api/providers', async (req, res) => {
-    // 白名单校验失败抛 HttpRequestError，由 dispatch 统一回 400。
+  route(router, 'POST', '/api/providers', { body: NewProviderBody }, async (req, res) => {
+    // 白名单校验失败抛 HttpRequestError，由 dispatch 统一回 400；类型/形状由契约 schema 兜住。
     const input = parseNewProviderInput(await req.body())
     const preset = input.presetId === undefined ? undefined : providerPreset(input.presetId)
     if (input.presetId !== undefined && preset === undefined) {
@@ -794,7 +793,7 @@ export function registerProviderRoutes(router: Router, deps: ProviderRoutes): vo
    *
    * 内置条目也允许改：它们删不掉，模型列表过期时唯一能救的就是这条路由。
    */
-  router.patch('/api/providers/:id', async (req, res) => {
+  route(router, 'PATCH', '/api/providers/:id', { body: ProviderPatchBody }, async (req, res) => {
     const providerId = req.params.id as string
     const provider = deps.providers.providers[providerId]
     if (provider === undefined) {
@@ -884,7 +883,7 @@ export function registerProviderRoutes(router: Router, deps: ProviderRoutes): vo
    * 与 verify 一样永远回 200 + 中文结论；合法性和 baseUrl 归一走同一套白名单，
    * 出错由 dispatch 回 400。
    */
-  router.post('/api/providers/discover', async (req, res) => {
+  route(router, 'POST', '/api/providers/discover', { body: DiscoverBody }, async (req, res) => {
     const input = parseDiscoverInput(await req.body())
     const probe = await probeProvider(
       {

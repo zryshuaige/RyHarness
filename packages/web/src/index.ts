@@ -21,7 +21,7 @@ export {
   webFetch,
 } from './fetch.ts'
 export type { HostResolver, SafeTarget } from './guard.ts'
-export { defaultResolveHost, isPrivateAddress, resolveSafeTarget } from './guard.ts'
+export { defaultResolveHost, isPrivateAddress, normalizeHost, resolveSafeTarget } from './guard.ts'
 export { collapseText, decodeEntities, htmlToText, stripTags } from './html.ts'
 export type { HttpRequestInit, HttpResponse, PinnedFetch } from './http.ts'
 export { buildRequestOptions, createPinnedFetch, DEFAULT_MAX_BYTES } from './http.ts'

@@ -16,7 +16,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { join } from 'node:path'
 import type { Duplex } from 'node:stream'
-import type { AgentEvolutionHooks, AgentMemoryHooks } from '@ryharness/agent'
+import type { AgentEvolutionHooks, AgentLoopOptions, AgentMemoryHooks } from '@ryharness/agent'
 import { ContentAddressedAttachmentStore } from '@ryharness/attachment-storage'
 import { CommandRegistry } from '@ryharness/commands'
 import { assembleContext } from '@ryharness/context'
@@ -104,6 +104,7 @@ import { ProactiveDigest } from './proactive.ts'
 import { retargetBuiltinAgents } from './provider-routing.ts'
 import { HttpRequestError, json, Router } from './router.ts'
 import { registerAgentRoutes } from './routes/agents.ts'
+import { registerApprovalPolicyRoutes } from './routes/approval-policy.ts'
 import { registerBackupRoutes } from './routes/backup.ts'
 import { type ConversationState, registerConversationRoutes } from './routes/conversations.ts'
 import { type ConsolidationRun, registerEvolveRoutes } from './routes/evolve.ts'
@@ -951,6 +952,27 @@ export class RyHarnessServer {
     const approvals = new ApprovalBroker(hub)
     let noticeHub: EventHub | undefined = hub
     /**
+     * 工具审批的唯一闸：单聊、群聊成员、子代理的内层 loop 全走这一条闭包。
+     *
+     * 裁决序就是 dsh ApprovalService 的那份：会话级显式放行（'never'）→ 没有
+     * 答题人按拒绝收口（fail-closed）→ 落审批卡等用户。任何新装配的 loop 都
+     * 必须接这里，别再造第二条审批路。
+     */
+    const approveToolCall: NonNullable<AgentLoopOptions['approver']> = (input, ctx) => {
+      if (approvals.policyOf(ctx.conversationId ?? '') === 'never') return Promise.resolve(true)
+      // 无会话上下文的调用没有审批卡可挂。以前这里**放行**（自辩是「装配缺口
+      // 兜底」），但 fail-open 意味着任何一条漏带会话的装配路径都会静默变成
+      // 免批通道——现在按 dsh 的「无答题者 → unavailable → 拒绝」收口，模型
+      // 拿到一句人话，知道该停下来而不是继续跑。
+      if (ctx.conversationId === undefined) return Promise.resolve(false)
+      return approvals.request({
+        conversationId: ctx.conversationId,
+        agentId: ctx.agentId ?? '',
+        toolName: input.name,
+        args: input.arguments,
+      })
+    }
+    /**
      * 目标与提醒服务：都是**跨重启**的东西，存储路径是应用级的事。
      *
      * 目标按会话归属（一个会话一件要做完的事）；提醒到点时把话投回原会话——
@@ -1109,8 +1131,9 @@ export class RyHarnessServer {
       }),
       // MCP 外部工具：连不上的 server 不影响其余（插件里逐个报失败原因）。
       mcpPlugin({ dataDir, cwd: workspaceRoot }),
-      // 子代理：把活派给上下文独立的子代理（路由跟着发起者走）。
-      subagentPlugin({ llm: ctx.llm, tools: ctx.tools, store }),
+      // 子代理：把活派给上下文独立的子代理（路由跟着发起者走）。审批闸一路
+      // 穿透到内层 loop——不给的话子代理跑 shell_exec 一族就是免批旁路。
+      subagentPlugin({ llm: ctx.llm, tools: ctx.tools, store, approver: approveToolCall }),
       // 后台任务与计划模式：活派到后台去跑，跑完通知自己进会话。
       jobsPlugin({
         llm: ctx.llm,
@@ -1341,18 +1364,8 @@ export class RyHarnessServer {
       identity: () => {
         return identityLine(readProfile(store))
       },
-      // shell_exec 这类工具的逐条审批：单聊与群聊成员走同一条闸（见 approvals.ts）。
-      approver: (input, ctx) => {
-        // 无会话上下文的调用没有审批卡可挂：聊天链路恒有 conversationId，这里
-        // 兜的是装配缺口，不是绕过审批的口子（shell 只在聊天轮次里可达）。
-        if (ctx.conversationId === undefined) return Promise.resolve(true)
-        return approvals.request({
-          conversationId: ctx.conversationId,
-          agentId: ctx.agentId ?? '',
-          toolName: input.name,
-          args: input.arguments,
-        })
-      },
+      // shell_exec 这类工具的逐条审批：单聊与群聊成员走同一条闸（见 approveToolCall）。
+      approver: approveToolCall,
     })
     // 巩固记账与主动消息调度器由组合根共享：回顾里报的合并条数必须来自真跑出来的那
     // 一轮，而不是另记一份会漂移的账。
@@ -1457,9 +1470,19 @@ export class RyHarnessServer {
           recallMemory: async (agentId: string, query: string) => {
             if (memoryService === undefined) return []
             // 契约要的是**记忆条目数组**，不是一段拼好的注入文本——
-            // 注入文本是给模型看的，拼过的；条目是给程序看的，原样的。
+            // 注入文本是给模型看的，拼过的；条目是给程序看的，原样的，且带
+            // 分数/时间/来源（RemoteMemoryHit）：排序键在，调用方才知道
+            // 「为什么是这几条」。
             const rows = await memoryService.hybridRecall(agentId, query)
-            return rows.map((row) => row.content)
+            return rows.map((row) => ({
+              id: row.id,
+              kind: row.kind,
+              content: row.content,
+              agentId: row.agentId,
+              createdAt: row.createdAt,
+              updatedAt: row.updatedAt,
+              score: row.score,
+            }))
           },
           writeSetting: async (key: string, value: string) => {
             await settingsService.update('app', { values: { [key]: value } })
@@ -1648,9 +1671,11 @@ export class RyHarnessServer {
     // 记忆与演进服务在库关闭之前收。三者各持各的句柄（同一份库文件、三个
     // DatabaseSync 实例），顺序上没有硬依赖，这里取保守序：先收后台服务再关
     // 库，将来它们的 close() 若长出写操作，也不会碰一个已关闭的连接。
-    // 已知且接受的行为：两个 close() 都**不写库、不等在途工作**——记忆的抽取
-    // 队列与演化的任务队列直接被丢弃（见各自实现），停机前刚聊过的那几轮记忆
-    // 不会入库。要改就得给 close 加有界 flush，属于单独的波次，不在这里偷偷等。
+    // 收之前先 drain（kimicode 的 settled()+deadline 模式）：给在途的记忆抽取
+    // 与演化任务一个有界的收敛窗口——聊完 30 秒内退出，那几轮的记忆现在能
+    // 落库了；到点没跑完的仍然放弃（close 丢队列），停机不被无限拖住。
+    await this.closeQuietly(() => this.memoryService?.drain())
+    await this.closeQuietly(() => this.evolutionService?.drain())
     await this.closeQuietly(() => this.memoryService?.close())
     await this.closeQuietly(() => this.evolutionService?.close())
     // 关库放在最后：上面那些收尾都要它。
@@ -1895,6 +1920,13 @@ export class RyHarnessServer {
 
     registerBackupRoutes(router, { dataDir: this.dataDir, store })
 
+    registerApprovalPolicyRoutes(router, {
+      approvals: this.approvals,
+      conversationExists: (conversationId) => {
+        return this.store.getConversation(conversationId) !== undefined
+      },
+    })
+
     registerPluginRoutes(router, { plugins: this.plugins })
 
     registerProactiveRoutes(router, { proactive: this.proactiveDigest })
@@ -1932,10 +1964,17 @@ export class RyHarnessServer {
         recallMemory: async (agentId: string, query: string) => {
           const service = this.memoryService
           if (service === undefined) return []
-          // 契约要的是**记忆条目数组**，不是一段拼好的注入文本——
-          // 注入文本是给模型看的，拼过的；条目是给程序看的，原样的。
+          // 同上的条目视图：正文 + 元数据（见 RemoteMemoryHit）。
           const rows = await service.hybridRecall(agentId, query)
-          return rows.map((row) => row.content)
+          return rows.map((row) => ({
+            id: row.id,
+            kind: row.kind,
+            content: row.content,
+            agentId: row.agentId,
+            createdAt: row.createdAt,
+            updatedAt: row.updatedAt,
+            score: row.score,
+          }))
         },
         writeSetting: async (key: string, value: string) => {
           await this.settingsService.update('app', { values: { [key]: value } })

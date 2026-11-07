@@ -110,6 +110,9 @@ export interface EvolveLimits {
   metricsRounds: number
 }
 
+/** 停机 drain 的收敛窗口（毫秒）：演化是后台增强，到点没跑完的随 close 丢弃。 */
+const SHUTDOWN_DRAIN_MS = 3_000
+
 export const DEFAULT_EVOLVE_LIMITS: EvolveLimits = {
   consolidationSliceMs: 12,
   consolidationSliceUnits: 2_000,
@@ -334,16 +337,38 @@ export class EvolveService implements AgentEvolutionHooks {
     await this.sweeper.drain()
   }
 
+  /**
+   * 停机用：带截止时间等在途任务收敛（kimicode 的 settled()+deadline 模式）。
+   *
+   * close() 原来直接 `tasks.length = 0`——停机前刚跑完的那几轮演化轨迹蒸发。
+   * drain 给它们一个有界的收尾窗口；到点没跑完的仍随 close 丢弃（演化是后台
+   * 增强，不该拖住停机）。
+   * @param deadlineMs - 收敛窗口（毫秒），默认 3 秒。
+   */
+  async drain(deadlineMs = SHUTDOWN_DRAIN_MS): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([
+        this.flush(),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, deadlineMs)
+        }),
+      ])
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
+    }
+  }
+
   private startDrain(): void {
     if (this.draining !== undefined) return
-    const drain = this.drain().finally(() => {
+    const drain = this.consumeQueue().finally(() => {
       if (this.draining === drain) this.draining = undefined
     })
     this.draining = drain
   }
 
   /** 单 writer 串行消费；一轮抛错不影响后续轮次（失败隔离在 runTurnIsolated）。 */
-  private async drain(): Promise<void> {
+  private async consumeQueue(): Promise<void> {
     while (this.tasks.length > 0) {
       const task = this.tasks.shift() as TurnTask
       await this.runTurnIsolated(task)

@@ -1413,7 +1413,7 @@ export function CreateAgentModal({
     setModel(groups[0]?.models[0]?.id ?? '')
     // 换到不认思考参数的那家时把档位一并清掉：留着会在提交时被运行时拒成
     // UNSUPPORTED_REASONING_EFFORT，而用户看不出是自己没管那个下拉框。
-    if (!(next?.reasoningEfforts ?? []).includes(reasoningEffort)) setReasoningEffort('')
+    if (!(next?.reasoningEfforts ?? []).some((effort) => effort === reasoningEffort)) setReasoningEffort('')
   }
 
   // 档位目录跟着所选供应商走：切到不认思考参数的那家（本地 Ollama、聚合网关）时

@@ -8,6 +8,8 @@
  */
 
 import { VOICE_ERROR_CODES, VoiceError, type VoiceProfile } from '@ryharness/voice'
+import { SpeakBody, type SpeakBodyInput } from '../contract/voice.ts'
+import { withBody } from '../route.ts'
 import { type Handler, json } from '../router.ts'
 
 /** 目录里一个引擎的对外视图。 */
@@ -67,15 +69,20 @@ export interface VoiceService {
   speak(input: VoiceSpeakInput, options?: { signal?: AbortSignal }): Promise<VoiceAudio>
 }
 
-/** 白名单校验：只认 text / profileId / speed 三个字段，其余键一律丢弃。 */
-function parseSpeakInput(body: unknown): VoiceSpeakInput {
-  const record = typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : {}
-  const text = typeof record.text === 'string' ? record.text : ''
-  const profileId = typeof record.profileId === 'string' ? record.profileId.trim() : ''
+/**
+ * 白名单校验：只认 text / profileId / speed 三个字段，其余键一律丢弃。
+ *
+ * 字段类型由契约 schema 兜住；这里的守卫拦的是 schema 拦不住的 null 透传，而
+ * profileId 缺失必须在这里抛 VoiceError——它的机器码（VOICE_BAD_REQUEST）是
+ * 调用方按码分支的契约，schema 的 400 接管不了。
+ */
+function parseSpeakInput(body: SpeakBodyInput): VoiceSpeakInput {
+  const text = typeof body.text === 'string' ? body.text : ''
+  const profileId = typeof body.profileId === 'string' ? body.profileId.trim() : ''
   if (profileId.length === 0) {
     throw new VoiceError('profileId 是必填的', VOICE_ERROR_CODES.badRequest)
   }
-  const speed = typeof record.speed === 'number' ? record.speed : undefined
+  const speed = typeof body.speed === 'number' ? body.speed : undefined
   return { text, profileId, ...(speed === undefined ? {} : { speed }) }
 }
 
@@ -140,7 +147,9 @@ export function createVoiceHandlers(voice: VoiceService): { catalog: Handler; sp
    * `<audio>`，省掉一次 base64 编解码。`X-Voice-Profile` 回显这次用的是哪条音色
    * （截断发生时同时给 `X-Voice-Truncated`，让界面能说明"只念了前半段"）。
    */
-  const speak: Handler = async (req, res) => {
+  // body 形状由契约 schema 兜住（schema 的报错在 handler 外就变成 400）；handler
+  // 自己的 try 只管语音业务错误——VoiceError 的机器码映射不能被 schema 报错稀释。
+  const speak: Handler = withBody({ body: SpeakBody }, async (req, res) => {
     try {
       const input = parseSpeakInput(await req.body())
       // 客户端中途断开（切会话、关窗）时把 signal 传到底：离线合成是真进程，
@@ -168,7 +177,7 @@ export function createVoiceHandlers(voice: VoiceService): { catalog: Handler; sp
     } catch (error) {
       sendVoiceFailure(res, error)
     }
-  }
+  })
 
   return { catalog, speak }
 }

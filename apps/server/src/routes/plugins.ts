@@ -7,7 +7,9 @@
  * @module @ryharness/server/routes/plugins
  */
 
+import { PluginPatchBody } from '../contract/plugins.ts'
 import { PluginError, type PluginHost } from '../plugins/host.ts'
+import { route } from '../route.ts'
 import { HttpRequestError, json, type Router } from '../router.ts'
 
 /** 插件路由的依赖。 */
@@ -21,14 +23,11 @@ export function registerPluginRoutes(router: Router, deps: PluginRoutes): void {
     json(res, 200, { plugins: deps.plugins.list() })
   })
 
-  router.patch('/api/plugins/:id', async (req, res) => {
+  route(router, 'PATCH', '/api/plugins/:id', { body: PluginPatchBody }, async (req, res) => {
+    // enabled 的类型（含缺省即 400）由契约 schema 兜住，这里只剩插件本身的业务错误。
     const body = await req.body()
-    const enabled = typeof body === 'object' && body !== null ? (body as { enabled?: unknown }).enabled : undefined
-    if (typeof enabled !== 'boolean') {
-      throw new HttpRequestError(400, 'enabled must be a boolean')
-    }
     try {
-      const plugin = await deps.plugins.setEnabled(req.params.id as string, enabled)
+      const plugin = await deps.plugins.setEnabled(req.params.id as string, body.enabled)
       // 与 GET 同形：调用方拿这一行直接替换列表项，不必整表重拉。
       json(res, 200, { plugin })
     } catch (error) {

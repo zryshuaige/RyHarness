@@ -25,25 +25,24 @@
  * @module @ryharness/sdk/ryharness
  */
 
-import { JsonRpcPeer, REMOTE_CALL_METHOD, REMOTE_GRAPH_METHOD, type RpcTransport } from '@ryharness/api'
+import {
+  JsonRpcPeer,
+  REMOTE_CALL_METHOD,
+  REMOTE_GRAPH_METHOD,
+  type RpcTransport,
+  type RemoteConversationView as RyHarnessConversation,
+  type RemoteMemoryHit as RyHarnessMemoryHit,
+  type RemoteMessageView as RyHarnessMessage,
+} from '@ryharness/api'
 import { SdkClient, type SdkClientOptions } from './client.ts'
 
-/** 一个会话的摘要。 */
-export interface RyHarnessConversation {
-  readonly id: string
-  readonly kind: string
-  readonly title: string
-  readonly memberAgentIds: readonly string[]
-  readonly updatedAt: number
-}
-
-/** 一条消息的摘要。 */
-export interface RyHarnessMessage {
-  readonly seq: number
-  readonly senderType: string
-  readonly content: string
-  readonly createdAt: number
-}
+// 线上视图从唯一真源导入（@ryharness/api），SDK 名字保持不变——此前两处各写
+// 各的接口，服务端加字段时这边悄悄漂移，这正是契约单源化要消灭的事故模式。
+export type {
+  RemoteConversationView as RyHarnessConversation,
+  RemoteMemoryHit as RyHarnessMemoryHit,
+  RemoteMessageView as RyHarnessMessage,
+} from '@ryharness/api'
 
 /** 一个工具的摘要。 */
 export interface RyHarnessTool {
@@ -140,10 +139,10 @@ export class RyHarnessClient {
     return Array.isArray(result) ? (result as RyHarnessTool[]) : []
   }
 
-  /** 召回一位助理的长期记忆。 */
-  async recallMemory(agentId: string, query: string): Promise<string[]> {
+  /** 召回一位助理的长期记忆（条目带分数/时间/来源，见 {@link RyHarnessMemoryHit}）。 */
+  async recallMemory(agentId: string, query: string): Promise<RyHarnessMemoryHit[]> {
     const result = await this.call('recallMemory', [agentId, query])
-    return Array.isArray(result) ? (result as string[]) : []
+    return Array.isArray(result) ? (result as RyHarnessMemoryHit[]) : []
   }
 
   /** 写一条应用设置。 */

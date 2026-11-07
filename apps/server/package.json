@@ -45,6 +45,7 @@
     "@ryharness/ptc": "workspace:*",
     "@ryharness/sandbox": "workspace:*",
     "@ryharness/schedule": "workspace:*",
+    "@ryharness/schemastery": "workspace:*",
     "@ryharness/sdk": "workspace:*",
     "@ryharness/session": "workspace:*",
     "@ryharness/session-query": "workspace:*",

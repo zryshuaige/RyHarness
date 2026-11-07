@@ -31,18 +31,23 @@ export const MCP_CONFIG_FILE = join('config', 'mcp-servers.json')
 export function readMcpConfig(dataDir: string): McpConfig {
   try {
     const raw = readFileSync(join(dataDir, MCP_CONFIG_FILE), 'utf8')
-    const parsed = JSON.parse(raw) as { servers?: unknown }
+    const parsed = JSON.parse(raw) as { servers?: unknown; requiresApproval?: unknown }
     if (
       typeof parsed !== 'object' ||
       parsed === null ||
       typeof parsed.servers !== 'object' ||
       parsed.servers === null
     ) {
-      return { servers: {} }
+      return { servers: {}, requiresApproval: true }
     }
-    return { servers: parsed.servers as McpConfig['servers'] }
+    // 没写就是 true（外部工具先问）；显式 false 才放行——保守方向不做「拼错键名
+    // 就静默放行」这种失败模式。
+    return {
+      servers: parsed.servers as McpConfig['servers'],
+      requiresApproval: parsed.requiresApproval !== false,
+    }
   } catch {
-    return { servers: {} }
+    return { servers: {}, requiresApproval: true }
   }
 }
 
@@ -72,6 +77,7 @@ export function mcpPlugin(options: McpPluginOptions): PluginEntry {
       const registry = new McpClientRegistry({
         ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
         ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+        requiresApproval: config.requiresApproval === true,
       })
       registry.registerAll(config)
       const report = await registry.connectAll()

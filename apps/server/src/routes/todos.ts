@@ -7,6 +7,7 @@
  * @module @ryharness/server/routes/todos
  */
 
+import { TodoRestoreBody, TodoSetDoneBody } from '../contract/todos.ts'
 import {
   MAX_CONVERSATION_ID_LENGTH,
   MAX_TODO_TEXT_LENGTH,
@@ -14,6 +15,7 @@ import {
   type TodoItem,
   type TodoStore,
 } from '../plugins/todo-store.ts'
+import { withBody } from '../route.ts'
 import { type Handler, HttpRequestError, json, strField } from '../router.ts'
 
 /** 待办路由的依赖。 */
@@ -62,21 +64,22 @@ export function createTodoHandlers(deps: TodoRoutesDeps): TodoHandlers {
     json(res, 200, deps.store.list(conversationId))
   }
 
-  const setDone: Handler = async (req, res) => {
+  // conversationId/done 的类型由契约 schema 兜住；done 缺省仍走 handler 的
+  // TODO_BAD_REQUEST（带机器码的文案，不能被 schema 的报错接管）。
+  const setDone: Handler = withBody({ body: TodoSetDoneBody }, async (req, res) => {
     const body = await req.body()
     const conversationId = requireConversationId(strField(body, 'conversationId'), deps)
-    const value = typeof body === 'object' && body !== null ? (body as Record<string, unknown>).done : undefined
-    if (typeof value !== 'boolean') {
+    if (typeof body.done !== 'boolean') {
       throw new HttpRequestError(400, 'done 必须是布尔值', 'TODO_BAD_REQUEST')
     }
     const id = req.params.id ?? ''
     if (id.length === 0) throw new HttpRequestError(400, '待办 id 是必填的', 'TODO_BAD_REQUEST')
     try {
-      json(res, 200, await deps.store.setDone(conversationId, id, value))
+      json(res, 200, await deps.store.setDone(conversationId, id, body.done))
     } catch (error) {
       sendTodoFailure(error)
     }
-  }
+  })
 
   const clear: Handler = async (req, res) => {
     const conversationId = requireConversationId(req.query.get('conversationId'), deps)
@@ -91,10 +94,12 @@ export function createTodoHandlers(deps: TodoRoutesDeps): TodoHandlers {
    * 撤销清空：把被清掉的那批待办原样写回。
    *
    * 入参是客户端回传的那几条（清空前它自己就有），逐条校验形状——这是写路径，
-   * 不能让一段畸形 JSON 变成清单里的垃圾行。
+   * 不能让一段畸形 JSON 变成清单里的垃圾行。条目整体只在 schema 里标 unknown：
+   * 回传带宽容改写语义（createdAt 非数字当场取 now、done 非 true 即 false），
+   * schema 化会把「宽容收下」变成 400。
    */
-  const restore: Handler = async (req, res) => {
-    const body = (await req.body()) as { conversationId?: unknown; items?: unknown }
+  const restore: Handler = withBody({ body: TodoRestoreBody }, async (req, res) => {
+    const body = await req.body()
     const conversationId = requireConversationId(
       typeof body.conversationId === 'string' ? body.conversationId : undefined,
       deps,
@@ -123,7 +128,7 @@ export function createTodoHandlers(deps: TodoRoutesDeps): TodoHandlers {
     } catch (error) {
       sendTodoFailure(error)
     }
-  }
+  })
 
   return { list, setDone, clear, restore }
 }
