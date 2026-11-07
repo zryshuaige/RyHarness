@@ -26,6 +26,18 @@
   的 selfcheck 描述改成与实现一致（进程内真跑 + rpc.test.ts 真子进程兜底）、workspace
   行注明边界只接进了 agent loop 的核心文件工具（document/lsp/mcp/skill 插件仍是静态根）。
 
+### Docs
+
+- **三仓工程质量对比落盘**（`docs/simple-yet-effective-audit.md`）：把 RyHarness 放在
+  dsh（DeepSeek Harness）与 kimicode（Kimi Code）两个标杆旁边，按 16 个维度实测对比，
+  回答两个问题——是不是屎山、够不够 simple yet effective。为什么现在做：第三轮评审
+  的遗留项（契约手抄、shell 审批、ChatView/组合根）在仓库内部只有自我判断，缺外部锚；
+  对比后两个 P0 都拿到了标杆证据背书（dsh 用 Schemastery 单源 + 67 个 verify 门、
+  kimicode 用 zod defineRoute 一路生成 openapi，且两家都有完整审批防线）。结论一句话：
+  非屎山，effective 成立（1/6 于 dsh、1/3.6 于 kimicode 的代码量做到三家独有的记忆
+  演化/多人格/群聊/桌面端/spill），simple 在包级成立、四处集中债（god 组件、组合根、
+  手抄契约、测试基建 bespoke）。本文只记录事实与判定，修复项仍在遗留路线图排期。
+
 ### Fixed
 
 - **关库顺序：先关成功，再置幂等标志**（`packages/session`、`packages/storage`）：
