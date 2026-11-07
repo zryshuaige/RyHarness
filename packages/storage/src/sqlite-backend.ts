@@ -154,11 +154,16 @@ export class SqliteBackend implements StorageBackend {
     })
   }
 
-  /** 关闭数据库连接。 */
+  /**
+   * 关闭数据库连接。
+   *
+   * 标志在关闭**成功之后**才置：首次关闭失败时再调 close() 是真的重试，
+   * 而不是被标志挡成静默成功（文件锁不放这类故障从此没人看得见）。
+   */
   close(): void {
     if (this.closed) return
-    this.closed = true
     this.db.close()
+    this.closed = true
   }
 
   /** 解析文档列；读不出来就报「内容损坏」。 */

@@ -342,13 +342,17 @@ export class SessionStore {
    *
    * **幂等**：关过一次之后再关不报错。关库这件事常会来两遍——宿主的停机流程
    * 走一遍，异常路径上（比如某个用例故意提前关库来制造写失败）又会走一遍。
-   * 第二次抛 `ERR_INVALID_STATE` 会把停机流程**从中间截断**：后面的清理
-   * （记忆服务、演进服务的收尾）就都不执行了，它们留在后台继续写一个已经关掉的库。
+   * 关成功之后标志才置位，第二次 close() 走 early return，不会碰一个已关闭
+   * 的句柄（那会抛 `ERR_INVALID_STATE`，把停机流程**从中间截断**）。
+   *
+   * 标志**不放在 `db.close()` 之前**：先置标志再关，首次关失败时后续 close()
+   * 会被标志挡成静默成功——「库没关上、Windows 上文件锁不放」从此没人看得见。
+   * 关失败时标志仍是 false，再调一次 close() 是真的重试。
    */
   close(): void {
     if (this.closed) return
-    this.closed = true
     this.db.close()
+    this.closed = true
   }
 
   // ---- agents ----

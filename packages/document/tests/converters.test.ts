@@ -12,7 +12,7 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -81,11 +81,16 @@ function makeDocx(): Uint8Array {
       '</w:body></w:document>',
   )
   const docx = join(dir, 'sample.docx')
+  // Compress-Archive 只认 .zip 目标——Windows 10-05 的更新给内置模块（版本号没动，
+  // 还是 1.0.1.0）加了严格扩展名校验，-DestinationPath 'sample.docx' 直接被拒。
+  // docx 本来就是 zip 字节，先落成 .zip 再改名，哪个版本的模块都成立。
+  const zipPath = join(dir, 'sample.zip')
   execFileSync(
     'powershell',
-    ['-NoProfile', '-Command', `Compress-Archive -Path '${inner}\\*' -DestinationPath '${docx}' -Force`],
+    ['-NoProfile', '-Command', `Compress-Archive -Path '${inner}\\*' -DestinationPath '${zipPath}' -Force`],
     { stdio: 'ignore' },
   )
+  renameSync(zipPath, docx)
   return readFileSync(docx)
 }
 

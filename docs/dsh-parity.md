@@ -95,8 +95,8 @@ Web GUI），所以「对账」不是逐行比对，而是**按能力家族核�
 | preset | 用 cordis.yml 组合能力 | 我们的人格模板不是能力组合 | **产品可用** | `packages/preset`（助理能力预设：选中即定一版，旧版留着能回看） | 低 |
 | bundle | `--profile` 分层装配 | 没有 | **产品可用** | `packages/bundle`（分层装配：后一层盖前一层，被覆盖的记下来） | 低 |
 | typert | 类型图 + 网关 + 生成的客户端 | 只有协议类型 | **产品可用** | `packages/typert/gateway`（类型图 + 网关 + 生成的客户端）——经 `packages/api` 的 Remote 层被 `apps/server/src/rpc/endpoint.ts` 挂到 stdio 端点上 | 低 |
-| api | Remote 层（Client 调 Host） | 没有 | **产品可用** | `packages/api`（Remote 层：Client 调 Host）+ `apps/server/src/rpc/service.ts`（`ryharness.listConversations` / `listMessages` / `listTools` / `recallMemory` / `writeSetting`） | 低 |
-| sdk | 进程外 JSON-RPC | 没有 | **产品可用** | `packages/sdk`（`RyHarnessClient`：起一个 `--rpc` 子进程，一行连上、一行调用）+ `GET /api/rpc/selfcheck`（服务端用 SDK 连自己，验证这条链路真的通） | 低 |
+| api | Remote 层（Client 调 Host） | 没有 | **产品可用** | `packages/api`（Remote 层：Client 调 Host）+ `apps/server/src/rpc/service.ts`（`ryharness.listConversations` / `listMessages` / `listTools` / `recallMemory` / `writeSetting`；`recallMemory` 返回**记忆条目数组** `string[]`——`row.content` 原文，不是拼好的注入文本，分数/时间等元数据不带，要带是将来的 v2 方法） | 低 |
+| sdk | 进程外 JSON-RPC | 没有 | **产品可用** | `packages/sdk`（`RyHarnessClient`：起一个 `--rpc` 子进程，一行连上、一行调用）+ `GET /api/rpc/selfcheck`（服务端把同一套远程服务挂上内存管道、用 SDK 连自己：取类型图 + **真发一次** `listConversations`；「外部程序拉起本进程」那一段由 `apps/server/tests/rpc.test.ts` 真起子进程兜底） | 低 |
 | acp | 标准 Agent Client Protocol | 没有 | **产品可用** | `packages/acp`（客户端 + **服务端侧** `AcpAgentServer`：编辑器把 RyHarness 当 agent 驱动；`--acp` 开关开在同一条 stdio 上） | 低 |
 
 ## 七、数据与设置（上游 session-query / settings / credentials / storage / workspace / feedback / telemetry / identity 家族）
@@ -107,7 +107,7 @@ Web GUI），所以「对账」不是逐行比对，而是**按能力家族核�
 | settings | 插件配置表单 | 没有 | **产品可用** | `packages/settings`（schema 推出的表单 + 版本化编辑 + 改完热生效） | 中 |
 | credentials | 凭据引用 + 需人授权的取号流 | 明文 api-keys.json | **产品可用** | `packages/credentials`（只存引用 + 要人点头的取号流 + 审计） | 低 |
 | storage | 非会话数据中枢 | 没有 | **产品可用** | `packages/storage`（非会话数据中枢：JSON 与 SQLite 两种后端 + 带校验的领域类型 + 键值表视图）+ `packages/settings` 的 `StorageSettingsStore`（**插件配置落进统一后端**，老文件自动搬过来） | 低 |
-| workspace | 项目分组 | 只有工作区目录 | **产品可用** | `packages/workspace` + `apps/server/src/routes/workspaces.ts`（`GET/POST /api/workspaces` + `PATCH /api/conversations/:id/workspace`；**会话归的工作区决定工具读写文件的边界**） | 低 |
+| workspace | 项目分组 | 只有工作区目录 | **产品可用** | `packages/workspace` + `apps/server/src/routes/workspaces.ts`（`GET/POST /api/workspaces` + `PATCH /api/conversations/:id/workspace`；**会话归的工作区决定工具读写文件的边界**——经 `turn-engine.ts` 的 `resolveWorkspaceRoot` 接进 agent loop 的核心文件工具；document/lsp/mcp/skill 这些挂载期插件拿的还是静态默认根，见 `app.ts` 的插件装配） | 低 |
 | feedback | 人工反馈 | 有 | **产品可用** | `POST /api/feedback` | — |
 | telemetry | OTel 通道 | 自有遥测 | **产品可用** | 本地环形缓冲 + `packages/otel` 的 OTLP/HTTP 导出（配了 `config/telemetry.json` 就往外送） | 低 |
 | identity | 匿名安装 id | 没有 | **产品可用** | `packages/identity`（匿名安装 id，不含任何个人信息） | 低 |
@@ -141,8 +141,16 @@ Web GUI），所以「对账」不是逐行比对，而是**按能力家族核�
 4. **subagent 只有进程内一种实现**：`packages/subagent` 的契约支持 provider（`in-process`），
    跨进程与 ACP 委派的后端还没写。
 5. **session 没有投影层**：能存能查，没有「同一份会话的另一套视图」。
+6. **进程外与查询面摸不到 workspace**：`RemoteConversationView`（`rpc/service.ts`）没有
+   workspaceId，五个 RPC 方法里没有任何 workspace 方法——本项目分组，外部程序既看
+   不到归属也不能改归属；`packages/session-query` 同样没有 workspace 维度，「按项目
+   查会话」在统一查询层不存在。
+7. **workspace 只有建与归属，没有改名/换根/删除**：`routes/workspaces.ts` 只有三组
+   接口；根目录挪走后 `rootExists=false` 的死工作区没有清理口。
+8. **recallMemory 只回条目正文**：wire 上把 `hybridRecall` 行上的分数/时间/来源元数据
+   全部丢掉，外部程序要按相关度排序或展示出处，得等 v2 方法。
 
-这五条都**不是**「建好了但触发不到」——每一件都写明了落点与边界。
+这八条都**不是**「建好了但触发不到」——每一件都写明了落点与边界。
 
 ## 十、哪些接口只有模型与程序走，界面不碰
 

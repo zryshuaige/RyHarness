@@ -6,7 +6,53 @@
 
 ## [Unreleased]
 
-暂无。
+### Changed
+
+- **自检端点真的调一次业务方法**（`apps/server/src/rpc/selfcheck.ts`）：自检原来只问了
+  一张类型图（`remote/graph`）——五个业务方法一个都没发过，`remote/call` 那条分发
+  路径没被自检走到，「协议对得上」只验了一半。现在补一次 `listConversations` 真调用
+  （只读，空库也该回数组），协议或参数校验坏了在自检里就会炸。
+- **死代码规则 C 的未引用值导出逐条审计落盘**（`docs/dead-code-rule-c-audit.md`）：
+  108 条 = 101 条「导出死了、值活着」（只多一个 export 关键字，去 export 即可）+
+  7 条「值也死了」（真死代码候选）。**本轮一条都不清**——动态引用静态证不了，这张
+  表是下个清理波次的输入。顺带修了脚本的一个假阳性：模板字符串里的代码样例
+  （`export function ${factoryName}`）会被抽成一个名叫 `$` 的「导出」
+  （`scripts/verify-no-dead-code.mjs`，109 → 108）。
+- **对账表第九节补上三条真实缺口**（`docs/dsh-parity.md`）：进程外 RPC/SDK 面摸不到
+  workspace（`RemoteConversationView` 没有 workspaceId、五个 RPC 方法里没有 workspace
+  方法，session-query 也没有 workspace 维度）；workspace 只有建与归属、没有改名/换根/
+  删除（根目录挪走后的死工作区没有清理口）；`recallMemory` 的 wire 只回条目正文。
+  同时把 api 行补上 recallMemory 的返回形状（条目数组、不是拼好的注入文本）、sdk 行
+  的 selfcheck 描述改成与实现一致（进程内真跑 + rpc.test.ts 真子进程兜底）、workspace
+  行注明边界只接进了 agent loop 的核心文件工具（document/lsp/mcp/skill 插件仍是静态根）。
+
+### Fixed
+
+- **关库顺序：先关成功，再置幂等标志**（`packages/session`、`packages/storage`）：
+  原来把「已关过」的标志写在 `db.close()` **之前**——首次关库一旦失败，后续 close()
+  会被标志挡成静默成功，「库没关上、Windows 上文件锁不放」从此没人看得见。现在
+  关成功才置标志：第二次 close() 照旧幂等（不会碰已关闭的句柄），首次失败时再调
+  一次是**真的重试**。
+- **停机流程的注释不再说谎**（`apps/server/src/app.ts`）：`doClose` 原注释声称记忆与
+  演进服务的收尾「要写库（记忆落盘、巩固结算）」——实现里两个 close() 都**不写库、
+  也不等在途工作**（记忆抽取队列与演化任务队列直接被丢弃，停机前刚聊过的那几轮
+  记忆不会入库），三者各持各的库句柄，「写一个已关掉的连接」的恐惧也不成立。
+  注释改成如实描述；给 close 加有界 flush 让在途抽取跑完，是单独的波次。
+- **真机转换夹具在新的 PowerShell 上起不来**（`packages/document`）：Windows 2026-10-05
+  的更新给内置 Archive 模块加了严格扩展名校验（版本号没动，还是 1.0.1.0），
+  `Compress-Archive -DestinationPath 'sample.docx'` 直接被拒（只认 .zip），而夹具用
+  `stdio: 'ignore'` 把真实报错吞了，表现为两条真机用例必红、且因「测试失败不产
+  覆盖率」挡住整条覆盖率通道。现在先落成 .zip 再改名——docx 本来就是 zip 字节，
+  哪个版本的模块都成立。
+- **覆盖率棘轮的 0/-0 条目全部空转**（`vitest.config.ts`）：vitest 对
+  `threshold >= 0` 走「百分比下限」分支，`0` 与 `-0` 等价于「下限 0%」——**永远过**，
+  不是「零未覆盖」。原来写 0/-0 的 24 处分两种：实测全绿、想钉住不许倒退的
+  （如 `guard.lines`、`commands.lines`），与实测有欠账但门禁看不见的（`otel` 的
+  exporter.ts、`attachment/storage` 的 store.ts、`computer-use` 的 windows.ts 驱动、
+  `sdk` 与 `browser-use` 的 functions、`preset`/`bundle`/`identity` 的 branches——
+  这些欠账一直存在，只是没人拦）。全部按实测最差单文件 +2 余量改写成负阈值
+  （如 document 的 lines 0 → -51），两种意图从此都真的拦得住。CI 若有某条实测
+  高于本机，按「取较大值」回填。
 
 ## [0.5.0] - 2026-11-04
 
@@ -56,6 +102,12 @@
 - **对账表状态改成三档**（`docs/dsh-parity.md`）：「已有」拆成**产品可用**（界面能用、模型
   调得到、代码从产品入口可达）与**部分**。上一轮把 12 个建好却触发不到的包标成「已有」，
   这轮它们全部接进产品，状态才配得上「产品可用」。
+- **进程外 `recallMemory` 返回记忆条目数组**（补记）：0.5.0 的 wire 上，`ryharness.recallMemory`
+  从「一段拼好的注入文本」（`[记忆] 用户画像：…`，那是给模型看的）改成了**记忆条目
+  原文数组** `string[]`（给程序看的）——SDK 客户端与方法签名表（`returns: 'string[]'`）
+  都按新契约写。分数、时间、来源等元数据当前不带上（外部程序要按相关度排序或展示
+  出处得等 v2 方法，见对账表第九节）。外部影响面≈0：MCP 不暴露该方法，
+  `packages/sdk` 本轮才首发。
 
 ### Fixed
 

@@ -23,9 +23,12 @@
  * 保证（外部程序走的就是同一条 `startRpcEndpoint`），selfcheck 要保证的是
  * **协议对得上**。
  *
- * ## 它不做什么
+ * ## 它做什么、不做什么
  *
- * 不做任何业务操作（不列会话、不发消息）：它只证明「协议对得上」。
+ * 发一次**只读**的真调用（`listConversations`，limit=1）：`remote/graph` 与
+ * `remote/call` 是网关的两条分发路径，只问类型图等于只验了一半——业务方法
+ * 真的能走通一轮，协议或参数校验坏了才会在这里炸。仍然不做任何有副作用的
+ * 操作（不发消息、不写设置）。
  *
  * @module @ryharness/server/rpc/selfcheck
  */
@@ -115,6 +118,12 @@ export async function runRpcSelfCheck(deps: RpcSelfCheckDeps): Promise<RpcSelfCh
     try {
       const graph = (await client.graph()) as { services?: unknown[] } | undefined
       const serviceCount = Array.isArray(graph?.services) ? graph.services.length : 0
+      // 光有类型图不够：graph 只证明网关能分发一个元方法。发一次真的只读调用
+      // （空库也该回数组），remote/call 这条分发路径才算被走过。
+      const conversations = await client.listConversations(1)
+      if (!Array.isArray(conversations)) {
+        throw new Error(`selfcheck: listConversations 没有返回数组（${typeof conversations}）`)
+      }
       return { ok: true, serviceCount }
     } finally {
       await client.close().catch(() => {

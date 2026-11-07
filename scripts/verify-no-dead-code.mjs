@@ -366,7 +366,11 @@ function exportedValueNames(text) {
     /export\s+(?:declare\s+)?(?:abstract\s+)?(?:async\s+)?(?:const|let|var|function|class|enum)\s+([A-Za-z_$][\w$]*)/g
   let match = pattern.exec(text)
   while (match !== null) {
-    names.push(match[1])
+    // 模板字符串里的代码样例（`export function ${factoryName}(invoke...)`）会把
+    // `${` 的 `$` 抽成一个名叫 `$` 的「导出」。真名叫 `$` 的导出后面不会紧跟
+    // `{`（那是插值），据此跳过。
+    const isTemplateInterpolation = match[1] === '$' && text[match.index + match[0].length] === '{'
+    if (!isTemplateInterpolation) names.push(match[1])
     match = pattern.exec(text)
   }
   return names

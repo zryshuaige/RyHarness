@@ -1645,9 +1645,12 @@ export class RyHarnessServer {
     // 插件在数据库关闭之前逆序卸载：工具/路由的 disposer 里若还要读 store，
     // 此时仍拿得到连接。
     await this.closeQuietly(() => this.plugins.close())
-    // **记忆与演进服务要在库关闭之前收**：它们的收尾要写库（记忆落盘、巩固结算）。
-    // 先关库再关它们，就是让它们去写一个已经关掉的连接——SQLite 在 native 层
-    // 直接把进程带走（不抛异常，进程就没了）。
+    // 记忆与演进服务在库关闭之前收。三者各持各的句柄（同一份库文件、三个
+    // DatabaseSync 实例），顺序上没有硬依赖，这里取保守序：先收后台服务再关
+    // 库，将来它们的 close() 若长出写操作，也不会碰一个已关闭的连接。
+    // 已知且接受的行为：两个 close() 都**不写库、不等在途工作**——记忆的抽取
+    // 队列与演化的任务队列直接被丢弃（见各自实现），停机前刚聊过的那几轮记忆
+    // 不会入库。要改就得给 close 加有界 flush，属于单独的波次，不在这里偷偷等。
     await this.closeQuietly(() => this.memoryService?.close())
     await this.closeQuietly(() => this.evolutionService?.close())
     // 关库放在最后：上面那些收尾都要它。
