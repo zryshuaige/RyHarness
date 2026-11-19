@@ -5,7 +5,16 @@
  * "哪几条真的可用"是探测脚本的结论，写在 catalog.ts 的注释里，不在测试里重跑网络。
  */
 import { describe, expect, it } from 'vitest'
-import { speakerModel, VOICE_ENGINES, VOICE_PROFILES, voiceProfile, voiceProfilesForEngine } from '../src/catalog.ts'
+import {
+  isKnownVoiceId,
+  speakerModel,
+  systemLocalVoiceId,
+  systemLocalVoiceName,
+  VOICE_ENGINES,
+  VOICE_PROFILES,
+  voiceProfile,
+  voiceProfilesForEngine,
+} from '../src/catalog.ts'
 import { VOICE_ERROR_CODES, type VoiceEngineId } from '../src/index.ts'
 
 describe('音色目录', () => {
@@ -79,5 +88,31 @@ describe('音色目录', () => {
     expect(VOICE_ERROR_CODES.upstream).toBe('VOICE_UPSTREAM')
     expect(VOICE_ERROR_CODES.unknownProfile).toBe('VOICE_PROFILE_NOT_FOUND')
     expect(VOICE_ERROR_CODES.badRequest).toBe('VOICE_BAD_REQUEST')
+  })
+})
+
+describe('本机系统音色 id（system-local:）', () => {
+  it('名字编进 id 再解码回来，含空格与括号的名字也不丢', () => {
+    const name = 'Microsoft Huihui Desktop - Chinese (Simplified)'
+    const id = systemLocalVoiceId(name)
+    expect(id.startsWith('system-local:')).toBe(true)
+    expect(systemLocalVoiceName(id)).toBe(name)
+  })
+
+  it('是合法音色 id：人格保存不会把它洗成「不朗读」；voiceProfile 不注册也能解码', () => {
+    const id = systemLocalVoiceId('Microsoft Zira Desktop')
+    expect(isKnownVoiceId(id)).toBe(true)
+    const profile = voiceProfile(id)
+    expect(profile?.engine).toBe('system')
+    expect(profile?.voice).toBe('Microsoft Zira Desktop')
+    expect(profile?.sampleText.length).toBeGreaterThan(0)
+  })
+
+  it('空名字与坏编码不算本机音色（不猜一个名字出来）', () => {
+    expect(systemLocalVoiceName('system-local:')).toBeUndefined()
+    expect(systemLocalVoiceName('system-local:%E0%A4%A')).toBeUndefined()
+    expect(systemLocalVoiceName('system-huihui')).toBeUndefined()
+    expect(isKnownVoiceId('system-local:')).toBe(false)
+    expect(voiceProfile('system-local:')).toBeUndefined()
   })
 })

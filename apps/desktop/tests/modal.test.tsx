@@ -211,6 +211,28 @@ describe('Modal 焦点管理', () => {
     expect(document.activeElement?.id).toBe('last')
   })
 
+  it('隐藏面板里的控件不参与 Tab 圈禁（向导未到的步骤留在 DOM 里）', () => {
+    // 新建向导把未到的步骤留在 DOM（表单状态不丢），但焦点不能落进去：
+    // display:none 的输入框看不见光标，Tab 也会跳过它，像是弹窗丢了焦点。
+    renderNode(
+      <Modal title="向导" onClose={() => {}}>
+        <div hidden={true}>
+          <button type="button" id="hidden-last">
+            隐藏的最后
+          </button>
+        </div>
+        <button type="button" id="visible-last">
+          可见的最后
+        </button>
+      </Modal>,
+    )
+    // 打开时焦点在头部关闭按钮（第一个可聚焦）
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('关闭')
+    // Shift+Tab 从第一个绕到「最后一个可见控件」，而不是隐藏面板里的那枚
+    keyDownOnDocument('Tab', true)
+    expect(document.activeElement?.id).toBe('visible-last')
+  })
+
   it('卸载后焦点还原到打开前的元素', () => {
     function AutoClose() {
       const [open, setOpen] = useState(false)

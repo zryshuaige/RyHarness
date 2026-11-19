@@ -303,6 +303,60 @@ describe('供应商区块：分组与状态', () => {
   })
 })
 
+describe('供应商搜索（补评审清单「供应商无搜索」缺口）', () => {
+  function searchBox(): HTMLInputElement {
+    const input = container.querySelector<HTMLInputElement>('input[aria-label="搜索供应商"]')
+    if (input === null) throw new Error('找不到供应商搜索框')
+    return input
+  }
+
+  it('按名字或 id 过滤已装列表，无命中给提示，清空恢复', async () => {
+    await renderSettings(fakeApi(), [builtinProvider, customProvider, ollamaProvider])
+    expect(container.textContent).toContain('SiliconFlow')
+    typeInto(searchBox(), 'ollama')
+    expect(container.textContent).toContain('Ollama')
+    expect(container.textContent).not.toContain('SiliconFlow')
+    expect(container.textContent).not.toContain('我的私有服务')
+    // id 也能搜（私有服务的 id 是 custom-abc）。
+    typeInto(searchBox(), 'custom-abc')
+    expect(container.textContent).toContain('我的私有服务')
+    expect(container.textContent).not.toContain('SiliconFlow')
+    // 无命中：诚实说没有，而不是留一片空白。
+    typeInto(searchBox(), 'zzz-不存在')
+    expect(container.textContent).toContain('没有匹配的供应商')
+    expect(container.textContent).not.toContain('SiliconFlow')
+    // 清空恢复全部。
+    typeInto(searchBox(), '')
+    expect(container.textContent).toContain('SiliconFlow')
+    expect(container.textContent).toContain('我的私有服务')
+  })
+
+  it('「先挑一家」预设网格同样被搜索过滤', async () => {
+    const api = fakeApi({
+      providerPresets: () => {
+        return Promise.resolve({ presets })
+      },
+    })
+    await renderSettings(api, [])
+    await act(async () => {
+      await Promise.resolve()
+    })
+    const names = (): Array<string | null | undefined> => {
+      return [...container.querySelectorAll('.provider-pick-tile .provider-preset-name')].map((node) => {
+        return node.textContent
+      })
+    }
+    expect(names()).toEqual(['DeepSeek', 'Ollama'])
+    typeInto(searchBox(), 'deep')
+    expect(names()).toEqual(['DeepSeek'])
+    typeInto(searchBox(), 'zzz-不存在')
+    expect(names()).toEqual([])
+    expect(container.textContent).toContain('没有匹配的供应商')
+    // 搜索无命中时不再叠一句「还没添加供应商」的空态（那是另一种状态）。
+    expect(container.textContent).not.toContain('还没添加供应商')
+  })
+})
+
 describe('添加供应商向导', () => {
   it('先出预设网格（含「自定义」），选定后表单预填 baseURL 与推荐模型', async () => {
     const created: CreateProviderInput[] = []
@@ -364,6 +418,43 @@ describe('添加供应商向导', () => {
     expect(changed).toBe(1)
     // 保存成功后弹窗关闭（父组件直接卸载）。
     expect(container.querySelector('.modal')).toBeNull()
+  })
+
+  /**
+   * 预设厂商的简形：填 Key 是首屏唯一正事，名称/协议/地址/模型列表收进
+   * 「高级设置」折叠区（默认收起，但仍在 DOM 里——要改的人点开就有）。
+   */
+  it('预设表单默认只露 Key：高级字段折叠，Key 在折叠区外', async () => {
+    const api = fakeApi({
+      providerPresets: () => {
+        return Promise.resolve({ presets })
+      },
+    })
+    await renderSettings(api, [builtinProvider])
+    await act(async () => {
+      buttonByText('添加供应商').click()
+      await Promise.resolve()
+    })
+    const grid = container.querySelector('.provider-preset-grid')
+    if (grid === null) throw new Error('没有预设网格')
+    await act(async () => {
+      buttonByText('DeepSeek', grid).click()
+      await Promise.resolve()
+    })
+    const form = container.querySelector('.provider-form')
+    if (form === null) throw new Error('没有供应商表单')
+    const advanced = form.querySelector('details.provider-advanced')
+    expect(advanced).not.toBeNull()
+    expect(advanced?.hasAttribute('open')).toBe(false)
+    // 实现层字段都在折叠区里；Key 与官网链接在外面。
+    expect(advanced?.querySelector('textarea')).not.toBeNull()
+    expect(fieldOf<HTMLInputElement>(form, '名称').closest('details')).toBe(advanced)
+    const key = form.querySelector('input[type="password"]')
+    expect(key).not.toBeNull()
+    expect(key?.closest('details')).toBeNull()
+    const docs = form.querySelector('a[href="https://platform.deepseek.com"]')
+    expect(docs).not.toBeNull()
+    expect(docs?.closest('details')).toBeNull()
   })
 
   it('Ollama 预设（免 key）隐藏 key 输入，载荷不带 apiKey', async () => {

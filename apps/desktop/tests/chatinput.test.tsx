@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatInput } from '../renderer/src/components/ChatInput.tsx'
 import type { MessageAttachment } from '../renderer/src/store.ts'
 
@@ -294,5 +294,40 @@ describe('ChatInput 附件通道', () => {
       await Promise.resolve()
     })
     expect(container.querySelector('.attach-item.is-error')?.textContent).toContain('当前未开放附件上传')
+  })
+})
+
+describe('ChatInput 模型读数', () => {
+  it('有模型时画 12px 读数（含上下文），点击去模型与供应商', () => {
+    const onClick = vi.fn()
+    act(() => {
+      root = createRoot(container)
+      root.render(
+        <ChatInput
+          members={members}
+          onSend={() => {}}
+          model="DeepSeek-V3 · SiliconFlow"
+          modelContext="128k 上下文"
+          onModelClick={onClick}
+        />,
+      )
+    })
+    const chip = container.querySelector<HTMLButtonElement>('.composer-model')
+    expect(chip).not.toBeNull()
+    expect(chip?.textContent).toContain('DeepSeek-V3 · SiliconFlow')
+    expect(chip?.textContent).toContain('128k 上下文')
+    expect(chip?.getAttribute('aria-label')).toContain('当前模型')
+    act(() => {
+      chip?.click()
+    })
+    expect(onClick).toHaveBeenCalledTimes(1)
+  })
+
+  it('没配模型时不画读数（不留一个点不动的空壳）', () => {
+    act(() => {
+      root = createRoot(container)
+      root.render(<ChatInput members={members} onSend={() => {}} />)
+    })
+    expect(container.querySelector('.composer-model')).toBeNull()
   })
 })

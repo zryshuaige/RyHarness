@@ -488,6 +488,14 @@ describe('层级：轻提示必须高于弹窗遮罩', () => {
       expect(sheet(name).match(/z-index:\s*\d/), `${name} 仍有裸 z-index`).toBeNull()
     }
   })
+
+  it('新建向导的隐藏面板显式写回 display:none', () => {
+    // .studio-section 给了 display:flex，会压过 UA 的 [hidden]{display:none}——
+    // 不写回的话三步面板同时露出来（起点屏混进人设与模型）。jsdom 只查 hidden 属性
+    // 查不出这种 CSS 覆盖，所以这里钉死写回规则本身；真实可见性由 capture 的
+    // assertWizardStep 在真浏览器里再量一遍。
+    expect(ruleBody(sheet('styles-product.css'), '.studio [hidden]')).toContain('display: none')
+  })
 })
 
 describe('token 是唯一真源', () => {
@@ -531,6 +539,73 @@ describe('一个组件的边缘只定义一次', () => {
       const overlap = [...topLevelClassSelectors(sheet(name))].filter((sel) => base.has(sel))
       expect(overlap, `${name} 与 styles.css 重复定义: ${overlap.join(' / ')}`).toEqual([])
     }
+  })
+
+  /**
+   * 上一条只盯「扩展层 vs 基础层」，但真正咬人的是**扩展层之间**：插件页的卡片曾在
+   * styles-product.css 与 styles-plugins.css 各写一套，两份声明按 import 顺序叠在一起——
+   * 状态标签既长了药丸底又留着圆点，开关既被 min-width 撑开又被 justify-content 居中。
+   * 那种「两半拼起来的控件」正是页面看着廉价的来源，而单看任何一个文件都发现不了。
+   * 所以这里把门禁扩到全部样式表两两比对：一个选择器只允许有一个家。
+   * `:root` 例外——token 块本来就该由各自的那一页补充（如 --radius-card）。
+   */
+  it('任意两张样式表之间都不重画同一个选择器（:root token 块除外）', () => {
+    const sheets = readdirSync(SRC)
+      .filter((name) => name.endsWith('.css'))
+      .sort()
+    const owners = new Map<string, string>()
+    const offenders: string[] = []
+    for (const name of sheets) {
+      const css = strip(readFileSync(resolve(SRC, name), 'utf8'))
+      for (const selector of topLevelClassSelectors(css)) {
+        if (selector === ':root') continue
+        const owner = owners.get(selector)
+        if (owner !== undefined) offenders.push(`${selector}: ${owner} + ${name}`)
+        else owners.set(selector, name)
+      }
+    }
+    expect(offenders, `选择器有两个家: ${offenders.join(' / ')}`).toEqual([])
+  })
+
+  /**
+   * 抬升纪律。此前全站有 51 处规则自带投影：卡片、行、按钮、气泡、头像……每一块都
+   * 「浮起来一点」，整页于是成了几十个白盒子的拼装，而不是一张有层级的界面。
+   * dsh 的做法相反：页面内的面一律贴面（底色分层 + 发丝描边），投影只给浮层。
+   * 这里把那条纪律钉死：--shadow-1/2 只允许出现在下面这份名单上，名单外的任何
+   * 新投影都会红。--shadow-3 是浮层档（菜单/弹窗/轻提示），不在此列。
+   */
+  const ELEVATION_ALLOWED = new Set([
+    '.chat-input-col', // 全页唯一的焦点面：输入卡
+    '.chat-input-col:focus-within',
+    '.welcome-compose', // 首屏的同一块输入卡
+    '.welcome-compose:focus-within',
+    '.welcome-cat .cat', // 品牌画自带形状
+    '.app-fatal-card', // 致命错误：它本身就是一张浮卡
+    '.bubble-action', // 悬停在气泡上的操作条
+    '.me-switch-track::after', // 开关拇指
+    '.theme-toggle button.is-active', // 分段控件的选中拇指
+    '.plugin-switch-knob',
+    '.plugins-filter-btn.is-active',
+    '.field input[type="range"]::-webkit-slider-thumb', // 滑杆拇指
+    '.field input[type="range"]::-moz-range-thumb',
+    '.persona-trait input[type="range"]::-webkit-slider-thumb',
+    '.persona-trait input[type="range"]::-moz-range-thumb',
+  ])
+
+  it('投影只给浮层与拇指：页面内的面一律贴面', () => {
+    const offenders: string[] = []
+    for (const name of readdirSync(SRC)
+      .filter((file) => file.endsWith('.css'))
+      .sort()) {
+      const css = strip(readFileSync(resolve(SRC, name), 'utf8'))
+      for (const rule of topLevelRules(css)) {
+        if (!/box-shadow:[^;]*var\(--shadow-[12]\)/.test(rule.body)) continue
+        for (const selector of rule.selectors) {
+          if (!ELEVATION_ALLOWED.has(selector)) offenders.push(`${name} ${selector}`)
+        }
+      }
+    }
+    expect(offenders, `页面内出现了新的抬升面: ${offenders.join(' / ')}`).toEqual([])
   })
 
   it('欢迎页与聊天页的 composer 是同一个长相（同一档阴影 + 同一根 --edge 描边）', () => {
@@ -622,10 +697,15 @@ describe('一个组件的边缘只定义一次', () => {
     expect(ruleBody(sheet('styles.css'), '.welcome-recent-item:hover')).toContain('background: var(--hover-bg)')
   })
 
-  it('.btn 是白底控件，靠那 1px --edge 站住（阴影在纯白底上等于没有）', () => {
+  it('.btn 是贴面控件：描边站住，不投影，高度走 token', () => {
     const btn = ruleBody(sheet('styles.css'), '.btn')
+    // 抬升只留给浮层。按钮一旦自带投影，整页就是几十块浮起来的白盒子（拼装感）。
     expect(btn).toContain('border: 1px solid var(--edge)')
-    expect(btn).toContain('box-shadow: var(--shadow-1)')
+    expect(btn).toContain('box-shadow: none')
+    expect(btn).toContain('height: var(--ctl-h)')
+    // 悬停与按下是同一根 alpha 阶梯上的两档，不是两套颜色。
+    expect(ruleBody(sheet('styles.css'), '.btn:hover:not(:disabled)')).toContain('background: var(--hover-bg)')
+    expect(ruleBody(sheet('styles.css'), '.btn:active:not(:disabled)')).toContain('background: var(--active-bg)')
   })
 })
 
@@ -634,19 +714,17 @@ describe('够不着的东西必须还在：窄窗口下操作条不被裁掉', (
   const tokens = themeTokens(base)
 
   /**
-   * 一条消息上最多同时挂几枚操作按钮。
+   * 一条消息上最多同时挂几枚**内联**操作按钮。
    *
-   * 从组件里数出来（用户行的「编辑并重发」与 agent 行的「重新生成」「分支」不同时出现，
-   * 所以同屏最多是总数减一）。这个数是通道宽度的**输入**：按钮多了而通道没跟着长，
-   * 整条操作条就会压回正文上——真机上就是这样压住了「MiniMax-M3.1-Flash」那一段。
+   * 读组件导出的 BUBBLE_INLINE_ACTIONS，而不是数 `bubble-action` 出现次数：D5 把这些
+   * 低频动作（朗读/赞/踩/编辑重发/重新生成/分支）收进了 `.bubble-menu` 溢出菜单，菜单项
+   * 的类名不是 bubble-action——但若改用「按钮总数」去数，菜单项也会被算进去、通道被算宽。
+   * 内联按钮数是通道宽度的**输入**：按钮多了而通道没跟着长，操作条就压回正文上。
    */
   const actionButtons = (): number => {
     const source = readFileSync(resolve(SRC, 'components', 'MessageBubble.tsx'), 'utf8')
-    // 按钮的类名是 bubble-action，容器是 bubble-actions（复数）——负向断言把容器剔掉。
-    const total = (source.match(/bubble-action(?!s)/g) ?? []).length
-    // 用户行的「编辑并重发」与 agent 行的「重新生成」「分支」不同时出现，
-    // 所以同屏最多是总数减一。
-    return Math.max(1, total - 1)
+    const declared = Number(/BUBBLE_INLINE_ACTIONS\s*=\s*(\d+)/.exec(source)?.[1] ?? 0)
+    return Math.max(1, declared)
   }
 
   it('操作条通道随消息列自适应，且放得下它自己那一排按钮', () => {

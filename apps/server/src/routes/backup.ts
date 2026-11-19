@@ -11,6 +11,7 @@
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { SessionStore } from '@ryharness/session'
+import type { BackupFileView, BackupListView } from '../contract/backups.ts'
 import { json, type Router } from '../router.ts'
 
 /** 手动备份的保留份数：够回溯最近的几次误操作，又不至于吃满磁盘。 */
@@ -67,6 +68,31 @@ function pruneBackups(dir: string, keep: number): void {
   }
 }
 
+/**
+ * 读备份清单（只读）：最近 BACKUPS_KEPT 份，按修改时间倒序。
+ *
+ * 界面此前写着「最近 10 份留在这里」却从不列出来——用户只能去文件管理器碰运气。
+ * 排序口径与 pruneBackups 一致（mtime 优先）：用户看到「最上面是最新」必须和
+ * 「淘汰谁」的顺序对得上。stat 不到的跳过：一份读不出元数据的文件不该让整张清单报错。
+ */
+export function readBackupHistory(dir: string): BackupFileView[] {
+  const files: BackupFileView[] = []
+  for (const name of listBackups(dir)) {
+    const path = join(dir, name)
+    try {
+      const stat = statSync(path)
+      files.push({ name, path, at: stat.mtimeMs, size: stat.size })
+    } catch {
+      // 句柄滞后/刚被删：跳过这一份，清单其余照常。
+    }
+  }
+  return files
+    .sort((a, b) => {
+      return b.at - a.at || (a.name < b.name ? 1 : -1)
+    })
+    .slice(0, BACKUPS_KEPT)
+}
+
 /** 备份路由的依赖。 */
 export interface BackupRoutes {
   dataDir: string
@@ -75,6 +101,12 @@ export interface BackupRoutes {
 
 /** 注册备份路由（鉴权由 app 层的 token 中间件统一把关，这里不再重复）。 */
 export function registerBackupRoutes(router: Router, deps: BackupRoutes): void {
+  // 只读清单：把「最近 10 份」真的列给用户。新增 GET，不动 POST 契约形状。
+  router.get('/api/backups', async (_req, res) => {
+    const dir = join(deps.dataDir, 'backups')
+    const view: BackupListView = { dir, backups: readBackupHistory(dir) }
+    json(res, 200, view)
+  })
   router.post('/api/backup', async (_req, res) => {
     const dir = join(deps.dataDir, 'backups')
     mkdirSync(dir, { recursive: true })

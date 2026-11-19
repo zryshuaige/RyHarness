@@ -12,6 +12,7 @@ import {
 } from '../lib/provider-health.ts'
 import { presetSummary } from '../lib/provider-presets.ts'
 import { markConversationRemoved, markConversationRestored } from '../lib/removed-conversations.ts'
+import { stagger } from '../lib/stagger.ts'
 import { toast } from '../lib/toast.ts'
 import { AsyncState } from './AsyncState.tsx'
 import { Avatar } from './avatars/Avatar.tsx'
@@ -388,21 +389,25 @@ export function WelcomeHome({
                   <p className="apikey-title">先选一家模型供应商</p>
                   <p className="apikey-hint">哪家都行，key 只存在你这台机器上。换厂商随时能改，助理会跟着走。</p>
                   <div className="provider-picker-grid welcome-preset-grid">
-                    {presetList.map((preset) => {
+                    {presetList.map((preset, index) => {
                       return (
                         <button
                           key={preset.id}
                           type="button"
                           className="provider-pick-tile"
+                          // 首屏供应商行逐行错峰进场（与全站 item-in 同一套语言）：
+                          // 新用户第一眼看到的列表逐行落下，而不是整块瞬现。
+                          style={stagger(index)}
                           onClick={() => {
                             setPickedPreset(preset)
                             setKey('')
                             setKeyError(undefined)
                           }}
                         >
-                          <ProviderIcon id={preset.id} name={preset.displayName} size={36} />
+                          <ProviderIcon id={preset.id} name={preset.displayName} size={24} />
                           <span className="provider-preset-name">{preset.displayName}</span>
                           <span className="provider-preset-sub">{presetSummary(preset)}</span>
+                          <Icon name="chevron-right" size={16} className="provider-pick-chevron" />
                         </button>
                       )
                     })}

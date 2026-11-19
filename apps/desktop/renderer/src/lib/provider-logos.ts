@@ -41,6 +41,7 @@ import zhipuLogo from '../../../assets/providers/zhipu.png'
 /** 供应商标识 → Vite 产物 URL。 */
 const BRAND_LOGOS: Readonly<Record<string, string | undefined>> = Object.freeze({
   siliconflow: siliconflowLogo,
+  bailian: qwenLogo,
   deepseek: deepseekLogo,
   moonshot: moonshotLogo,
   kimi: kimiLogo,

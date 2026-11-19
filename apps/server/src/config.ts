@@ -241,6 +241,22 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     reasoningControl: 'effort',
   },
   {
+    id: 'bailian',
+    displayName: '阿里云百炼（Token Plan）',
+    protocol: 'openai',
+    // 百炼是 OpenAI 兼容网关。Token Plan / Coding Plan 走专属端点 + 专属 sk-sp- key；
+    // 按量计费则用通用端点 https://dashscope.aliyuncs.com/compatible-mode/v1 + 普通 sk- key，
+    // 在向导里改 baseUrl 即可。模型 id 经该端点 /v1/models 实测核对（2026-11），只收文本对话档。
+    baseUrl: 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1',
+    // qwen4-max 是旗舰、qwen4-max-preview 是预览档、deepseek-v4.1-flash-1017 是便宜快档。
+    // contextWindow 保守口径落注释（preset models 是 string[]）：qwen4 系按 256K → 262_144。
+    models: ['qwen4-max', 'qwen4-max-preview', 'deepseek-v4.1-flash-1017'],
+    defaultModel: 'qwen4-max',
+    docsUrl: 'https://help.aliyun.com/zh/model-studio/compatibility-of-openai-with-dashscope',
+    // 千问思考参数逐模型不同（enable_thinking / reasoning_effort），适配器只发标准字段，
+    // 不声明思考控件，避免发一个端点可能静默忽略或 400 的参数。
+  },
+  {
     id: 'moonshot',
     displayName: 'Moonshot 月之暗面',
     protocol: 'openai',

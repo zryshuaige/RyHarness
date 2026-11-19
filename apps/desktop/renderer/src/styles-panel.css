@@ -207,6 +207,12 @@
   font-size: var(--fs-xs);
 }
 
+/* 文字链接的悬停反馈是下划线，不是底色：它没有盒子，铺底会凭空多出一块面。 */
+.right-panel .panel-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 /* 性格四维：两列两行的小标签格，每格写「维度 · 档位」。
    四个小药丸顺着流排会读成「四件不重要的事」，排成齐整的两行才看得出这是四项设定。 */
 .right-panel .trait-list {
@@ -1075,4 +1081,13 @@
   height: 12px;
   border-radius: var(--radius-sm);
   background: var(--skeleton-bg);
+}
+
+
+/* 群成员行：调度者皇冠 + 名字。与右栏其它行同一档字号，不额外抢眼。 */
+.right-panel .evolution-crown {
+  display: inline-flex;
+  vertical-align: -2px;
+  margin-right: 4px;
+  color: var(--amber-text);
 }

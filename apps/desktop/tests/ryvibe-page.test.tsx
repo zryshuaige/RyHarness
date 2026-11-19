@@ -211,18 +211,6 @@ function typeInto(textarea: HTMLTextAreaElement, value: string): void {
   })
 }
 
-/** 往 input 里打字（React 受控输入要走原生 setter）。 */
-function typeIntoInput(input: HTMLInputElement, value: string): void {
-  const setter = must(
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set,
-    'input.value 的原生 setter',
-  )
-  act(() => {
-    setter.call(input, value)
-    input.dispatchEvent(new Event('input', { bubbles: true }))
-  })
-}
-
 describe('RyVibe 页面', () => {
   it('首屏只有一句话和一个开始：别的都不问用户', () => {
     render(stub())
@@ -237,8 +225,11 @@ describe('RyVibe 页面', () => {
     const api = stub({ session: requested, sessions: [session, requested] })
     render(api, { sessionId: 'v2', onSessionChange })
     await settle()
-    expect(container.textContent).toContain('指定任务')
-    expect(container.textContent).not.toContain(session.requirement)
+    // 断言落在主列（当前这一轮的 flow）：历史左栏会如实列出包括最近任务在内的所有条目，
+    // 那是常驻历史该有的样子；要验的是「主列恢复的是指定任务，而不是被最近任务顶替」。
+    const main = must(container.querySelector('.vibe-main'), '.vibe-main')
+    expect(main.textContent).toContain('指定任务')
+    expect(main.textContent).not.toContain(session.requirement)
     expect(onSessionChange).toHaveBeenCalledWith('v2')
   })
 
@@ -608,8 +599,9 @@ describe('RyVibe 页面', () => {
     render(api)
     await settle()
     expect(container.querySelector('.vibe-project-kind')?.textContent).toBe('表格')
+    // 文件行现在是 icon + 名字 span + 打开角标：按名字 span 定位（装饰图标的空白不算名字）。
     const csv = [...container.querySelectorAll<HTMLButtonElement>('.vibe-file')].find((button) => {
-      return button.textContent === '清单.csv'
+      return button.querySelector('.vibe-file-name')?.textContent === '清单.csv'
     })
     await act(async () => {
       must(csv, '清单.csv 按钮').click()
@@ -678,8 +670,8 @@ describe('RyVibe 页面', () => {
       must(container.querySelector<HTMLButtonElement>('.vibe-start'), '.vibe-start').click()
     })
     await settle()
-    const own = must(container.querySelector<HTMLInputElement>('.vibe-own-answer'), '.vibe-own-answer')
-    typeIntoInput(own, '我们公司内部用')
+    const own = must(container.querySelector<HTMLTextAreaElement>('.vibe-own-answer'), '.vibe-own-answer')
+    typeInto(own, '我们公司内部用')
     await act(async () => {
       must(container.querySelector<HTMLButtonElement>('.vibe-card-submit'), '.vibe-card-submit').click()
     })
@@ -707,5 +699,142 @@ describe('RyVibe 页面', () => {
     })
     await settle()
     expect(api.setTodoDone).toHaveBeenCalledWith('c1', 't1', true)
+  })
+})
+
+describe('RyVibe 选项单选语义与进度 stepper（P5）', () => {
+  /** 进到有选项的那一屏：说一句话 → 开始 → 小队问第一题。 */
+  async function intoQuestion(): Promise<ReturnType<typeof stub>> {
+    const api = stub({ questions: oneQuestion })
+    render(api)
+    typeInto(must(container.querySelector<HTMLTextAreaElement>('.vibe-input'), '.vibe-input'), '做个记账工具')
+    await act(async () => {
+      must(container.querySelector<HTMLButtonElement>('.vibe-start'), '.vibe-start').click()
+    })
+    await settle()
+    return api
+  }
+
+  it('选项是 radiogroup 里的 radio：预选第一项 aria-checked=true，其余 false', async () => {
+    await intoQuestion()
+    const group = must(container.querySelector('.vibe-options'), '.vibe-options')
+    expect(group.getAttribute('role')).toBe('radiogroup')
+    expect(group.getAttribute('aria-label')).toBe('这东西跑在哪？')
+    const radios = [...container.querySelectorAll<HTMLButtonElement>('.vibe-option')]
+    expect(radios).toHaveLength(3)
+    expect(
+      radios.every((node) => {
+        return node.getAttribute('role') === 'radio'
+      }),
+    ).toBe(true)
+    expect(radios[0]?.getAttribute('aria-checked')).toBe('true')
+    expect(radios[1]?.getAttribute('aria-checked')).toBe('false')
+    expect(radios[2]?.getAttribute('aria-checked')).toBe('false')
+    // 圆点是纯装饰（aria-hidden、空 span），选项 textContent 仍只是选项本身。
+    expect(radios[0]?.querySelector('.vibe-option-radio')?.getAttribute('aria-hidden')).toBe('true')
+    expect(radios[0]?.textContent).toBe('网页')
+  })
+
+  it('方向键在选项间走位：ArrowDown 把选中移到下一项并聚焦', async () => {
+    await intoQuestion()
+    const radios = [...container.querySelectorAll<HTMLButtonElement>('.vibe-option')]
+    act(() => {
+      must(radios[0], '第一个选项').focus()
+      radios[0]?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+    })
+    await settle()
+    const after = [...container.querySelectorAll<HTMLButtonElement>('.vibe-option')]
+    expect(after[1]?.classList.contains('is-chosen')).toBe(true)
+    expect(after[1]?.getAttribute('aria-checked')).toBe('true')
+    expect(after[0]?.getAttribute('aria-checked')).toBe('false')
+    expect(document.activeElement).toBe(after[1])
+  })
+
+  it('进度是五节点 stepper：节点 + 标签结构，恰好一个当前步带 aria-current', async () => {
+    await intoQuestion()
+    const steps = [...container.querySelectorAll('.vibe-step')]
+    expect(steps).toHaveLength(5)
+    // 不再是纯文字 li：每个节点有 node 容器与下方标签。
+    expect(steps[0]?.querySelector('.vibe-step-node')).not.toBeNull()
+    expect(
+      steps.map((node) => {
+        return node.querySelector('.vibe-step-label')?.textContent
+      }),
+    ).toEqual(['读需求', '定方案', '动手做', '验收', '交付'])
+    // 首屏 clarify=第 0 步：恰好一个当前步，带 aria-current=step 与 is-active。
+    const current = [...container.querySelectorAll('.vibe-step[aria-current="step"]')]
+    expect(current).toHaveLength(1)
+    expect(current[0]?.classList.contains('is-active')).toBe(true)
+  })
+})
+
+describe('RyVibe 历史常驻左栏（P5）', () => {
+  it('有过任务就常驻左栏：需求 + 状态短签 + 日期，当前任务标 is-active，表头带新任务', async () => {
+    const done: VibeSessionView = {
+      ...session,
+      id: 'v0',
+      requirement: '上一轮旧任务',
+      status: 'done',
+      createdAt: 86_400_000,
+    }
+    const api = stub({ session, sessions: [session, done] })
+    render(api)
+    await settle()
+    const rail = must(container.querySelector('.vibe-rail'), '.vibe-rail')
+    expect(rail.getAttribute('aria-label')).toBe('任务历史')
+    const items = [...container.querySelectorAll<HTMLButtonElement>('.vibe-history-item')]
+    expect(items).toHaveLength(2)
+    // 当前这一轮（v1）高亮且 aria-current；另一条不高亮。
+    expect(items[0]?.classList.contains('is-active')).toBe(true)
+    expect(items[0]?.getAttribute('aria-current')).toBe('true')
+    expect(items[1]?.classList.contains('is-active')).toBe(false)
+    expect(items[1]?.hasAttribute('aria-current')).toBe(false)
+    // 每条都有需求摘要、状态短签与日期。
+    expect(items[0]?.querySelector('.vibe-history-req')?.textContent).toBe('给独立开发者做个记账工具')
+    expect(items[0]?.querySelector('.vibe-status-chip')?.textContent).toBe('等你选')
+    expect(items[1]?.querySelector('.vibe-status-chip')?.textContent).toBe('已完成')
+    expect(items[0]?.querySelector('.vibe-history-date')).not.toBeNull()
+    // 正开着一轮：表头有「新任务」入口。
+    expect(rail.querySelector('.vibe-rail-head')?.textContent).toContain('新任务')
+  })
+
+  it('首跑零历史不画左栏：欢迎屏独占整幅居中', () => {
+    render(stub())
+    expect(container.querySelector('.vibe-rail')).toBeNull()
+    expect(container.querySelector('.vibe-main')).not.toBeNull()
+    expect(container.querySelector('.vibe-hero')).not.toBeNull()
+  })
+
+  it('点左栏一条就把那一轮接回来（不是重说一遍）', async () => {
+    const other: VibeSessionView = { ...session, id: 'v9', conversationId: 'c9', requirement: '另一轮任务' }
+    const onSessionChange = vi.fn()
+    const api = stub({ session, sessions: [session, other] })
+    render(api, { onSessionChange })
+    await settle()
+    const items = [...container.querySelectorAll<HTMLButtonElement>('.vibe-history-item')]
+    await act(async () => {
+      must(items[1], '左栏第二条').click()
+    })
+    await settle()
+    expect(onSessionChange).toHaveBeenCalledWith('v9')
+  })
+
+  it('状态短签四种语义色：未通过 / 进行中 / 已完成 / 等你选', async () => {
+    const failed: VibeSessionView = { ...session, id: 'f', status: 'failed' }
+    const building: VibeSessionView = { ...session, id: 'b', status: 'building', stage: 'execute' }
+    const done: VibeSessionView = { ...session, id: 'd', status: 'done' }
+    const api = stub({ sessions: [failed, building, done, session] })
+    render(api)
+    await settle()
+    const chips = [...container.querySelectorAll('.vibe-status-chip')]
+    expect(chips).toHaveLength(4)
+    expect(chips[0]?.textContent).toBe('未通过')
+    expect(chips[0]?.classList.contains('is-failed')).toBe(true)
+    expect(chips[1]?.textContent).toBe('进行中')
+    expect(chips[1]?.classList.contains('is-building')).toBe(true)
+    expect(chips[2]?.textContent).toBe('已完成')
+    expect(chips[2]?.classList.contains('is-done')).toBe(true)
+    expect(chips[3]?.textContent).toBe('等你选')
+    expect(chips[3]?.classList.contains('is-asking')).toBe(true)
   })
 })

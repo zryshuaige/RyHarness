@@ -19,6 +19,7 @@ import {
   ApprovalDecisionBody,
   AttachmentLookupBody,
   BranchBody,
+  type ConversationContextView,
   ConversationPatchBody,
   CreateConversationBody,
   SendTextBody,
@@ -109,6 +110,11 @@ export interface ConversationRoutes {
    * 工具执行审批桥：决议路由按 id 收口挂起中的审批（shell_exec 的允许/拒绝）。
    */
   approvals: ApprovalBroker
+  /**
+   * 供应商里**声明**的模型读数（composer 的上下文窗口）。缺省时端点仍回形状完整的
+   * 一行，只是窗口为 null——测试只关心会话 CRUD 时不必造一份供应商配置。
+   */
+  describeModel?: (providerId: string, modelId: string) => { providerName: string; contextWindow: number | null }
 }
 
 /** 消息列表单页条数上限（?limit 的上限，也用作 ?since= 的翻页步长）。 */
@@ -522,6 +528,15 @@ function firstTextOf(contentBlocks: readonly unknown[]): string {
   return ''
 }
 
+/**
+ * 「模型叶名 · 供应商名」的读数：与渲染层 `modelPair` 的写法一致（见
+ * apps/desktop/renderer/src/lib/humanize.ts），让别的客户端不必各自再拼一遍。
+ */
+function modelLabelOf(providerName: string, modelId: string): string {
+  const leaf = modelId.includes('/') ? modelId.slice(modelId.lastIndexOf('/') + 1) : modelId
+  return providerName.length === 0 ? leaf : `${leaf} · ${providerName}`
+}
+
 /** 会话域的全部路由。 */
 export function registerConversationRoutes(router: Router, deps: ConversationRoutes): void {
   const { store, workspaceRoot, conversationStates } = deps
@@ -652,6 +667,49 @@ export function registerConversationRoutes(router: Router, deps: ConversationRou
         conversation: viewOf(conversation),
         usage: store.conversationUsage(conversationId),
       })
+  })
+
+  /**
+   * 输入区的模型读数（composer 上那一行 12px）：这个会话此刻由哪个模型答、
+   * 声明的上下文窗口多大、本会话累计用了多少 token。
+   *
+   * 解析口径与派工一致：direct → 唯一成员，group → 调度员（缺省回落到首个成员）。
+   * 只读一次轻量查询——渲染层在会话切换与轮末各取一次，不为此订阅任何 store
+   * （40ms 流式窗口下，一行读数不该跟着每帧重算）。
+   */
+  router.get('/api/conversations/:id/context', async (req, res) => {
+    const conversationId = req.params.id as string
+    const stored = store.getConversation(conversationId)
+    if (stored === undefined) {
+      json(res, 404, { error: 'conversation not found' })
+      return
+    }
+    const conversation = viewOf(stored)
+    const agentId =
+      conversation.kind === 'group'
+        ? (conversation.dispatcherAgentId ?? conversation.memberAgentIds[0])
+        : conversation.memberAgentIds[0]
+    const agent = agentId === undefined ? undefined : store.getAgent(agentId)
+    if (agent === undefined) {
+      // 成员被删光：读数缺席比编一个模型名诚实，形状仍然完整（渲染层据此不画 chip）。
+      json(res, 200, {
+        providerId: '',
+        modelId: '',
+        modelLabel: '',
+        contextWindow: null,
+        usedTokens: null,
+      } satisfies ConversationContextView)
+      return
+    }
+    const described = deps.describeModel?.(agent.provider, agent.model)
+    const usage = store.conversationUsage(conversationId)
+    json(res, 200, {
+      providerId: agent.provider,
+      modelId: agent.model,
+      modelLabel: modelLabelOf(described?.providerName ?? agent.provider, agent.model),
+      contextWindow: described?.contextWindow ?? null,
+      usedTokens: usage.totalTokens > 0 ? usage.totalTokens : null,
+    } satisfies ConversationContextView)
   })
 
   /**

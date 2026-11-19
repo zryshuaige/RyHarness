@@ -144,31 +144,41 @@ describe('列表 stagger 接线', () => {
     expect(html).toContain('--i:2')
   })
 
-  it('通讯录卡片与模板卡都带 --i', () => {
-    const html = renderToStaticMarkup(
-      <ContactsPage
-        agents={agents}
-        templates={[
-          {
-            key: 'general',
-            name: '通用助理',
-            description: '什么都能聊',
-            suggestedSystemPrompt: '你是通用助理。',
-            defaultModel: 'deepseek-ai/DeepSeek-V3',
-            persona: TEST_PERSONA,
-            defaultTools: [],
-          },
-        ]}
-        onChat={() => {}}
-        onCreateAgent={() => {}}
-        onEditAgent={() => {}}
-        onDeleteAgent={() => {}}
-        onCreateGroup={() => {}}
-      />,
-    )
-    expect(html).toContain('template-card" style="--i:0')
-    expect(html).toMatch(/contact-card contact-create" style="--i:0/)
-    expect(html).toMatch(/contact-card" style="--i:\d+/)
+  it('通讯录条目带 --i；创建格已删、模板收进弹层不在页面齐铺', () => {
+    const props = {
+      agents,
+      templates: [
+        {
+          key: 'general',
+          name: '通用助理',
+          description: '什么都能聊',
+          suggestedSystemPrompt: '你是通用助理。',
+          defaultModel: 'deepseek-ai/DeepSeek-V3',
+          persona: TEST_PERSONA,
+          defaultTools: [],
+        },
+      ],
+      onChat: () => {},
+      onCreateAgent: () => {},
+      onEditAgent: () => {},
+      onDeleteAgent: () => {},
+      onCreateGroup: () => {},
+    }
+    // 默认列表视图（P3）：每一行带递增 --i，进场 stagger 由组件按下标喂，不是死样式。
+    localStorage.removeItem('ryharness-contacts-view')
+    const listHtml = renderToStaticMarkup(<ContactsPage {...props} />)
+    expect(listHtml).toMatch(/contact-row" style="--i:\d+/)
+    // D7：卡片级创建格已删——新建只剩头部一个入口，不再在网格里占一格。
+    expect(listHtml).not.toContain('contact-create')
+    // 模板收进「从模板」弹层：初始页面不齐铺模板卡，入口按钮仍在。
+    expect(listHtml).toContain('从模板')
+    expect(listHtml).not.toContain('template-card')
+    // 卡片视图同样带 --i（切视图不丢进场节奏）。
+    localStorage.setItem('ryharness-contacts-view', 'card')
+    const cardHtml = renderToStaticMarkup(<ContactsPage {...props} />)
+    expect(cardHtml).toMatch(/contact-card" style="--i:\d+/)
+    expect(cardHtml).not.toContain('contact-create')
+    localStorage.removeItem('ryharness-contacts-view')
   })
 })
 

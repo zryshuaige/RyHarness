@@ -141,7 +141,7 @@
   padding: var(--space-4);
   border-radius: var(--radius-lg);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-1);
+  box-shadow: none;
   text-align: left;
 }
 
@@ -173,9 +173,13 @@
   font-size: var(--fs-sm);
 }
 
-/* 首屏的供应商选择：卡片只留名字，网格自己按宽度排。 */
-.welcome-preset-grid {
-  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+/* 首屏的供应商选择：竖排一行一家（继承 .provider-picker-grid 的 flex-column）。
+   进场交给逐行 stagger（新用户第一眼的列表逐行落下，而非整块瞬现）；容器本身
+   不再整块淡入，避免「容器升 + 行升」双重位移——标题与猫各有自己的进场拍。延迟封顶
+   8 档（与全站 item-in 同口径），第九行不会久等；reduced-motion 全局 1ms 接管。 */
+.welcome-preset-grid .provider-pick-tile {
+  animation: item-in var(--dur-in) var(--ease-out) backwards;
+  animation-delay: calc(min(var(--i, 0), 8) * 30ms);
 }
 /* 「换一家」：回到挑厂商那一步，而不是把整张卡关掉。 */
 .provider-pick-back {
@@ -796,21 +800,6 @@
   align-items: center;
 }
 
-.me-inline-edit {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  border: none;
-  background: none;
-  padding: 2px 6px;
-  margin: -2px -6px;
-  border-radius: var(--radius-sm);
-  font: inherit;
-  color: var(--text-primary);
-  cursor: pointer;
-  transition: background var(--dur-hover) var(--ease-out);
-}
-
 .me-inline-edit:hover {
   background: var(--hover-bg);
 }
@@ -834,27 +823,6 @@
   background: none;
   cursor: pointer;
   line-height: 0;
-}
-
-.me-avatar-edit {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  background: var(--amber-primary);
-  color: var(--amber-on-primary);
-  opacity: 0;
-  transition: opacity var(--dur-hover) var(--ease-out);
-}
-
-.me-avatar-btn:hover .me-avatar-edit,
-.me-avatar-btn:focus-visible .me-avatar-edit {
-  opacity: 1;
 }
 
 /* 焦点不能只剩浏览器默认描边压在头像图片上。 */
@@ -1050,6 +1018,105 @@
   padding-bottom: var(--space-6);
 }
 
+/* ============================================================
+   新建向导：三步步骤条（起点 → 人设 → 模型与权限）
+   ============================================================ */
+/* 向导比编辑工作台再宽一档：主列（表单）要留出 700px 上下的呼吸，
+   身份卡仍常驻右栏。窗口窄于 1088 时 92vw 上限接手，窄窗档再堆叠。 */
+.modal:has(.wizard-steps) {
+  width: 1000px;
+}
+
+.wizard-steps {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  list-style: none;
+  margin: 0 0 var(--space-4);
+  padding: 0 0 var(--space-3);
+  border-bottom: 1px solid var(--divider);
+}
+
+.wizard-steps li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* 步骤之间的连接线：中性发丝，不按进度染色（染色会把步骤条变成进度条）。 */
+.wizard-steps li + li::before {
+  content: '';
+  width: 24px;
+  height: 1px;
+  background: var(--divider);
+}
+
+.wizard-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--row-h);
+  padding: 0 var(--space-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-tertiary);
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  transition: background var(--dur-hover) var(--ease-out), color var(--dur-hover) var(--ease-out);
+}
+
+.wizard-step:hover:not(:disabled) {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+
+.wizard-step:disabled {
+  cursor: default;
+  color: var(--text-disabled);
+}
+
+.wizard-step-dot {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-pill);
+  background: var(--bg-subtle);
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 当前步：琥珀环 + 琥珀字；已完成：success 的 check。已完成步骤可以点回去改，
+   未到的禁用——「回看已完成」与「跳步」是两件事。 */
+.wizard-steps li.is-current .wizard-step {
+  color: var(--amber-text);
+}
+
+.wizard-steps li.is-current .wizard-step-dot {
+  background: var(--bg-surface);
+  color: var(--amber-text);
+  box-shadow: 0 0 0 2px var(--amber-text);
+}
+
+.wizard-steps li.is-done .wizard-step {
+  color: var(--text-secondary);
+}
+
+.wizard-steps li.is-done .wizard-step-dot {
+  background: color-mix(in srgb, var(--success) 16%, transparent);
+  color: var(--success);
+}
+
+/* 第三步的标题行：与其它步骤的分区标题同一套，包在 .advanced 里给足内边距。 */
+.wizard-model-head {
+  padding: var(--space-3) var(--space-4) 0;
+}
+
 .studio {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 248px;
@@ -1075,6 +1142,14 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+}
+
+/* 新建向导用 hidden 切换三步面板，但 .studio-section 给了 display:flex——作者规则
+   压过 UA 的 [hidden]{display:none}，三步会同时露出来（起点屏里混进人设与模型）。
+   显式写回 display:none，与 .bubble-menu[hidden] / .contact-more-menu[hidden] 同一口径。
+   选择器特异性（.studio + [hidden]）高于 .studio-section，隐藏态稳稳生效。 */
+.studio [hidden] {
+  display: none;
 }
 
 .studio-section + .studio-section {
@@ -1137,14 +1212,14 @@
   border-radius: var(--radius-lg);
   background: var(--bg-surface);
   border: 1px solid var(--edge);
-  box-shadow: var(--shadow-1);
+  box-shadow: none;
 }
 
 /* 光晕压在头像下面那圈垫板上：琥珀只做指示，不铺满整张卡。 */
 .agent-card-face {
   padding: 3px;
   border-radius: 50%;
-  box-shadow: 0 0 0 3px var(--amber-primary-soft), var(--shadow-2);
+  box-shadow: 0 0 0 3px var(--amber-primary-soft);
 }
 
 .agent-card-body {
@@ -1225,16 +1300,15 @@
   background: var(--bg-surface);
   border: 1px solid var(--edge);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-1);
+  box-shadow: none;
   animation: item-in var(--dur-in) var(--ease-out) backwards;
   animation-delay: calc(min(var(--i, 0), 8) * 30ms);
-  transition: transform var(--dur-hover) var(--ease-out), box-shadow var(--dur-hover) var(--ease-out),
-    border-color var(--dur-hover) var(--ease-out), background var(--dur-hover) var(--ease-out);
+  transition: border-color var(--dur-hover) var(--ease-out), background var(--dur-hover) var(--ease-out);
 }
 
 .template-pick:hover {
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-2);
+  border-color: var(--edge-strong);
+  background: var(--hover-bg);
 }
 
 /* 选中态用琥珀描边 + 软底：与头像选择器的选中环同一套「我被选中了」语言。 */
@@ -1496,6 +1570,71 @@
   gap: var(--space-3);
 }
 
+/* 音色行独占一整行：下拉 + 试听键并排，半行宽会把长音色名挤没。 */
+.persona-fields > .field {
+  grid-column: 1 / -1;
+}
+
+/* 「更多个性化」折叠区：生日/口头禅/形象/提示预览默认收起，首屏只留
+   四维性格与音色这两件最常改的事。 */
+.persona-more {
+  grid-column: 1 / -1;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-lg);
+  background: var(--bg-subtle);
+  padding: 0 var(--space-3);
+}
+
+.persona-more > summary {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+  transition: color var(--dur-hover) var(--ease-out);
+}
+
+.persona-more > summary:hover {
+  color: var(--text-primary);
+}
+
+.persona-more > summary:focus-visible {
+  outline: 2px solid var(--focus-outline);
+  outline-offset: 2px;
+}
+
+.persona-more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.persona-more > summary::before {
+  content: '›';
+  display: inline-block;
+  transition: transform var(--dur-hover) var(--ease-out);
+}
+
+.persona-more[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.persona-more > summary small {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-weight: 400;
+}
+
+.persona-more[open] {
+  padding-bottom: var(--space-3);
+}
+
+.persona-more .field {
+  margin-top: var(--space-2);
+}
+
 /* ---- 高级设置：折叠的一行入口 ---- */
 .advanced {
   border: 1px solid var(--edge);
@@ -1587,7 +1726,7 @@
   border: 1px solid var(--edge);
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-1);
+  box-shadow: none;
   transition: border-color var(--dur-hover) var(--ease-out), background var(--dur-hover) var(--ease-out);
 }
 
@@ -1657,315 +1796,6 @@
   }
 }
 
-/* ---- 独立插件页 ----
-   此前插件只是「我的」页第三段的一排开关：要滚过整个供应商区块才找得到，
-   关掉一个功能后也没有地方能立刻回到它。独立页把「有什么能力、开了什么、
-   关掉会失去什么」放在同一屏；入口同时出现在 rail 与「我的」页。 */
-.plugins-header {
-  align-items: flex-start;
-}
-
-.plugins-head-text {
-  flex: 1;
-  min-width: 0;
-}
-
-.plugins-head-text h2 {
-  margin: 0;
-}
-
-.plugins-lede {
-  margin: 4px 0 0;
-  color: var(--text-secondary);
-  font-size: var(--fs-sm);
-  line-height: 1.5;
-}
-
-.plugins-search {
-  width: min(260px, 34vw);
-  flex-shrink: 0;
-}
-
-.plugins-col {
-  max-width: 760px;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-5);
-}
-
-.plugin-group {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.plugin-group-head {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-  padding: 0 var(--space-1);
-}
-
-.plugin-group-title {
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: var(--fs-sm);
-  font-weight: 600;
-}
-
-.plugin-group-count {
-  color: var(--text-tertiary);
-  font-size: var(--fs-xs);
-  font-variant-numeric: tabular-nums;
-}
-
-.plugin-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.plugin-card {
-  background: var(--bg-surface);
-  border: 1px solid var(--edge);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-1);
-  overflow: hidden;
-  transition:
-    border-color var(--dur-hover) var(--ease-out),
-    box-shadow var(--dur-hover) var(--ease-out),
-    background var(--dur-hover) var(--ease-out);
-}
-
-.plugin-card:hover {
-  border-color: var(--edge-strong);
-  box-shadow: var(--shadow-2);
-}
-
-/* 展开中的卡片把描边染成琥珀：它和 hover 的「抬起」是两种状态，颜色是唯一
-   不会与阴影混淆的选中信号。 */
-.plugin-card.is-open {
-  border-color: color-mix(in srgb, var(--amber-text) 45%, var(--edge));
-  box-shadow: var(--shadow-2);
-}
-
-.plugin-card-head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-4);
-}
-
-.plugin-card-main {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  border: none;
-  background: none;
-  padding: 0;
-  text-align: left;
-  font: inherit;
-  color: inherit;
-  cursor: pointer;
-  border-radius: var(--radius-md);
-}
-
-/* 卡片裁切了溢出，全局焦点环的 2px 外偏移会被裁掉一半；改成内偏移保证
-   键盘用户看得到完整的选中框。 */
-.plugin-card-main:focus-visible,
-.plugin-chevron:focus-visible {
-  outline: 2px solid var(--focus-outline);
-  outline-offset: -2px;
-}
-
-/* 图标位：内置用实心琥珀（它是底座），其余统一用 soft 底。不引入第二套图标，
-   也不给每块插件随机配色——颜色只表达「内置 vs 可开关」。 */
-.plugin-icon {
-  width: 40px;
-  height: 40px;
-  flex-shrink: 0;
-  border-radius: var(--radius-md);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--amber-primary-soft);
-  color: var(--amber-text);
-}
-
-.plugin-card[data-group='core'] .plugin-icon {
-  background: var(--amber-primary);
-  color: var(--amber-on-primary);
-}
-
-.plugin-body {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.plugin-name {
-  overflow: hidden;
-  color: var(--text-primary);
-  font-size: var(--fs-base);
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.plugin-desc {
-  color: var(--text-secondary);
-  font-size: var(--fs-xs);
-  line-height: 1.45;
-}
-
-.plugin-core-note,
-.plugin-note {
-  color: var(--text-tertiary);
-  font-size: var(--fs-xs);
-  line-height: 1.45;
-}
-
-.plugin-side {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex-shrink: 0;
-}
-
-.plugin-status {
-  padding: 2px 9px;
-  border-radius: var(--radius-pill);
-  background: var(--bg-subtle);
-  color: var(--text-tertiary);
-  font-size: var(--fs-xs);
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.plugin-status.is-running {
-  background: color-mix(in srgb, var(--success) 12%, transparent);
-  color: var(--success);
-}
-
-.plugin-status.is-error {
-  background: color-mix(in srgb, var(--danger) 12%, transparent);
-  color: var(--danger);
-}
-
-.plugin-switch {
-  min-width: 64px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.plugin-chevron {
-  width: 30px;
-  height: 30px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: none;
-  color: var(--text-tertiary);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition:
-    background var(--dur-hover) var(--ease-out),
-    color var(--dur-hover) var(--ease-out);
-}
-
-.plugin-chevron:hover {
-  background: var(--hover-bg);
-  color: var(--amber-text);
-}
-
-.plugin-chevron-icon {
-  transition: transform var(--dur-hover) var(--ease-out);
-}
-
-.plugin-card.is-open .plugin-chevron-icon {
-  transform: rotate(90deg);
-}
-
-.plugin-detail {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-4) var(--space-4);
-  border-top: 1px solid var(--divider);
-  animation: fade-in var(--dur-in) var(--ease-out);
-}
-
-.plugin-detail-row {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.plugin-detail-label {
-  color: var(--text-secondary);
-  font-size: var(--fs-xs);
-  font-weight: 600;
-}
-
-.plugin-detail-text {
-  margin: 0;
-  color: var(--text-primary);
-  font-size: var(--fs-sm);
-  line-height: 1.55;
-}
-
-.plugin-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.plugin-chip {
-  padding: 3px 10px;
-  border-radius: var(--radius-pill);
-  background: var(--bg-subtle);
-  color: var(--text-secondary);
-  font-size: var(--fs-xs);
-}
-
-.plugin-chip.is-route {
-  font-family: var(--font-mono);
-}
-
-.plugin-error {
-  margin: 0;
-  color: var(--danger);
-  font-size: var(--fs-sm);
-  line-height: 1.55;
-}
-
-.plugins-empty {
-  padding: var(--space-8) var(--space-4);
-  text-align: center;
-  color: var(--text-secondary);
-}
-
-.plugins-empty h3 {
-  margin: 0 0 var(--space-2);
-  color: var(--text-primary);
-  font-size: var(--fs-md);
-}
-
-.plugins-empty p {
-  margin: 0 0 var(--space-3);
-  font-size: var(--fs-sm);
-}
-
-.plugins-unsupported {
-  padding: var(--space-6) var(--space-2);
-}
-
 /* 右栏待办区：插件关闭时的出口。此前只写「去我的页」让用户自己找回路径，
    现在原地给一个按钮。 */
 .todo-plugin-off {
@@ -1973,16 +1803,6 @@
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
-}
-
-@media (max-width: 720px) {
-  .plugins-header {
-    flex-wrap: wrap;
-  }
-
-  .plugins-search {
-    width: 100%;
-  }
 }
 
 /* 音色不可用：说明与安装卡都贴在音色行下面，不靠一次性 toast。 */
@@ -2054,10 +1874,62 @@
    这一页的界面上不许出现「配置」「工作流」这类词：用户要做的只有两件事——说一句话、
    点几下选项。所以输入框、选项胶囊、方案正文三样东西就够了，别的都不画。 */
 
+/* 整页是一行：左栏历史 + 主列 flow，作为一个整体在视口里居中。
+   此前整页就是一根 760px 的居中单列，历史藏在按钮后的弹层里；现在左栏常驻，
+   主列继承原来的 760px 阅读宽。首跑零历史时不画左栏，主列靠 margin auto 独自居中。 */
 .vibe-page {
-  max-width: 760px;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-6);
+  max-width: 1080px;
   margin: 0 auto;
   padding: var(--space-6) var(--space-5) var(--space-8);
+}
+
+.vibe-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 760px;
+  margin-inline: auto;
+  /* 切历史条目（主列按 session.id 重建）时的进场补间：与聊天页 chat-swap 同口径。
+     reduced-motion 由 styles.css 的全局 `* { animation-duration: 1ms }` 自动接管。 */
+  animation: vibe-swap var(--dur-macro) var(--ease-out);
+}
+
+@keyframes vibe-swap {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* 左栏跟着页面滚到顶就钉住（sticky），长任务列表在栏内自己滚——表头「任务历史」不跟着走。 */
+.vibe-rail {
+  flex: 0 0 240px;
+  align-self: flex-start;
+  position: sticky;
+  top: var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.vibe-rail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.vibe-rail-title {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.vibe-rail-empty {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  line-height: 1.6;
 }
 
 .vibe-hero { padding-top: var(--space-4); }
@@ -2189,11 +2061,12 @@
 .vibe-squad-panel {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-2) var(--space-4);
-  margin: 0 0 var(--space-4);
-  padding: var(--space-3) var(--space-4);
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2) var(--space-3);
   border: 1px solid var(--edge);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   background: var(--bg-surface);
 }
 
@@ -2208,20 +2081,21 @@
 .vibe-squad-row.is-speaking .vibe-squad-name { color: var(--text-primary); font-weight: 600; }
 .vibe-squad-row.is-speaking .vibe-squad-state { color: var(--amber-text); }
 
+/* 名字是一枚真按钮（点它去单聊），不再画成常驻下划线的超链接——下划线观感与
+   「这是个可点的控件」打架；hover 给底色 + 琥珀，affordance 更准、也更安静。 */
 .vibe-squad-name {
-  padding: 0;
+  padding: 2px var(--space-1);
   border: none;
+  border-radius: var(--radius-sm);
   background: none;
   color: var(--text-secondary);
   font: inherit;
   font-size: var(--fs-sm);
-  text-decoration: underline;
-  text-decoration-color: color-mix(in srgb, var(--amber-text) 40%, transparent);
-  text-underline-offset: 2px;
   cursor: pointer;
+  transition: background var(--dur-hover) var(--ease-out), color var(--dur-hover) var(--ease-out);
 }
-.vibe-squad-name:disabled { cursor: default; text-decoration: none; }
-.vibe-squad-name:hover:not(:disabled) { color: var(--amber-text); text-decoration-color: var(--amber-text); }
+.vibe-squad-name:disabled { cursor: default; }
+.vibe-squad-name:hover:not(:disabled) { color: var(--amber-text); background: var(--hover-bg); }
 
 .vibe-squad-state { color: var(--text-tertiary); font-size: var(--fs-xs); }
 
@@ -2251,12 +2125,14 @@
    就是一支队伍在接力干活，它该长得像一段对话。气泡直接复用聊天页那套（同一个
    组件），RyVibe 与聊天页因此不会是两副面孔。 */
 .vibe-stream { display: flex; flex-direction: column; gap: var(--space-2); }
-.vibe-stream-section { margin-top: var(--space-5); }
+/* 流式段是连续对话的一部分，比普通段挨得更近。复合选择器压过下面 .vibe-section
+   的 margin（同特异性时后者居后会赢），不靠源码顺序碰运气。 */
+.vibe-section.vibe-stream-section { margin-top: var(--space-4); }
 
 /* 「小队问过 + 你答过」这一对：问题与回答挨着，中间不留大空。 */
 .vibe-asked-pair { display: flex; flex-direction: column; gap: var(--space-1); }
 
-.vibe-section { margin-top: var(--space-6); }
+.vibe-section { margin-top: var(--space-5); }
 
 .vibe-section-title {
   display: flex;
@@ -2309,6 +2185,8 @@
   color: var(--text-primary);
   font-family: inherit;
   font-size: var(--fs-base);
+  line-height: 1.5;
+  resize: vertical;
 }
 
 .vibe-own-answer::placeholder { color: var(--text-tertiary); }
@@ -2345,13 +2223,34 @@
     color var(--dur-hover) var(--ease-out), transform var(--dur-press) var(--ease-spring);
 }
 
-/* 选中的那一项：左边一道琥珀竖条 + 琥珀底——两处信号，不只靠颜色深浅。 */
+/* 选中的那一项：radio 圆点实心 + 琥珀底——离散选中标记交给圆点，不只靠颜色深浅。 */
 .vibe-option.is-chosen {
   border-color: var(--amber-primary);
   background: var(--amber-primary-soft);
   color: var(--amber-text);
   font-weight: 600;
-  box-shadow: inset 3px 0 0 var(--amber-primary);
+}
+
+/* radio 圆点：未选=空心环，选中=琥珀环 + 实心点。纯 CSS 绘制（空 span），
+   不引入图标资产，也不往按钮里塞文字（选项 textContent 仍只是选项本身）。 */
+.vibe-option-radio {
+  flex: none;
+  position: relative;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-pill);
+  border: 2px solid var(--edge);
+  background: var(--bg-elevated);
+}
+.vibe-option.is-chosen .vibe-option-radio {
+  border-color: var(--amber-primary);
+}
+.vibe-option.is-chosen .vibe-option-radio::after {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--amber-primary);
 }
 
 .vibe-option:hover:not(:disabled) {
@@ -2404,30 +2303,97 @@
 
 /* 等待期的进度：小队开工到出方案之间可能有一两分钟，空转圈最容易让人放弃。 */
 .vibe-progress { margin-top: var(--space-4); }
-.vibe-progress-bar {
-  height: 2px;
-  overflow: hidden;
-  border-radius: var(--radius-pill);
-  background: var(--bg-subtle);
-}
-.vibe-progress-bar span {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--amber-primary);
-  transition: width var(--dur-in) var(--ease-out);
-}
+
+/* 五节点 stepper：节点 + 连接线取代「进度线 + 一排文字」。done=success 勾 /
+   current=琥珀环 / todo=灰点；连接线随走过的段染琥珀。节点纯状态指示，不做按钮。 */
 .vibe-steps {
   display: flex;
-  gap: var(--space-4);
-  margin: var(--space-2) 0 0;
+  margin: 0;
   padding: 0;
   list-style: none;
+}
+.vibe-step {
+  flex: 1;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+}
+/* 连接线：从上一节点中心拉到本节点中心（border-box 下节点 20px，中心 10px）。
+   ::before 是灰底轨道，::after 是琥珀进度——scaleX 0→1 从左（上一节点）向右填充，
+   走过的段「流」过来而不是瞬染（此前 done/active 直接换 background，进度是瞬切）。
+   transform-origin 取 left：线的左缘正是上一节点中心，进度朝本节点方向长。 */
+.vibe-step:not(:first-child)::before {
+  content: '';
+  position: absolute;
+  top: 9px;
+  right: 50%;
+  width: 100%;
+  height: 2px;
+  background: var(--divider);
+}
+.vibe-step:not(:first-child)::after {
+  content: '';
+  position: absolute;
+  top: 9px;
+  right: 50%;
+  width: 100%;
+  height: 2px;
+  background: var(--amber-primary);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform var(--dur-macro) var(--ease-out);
+}
+.vibe-step.is-done:not(:first-child)::after,
+.vibe-step.is-active:not(:first-child)::after {
+  transform: scaleX(1);
+}
+.vibe-step-node {
+  position: relative;
+  /* 节点压在本格连接线（::before）之上：只是局部抬一层，不是全局浮层，
+     沿用 styles.css 那套「calc(--z-sticky - 1)」的本地抬升口径，不写裸数字。 */
+  z-index: calc(var(--z-sticky) - 1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-pill);
+  border: 2px solid var(--divider);
+  background: var(--bg-elevated);
+  color: var(--text-tertiary);
+  /* 节点状态随进度平滑过渡（todo→active→done），与连接线填充同一拍，不瞬切。 */
+  transition:
+    border-color var(--dur-in) var(--ease-out),
+    background var(--dur-in) var(--ease-out),
+    color var(--dur-in) var(--ease-out),
+    box-shadow var(--dur-in) var(--ease-out);
+}
+.vibe-step.is-done .vibe-step-node {
+  border-color: var(--success);
+  color: var(--success);
+}
+/* 当前步：琥珀环（纯 spread ring，不算 elevation，与头像身份环同口径）。 */
+.vibe-step.is-active .vibe-step-node {
+  border-color: var(--amber-primary);
+  background: var(--amber-primary-soft);
+  color: var(--amber-text);
+  box-shadow: 0 0 0 3px var(--amber-primary-soft);
+}
+.vibe-step-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: currentColor;
+}
+.vibe-step-label {
   font-size: var(--fs-xs);
   color: var(--text-tertiary);
+  transition: color var(--dur-in) var(--ease-out);
 }
-.vibe-steps li.is-done { color: var(--text-secondary); }
-.vibe-steps li.is-active { color: var(--amber-text); font-weight: 600; }
+.vibe-step.is-done .vibe-step-label { color: var(--text-secondary); }
+.vibe-step.is-active .vibe-step-label { color: var(--amber-text); font-weight: 600; }
 
 /* 失败：必须长得和成功不一样。 */
 .vibe-failed {
@@ -2459,7 +2425,7 @@
   border: 1px solid var(--edge);
   border-radius: var(--radius-lg);
   background: var(--bg-surface);
-  box-shadow: var(--shadow-1);
+  box-shadow: none;
 }
 
 .vibe-project-head {
@@ -2480,29 +2446,60 @@
 
 .vibe-open-folder { flex: none; }
 
-/* 文件列表：一排等宽的小按钮，点一下在下面预览。 */
+/* 交付文件：一列 32px 行（icon16 + 等宽名 + hover 打开角标），点一下在下面预览。
+   比一排小按钮更好扫读，也和右栏产物行、历史左栏同一套「行」语言；连续分隔线让
+   它读起来像一份文件清单，而不是散落一地的 chip。 */
 .vibe-files {
   display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
+  flex-direction: column;
   margin: var(--space-3) 0 0;
   padding: 0;
   list-style: none;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-md);
+  overflow: hidden;
 }
 
+.vibe-files li + li { border-top: 1px solid var(--divider); }
+
 .vibe-file {
-  border: 1px solid var(--edge);
-  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  height: var(--row-h);
+  padding: 0 var(--space-3);
+  border: none;
   background: var(--bg-subtle);
   color: var(--text-primary);
   font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  padding: 4px 9px;
+  font-size: var(--fs-sm);
+  text-align: left;
   cursor: pointer;
   transition: background var(--dur-hover) var(--ease-out);
 }
 
 .vibe-file:hover { background: var(--amber-primary-soft); color: var(--amber-text); }
+/* 容器裁了圆角，焦点环改内缩（与插件/供应商行同一手法），不被裁掉。 */
+.vibe-file:focus-visible { outline-offset: -2px; }
+
+.vibe-file-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 打开角标：占位常在（几何不跳），hover/focus 才显形，扫读时不抢名字。 */
+.vibe-file-open {
+  flex: 0 0 auto;
+  opacity: 0;
+  color: var(--text-tertiary);
+  transition: opacity var(--dur-hover) var(--ease-out);
+}
+.vibe-file:hover .vibe-file-open,
+.vibe-file:focus-visible .vibe-file-open { opacity: 1; color: var(--amber-text); }
 
 .vibe-versions {
   display: flex;
@@ -2650,3 +2647,94 @@
 
 .vibe-task.is-done { color: var(--text-tertiary); }
 .vibe-task.is-done span { text-decoration: line-through; }
+
+/* ---- RyVibe 任务历史（常驻左栏） ----
+   每一条是一轮任务的需求摘要 + 状态短签 + 日期。切回去不是「重说一遍」，而是把那一轮的
+   会话、问题与产出原样接回来。密集行（无边框卡）：左栏只有 240px，卡片 chrome 会把
+   本就紧张横向空间再吃掉一圈；身份交给选中态的琥珀底，行与行靠 2px 间距分开。 */
+.vibe-history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: calc(100vh - 160px);
+  overflow-y: auto;
+}
+
+.vibe-history-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--dur-hover) var(--ease-out), background var(--dur-hover) var(--ease-out);
+}
+
+.vibe-history-item:hover { background: var(--hover-bg); }
+
+.vibe-history-item.is-active {
+  border-color: color-mix(in srgb, var(--amber-text) 34%, transparent);
+  background: var(--amber-primary-soft);
+}
+
+.vibe-history-req {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  font-size: var(--fs-base);
+  font-weight: 500;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.vibe-history-meta { display: flex; align-items: center; gap: var(--space-2); }
+
+.vibe-history-date {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 状态短签：边框与底色都从 currentColor 推导，语义色只换一处（color），双主题自动跟随。
+   不铺彩虹——进行中是中性次级字，等你选才用琥珀把人唤回来，完成/未通过走 success/danger。 */
+.vibe-status-chip {
+  flex: none;
+  padding: 0 var(--space-2);
+  border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  line-height: 1.6;
+}
+
+.vibe-status-chip.is-done { color: var(--success); }
+.vibe-status-chip.is-failed { color: var(--danger); }
+.vibe-status-chip.is-asking { color: var(--amber-text); }
+.vibe-status-chip.is-building { color: var(--text-secondary); }
+
+/* 窄窗（桌面最小 1024）：左栏收一档、间距收一档，把横向空间让给主列的问答卡与交付卡。 */
+@media (max-width: 1199px) {
+  .vibe-page { gap: var(--space-4); }
+  .vibe-rail { flex-basis: 200px; }
+}
+
+/* RyVibe 头部动作在 760px 里会挤：允许换行，状态行与按钮各占一行也不难看。 */
+.vibe-header {
+  flex-wrap: wrap;
+  row-gap: var(--space-2);
+}
+
+.vibe-header-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}

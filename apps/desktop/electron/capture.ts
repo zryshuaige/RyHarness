@@ -18,6 +18,7 @@
  * 的点击，而不是直接改状态——改状态要碰到 React 内部，跨版本就碎。
  */
 
+import { createHash } from 'node:crypto'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import type { Socket } from 'node:net'
@@ -52,7 +53,7 @@ const SETTLE_MS = 1200
  * 只有对着清单数才发现少了一屏。名字是稳定的，顺序不是。
  */
 async function gotoTab(window: BrowserWindow, label: string): Promise<void> {
-  await window.webContents.executeJavaScript(
+  const clicked = await window.webContents.executeJavaScript(
     `(() => {
       const tab = [...document.querySelectorAll('.rail-tab')].find((node) => {
         return (node.textContent ?? '').includes(${JSON.stringify(label)})
@@ -62,9 +63,109 @@ async function gotoTab(window: BrowserWindow, label: string): Promise<void> {
       return true
     })()`,
   )
+  // 找不到页签就**抛错**，不再静默留在原页：此前 gotoTab('插件') 在 rail 上找不到
+  // 「插件」（它是「我的」子页，不是页签），函数照常返回，插件那张实拍其实是个人
+  // 资料页——图上没有任何异常可查。导航失败必须当场炸，不许冒充成功。
+  if (clicked !== true) {
+    throw new Error(`[capture] rail 上没有「${label}」页签——页签清单变了，截图场景要跟着改`)
+  }
   await new Promise((resolve) => {
     return setTimeout(resolve, SETTLE_MS)
   })
+}
+
+/** 「我的」子页切换的落定时间：子页是 CSS 显隐切换，数据在页挂载时已读回，不必等整页过渡。 */
+const SECTION_SETTLE_MS = 500
+
+/**
+ * 按**名字**切到「我的」页的某个子页（点 `.me-nav-item`，不是 rail 页签）。
+ *
+ * 插件、模型供应商、用量这些都不是 rail 页签，是「我的」设置 Hub 里 `.me-nav` 的九项
+ * 之一（MePage.tsx 的 ME_NAV）。此前用 gotoTab('插件') 去 rail 上找，找不到就静默留在
+ * 「我的」——拍出来的「插件页」其实是个人资料。子页导航必须点二级导航按钮。
+ *
+ * 点完不假设成功：调用方紧接着用 assertInViewport 断言目标内容真的在视口里。
+ */
+async function gotoMeSection(window: BrowserWindow, label: string): Promise<void> {
+  const clicked = await window.webContents.executeJavaScript(
+    `(() => {
+      const item = [...document.querySelectorAll('.me-nav-item')].find((node) => {
+        return (node.textContent ?? '').includes(${JSON.stringify(label)})
+      })
+      if (!item) return false
+      item.click()
+      return true
+    })()`,
+  )
+  if (clicked !== true) {
+    throw new Error(`[capture] 「我的」二级导航里没有「${label}」——子页清单变了，截图场景要跟着改`)
+  }
+  await new Promise((resolve) => {
+    return setTimeout(resolve, SECTION_SETTLE_MS)
+  })
+}
+
+/**
+ * 拍前断言：目标元素必须真的在视口里，否则**拒拍**。
+ *
+ * 错页截图的教训：被 CSS 藏起来的 section（styles-me.css 把非当前 data-section 整段
+ * display:none）上 scrollIntoView 是空操作，querySelector 照样找得到节点，capturePage
+ * 照样返回一张图——图看着挺正常，只是根本不是那一屏（供应商/插件/暗色欢迎三张重复图
+ * 就是这么来的）。所以拍前量矩形：不在视口 → 滚一次再量 → 几次都不在就抛错，宁可整轮
+ * 失败，也不把错图落盘冒充证据。
+ *
+ * 轮询而非一次：子页内容（插件清单、供应商预设网格）是异步读回来的，第一帧可能还没到。
+ */
+async function assertInViewport(window: BrowserWindow, selector: string, label: string): Promise<void> {
+  const probe = `(() => {
+    const node = document.querySelector(${JSON.stringify(selector)})
+    if (!node) return { found: false }
+    node.scrollIntoView({ block: 'start' })
+    const rect = node.getBoundingClientRect()
+    const visible = rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < window.innerHeight
+    return { found: true, visible, top: Math.round(rect.top), height: Math.round(rect.height) }
+  })()`
+  let last: { found: boolean; visible?: boolean; top?: number; height?: number } = { found: false }
+  for (let attempt = 0; attempt < 6; attempt++) {
+    last = (await window.webContents.executeJavaScript(probe)) as typeof last
+    if (last.found && last.visible === true) {
+      await new Promise((resolve) => {
+        return setTimeout(resolve, 350)
+      })
+      return
+    }
+    await new Promise((resolve) => {
+      return setTimeout(resolve, 400)
+    })
+  }
+  throw new Error(`[capture] ${label}：${selector} 不在视口（${JSON.stringify(last)}）——拒拍错页`)
+}
+
+/**
+ * 拍一张，同时落一次性产物目录（here）与 docs/（入库的正式画面）。
+ *
+ * 顺手做**同轮哈希互异**守卫：这一轮里任何两张 PNG 字节相同就抛错。导航失败（拍错页、
+ * 重复拍同一屏）在拍照当场就被抓住，不用等到评审对着图数才发现少了一屏。浅色与暗色
+ * 像素必然不同，不会误伤；同主题内各页各子页本就该张张不同。
+ */
+async function saveShot(
+  window: BrowserWindow,
+  here: string,
+  docsDir: string,
+  file: string,
+  theme: string,
+  seen: Set<string>,
+): Promise<void> {
+  const image = await window.webContents.capturePage()
+  const png = image.toPNG()
+  const hash = createHash('sha256').update(png).digest('hex')
+  if (seen.has(hash)) {
+    throw new Error(`[capture] ${file} 与本轮先前的一张字节相同（sha256 ${hash.slice(0, 12)}）——导航拍错了页`)
+  }
+  seen.add(hash)
+  writeFileSync(join(here, file), png)
+  writeFileSync(join(docsDir, file), png)
+  console.log(`[capture] saved ${file}（${theme}）`)
 }
 
 export async function runCapture(
@@ -308,23 +409,40 @@ export async function runCapture(
     await runMentionCardShot(window, here)
   }
 
+  // 同轮哈希互异守卫（见 saveShot）：拍错页/重复拍同一屏当场就炸。
+  const seen = new Set<string>()
+  const suffix = (shot: { file: string }, name: string): string => {
+    return shot.file.replace(/\.png$/, `-${name}.png`)
+  }
+
   for (const shot of SHOTS) {
     // 主题存在 localStorage 里；渲染层挂载前的内联脚本会读它，页面一挂载就是对的
     // 主题。改完再重载一次，页面按新主题重画。
+    //
+    // 顺手清掉「上次会话」恢复键、两栏收起态与通讯录视图选择：上一轮点过会话后恢复键
+    // 就写上了，reload 会把它恢复出来——暗色欢迎张因此和聊天张哈希相同（拍的根本不是
+    // 欢迎页）。通讯录视图同理：巡检停在卡片态会带进下一轮，列表张就被拍成卡片张。
+    // 欢迎张必须是欢迎页、两栏默认展开、通讯录默认列表，每轮 reload 前都清一次
+    //（新旧键名都清，见 lib/storage.ts 的改名回落）。
     await window.webContents.executeJavaScript(
-      `localStorage.setItem(${JSON.stringify(THEME_KEY)}, ${JSON.stringify(shot.theme)}); true`,
+      `(() => {
+        localStorage.setItem(${JSON.stringify(THEME_KEY)}, ${JSON.stringify(shot.theme)})
+        localStorage.removeItem('ryharness-active-conversation')
+        localStorage.removeItem('ryagent-active-conversation')
+        localStorage.removeItem('ryharness-list-collapsed')
+        localStorage.removeItem('ryharness-panel-collapsed')
+        localStorage.removeItem('ryharness-contacts-view')
+        return true
+      })()`,
     )
     await window.webContents.reload()
     await new Promise((resolve) => {
       return setTimeout(resolve, 3500)
     })
 
-    // 聊天页（默认页签）与通讯录页各拍一张：暗色下这两处的差别最大
-    // （聊天页有大量气泡与工具行，通讯录页有卡片与头像）。
-    const image = await window.webContents.capturePage()
-    writeFileSync(join(here, shot.file), image.toPNG())
-    writeFileSync(join(docsDir, shot.file), image.toPNG())
-    console.log(`[capture] saved ${shot.file}（${shot.theme}）`)
+    // 欢迎页（默认页签、无选中会话）：先断言真是欢迎页再拍。
+    await assertInViewport(window, '.welcome-greeting', '欢迎页')
+    await saveShot(window, here, docsDir, shot.file, shot.theme, seen)
 
     // 真正有对话的那一屏：气泡、工具行、输入区。
     // 此前 docs 里只有**首页**——这个产品最要紧的一屏（聊起来是什么样）反而没有
@@ -337,97 +455,149 @@ export async function runCapture(
         return true
       })()`,
     )
-    if (opened === true) {
-      await new Promise((resolve) => {
-        return setTimeout(resolve, SETTLE_MS)
-      })
-      const chatImage = await window.webContents.capturePage()
-      const chatFile = shot.file.replace(/\.png$/, '-chat.png')
-      writeFileSync(join(here, chatFile), chatImage.toPNG())
-      writeFileSync(join(docsDir, chatFile), chatImage.toPNG())
-      console.log(`[capture] saved ${chatFile}（${shot.theme}）`)
-    }
-
-    // 切到通讯录：按**名字**点页签，不按下标。
-    // 下标会随页签增减而错位——RyVibe 插进聊天下面那一次，就把「我的」拍成了插件页，
-    // 而图上看不出错（插件页也挺好看的），只有对着清单才发现少了一屏。
-    await gotoTab(window, '通讯录')
-    const contactsImage = await window.webContents.capturePage()
-    const contactsFile = shot.file.replace(/\.png$/, '-contacts.png')
-    writeFileSync(join(here, contactsFile), contactsImage.toPNG())
-    writeFileSync(join(docsDir, contactsFile), contactsImage.toPNG())
-    console.log(`[capture] saved ${contactsFile}（${shot.theme}）`)
-
-    // 切到「我的」页：那张形象定制面板（立体动物 + 毛色 + 花纹）要拍出实图。
-    await gotoTab(window, '我的')
-    const meImage = await window.webContents.capturePage()
-    const meFile = shot.file.replace(/\.png$/, '-me.png')
-    writeFileSync(join(here, meFile), meImage.toPNG())
-    writeFileSync(join(docsDir, meFile), meImage.toPNG())
-    console.log(`[capture] saved ${meFile}（${shot.theme}）`)
-
-    // 模型供应商的「先挑一家」网格：截图模式下没有配 key 的供应商，所以这张图
-    // 拍到的就是用户第一次打开设置页看到的那一屏——厂商由他挑，不替他定。
-    const hasPicker = await window.webContents.executeJavaScript(
-      `(() => {
-        const node = document.querySelector('.provider-picker'); if (!node) return false; node.scrollIntoView({block:'start'}); return true })()`,
-    )
-    if (hasPicker !== true) {
-      const diag = await window.webContents.executeJavaScript(
-        `(() => ({
-          section: document.querySelectorAll('#provider-settings').length,
-          picker: document.querySelectorAll('.provider-picker').length,
-          tiles: document.querySelectorAll('.provider-pick-tile').length,
-          head: (document.querySelector('#provider-settings')?.textContent ?? '').slice(0, 80)
-        }))()`,
-      )
-      console.log('[capture] provider picker 未出现', JSON.stringify(diag))
-    }
-    if (hasPicker === true) {
-      await new Promise((resolve) => {
-        return setTimeout(resolve, SETTLE_MS)
-      })
-      const pickerImage = await window.webContents.capturePage()
-      const pickerFile = shot.file.replace(/\.png$/, '-providers.png')
-      writeFileSync(join(here, pickerFile), pickerImage.toPNG())
-      writeFileSync(join(docsDir, pickerFile), pickerImage.toPNG())
-      console.log(`[capture] saved ${pickerFile}（${shot.theme}）`)
-    }
-
-    // 插件页：它此前一直没有实拍——一个真实的页面却没有画面，评审与文档都缺一块。
-    await gotoTab(window, '插件')
+    if (opened !== true) throw new Error('[capture] 会话列表是空的——演示数据没造出来')
     await new Promise((resolve) => {
       return setTimeout(resolve, SETTLE_MS)
     })
-    const pluginsImage = await window.webContents.capturePage()
-    const pluginsFile = shot.file.replace(/\.png$/, '-plugins.png')
-    writeFileSync(join(here, pluginsFile), pluginsImage.toPNG())
-    writeFileSync(join(docsDir, pluginsFile), pluginsImage.toPNG())
-    console.log(`[capture] saved ${pluginsFile}（${shot.theme}）`)
+    await assertInViewport(window, '.chat-scroll', '聊天页')
+    await saveShot(window, here, docsDir, suffix(shot, 'chat'), shot.theme, seen)
+
+    // 单聊：上面那张拍的是演示群聊，群聊没有「谁在答」的单一模型，输入区的模型读数
+    // 故意不出现（D11 的像素缺口就这么留下的）。点标题找单聊那一行，不按下标。
+    const openedDirect = await window.webContents.executeJavaScript(
+      `(() => {
+        const item = [...document.querySelectorAll('.conversation-item-main')].find((node) => {
+          return (node.textContent ?? '').includes('打字实拍')
+        })
+        if (!item) return false
+        item.click()
+        return true
+      })()`,
+    )
+    if (openedDirect !== true) throw new Error('[capture] 会话列表里找不到单聊「打字实拍」')
+    await new Promise((resolve) => {
+      return setTimeout(resolve, SETTLE_MS)
+    })
+    await assertInViewport(window, '.composer-model', '聊天页·单聊模型读数')
+    await saveShot(window, here, docsDir, suffix(shot, 'chat-direct'), shot.theme, seen)
+
+    // 切到通讯录：按**名字**点页签，不按下标（下标会随页签增减错位）。
+    // 断言落在 .contact-list（默认列表视图）而不是 .contacts-page：视图选择记在
+    // localStorage，上一轮巡检停在卡片态会带进来——只断言页面容器会把卡片张当成
+    // 列表张拍下去（看着挺正常，实则列表视图没了像素证据）。每轮 reload 已清该键。
+    await gotoTab(window, '通讯录')
+    await assertInViewport(window, '.contact-list', '通讯录·列表视图')
+    await saveShot(window, here, docsDir, suffix(shot, 'contacts'), shot.theme, seen)
+
+    // 通讯录双视图（P3）：上面那张是默认列表；再拍卡片网格。切回列表再往下走，
+    // 否则视图选择记在 localStorage 里，下一轮（暗色）开场就是卡片、与这张重复。
+    const pickView = async (label: string): Promise<boolean> => {
+      const clicked = await window.webContents.executeJavaScript(
+        `(() => {
+          const button = [...document.querySelectorAll('.view-toggle button')].find((node) => {
+            return (node.textContent ?? '').trim() === ${JSON.stringify(label)}
+          })
+          if (!button) return false
+          button.click()
+          return true
+        })()`,
+      )
+      if (clicked !== true) throw new Error(`[capture] 通讯录视图切换里找不到「${label}」`)
+      await new Promise((resolve) => {
+        return setTimeout(resolve, 240)
+      })
+      return true
+    }
+    await pickView('卡片')
+    await assertInViewport(window, '.contact-grid', '通讯录·卡片视图')
+    await saveShot(window, here, docsDir, suffix(shot, 'contacts-cards'), shot.theme, seen)
+    await pickView('列表')
+    await assertInViewport(window, '.contact-list', '通讯录·列表视图')
+
+    // 「我的」设置 Hub：九个子页各拍一张。此前只有一张个人资料，插件/供应商/用量等
+    // 子页从来没有像素证据——评审与文档对着空白说话。子页导航点 .me-nav-item，每张
+    // 拍前断言目标 section 真在视口里（被 CSS 藏着的 section 滚不动，必须拒拍）。
+    await gotoTab(window, '我的')
+    await gotoMeSection(window, '个人资料')
+    await assertInViewport(window, '[data-section="profile"]', '我的·个人资料')
+    await saveShot(window, here, docsDir, suffix(shot, 'me'), shot.theme, seen)
+
+    await gotoMeSection(window, '助理')
+    await assertInViewport(window, '[data-section="assistant"]', '我的·助理')
+    await saveShot(window, here, docsDir, suffix(shot, 'me-assistant'), shot.theme, seen)
+
+    // 模型供应商：截图模式下没有配 key 的供应商，拍到的是用户第一次打开设置页那一屏。
+    // 断言锚在 .provider-section-head（section 的第一个元素）而不是 .provider-picker：
+    // 真实导航切子页时 MePage scrollTo({top:0}) 落在 section 顶，页头 + 搜索框 + 「先挑一家」
+    // 网格依次往下排；若锚 picker 再 block:'start'，会把页头与新加的搜索框顶出视口，
+    // 截图就漏掉搜索框这条证据。锚 section 顶 = 用户真正看到的那一屏。
+    // （section 不激活就是 display:none，scrollIntoView 空操作——此前供应商张因此拍成个人资料页。）
+    await gotoMeSection(window, '模型与供应商')
+    await assertInViewport(window, '.provider-section-head', '我的·模型供应商')
+    await saveShot(window, here, docsDir, suffix(shot, 'providers'), shot.theme, seen)
+
+    await gotoMeSection(window, '云成员')
+    await assertInViewport(window, '[data-section="cloud"]', '我的·云成员')
+    await saveShot(window, here, docsDir, suffix(shot, 'me-cloud'), shot.theme, seen)
+
+    await gotoMeSection(window, '工作区与数据')
+    // 先真备份一份再拍：备份清单（P4 把「最近 10 份留在这里」真的列出来）要有像素
+    // 证据，空态截图说服力不够。点「立即备份」→ 等清单里出现一行（POST 落盘 + GET
+    // 刷新都是本机操作，轮询等它到）→ 再断言 section 顶在视口。数据段不长，备份行
+    // 排在段尾也仍在这一屏里。
+    await window.webContents.executeJavaScript(
+      `(() => {
+        const button = [...document.querySelectorAll('[data-section="data"] button')].find((node) => {
+          return (node.textContent ?? '').trim() === '立即备份'
+        })
+        if (button) button.click()
+      })()`,
+    )
+    for (let attempt = 0; attempt < 12; attempt++) {
+      const ready = await window.webContents.executeJavaScript(
+        `document.querySelectorAll('[data-section="data"] .backup-item').length > 0`,
+      )
+      if (ready === true) break
+      await new Promise((resolve) => {
+        return setTimeout(resolve, 250)
+      })
+    }
+    await assertInViewport(window, '[data-section="data"]', '我的·工作区与数据')
+    await saveShot(window, here, docsDir, suffix(shot, 'me-data'), shot.theme, seen)
+    // 备份触发的 success toast 会 linger 进后续 Me 子页截图；拍完 data 张就清掉，
+    // 让用量/插件/偏好/关于几张是干净的产品证据（toast 反馈本身正确，只是不该串场）。
+    await window.webContents.executeJavaScript(
+      `(() => { for (const node of document.querySelectorAll('.toast-close')) node.click() })()`,
+    )
+
+    await gotoMeSection(window, '用量与记忆')
+    await assertInViewport(window, '[data-section="usage"]', '我的·用量与记忆')
+    await saveShot(window, here, docsDir, suffix(shot, 'me-usage'), shot.theme, seen)
+
+    // 插件子页：点 .me-nav-item 会切到内嵌的 PluginsPage（App 级 settingsSection='plugins'），
+    // 不是 rail 页签——此前 gotoTab('插件') 找不到页签，插件张拍成了个人资料。
+    // 断言 .plugin-card 真出现（清单异步读回，轮询等它到）。
+    await gotoMeSection(window, '插件与能力')
+    await assertInViewport(window, '.plugin-card', '我的·插件与能力')
+    await saveShot(window, here, docsDir, suffix(shot, 'plugins'), shot.theme, seen)
+
+    await gotoMeSection(window, '偏好')
+    await assertInViewport(window, '[data-section="preferences"]', '我的·偏好')
+    await saveShot(window, here, docsDir, suffix(shot, 'me-preferences'), shot.theme, seen)
+
+    await gotoMeSection(window, '关于')
+    await assertInViewport(window, '[data-section="about"]', '我的·关于')
+    await saveShot(window, here, docsDir, suffix(shot, 'me-about'), shot.theme, seen)
 
     // RyVibe：独立页面的样子（首屏就是一句话 + 一个开始）。
     await gotoTab(window, 'RyVibe')
-    const vibeImage = await window.webContents.capturePage()
-    const vibeFile = shot.file.replace(/\.png$/, '-vibe.png')
-    writeFileSync(join(here, vibeFile), vibeImage.toPNG())
-    writeFileSync(join(docsDir, vibeFile), vibeImage.toPNG())
-    console.log(`[capture] saved ${vibeFile}（${shot.theme}）`)
+    await assertInViewport(window, '.vibe-page', 'RyVibe')
+    await saveShot(window, here, docsDir, suffix(shot, 'vibe'), shot.theme, seen)
 
     // 项目的落成结果在页面更下面（方案正文之后）：滚到它再拍一张，
     // 否则「项目已落盘 + 任务清单」这两块永远不在任何一张实拍里。
-    const hasProject = await window.webContents.executeJavaScript(
-      `(() => { const node = document.querySelector('.vibe-project'); if (!node) return false; node.scrollIntoView({block:'start'}); return true })()`,
-    )
-    if (hasProject === true) {
-      await new Promise((resolve) => {
-        return setTimeout(resolve, SETTLE_MS)
-      })
-      const projectImage = await window.webContents.capturePage()
-      const projectFile = shot.file.replace(/\.png$/, '-project.png')
-      writeFileSync(join(here, projectFile), projectImage.toPNG())
-      writeFileSync(join(docsDir, projectFile), projectImage.toPNG())
-      console.log(`[capture] saved ${projectFile}（${shot.theme}）`)
-    }
+    await assertInViewport(window, '.vibe-project', 'RyVibe·项目')
+    await saveShot(window, here, docsDir, suffix(shot, 'project'), shot.theme, seen)
 
     // 切回聊天页，下一轮从聊天页开始拍
     await gotoTab(window, '聊天')
@@ -471,6 +641,7 @@ export async function runCapture(
   await runActionBarCheck(window)
   await runPanelPreviewShot(window, here)
   await runScrollHistoryShot(window, here)
+  await runVoiceDistinctCheck(window)
   if (process.env.RYHARNESS_REVIEW === '1') {
     await runInteractionReview(window, here, docsDir)
   }
@@ -732,6 +903,163 @@ async function runScrollHistoryShot(window: BrowserWindow, here: string): Promis
 }
 
 /**
+ * 「换系统音色听起来都一样」的真机回归闸。
+ *
+ * 根因回顾：目录里写死四条 Windows 预设，机器上没装的那几条全部回退到同一条
+ * 默认音色——选哪个都是同一个声音。修法是下拉按 `speechSynthesis.getVoices()`
+ * 动态列本机真实音色（id 形如 `system-local:<名字>`）。
+ *
+ * 这里在真机上钉两件事：
+ * 1. 下拉里的系统音色与本机实际安装**一一对应**（不多列没装的，不少列装了的）；
+ * 2. 选两条不同的音色点试听，`speechSynthesis.speak` 收到的 `utterance.voice`
+ *    真的是两条不同的音色（不是都回退到默认）。
+ *
+ * 朗读本身不出声：speak 被记一笔后立刻 cancel——量的是「交给引擎的是哪条音色」，
+ * 不是音频。本机一条音色都没有的机器（精简 CI）跳过，不算失败。
+ */
+async function runVoiceDistinctCheck(window: BrowserWindow): Promise<void> {
+  await gotoTab(window, '通讯录')
+  const opened = await window.webContents.executeJavaScript(
+    `(() => {
+      const button = [...document.querySelectorAll('button')].find((node) => {
+        return (node.textContent ?? '').trim() === '新建 Agent'
+      })
+      if (!button) return false
+      button.click()
+      return true
+    })()`,
+  )
+  if (opened !== true) {
+    console.warn('[voice] 找不到「新建 Agent」入口')
+    return
+  }
+  await new Promise((resolve) => {
+    return setTimeout(resolve, 900)
+  })
+  const probe = await window.webContents.executeJavaScript(`(async () => {
+    // 音色列表是异步加载的：等它非空（最多 3 秒），空列表的机器后面跳过。
+    let voices = speechSynthesis.getVoices()
+    for (let i = 0; i < 6 && voices.length === 0; i++) {
+      await new Promise((r) => setTimeout(r, 500))
+      voices = speechSynthesis.getVoices()
+    }
+    const trigger = [...document.querySelectorAll('.select-trigger')].find((node) => {
+      return node.getAttribute('aria-label') === '音色'
+    })
+    if (!trigger) return { error: '没有音色下拉' }
+    trigger.click()
+    await new Promise((r) => setTimeout(r, 200))
+    const popover = document.querySelector('.select-popover')
+    if (!popover) return { error: '音色下拉没打开' }
+    const options = [...popover.querySelectorAll('.select-option')].map((node) => {
+      return { value: node.dataset.value ?? '', label: node.querySelector('.select-option-label')?.textContent ?? '' }
+    })
+    // 收起来（Escape 是 Select 认的关法；再点触发器不一定 toggle），后面逐条选。
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    return { voices: voices.map((v) => { return v.name }), options }
+  })()`)
+  const result = probe as {
+    error?: string
+    voices?: string[]
+    options?: { value: string; label: string }[]
+  }
+  if (result.error !== undefined || result.voices === undefined || result.options === undefined) {
+    console.warn('[voice] 没测成：', JSON.stringify(result).slice(0, 200))
+    return
+  }
+  if (result.voices.length === 0) {
+    console.log('[voice] 本机没有系统音色，跳过（不算失败）')
+    return
+  }
+  const localOptions = result.options.filter((option) => {
+    return option.value.startsWith('system-local:')
+  })
+  const listedNames = localOptions.map((option) => {
+    return decodeURIComponent(option.value.slice('system-local:'.length))
+  })
+  const oneToOne =
+    listedNames.length === result.voices.length && result.voices.every((name) => listedNames.includes(name))
+  console.log(
+    `[voice] 本机 ${result.voices.length} 条音色，下拉列出 ${listedNames.length} 条系统音色 · ` +
+      `${oneToOne ? '一一对应 ✓' : '对不上 ✗（多列了没装的 / 少列了装了的）'}`,
+  )
+  if (result.voices.length < 2) {
+    console.log('[voice] 本机只有一条音色，「两条不同」无从比起，跳过')
+    return
+  }
+  // 记下每次 speak 拿到的音色名；不出声（记完立刻 cancel）。
+  await window.webContents.executeJavaScript(`(() => {
+    window.__spokenVoices = []
+    const synth = speechSynthesis
+    const orig = synth.speak.bind(synth)
+    synth.speak = (utterance) => {
+      window.__spokenVoices.push(utterance.voice ? utterance.voice.name : '(default)')
+      orig(utterance)
+      synth.cancel()
+    }
+    return true
+  })()`)
+  const spoken: string[] = []
+  for (const option of localOptions.slice(0, 2)) {
+    const picked = await window.webContents.executeJavaScript(`(async () => {
+      const trigger = [...document.querySelectorAll('.select-trigger')].find((node) => {
+        return node.getAttribute('aria-label') === '音色'
+      })
+      // 弹层可能已经开着（上一条选完它自己会收，但别假设）：开着就直接用。
+      if (!document.querySelector('.select-popover')) {
+        trigger.click()
+        await new Promise((r) => setTimeout(r, 200))
+      }
+      const row = [...document.querySelectorAll('.select-popover .select-option')].find((node) => {
+        return node.dataset.value === ${JSON.stringify(option.value)}
+      })
+      if (!row) return { ok: false, why: 'no-row' }
+      // Select 的选项在 mousedown 上提交（默认行为先到，焦点跑掉后 click 之前就收起了）：只发 click 选不中。
+      row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+      await new Promise((r) => setTimeout(r, 200))
+      const label = trigger.textContent ?? ''
+      const preview = [...document.querySelectorAll('button')].find((node) => {
+        return (node.textContent ?? '').includes('试听')
+      })
+      if (!preview || preview.disabled) return { ok: false, why: 'no-preview', label }
+      preview.click()
+      await new Promise((r) => setTimeout(r, 700))
+      return { ok: true, label }
+    })()`)
+    if (picked?.ok !== true) {
+      console.warn('[voice] 选音色 / 点试听没走通：', option.label, JSON.stringify(picked))
+      return
+    }
+    const last = await window.webContents.executeJavaScript(`window.__spokenVoices[window.__spokenVoices.length - 1]`)
+    console.log(`[voice] 选中「${picked.label}」→ 引擎收到「${String(last)}」`)
+    spoken.push(String(last))
+  }
+  const distinct = spoken.length === 2 && spoken[0] !== spoken[1] && !spoken.includes('(default)')
+  console.log(
+    `[voice] 两次试听交给引擎的音色：${spoken.join(' / ')} · ${distinct ? '是两条不同的音色 ✓' : '还是同一条 ✗'}`,
+  )
+  // 收拾现场：关掉弹窗（改过音色会弹放弃确认），回到聊天页。
+  await window.webContents.executeJavaScript(`(() => {
+    const cancel = [...document.querySelectorAll('.modal-actions button')].find((node) => {
+      return (node.textContent ?? '').trim() === '取消'
+    })
+    if (cancel) cancel.click()
+    return true
+  })()`)
+  await new Promise((resolve) => {
+    return setTimeout(resolve, 300)
+  })
+  await window.webContents.executeJavaScript(`(() => {
+    const discard = [...document.querySelectorAll('button')].find((node) => {
+      return (node.textContent ?? '').trim() === '放弃修改'
+    })
+    if (discard) discard.click()
+    return true
+  })()`)
+  await gotoTab(window, '聊天')
+}
+
+/**
  * 气泡操作条不许压在正文上。
  *
  * 这条是用户点出来的：读长文时那排动作键（朗读/复制/赞/踩/重新生成）横在正文中间，
@@ -942,6 +1270,38 @@ async function runNarrowWindowReview(window: BrowserWindow, here: string): Promi
   await wait(600)
   await shoot('narrow-window-panel.png')
 
+  // 通讯录双视图也要过同一道窄窗：1100 以下列表行收起性格 chip 与亲密度（空间不够时
+  // 优先保名字/模型），卡片网格则从三列降到两列——两张都拍下来当证据。
+  await window.webContents.executeJavaScript(
+    `(() => { const b = document.querySelector('.panel-drawer-btn'); if (b) b.click(); return true })()`,
+  )
+  await gotoTab(window, '通讯录')
+  await wait(900)
+  await shoot('narrow-window-contacts.png')
+  await window.webContents.executeJavaScript(
+    `(() => {
+      const button = [...document.querySelectorAll('.view-toggle button')].find((node) => {
+        return (node.textContent ?? '').trim() === '卡片'
+      })
+      if (!button) return false
+      button.click()
+      return true
+    })()`,
+  )
+  await wait(600)
+  await shoot('narrow-window-contacts-cards.png')
+  await window.webContents.executeJavaScript(
+    `(() => {
+      const button = [...document.querySelectorAll('.view-toggle button')].find((node) => {
+        return (node.textContent ?? '').trim() === '列表'
+      })
+      if (!button) return false
+      button.click()
+      return true
+    })()`,
+  )
+  await wait(300)
+
   window.setBounds(bounds)
   await wait(400)
 }
@@ -996,6 +1356,15 @@ async function runInteractionReview(window: BrowserWindow, here: string, docsDir
   // 选择器要精确到"立体动物"那一种（.avatar-3d[data-view] 只有三视图通道才带
   // 这个属性）：第一张卡可能是品牌橘猫，它没有三张脸，拍了也看不出变化。
   await gotoContacts()
+  // 通讯录默认是列表视图（P3），换脸三视图要在卡片视图上拍：先切过去。
+  await run(`(() => {
+    const button = [...document.querySelectorAll('.view-toggle button')].find((node) => {
+      return (node.textContent ?? '').trim() === '卡片'
+    })
+    if (!button) return false
+    button.click()
+    return true
+  })()`)
   await hoverAt('.contact-card .avatar-3d[data-view]', 0.06)
   await shoot('review-turn-left.png')
   await hoverAt('.contact-card .avatar-3d[data-view]', 0.94)
@@ -1107,23 +1476,42 @@ async function runUiAudit(window: BrowserWindow, here: string): Promise<void> {
     })()`)
   }
 
+  /**
+   * 向导真的在「分步」吗：hidden 属性在不算数——.studio-section 给了 display:flex，
+   * 作者规则会压过 UA 的 [hidden]{display:none}，三步同时露出来（jsdom 只查属性，
+   * 查不出这种 CSS 覆盖，此前起点屏里就混进了人设与模型）。这里量真实可见性：
+   * 去重后恰好只有当前步的面板看得见，否则拒拍。
+   */
+  const assertWizardStep = async (current: number): Promise<void> => {
+    const rows = (await window.webContents.executeJavaScript(
+      `(() => [...document.querySelectorAll('.studio [data-step]')].map((node) => {
+        const rect = node.getBoundingClientRect()
+        return { step: node.getAttribute('data-step'), shown: node.offsetParent !== null && rect.height > 0 }
+      }))()`,
+    )) as Array<{ step: string | null; shown: boolean }>
+    const unique = [...new Set(rows.filter((row) => row.shown).map((row) => row.step))]
+    if (unique.length !== 1 || unique[0] !== String(current)) {
+      throw new Error(
+        `[audit] 向导第 ${String(current)} 步可见面板不对：实际 ${JSON.stringify(unique)}（应只有 "${String(current)}"）`,
+      )
+    }
+  }
+
   await tab('聊天')
   await shoot('audit-chat.png')
   await tab('通讯录')
   await shoot('audit-contacts.png')
-  // 新建 Agent 弹层
+  // 新建 Agent 弹层：P3 起是三步向导（起点→人设→模型与权限）。逐步骤拍，不是
+  // 折叠高级设置——新建模式下根本没有那枚折叠开关，供应商/预算就在第三步里。
   await clickText('新建 Agent')
+  await assertWizardStep(0)
   await shoot('audit-create-agent.png')
-  // 展开高级设置
-  await clickText('高级设置')
-  await shoot('audit-create-agent-advanced.png')
-  // 滚到性格区
-  await run(`(() => {
-    const node = document.querySelector('.persona-fields')
-    if (node) node.scrollIntoView({ block: 'center' })
-    return true
-  })()`)
+  await clickText('下一步')
+  await assertWizardStep(1)
   await shoot('audit-create-agent-persona.png')
+  await clickText('下一步')
+  await assertWizardStep(2)
+  await shoot('audit-create-agent-model.png')
   // 关掉
   await closeModal()
   await tab('我的')
@@ -1143,7 +1531,10 @@ async function runUiAudit(window: BrowserWindow, here: string): Promise<void> {
   // 把指针停在「我的形象」的大预览上：应当抬起爪子打招呼。
   await hoverAt('.animal-studio-preview .avatar-3d', 0.5)
   await shoot('audit-me-wave.png')
-  await tab('插件')
+  // 插件是「我的」子页，不是 rail 页签：点二级导航并断言清单真出现（此前 tab('插件')
+  // 找不到页签，audit-plugins 拍成了个人资料页）。
+  await gotoMeSection(window, '插件与能力')
+  await assertInViewport(window, '.plugin-card', '巡检·插件与能力')
   await shoot('audit-plugins.png')
   // 建群弹层
   await tab('通讯录')

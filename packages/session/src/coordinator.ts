@@ -31,6 +31,7 @@ import type {
   SandboxMode,
   SessionQuota,
   SessionQuotaLimits,
+  ToolContext,
   ToolSource,
 } from '@ryharness/agent'
 import { AgentLoop, createSessionQuota, DEFAULT_HISTORY_BUDGET_TOKENS } from '@ryharness/agent'
@@ -38,6 +39,7 @@ import { brandString } from '@ryharness/brand'
 import type { GroupEvent, GroupHistoryEntry } from '@ryharness/group'
 import { GroupDispatcher, parseMentions } from '@ryharness/group'
 import type {
+  AssistantMessage,
   ContentBlock,
   GenerateOptions,
   LlmRuntime,
@@ -61,6 +63,35 @@ import type { StoredAgent, StoredMessage, StoredUsage } from './types.ts'
  */
 function personaAgent(agent: StoredAgent): AgentDefinition {
   return { ...agent, systemPrompt: composePersonaPrompt(agent.systemPrompt, agent.persona) }
+}
+
+/** 单聊里一位云成员的运行输入。 */
+export interface HostedDirectInput {
+  conversationId: string
+  agentId: string
+  text: string
+  turnIndex: number
+  signal?: AbortSignal
+}
+
+/** 群聊里给一位云成员产事件流的函数。 */
+export type HostedGroupStream = (
+  promptText: string,
+  context: ToolContext,
+  options: { signal?: AbortSignal; onAssistantMessage?: (message: AssistantMessage) => void },
+) => AsyncGenerator<AgentLoopEvent>
+
+/**
+ * 云端成员的运行钩子。
+ *
+ * `@ryharness/session` 不认识 Hosted Agents 的实现（那是宿主的事）；它只需要知道
+ * "这位成员不在本机跑"。宿主把实现注入进来，协调器在 `chatDirect` / `chatGroup`
+ * 里替换掉本地的 AgentLoop——单聊用 {@link HostedTurnRunner.chatDirect}，群聊用
+ * {@link HostedTurnRunner.groupRunner} 产出的流。
+ */
+export interface HostedTurnRunner {
+  chatDirect(input: HostedDirectInput): AsyncGenerator<AgentLoopEvent>
+  groupRunner(input: { conversationId: string; agentId: string; turnIndex: number }): HostedGroupStream | undefined
 }
 
 /** 协调器构造参数。 */
@@ -134,6 +165,13 @@ export interface CoordinatorOptions {
    * 群聊里每个成员走同一条钩子。
    */
   transformToolResult?: AgentLoopOptions['transformToolResult']
+  /**
+   * 云端成员的运行钩子（可选）：宿主注入 Hosted Agents 的实现。
+   *
+   * 不给时，`runtime: 'hosted'` 的成员会被当成配置错误直接报错——宁可说得清楚，
+   * 也不要悄悄退回本地循环（那会把"云同事"跑成一个没有云端工具的本机模型）。
+   */
+  hostedRunner?: HostedTurnRunner
 }
 
 /** 一次性上下文注入：文本 + 送达确认。 */
@@ -636,12 +674,46 @@ export class SessionCoordinator {
     const { store, llm, tools } = this.options
     const stored = store.getAgent(agentId)
     if (stored === undefined) throw new Error(`@ryharness/session: unknown agent "${agentId}"`)
+    const conversation = store.getConversation(conversationId)
+    if (conversation === undefined) throw new Error(`@ryharness/session: unknown conversation "${conversationId}"`)
+    /**
+     * 云成员：本地不跑 AgentLoop，交给宿主注入的 runner。
+     *
+     * 用户消息仍由这里先落库（与本地路径同一时机、同一个 seq 语义）；重放时库里
+     * 已经有那一条，不再追加。云端发言由 runner 自己镜像落库——它才知道
+     * `agent.message` 与 `agent.tool_result` 分别该长成什么样。
+     *
+     * 这一支放在人格/问答注入之前：云成员的 system 在远端，本地的问答注入与
+     * 工作法都送不过去，拼了只会让"已送达"的记账错位。
+     */
+    if (stored.runtime === 'hosted') {
+      const runner = this.options.hostedRunner
+      if (runner === undefined) {
+        throw new Error(`@ryharness/session: agent "${agentId}" 是云成员，但宿主没有提供 hostedRunner`)
+      }
+      const hostedTurnIndex = options.turnIndex ?? store.nextTurnIndex(conversationId)
+      if (options.replay !== true) {
+        store.appendMessage({
+          conversationId,
+          senderType: 'user',
+          senderId: 'user',
+          contentBlocks: [{ type: 'text', text }],
+          turnIndex: hostedTurnIndex,
+        })
+      }
+      yield* runner.chatDirect({
+        conversationId,
+        agentId,
+        text,
+        turnIndex: hostedTurnIndex,
+        ...(context.signal === undefined ? {} : { signal: context.signal }),
+      })
+      return
+    }
     // 人格在这一刻才拼进系统提示：库里的 systemPrompt 保持"用户写的原话"，
     // 拼出来的版本只在本次调用里用，编辑器预览与实际发送因此永远一致。
     // 问答注入接在人格之后：它是本轮的事实补充，不是 agent 人设的一部分。
     const { agent, commit: commitQuestion } = this.injectTurnContext(personaAgent(stored), conversationId)
-    const conversation = store.getConversation(conversationId)
-    if (conversation === undefined) throw new Error(`@ryharness/session: unknown conversation "${conversationId}"`)
 
     const turnIndex = options.turnIndex ?? store.nextTurnIndex(conversationId)
     const history = this.loadDirectHistory(conversationId, agent)
@@ -859,6 +931,17 @@ export class SessionCoordinator {
     let lastAssistant: StoredMessage | undefined
     /** 本轮真的发言过的成员：亲密度按人给一次，而不是按他说了几句给几次。 */
     const speakers = new Set<string>()
+    /**
+     * 云成员的运行器：只有宿主注入了 hostedRunner 且这位成员确实是云成员时，
+     * 调度器才会用它替换本地的 AgentLoop。返回 undefined 的成员走原路。
+     */
+    const hostedRunner = this.options.hostedRunner
+    const runnerFor =
+      hostedRunner === undefined
+        ? undefined
+        : (member: AgentDefinition) => {
+            return hostedRunner.groupRunner({ conversationId, agentId: member.id, turnIndex })
+          }
     const dispatcher = new GroupDispatcher({
       llm: observeUsage(llm, (call) => {
         usage.add(call)
@@ -866,6 +949,7 @@ export class SessionCoordinator {
       members,
       dispatcherId,
       tools,
+      ...(runnerFor === undefined ? {} : { runnerFor }),
       ...(this.bindMemory(conversationId) === undefined ? {} : { memory: this.bindMemory(conversationId) }),
       ...(this.bindEvolution(conversationId) === undefined ? {} : { evolution: this.bindEvolution(conversationId) }),
       ...(this.options.identity === undefined ? {} : { identity: this.options.identity }),

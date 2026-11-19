@@ -40,6 +40,7 @@ import rawGroup from '../assets/lucide/group.svg?raw'
 import rawMail from '../assets/lucide/mail.svg?raw'
 import rawMoon from '../assets/lucide/moon.svg?raw'
 import rawPanelRight from '../assets/lucide/panel-right.svg?raw'
+import rawPaperclip from '../assets/lucide/paperclip.svg?raw'
 import rawPencil from '../assets/lucide/pencil.svg?raw'
 import rawPlus from '../assets/lucide/plus.svg?raw'
 import rawSearch from '../assets/lucide/search.svg?raw'
@@ -89,6 +90,7 @@ export const ICONS = {
   'chevron-right': bodyOf(rawChevronRight),
   'chevron-left': bodyOf(rawChevronLeft),
   'panel-right': bodyOf(rawPanelRight),
+  paperclip: bodyOf(rawPaperclip),
   copy: bodyOf(rawCopy),
   check: bodyOf(rawCheck),
   file: bodyOf(rawFile),

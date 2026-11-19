@@ -38,6 +38,16 @@ async function postBackup(
   return { status: response.status, body: (await response.json()) as { path?: string; error?: string } }
 }
 
+interface BackupListView {
+  dir: string
+  backups: { name: string; path: string; at: number; size: number }[]
+}
+
+async function getBackups(server: RyHarnessServer): Promise<{ status: number; body: BackupListView }> {
+  const response = await fetch(`${server.url}/api/backups`)
+  return { status: response.status, body: (await response.json()) as BackupListView }
+}
+
 describe('POST /api/backup', () => {
   it('返回的路径真实存在、在 dataDir/backups 内，且是含数据的合法 SQLite', async () => {
     const server = await startServer()
@@ -102,6 +112,56 @@ describe('POST /api/backup', () => {
       ).n
       expect(found).toBe(1)
       db.close()
+    } finally {
+      await server.close()
+    }
+  })
+})
+
+describe('GET /api/backups（只读清单）', () => {
+  it('没备份过时返回空清单与备份目录，而不是 404', async () => {
+    const server = await startServer()
+    try {
+      const { status, body } = await getBackups(server)
+      expect(status).toBe(200)
+      expect(body.dir).toBe(join(server.dataDir, 'backups'))
+      expect(body.backups).toEqual([])
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('列出真实备份：路径存在、大小非零、按时间倒序（最新在上）', async () => {
+    const server = await startServer()
+    try {
+      for (let i = 0; i < 3; i++) {
+        expect((await postBackup(server)).status).toBe(200)
+      }
+      const { status, body } = await getBackups(server)
+      expect(status).toBe(200)
+      expect(body.backups).toHaveLength(3)
+      for (const file of body.backups) {
+        expect(existsSync(file.path)).toBe(true)
+        expect(file.size).toBeGreaterThan(0)
+        expect(file.name).toMatch(/^ryharness-\d{8}-\d{6}(-\d+)?\.db$/)
+      }
+      // 倒序：相邻两份的修改时间非递增（同秒连点 mtime 可能相同，允许相等）。
+      for (let i = 1; i < body.backups.length; i++) {
+        expect(body.backups[i - 1].at).toBeGreaterThanOrEqual(body.backups[i].at)
+      }
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('清单与淘汰口径一致：连打 12 次后只列最近 10 份', async () => {
+    const server = await startServer()
+    try {
+      for (let i = 0; i < 12; i++) {
+        expect((await postBackup(server)).status).toBe(200)
+      }
+      const { body } = await getBackups(server)
+      expect(body.backups).toHaveLength(10)
     } finally {
       await server.close()
     }

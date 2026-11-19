@@ -18,24 +18,34 @@ import { Icon } from './Icon.tsx'
 /** 群成员的进化入口：逐人打开记忆 / 经验手册（面板由注入方持有）。 */
 export function GroupEvolution({
   members,
+  dispatcherAgentId,
   onShowMemories,
   onShowPlaybook,
 }: {
   members: AgentDef[]
+  /** 调度者：名字前一枚皇冠，回答「这个群谁在派活」。 */
+  dispatcherAgentId?: string
   onShowMemories: (agent: AgentDef) => void
   onShowPlaybook: (agent: AgentDef) => void
 }) {
   if (members.length === 0) return <p className="panel-empty">群里还没有成员</p>
   return (
     <>
-      <h4>谁在进化</h4>
+      <h4>成员（{members.length}）</h4>
       <ul className="evolution-list">
         {members.map((member) => (
           <li key={member.id} className="evolution-row">
             <Avatar avatarKey={member.avatar} name={member.name} seed={member.id} size={28} />
             {/* 名字与两个入口上下两行：窄栏里横着排，名字会被两个按钮挤成一条缝。 */}
             <span className="evolution-main">
-              <span className="evolution-name">{member.name}</span>
+              <span className="evolution-name">
+                {member.id === dispatcherAgentId && (
+                  <span className="evolution-crown" role="img" title="本会话的调度者" aria-label="本会话的调度者">
+                    <Icon name="crown" size={14} />
+                  </span>
+                )}
+                {member.name}
+              </span>
               <span className="evolution-actions">
                 <button
                   type="button"

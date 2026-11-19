@@ -217,7 +217,7 @@ Toast、骨架屏、ChatStore 事件折叠、REST/WS 客户端。由**仓库根*
 - `redesign4-01-feedback.png`：消息反馈（agent 气泡 👍/👎，归因进自我进化闭环）。
 - `redesign4-02-contacts.png`：通讯录（SVG 头像卡片 + 模板区）。
 - `redesign4-02-playbook.png`：经验手册（ACE playbook 条目、helpful/harmful 计数）。
-- `redesign4-03-create-agent.png`：模板建 Agent（人设/模型/工具白名单）。
+- `redesign4-03-create-agent.png`：模板建 Agent（人设/模型/权限档位）。
 - `redesign4-04-group.png`：群聊（接力链、成员网格、调度轨迹，根 README 头图取本页）。
 - `capture-contacts.png`：通讯录（**照片级 3D 渲染的动物形象**——球面光照 + 厚度，鼠标移上去会跟着转头）。
 - `capture-chat.png`：**真正有对话的那一屏**（气泡、工具行、输入区）——此前 docs 里只有首页，

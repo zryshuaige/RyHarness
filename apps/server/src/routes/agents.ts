@@ -32,6 +32,11 @@ export interface AgentRoutes {
   tools: ToolRegistry
   /** 能力预设：给这位助理定一版「能用什么」。 */
   presets: PresetRegistry
+  /**
+   * 云成员的人设同步（可选）：改完本地 agent 后把 system 推到远端，生成新版本。
+   * 失败不该让本地编辑回滚——本地已经写进去了，回滚只会让用户以为没保存。
+   */
+  hostedSync?: (agentId: string) => Promise<void>
 }
 
 /**
@@ -331,6 +336,10 @@ export function registerAgentRoutes(router: Router, deps: AgentRoutes): void {
     const merged: AgentDefinition = {
       ...existing,
       ...overrides,
+      // 云成员的 provider / model / tools 由远端决定：本地编辑表单可能带着一套
+      // 本机供应商的值回来（弹出的编辑器并不知道这位跑在云端），照收会把展示与
+      // 真实运行位置写岔。这里收回到雇佣时的那一份。
+      ...(existing.runtime === 'hosted' ? { provider: existing.provider, model: existing.model, tools: [] } : {}),
       id: existing.id,
       isBuiltin: existing.isBuiltin,
     }
@@ -338,20 +347,33 @@ export function registerAgentRoutes(router: Router, deps: AgentRoutes): void {
     if (overrides.name !== undefined) {
       assertNameFree(store, merged.name, existing.id)
     }
-    json(res, 200, {
-      agent: store.upsertAgent({
-        ...merged,
-        // 给了档位就按档位收窄内置工具：档位是「能碰到什么」的承诺，工具清单必须
-        // 与它一致，否则界面上写着「只读」、实际工具箱里还挂着执行命令。
-        ...(merged.permissionPreset === undefined
-          ? {}
-          : { tools: applyPermissionPreset(merged.tools, merged.permissionPreset) }),
-        ...(overrides.persona === undefined ? {} : { persona: { ...existing.persona, ...overrides.persona } }),
-        // 手动改过 provider / model = 用户自己挑了这条路由，标上锁：以后用户再给别家
-        // 配好凭据，内置助理那条「跟着走」的规则就不该把这位的选择改回去。
-        routeLocked: routeLockedAfterEdit(existing, overrides),
-      }),
+    const stored = store.upsertAgent({
+      ...merged,
+      // 给了档位就按档位收窄内置工具：档位是「能碰到什么」的承诺，工具清单必须
+      // 与它一致，否则界面上写着「只读」、实际工具箱里还挂着执行命令。
+      ...(merged.permissionPreset === undefined
+        ? {}
+        : { tools: applyPermissionPreset(merged.tools, merged.permissionPreset) }),
+      ...(overrides.persona === undefined ? {} : { persona: { ...existing.persona, ...overrides.persona } }),
+      // 手动改过 provider / model = 用户自己挑了这条路由，标上锁：以后用户再给别家
+      // 配好凭据，内置助理那条「跟着走」的规则就不该把这位的选择改回去。
+      routeLocked: routeLockedAfterEdit(existing, overrides),
     })
+    /**
+     * 云成员：本地人设改完要把 system 推到远端（生成新版本）。
+     *
+     * 推失败不让本地编辑回滚——本地已经写进去了，回滚只会让用户以为没保存；
+     * 把原因放进回包的 `warning`，界面照常刷新，同时知道"远端还没跟上"。
+     */
+    let warning: string | undefined
+    if (stored.runtime === 'hosted' && deps.hostedSync !== undefined) {
+      try {
+        await deps.hostedSync(stored.id)
+      } catch (error) {
+        warning = `本地已保存，但同步到云端失败：${error instanceof Error ? error.message : String(error)}`
+      }
+    }
+    json(res, 200, { agent: stored, ...(warning === undefined ? {} : { warning }) })
   })
 
   /**

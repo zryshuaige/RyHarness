@@ -29,7 +29,10 @@ export {
   toAdapterConfig,
   writeProvidersConfig,
 } from './config.ts'
+export type { BackupFileView, BackupListView } from './contract/backups.ts'
+export type { ConversationContextView } from './contract/conversations.ts'
 export type { StampedWsEvent, WsEvent } from './events.ts'
+export type { HostedArtifact, HostedEnvironment, HostedRemoteAgent } from './hosted/types.ts'
 export type { AskUserPluginDeps } from './plugins/ask-user.ts'
 export { ASK_USER_PLUGIN_ID, ASK_USER_RESULT, askUserPlugin, createAskUserTool } from './plugins/ask-user.ts'
 export type { QuestionEntry, QuestionStatus } from './plugins/ask-user-store.ts'

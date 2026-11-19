@@ -129,8 +129,8 @@ export function AnimalStudio({
     })
   }
 
-  /** 保存键上的字：说清这一步能不能做、做完会怎样。 */
-  const saveLabel = pending ? '正在读你的形象…' : disabled ? '这个版本不能改形象' : dirty ? '保存形象' : '已保存'
+  /** 保存键上的字：只描述「保存」这个动作能不能做。没改动时不摆按钮，改摆状态徽标（D8）。 */
+  const saveLabel = pending ? '正在读你的形象…' : disabled ? '这个版本不能改形象' : '保存形象'
 
   /** 一句话说清「存着的是哪只」和「挑的是哪只」。 */
   const statusText = pending
@@ -146,7 +146,7 @@ export function AnimalStudio({
       {/* 预览：这一块是主角（大头像 + 名字 + 动作）。挑选器在下面，只是备选。 */}
       <div className="animal-studio-preview">
         <span className="animal-studio-preview-face">
-          <Avatar3D avatarKey={avatar} name="你" seed="you" size={144} tilt action="breathing" />
+          <Avatar3D avatarKey={avatar} name="你" seed="you" size={96} tilt action="breathing" />
           <span className="animal-studio-current">{draftName}</span>
         </span>
         <div className="animal-studio-preview-side">
@@ -154,17 +154,27 @@ export function AnimalStudio({
           <p className="animal-studio-desc">选一只动物当你的形象，它会跟着你走进每一段对话。</p>
           <p className="animal-studio-status">{statusText}</p>
           <div className="animal-studio-actions">
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={disabled || !dirty}
-              onClick={() => {
-                onSave(avatar)
-              }}
-            >
-              {/* 服务端不支持改资料时不能写"已保存"——那是谎报：用户会以为存上了。 */}
-              {saveLabel}
-            </button>
+            {pending || disabled || dirty ? (
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={disabled || pending || !dirty}
+                onClick={() => {
+                  onSave(avatar)
+                }}
+              >
+                {/* 服务端不支持改资料时不能写"已保存"——那是谎报：用户会以为存上了。 */}
+                {saveLabel}
+              </button>
+            ) : (
+              /* D8：没改动时「已保存」是一枚状态徽标（role=status），不是一个点不动的按钮——
+                 状态不该伪装成控件。保存成功后宿主更新 profile.avatar → key 重挂 → 草稿回到
+                 已存的那只 → dirty 转 false，这枚徽标自然出现，就是「存上了」的确认。 */
+              <span className="animal-studio-saved" role="status">
+                <Icon name="check" size={14} />
+                已保存
+              </span>
+            )}
             <button type="button" className="btn" onClick={onPickOther}>
               换别的头像
             </button>

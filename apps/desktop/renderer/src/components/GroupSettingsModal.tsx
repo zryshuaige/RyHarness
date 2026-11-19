@@ -227,7 +227,7 @@ export function GroupSettingsModal({
       </div>
       {/* 信息性说明用灰字（provider-note），红色只留给真的会挡住保存的问题：
           调度员改不了不是错误，只是这一版服务端还没这个字段。 */}
-      <div className="modal-actions">
+      <div className="modal-actions modal-actions-sticky">
         <button
           type="button"
           className="btn"

@@ -159,17 +159,12 @@ describe('送达三态', () => {
 })
 
 describe('agent 色相', () => {
-  /** 从渲染结果里取气泡左边框的色相（内联样式，稳定派生即可，不钉坐标）。 */
+  /** 从渲染结果里取行上内联的 --agent-hue（头像环消费它，稳定派生即可，不钉坐标）。 */
   const hueOf = (html: string): string | undefined => {
-    return /border-left:\s*3px solid\s*(#[0-9a-f]{6})/i.exec(html)?.[1]
+    return /--agent-hue:\s*(#[0-9a-f]{6})/i.exec(html)?.[1]
   }
 
-  /** 发言人名字的内联色（浅色主题那一套）。 */
-  const nameColorOf = (html: string): string | undefined => {
-    return /class="bubble-name" style="color:\s*(#[0-9a-f]{6})"/i.exec(html)?.[1]
-  }
-
-  it('每个 agent 一个稳定色相：边框取图形色、名字取正文色，两套值不相等', () => {
+  it('每个 agent 一个稳定色相，只挂在行上（名字与气泡本身不上色）', () => {
     const ryen = renderToStaticMarkup(
       <MessageBubble message={agentMessage([{ kind: 'text', text: '甲' }])} fileUrl={fileUrl} />,
     )
@@ -194,15 +189,13 @@ describe('agent 色相', () => {
       ),
     ).toBe(hueOf(ryen))
 
-    // 不变量是「同色相、两套值」：边框是 3:1 的图形色（1.4.11），名字是 12px 正文色
-    // （1.4.3，要 4.5:1）。曾经两者同值，断言写成「边框与名字同色」；现在同名同值就是
-    // 回归——把正文色降回 3:1 会让白底气泡上的名字读不清，而这行旧断言照样通过。
-    const nameColor = nameColorOf(ryen)
-    expect(nameColor).toBeDefined()
-    expect(nameColor).not.toBe(hueOf(ryen))
-    // 暗色主题那一套挂在行上的自定义属性里（主题层 !important 接管），也得是另一值。
-    expect(ryen).toMatch(/--agent-hue-text-dark:\s*(#[0-9a-f]{6})/i)
-    expect(ryen).not.toMatch(new RegExp(`--agent-hue-text-dark:\\s*${nameColor}`, 'i'))
+    // 身份色相现在只做「是谁」的头像环：名字回中性 secondary（样式表给，不再内联 color），
+    // 气泡也不再有左 3px 色条。以前两处都吃色相，蓝名字在琥珀底上像超链接，一屏出现三次
+    // 身份色；把它们写回内联样式就是回归。
+    expect(ryen).not.toMatch(/class="bubble-name"[^>]*style="[^"]*color:/i)
+    expect(ryen).not.toContain('border-left')
+    // 旧的暗色正文色相变量已退场：主题不再需要为名字分两套色值。
+    expect(ryen).not.toContain('--agent-hue-text-dark')
   })
 
   it('用户气泡不上色相', () => {
@@ -221,6 +214,7 @@ describe('agent 色相', () => {
       />,
     )
     expect(html).not.toContain('border-left')
+    expect(html).not.toContain('--agent-hue')
   })
 })
 

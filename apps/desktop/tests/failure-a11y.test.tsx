@@ -567,7 +567,7 @@ describe('可访问性：读屏能定位到新增内容与当前所在', () => {
       })
       return Number(tab?.querySelector('.rail-icon svg')?.getAttribute('width') ?? Number.NaN)
     }
-    const widths = ['聊天', '通讯录', '插件', '我的'].map((label) => {
+    const widths = ['聊天', 'RyVibe', '通讯录', '我的'].map((label) => {
       return [label, slotWidth(label)] as const
     })
     for (const [label, width] of widths) {

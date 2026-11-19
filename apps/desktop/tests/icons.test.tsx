@@ -22,6 +22,8 @@ describe('Lucide 图标系统', () => {
       'chevron-right',
       'chevron-left',
       'panel-right',
+      // 输入区附件：回形针
+      'paperclip',
       'copy',
       'check',
       'file',

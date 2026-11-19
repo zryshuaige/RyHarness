@@ -6,7 +6,7 @@
  * - 面板**先显示用户已经存好的那只**（个人资料是异步读回来的，首帧时 profile
  *   还没到，面板不能停在默认猫上）；
  * - 换动物 / 毛色，预览**立刻跟着变**（毛色是 CSS filter 链，GPU 上跑，零资产生成）；
- * - 「保存形象」存的是 `an3d:<种类>:<色相>`，且没改动时按钮是"已保存"态。
+ * - 「保存形象」存的是 `an3d:<种类>:<色相>`，且没改动时「已保存」是状态徽标（D8，不是点不动的按钮）。
  *
  * @module @ryharness/desktop/tests/animal-studio
  */
@@ -100,14 +100,18 @@ describe('定制面板', () => {
     expect(onSave.mock.calls[0]?.[0]).toMatch(/^an3d:[a-z]+:\d+$/)
   })
 
-  it('没改动时按钮是"已保存"且点不动（不让人以为没存上）', () => {
+  it('没改动时「已保存」是状态徽标而不是点不动的按钮（D8：状态不伪装控件）', () => {
     const onSave = vi.fn()
     render({ onSave })
+    const saved = container.querySelector('.animal-studio-saved')
+    expect(saved).not.toBeNull()
+    expect(saved?.getAttribute('role')).toBe('status')
+    expect(saved?.textContent).toContain('已保存')
+    // 没改动时「保存」这个动作不存在：不摆一个点不动的保存键让人以为没存上。
     const save = [...container.querySelectorAll('button')].find((button) => {
-      return button.textContent?.includes('已保存')
-    }) as HTMLButtonElement
-    expect(save).toBeDefined()
-    expect(save.disabled).toBe(true)
+      return button.textContent?.includes('保存形象')
+    })
+    expect(save).toBeUndefined()
   })
 
   it('服务端不支持保存时，保存键是禁用的且说实话（不能写"已保存"）', () => {

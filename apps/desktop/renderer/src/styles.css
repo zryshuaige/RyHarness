@@ -12,12 +12,15 @@
      7. 可达性（focus-visible / prefers-reduced-motion）
 
    维护约定：
-     · 每个选择器只允许一处主规则，杜绝「后者覆盖前者」。
-     · 边缘语言：阴影只表达抬升，描边只表达贴面，两者不互相顶替。白底控件
-       （.bubble-bubble / .btn / .me-row / .welcome-chip / .welcome-recent-item /
-       .chat-input-col）是唯一的叠加例外：纯白面压在白底上时暖棕模糊只有 1.2:1，
-       那 1px --edge 是它唯一的边缘信号，去掉描边等于把控件从页面上擦掉。
-     · 抬升层级只有三档：--shadow-1 控件 / --shadow-2 卡片 / --shadow-3 浮层。
+     · 一个选择器只允许有一个家（跨文件也不许重画）：两份声明按 import 顺序叠在
+       一起时，控件会长成「两半拼起来」的样子，而单看任何一个文件都发现不了。
+       门禁在 tests/design-system.test.tsx「任意两张样式表之间都不重画同一个选择器」。
+     · 边缘语言：页面内的面一律贴面——底色分层 + 1px --edge 描边（或 --ring-edge
+       发丝内环）。白底控件压在白底上时暖棕模糊只有 1.2:1，那根描边是它唯一的
+       边缘信号，去掉等于把控件从页面上擦掉。
+     · 抬升只给浮层与拇指：--shadow-3 菜单/弹窗/轻提示，--shadow-2 输入卡与品牌画，
+       --shadow-1 开关/滑杆/分段拇指与气泡操作条。页面内的卡片、行、按钮不投影——
+       每多一块投影面就多一分「拼装感」。名单钉在「投影只给浮层与拇指」那条门禁里。
      · 琥珀只做填充与指示；一旦当文字用就走 --amber-text（AA 档），语义色
        同理走 --success / --danger / --info，页面上不出现 token 之外的裸色值。
    ============================================================ */
@@ -45,7 +48,9 @@
   --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
   --space-5: 20px; --space-6: 24px; --space-8: 32px;
 
-  /* 圆角梯度：控件 / 卡片 / 大卡 / 药丸（全站只用这 5 档） */
+  /* 圆角梯度 + 角色映射（D6）：xs6=小标签/内嵌件、sm8=控件/输入/菜单项、md12=卡/菜单外框、
+     lg18=气泡/输入卡/模态、xl28=仅模态外层与特大卡、pill=仅 badge/chip/avatar。
+     嵌套至多两层、外层 ≤lg、同心 inner=outer−inset；pill 不再给容器滥用。 */
   --radius-xs: 6px;
   --radius-sm: 8px;
   --radius-md: 12px;
@@ -55,10 +60,13 @@
 
   /* 排版。--fs-xs 是 CJK 可读下限（12px），再小中文笔画会糊成一团 */
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI",
-    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif;
   --font-mono: "JetBrains Mono", "SF Mono", Consolas, monospace;
   --fs-xs: 12px; --fs-sm: 13px; --fs-base: 14px; --fs-body: 15px;
   --fs-md: 16px; --fs-title: 20px; --fs-display: 30px;
+  /* 标题行高：正文 1.45 是给连续阅读的，标题继承它会显得松、层级拉不开。
+     标题短而醒目，收紧到 1.25 更挺括（无单位，下级字号不会被压掉 CJK 字面）。 */
+  --lh-tight: 1.25;
 
   /* 图标尺寸不进 CSS token：Lucide 图标由 <Icon size={} /> 就地定尺寸，
      组件里的尺寸和图标里的是同一个数，token 化只会变成第二个真源。 */
@@ -74,6 +82,32 @@
 
   /* 按压反馈（所有可点元素统一） */
   --press-scale: .97;
+
+  /* 主按钮 = ink（dsh/Linear 纪律）：主动作填近黑/近白，琥珀退居选中/active/unread/
+     用户气泡/focus/品牌。ink 取 --text-primary（浅 #292524 暖近黑、暗 #EAE9E7 近白），
+     字取 --text-inverse；hover 把 ink 往 canvas 方向混一档（浅变亮、暗变暗），与全站
+     「hover 只动一个变量、不用 brightness」同纪律。引用主题 token，翻面自动跟随。 */
+  --ink-primary-btn: var(--text-primary);
+  --ink-primary-btn-hover: color-mix(in srgb, var(--text-primary) 82%, var(--bg-app));
+  --on-ink: var(--text-inverse);
+
+  /* 控件高度三档。写死高度而不是 padding 撑高：padding + 行高算出来的高度会随
+     字号/字体浮动（14px × 1.45 + 16 + 2 = 38.3px），同一排按钮于是高低不齐。
+     32 是正文按钮，28 是行内/密集区，36 是页面主动作。 */
+  --ctl-h: 32px;
+  --ctl-h-sm: 28px;
+  --ctl-h-lg: 36px;
+
+  /* 行高密集档（dsh 32/24）：列表行/披露行/菜单项取 32，更密的标签行取 24。
+     与 --ctl-h 同源思路——写死行高，不让 padding+字号推算出参差。 */
+  --row-h: 32px;
+  --row-h-sm: 24px;
+  /* 头像三档：列表/顶栏 32、卡片/会话行 40、资料卡 64。物件尺寸收口，不再各处各写。 */
+  --avatar-sm: 32px;
+  --avatar-md: 40px;
+  --avatar-lg: 64px;
+  /* 宏动效时长（会话/主题 crossfade、列表 FLIP）：复用 --dur-in 的 220ms 档。 */
+  --dur-macro: var(--dur-in);
 
   /* 滑杆几何。轨道高与拇指直径进 token，是因为两套引擎的伪元素（::-webkit-slider-
      runnable-thumb / ::-moz-range-thumb）要拿同一个数去算居中的 margin-top。控件高度
@@ -110,15 +144,17 @@
   /* 气泡操作条的外置通道宽度，跟消息列一起自适应（cqw = .chat-col 宽度的 1%）。
      通道 = 气泡右侧（用户行是左侧）那块留白：气泡最宽 75%，一侧还占着 48px
      头像与间隙，右侧最多只剩 25% 列宽减 48px。
-     **下限 196px 是按操作条的真实宽度算的**：一条消息上最多同时挂六枚 28px 按钮
-     （朗读、复制、赞、踩、重新生成/编辑、再加分支），加五道 4px 间隙与 8px 边距。
-     此前这里写的是 118px（那是三枚按钮时的数），操作条长到五枚之后通道装不下，
-     整条操作条就压回正文上——截图里那条压在「MiniMax-M3.1-Flash」上面的操作条
-     就是这么来的。上限 320px 只是防止超宽列把操作条甩到天边。
-     列宽不够 976px 时通道放不下它，那条 @container 规则把它挪到气泡下沿。 */
-  --action-gutter: clamp(196px, calc(25cqw - 48px), 320px);
+     **下限 100px 是按内联操作条的真实宽度算的**：一条消息上最多同时挂三枚 28px
+     按钮（停止朗读、复制、更多），加两道 4px 间隙与 8px 边距。低频动作（朗读/赞/踩/
+     编辑重发/重新生成/分支）已收进溢出菜单，不再占内联宽度——三枚对应的数是 100。
+     组件里的 BUBBLE_INLINE_ACTIONS 就是 3，改按钮数必须同步改这里，否则通道短一截
+     又把操作条压回正文（976px 那条旧断点就是六枚按钮时算出来的）。上限 320px 只是
+     防止超宽列把操作条甩到天边。列宽不够 592px 时通道放不下它，那条 @container
+     规则把它挪到气泡下沿。 */
+  --action-gutter: clamp(100px, calc(25cqw - 48px), 320px);
   --panel-banner-h: 64px;   /* 右栏顶部柔光带高度；内容区顶部留白必须同源，否则分隔线与内容错位 */
   --panel-collapsed-w: 44px; /* 右栏收起后留的窄边：宽度归零会把展开键一起裁掉 */
+  --panel-w: 300px;          /* 右栏常驻宽度；300 是资料卡 7 行字段的可读下限 */
   /* 自绘标题栏高度：必须与 electron/main.ts 的 TITLEBAR_H 一致，否则窗口按钮会压住顶栏。
      背景色同样同源——主进程把 titleBarOverlay.color 设成 --bg-app，这里留出的顶条也是它。 */
   --titlebar-h: 40px;
@@ -142,9 +178,12 @@
 }
 
 :root[data-theme='light'] {
-  --bg-app: #FAF7F2;
+  /* 浅色表面梯（D1）：canvas 加深一档暖中性、subtle 再加深，让 app/subtle/surface 三个
+     L* 步肉眼可分——白卡压在 #FAF7F2 上时几乎贴底，「发灰发飘」就是这么来的。白面本身
+     不动，分层交给 canvas 与描边。原生壳标题栏/启动屏底色同源同步（main.ts / index.html）。 */
+  --bg-app: #F5F1E8;
   --bg-surface: #FFFFFF;
-  --bg-subtle: #F4F0E8;
+  --bg-subtle: #EDE7DB;
   --bg-elevated: #FFFFFF;
 
   /* 主色 */
@@ -159,20 +198,25 @@
 
   --bubble-self: #F59E0B;
   --bubble-peer: #FFFFFF;
+  /* agent 身份色相：组件按 senderId 哈希内联到行上，这里只是「没有内联值」时的
+     兜底，同时让 token 定义门禁认得出它。真正的值见 components/avatars 的调色板。 */
+  --agent-hue: var(--text-tertiary);
   --tool-row-bg: var(--bg-app);
 
   --text-primary: #292524;
-  --text-secondary: #736B65;  /* 对 #FAF7F2 ≈4.9:1 */
+  --text-secondary: #6A625B;  /* 对 #F5F1E8 ≈5.2:1、对白底 ≈5.8:1（canvas 加深后同步加深保 AA） */
   /* 第三级文字（占位符、时间戳、次要标签）。仍按正文标准看，AA 4.5:1 */
-  --text-tertiary: #6B635C;
+  --text-tertiary: #5D564F;
   /* 只用于装饰性图标与禁用态：不是可读文本，不承担 AA 承诺 */
   --text-disabled: #A8A29E;
   --text-inverse: #FFFDF8;
 
-  /* 描边语言：结构分隔线 / 组件描边 / 需要更明确的描边。已去棕，改中性。 */
-  --divider: rgba(41, 37, 36, .09);
-  --edge: rgba(41, 37, 36, .10);
-  --edge-strong: rgba(41, 37, 36, .16);
+  /* 描边语言：结构分隔线 / 组件描边 / 需要更明确的描边。已去棕，改中性。
+     D1：alpha 各抬一档（.09/.10/.16 → .12/.16/.26），发丝边在臂距可读；结构线才吃
+     --edge，控件内描边仍走 --ring-edge（它引用 --edge，自动跟随）。 */
+  --divider: rgba(41, 37, 36, .12);
+  --edge: rgba(41, 37, 36, .16);
+  --edge-strong: rgba(41, 37, 36, .26);
 
   /* 阴影 3 级 = 抬升层级 3 级；暗色主题在每级里自带一根发丝内描边。
      浅色档只表达「抬起来一点」：暖棕模糊在纯白上永远画不出边缘（.10 的棕对白底
@@ -191,7 +235,9 @@
   --mention-bg: var(--amber-100);
   --mention-bg-hover: var(--amber-200);
   --mention-fg: var(--amber-800);
-  --hover-bg: rgba(41, 37, 36, .045);
+  --hover-bg: rgba(41, 37, 36, .055);
+  /* 按下态比悬停深一档：同一根 alpha 阶梯（5.5% → 10%，对齐 dsh 6/10 档），不另起色相。 */
+  --active-bg: rgba(41, 37, 36, .10);
   --focus-ring: 0 0 0 3px rgba(245, 158, 11, .28);
   --focus-outline: var(--amber-text);
 
@@ -199,7 +245,7 @@
   --search-hit-bg: var(--amber-100);
   --search-hit-fg: var(--amber-on-primary);
 
-  --skeleton-bg: #EFEAE1;
+  --skeleton-bg: #E7E1D4;
   --skeleton-sheen: rgba(255, 255, 255, .75);
 
   --scrollbar-thumb: rgba(41, 37, 36, .20);
@@ -229,10 +275,6 @@
      琥珀既是环境又是强调，品牌色反而失去对比特权。 */
   --bubble-self: #F59E0B;
   --bubble-peer: #1C1E23;
-  /* 发言人名字在暗色主题下的正文色相（12 支里按 id 哈希取一支，由 MessageBubble 内联
-     传入；此处是「没有内联值」时的兜底）。亮色主题那套由组件直接内联成 color，
-     因为只有它能和组件的其余内联样式同批写入——见 .bubble-name 的注释。 */
-  --agent-hue-text-dark: var(--text-secondary);
   --tool-row-bg: rgba(255, 255, 255, .05);
 
   --text-primary: #EAE9E7;
@@ -242,8 +284,8 @@
   --text-inverse: #16171A;
 
   /* 表面改中性灰阶后，描边也从中性走；暖棕描边叠在暖棕面上就是「泥巴」的配方 */
-  --divider: rgba(255, 255, 255, .07);
-  --edge: rgba(255, 255, 255, .09);
+  --divider: rgba(255, 255, 255, .10);
+  --edge: rgba(255, 255, 255, .12);
   --edge-strong: rgba(255, 255, 255, .16);
 
   /* 抬升层级里的内描边就是暗色的「边缘信号」，与阴影合成同一档 token */
@@ -259,6 +301,7 @@
   --mention-bg-hover: rgba(251, 191, 36, .22);
   --mention-fg: var(--amber-300);
   --hover-bg: rgba(255, 255, 255, .06);
+  --active-bg: rgba(255, 255, 255, .11);
   --focus-ring: 0 0 0 3px rgba(251, 191, 36, .26);
   --focus-outline: var(--amber-400);
 
@@ -327,7 +370,7 @@ input::placeholder, textarea::placeholder { color: var(--text-tertiary); opacity
 *::-webkit-scrollbar-thumb:hover { background-color: var(--scrollbar-thumb-hover); border-width: 2px; }
 
 .app-error { max-width: 480px; margin: 15vh auto; text-align: center; color: var(--text-secondary); }
-.app-error h2 { color: var(--text-primary); font-size: var(--fs-title); }
+.app-error h2 { color: var(--text-primary); font-size: var(--fs-title); line-height: var(--lh-tight); }
 
 /* 渲染期兜底（ErrorBoundary）：子树抛错时这一块接手，替掉整屏空白。
    表面、圆角、阴影、按钮全部取既有 token——兜底层必须看起来就是这套界面的一部分，
@@ -345,7 +388,7 @@ input::placeholder, textarea::placeholder { color: var(--text-tertiary); opacity
 .app-fatal-mark { display: inline-flex; color: var(--amber-text); }
 .app-fatal-title {
   margin: var(--space-3) 0 var(--space-2);
-  color: var(--text-primary); font-size: var(--fs-title);
+  color: var(--text-primary); font-size: var(--fs-title); line-height: var(--lh-tight);
 }
 .app-fatal-reason { margin: 0; color: var(--text-primary); }
 .app-fatal-hint { margin: var(--space-2) 0 0; font-size: var(--fs-sm); }
@@ -373,6 +416,32 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
   -webkit-app-region: drag;
 }
 
+/* 顶条内容层：拖拽由 app-shell::before 提供，这一层只摆搜索丸，自身不拦点击
+   （pointer-events:none），按钮单独开点击并退出拖拽区（no-drag）。原生窗口按钮
+   （titleBarOverlay）浮在右上角，右侧让出 150px 免得搜索丸压到它们下面。 */
+.titlebar {
+  position: absolute; top: 0; left: 0; right: 0; height: var(--titlebar-h);
+  display: flex; align-items: center; justify-content: center;
+  padding-right: 150px;
+  pointer-events: none;
+  z-index: var(--z-sticky);
+}
+.titlebar-search {
+  -webkit-app-region: no-drag;
+  pointer-events: auto;
+  display: inline-flex; align-items: center; gap: var(--space-2);
+  height: 26px; padding: 0 var(--space-3);
+  border: 1px solid var(--edge); border-radius: var(--radius-pill);
+  background: var(--bg-surface); color: var(--text-secondary);
+  font-size: var(--fs-sm); cursor: pointer;
+  transition: border-color var(--dur-hover) var(--ease-out), background var(--dur-hover) var(--ease-out), color var(--dur-hover) var(--ease-out);
+}
+.titlebar-search:hover { border-color: var(--edge-strong); background: var(--hover-bg); color: var(--text-primary); }
+.titlebar-search-kbd {
+  font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-tertiary);
+  padding: 0 4px; border-radius: var(--radius-xs); background: var(--bg-subtle);
+}
+
 .rail {
   width: 72px; flex-shrink: 0; background: var(--bg-surface);
   /* rail 与右侧列表栏同为 --bg-surface，没有这条发丝线就是一条浮在白底上的白条 */
@@ -388,6 +457,10 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
   border-radius: var(--cat-plate-radius); overflow: hidden;
 }
 .rail-logo svg { display: block; width: 100%; height: 100%; }
+/* 栏顶品牌猫也认人：指针压上去轻轻点头应一声（与通讯录头像同一套 avatar-greet）。
+   常驻 chrome 里的品牌主角不该只是一张静图。动整个底板（而非内部 img）避免 overflow
+   裁切点头幅度；transform-origin 取底边中心同 greeting 约定。reduced-motion 全局 1ms 接管。 */
+.rail-logo:hover { animation: avatar-greet 720ms var(--ease-out) 1; transform-origin: center bottom; }
 
 .rail-tab {
   position: relative; width: 56px; padding: var(--space-2) 0 var(--space-1);
@@ -487,9 +560,10 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
 /* 新对话按钮：列表头部第一行，右边让出折叠键的绝对定位区（44px = 30px 键 + 两侧留白）。
    与托盘「新对话」/Ctrl+N 走同一事件（App.tsx 的 NEW_CHAT_EVENT），三种入口一个行为。 */
 .list-new-chat {
-  display: inline-flex; align-items: center; gap: 6px;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  width: calc(100% - 44px); height: var(--row-h);
   margin: 0 44px var(--space-2) 0;
-  padding: 5px 10px; border: 1px solid var(--edge); border-radius: var(--radius-sm);
+  padding: 0 var(--space-3); border: 1px solid var(--edge); border-radius: var(--radius-sm);
   background: transparent; color: var(--text-secondary); cursor: pointer;
   font-size: var(--fs-sm); line-height: 1.4;
   transition: background var(--dur-hover) var(--ease-out), color var(--dur-hover) var(--ease-out), border-color var(--dur-hover) var(--ease-out);
@@ -518,7 +592,7 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
 .conversation-item {
   position: relative;
   display: flex; gap: var(--space-3); align-items: center;
-  width: 100%; min-height: 64px; padding: var(--space-2) var(--space-3);
+  width: 100%; min-height: 56px; padding: var(--space-2) var(--space-3);
   border: none; background: none; text-align: left;
   font-family: inherit; font-size: inherit; color: var(--text-primary);
   border-radius: var(--radius-md);
@@ -596,11 +670,28 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
 .conversation-item-menu {
   position: absolute; top: calc(100% - var(--space-1)); right: var(--space-2);
   z-index: var(--z-popover);
-  display: flex; gap: var(--space-1);
-  padding: var(--space-1);
+  display: flex; flex-direction: column; gap: 2px;
+  width: 200px; max-width: calc(100% - 16px); padding: var(--space-1);
   background: var(--bg-elevated); border-radius: var(--radius-md);
   box-shadow: var(--shadow-3);
   animation: menu-in var(--dur-in) var(--ease-spring);
+}
+/* 竖向菜单项：32px 行高 + 不换行。此前是横排 5 枚 btn-mini，在 200px 列表里
+   每枚被压到 46/32px，文字需要 32px 行高、控件只有 26px——标签纵向被裁。
+   竖向之后菜单宽度固定 200px，最小窗口也不再碰运气。 */
+.conversation-item-menu .menu-item {
+  display: flex; align-items: center;
+  width: 100%; min-height: 32px; padding: 0 10px;
+  border: none; border-radius: var(--radius-sm);
+  background: none; color: var(--text-primary);
+  font: inherit; font-size: var(--fs-sm); text-align: left;
+  white-space: nowrap; cursor: pointer;
+  transition: background var(--dur-hover) var(--ease-out), color var(--dur-hover) var(--ease-out);
+}
+.conversation-item-menu .menu-item:hover { background: var(--hover-bg); }
+.conversation-item-menu .menu-item.is-danger { color: var(--danger); }
+.conversation-item-menu .menu-item.is-danger:hover {
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
 }
 
 /* 行内状态徽标：置顶走琥珀（与 .badge 同档），已静音是中性灰——静音不该比置顶更显眼。 */
@@ -785,8 +876,10 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
   background: var(--bg-surface); border-bottom: 1px solid var(--divider);
 }
 .chat-header-info { display: flex; flex-direction: column; min-width: 0; }
-.chat-header-info strong { font-size: var(--fs-md); letter-spacing: -0.01em; }
-.chat-header-info small { color: var(--text-secondary); font-size: var(--fs-xs); }
+/* 会话名与会话列表名同档（fs-md/600）：strong 默认 700 过重，显式收到 600，
+   与全站「标题 600 / display 700」字重阶一致。副标题（群聊·成员）是常读 chrome，13 比 12 稳。 */
+.chat-header-info strong { font-size: var(--fs-md); font-weight: 600; letter-spacing: -0.01em; }
+.chat-header-info small { color: var(--text-secondary); font-size: var(--fs-sm); }
 /* 窄窗抽屉的入口：宽窗时右栏就在旁边，这枚按钮不出现（壳不传回调）。 */
 .panel-drawer-btn {
   margin-left: auto;
@@ -799,6 +892,12 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
 /* 亲密度徽标与这枚按钮抢同一行的右端：徽标在左、按钮在右，各让一步。 */
 .chat-header .chip + .panel-drawer-btn { margin-left: var(--space-2); }
 .chat-task-btn + .panel-drawer-btn { margin-left: 0; }
+/* 顶栏右侧动作组：徽标/任务/会话菜单/信息板同属「关于这个会话的次级动作」，排成一簇
+   推到行尾。此前四枚各自 margin-left:auto，剩余空白被摊到按钮之间——截图里 sparkles、
+   …、面板键彼此隔了半个屏幕，看着像三组不相干的控件。 */
+.chat-header-actions { margin-left: auto; display: flex; align-items: center; gap: var(--space-1); }
+.chat-header-actions .panel-drawer-btn { margin-left: 0; }
+.chat-header-actions .chip { flex-shrink: 0; }
 
 /* 消息列与输入卡共用的左右留白。两者必须取同一个 --gutter-x：一边 32px 一边 20px
    时，未触到 max-width 的窄窗上整列差出 12px，输入卡还比消息列宽 24px。 */
@@ -842,6 +941,17 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
 .bubble-row.from-user { flex-direction: row-reverse; }
 .bubble-row.tight { margin-top: 2px; }
 .bubble-row.first-of-group { margin-top: var(--space-3); }
+/* 身份色相（--agent-hue，MessageBubble 内联在行上）只画头像环：以前它还染名字文字与
+   气泡左 3px 条，一个 agent 在一屏里出现三次身份色，蓝名字又像超链接。
+   零偏移 box-shadow 是「环」不是层级（门禁明确 zero-offset ring 不算 elevation）；
+   阴影不占位，2px 环不会推动气泡。inline-flex + align-self 让 gutter 收缩到 40px 头像，
+   border-radius 50% 才是正圆——默认 stretch 会把盒拉到整行高，环就成了竖椭圆。
+   `:not(:empty)` 是必须的：同组后续消息的 gutter 是空的（头像只画组首那条），
+   空盒上挂环会留下一个 4px 的杂点。 */
+.bubble-row.from-agent .bubble-avatar-gutter:not(:empty) {
+  display: inline-flex; align-self: flex-start; border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--agent-hue);
+}
 .bubble { max-width: 75%; position: relative; min-width: 0; }
 
 /* 对话方气泡是白面：--bubble-peer 压在聊天底上只有 1.1:1，暖棕阴影量不出边。
@@ -851,15 +961,15 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
   padding: 10px 14px;
   border-radius: var(--radius-lg) var(--radius-lg) var(--radius-lg) var(--radius-xs);
   background: var(--bubble-peer); border: 1px solid var(--edge);
-  /* hover 只改描边与阴影档位：消息是阅读对象，位移会让文字抖动（流式期尤其明显） */
-  box-shadow: var(--shadow-1);
-  transition: border-color var(--dur-hover) var(--ease-out), box-shadow var(--dur-hover) var(--ease-out);
+  /* 消息是阅读对象：贴面，不抬升。hover 只加深描边——位移会让文字抖动（流式期尤其明显） */
+  box-shadow: none;
+  transition: border-color var(--dur-hover) var(--ease-out);
 }
-.bubble-row:hover .bubble-bubble { border-color: var(--edge-strong); box-shadow: var(--shadow-2); }
+.bubble-row:hover .bubble-bubble { border-color: var(--edge-strong); }
 .bubble-row.from-user .bubble-bubble {
   background: var(--bubble-self); border: none; color: var(--amber-on-primary);
   border-radius: var(--radius-lg) var(--radius-lg) var(--radius-xs) var(--radius-lg);
-  box-shadow: var(--shadow-2);
+  box-shadow: none;
   animation: send-confirm 340ms var(--ease-spring);
 }
 .bubble-row.from-agent .bubble-bubble { border-bottom-left-radius: var(--radius-xs); }
@@ -872,14 +982,12 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
   color: var(--amber-on-primary);
 }
 
-/* 发言人名字是 12px 正文，走 1.4.3 的 4.5:1；气泡左边框是图形，走 1.4.11 的 3:1。
-   同一色相但不是一个值：亮底要 L ≤ 0.183、暗底要 L ≥ 0.203，没有交集，所以正文色按主题
-   分两套。浅色那套由 MessageBubble 内联成 color（和组件其余内联样式同批写入），暗色那套
-   以 --agent-hue-text-dark 传进来、由主题层接管——这里刻意用 !important 压过组件内联色，
-   否则暗色主题下内联的浅色值会赢，主题翻转会失效。
+/* 发言人名字回中性正文色：以前它吃 12 支身份色里的一支（浅色内联、暗色
+   --agent-hue-text-dark 接管），蓝名字在暖琥珀底上看着像超链接，一个 agent 在一屏里
+   又出现三次身份色。现在身份只由行上的 --agent-hue 喂头像环（见下方 .bubble-avatar-gutter），
+   名字就是 12px secondary——对比度问题随色相一起消失，不再需要主题分两套色值。
    实测与派生脚本见 components/avatars/avatars.tsx 与 tests/avatars.test.tsx。 */
 .bubble-name { font-size: var(--fs-xs); color: var(--text-secondary); margin: 0 0 4px 2px; }
-[data-theme='dark'] .bubble-name { color: var(--agent-hue-text-dark) !important; }
 .bubble-text { margin: 0; white-space: pre-wrap; word-break: break-word; font-size: var(--fs-body); line-height: 1.65; }
 .bubble-text + .bubble-text, .tool-row + .bubble-text, .bubble-text + .tool-row { margin-top: 6px; }
 .bubble-text a, .bubble-md a { color: var(--amber-text); text-decoration: underline; text-underline-offset: 2px; }
@@ -965,14 +1073,14 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
    soft；.bubble-bubble 的基线规则一个字都不动——动基线会把整列对话的底色一起带偏。 */
 .is-search-hit .bubble-bubble { border-color: var(--amber-primary); background: var(--amber-primary-soft); }
 
-/* 窄列（消息列 < 976px）：两侧实在排不下这条通道，操作条改挂在气泡下沿内侧、
+/* 窄列（消息列 < 592px）：两侧实在排不下这条通道，操作条改挂在气泡下沿内侧、
    并且常显。窄栏里没有 hover 的余裕（触屏根本没有），藏起来的按钮等于不存在；
    挂在下沿而不是压在气泡里面，正文一个字都不会被盖住。
-   **976px 是算出来的**：通道 = 25% 列宽 − 48px，要装下 196px 的操作条，
-   列宽至少得是 976px。装不下就走这一段。
+   **592px 是算出来的**：通道 = 25% 列宽 − 48px，要装下 100px 的内联操作条
+   （三枚按钮），列宽至少得是 592px。装不下就走这一段。
    选择器都带 .chat-col 前缀：与上面 .bubble-row:hover 那条同为 (0,3,0)，
    只能靠源码顺序取胜，否则 hover 时操作条会突然跳回垂直居中。 */
-@container (max-width: 975px) {
+@container (max-width: 591px) {
   .chat-col .bubble { margin-bottom: var(--space-8); }
   .chat-col .from-agent .bubble-actions,
   .chat-col .from-user .bubble-actions {
@@ -991,6 +1099,31 @@ button:active:not(:disabled) { transform: scale(var(--press-scale)); }
 }
 .bubble-action:hover { color: var(--amber-text); background: var(--amber-primary-soft); }
 .bubble-action:active { transform: scale(.9); }
+
+/* 气泡溢出菜单（D5）：低频动作从常显操作条里收进来。它锚在「更多」键下方，浮在正文之上，
+   因此必须自带面与边（浮层才用 shadow-2，气泡本身仍是贴面）。
+   `[hidden]` 要显式写回 display:none——作者规则一旦给了 display:flex，UA 的
+   [hidden]{display:none} 就被压过去了，菜单关不掉。 */
+.bubble-menu {
+  position: absolute; top: calc(100% + var(--space-1)); right: 0;
+  display: flex; flex-direction: column; gap: 2px;
+  min-width: 148px; padding: 4px; z-index: var(--z-popover);
+  background: var(--bg-elevated); border: 1px solid var(--edge);
+  border-radius: var(--radius-md); box-shadow: var(--shadow-3);
+}
+.from-user .bubble-menu { right: auto; left: 0; }
+.bubble-menu[hidden] { display: none; }
+.bubble-menu .menu-item {
+  display: flex; align-items: center; gap: var(--space-2);
+  height: var(--row-h); padding: 0 10px; border: none; border-radius: var(--radius-sm);
+  background: none; color: var(--text-secondary); cursor: pointer;
+  font: inherit; font-size: var(--fs-sm); text-align: left; white-space: nowrap;
+  transition: color var(--dur-hover) var(--ease-out), background var(--dur-hover) var(--ease-out);
+}
+.bubble-menu .menu-item:hover:not(:disabled) { color: var(--text-primary); background: var(--hover-bg); }
+.bubble-menu .menu-item:disabled { opacity: .5; cursor: default; }
+.bubble-menu .menu-item.is-active { color: var(--success); }
+.bubble-menu .menu-item.is-active-neg { color: var(--danger); }
 
 /* 就地编辑（"编辑并重发"）：气泡正文原地摊成输入框，保存后由上层改写并重跑。
    输入框沿用输入区的底色与圆角档位，让"改这句话"看起来还是同一个地方在说话。 */
@@ -1182,17 +1315,32 @@ button.tool-row:disabled { cursor: default; }
    压暗 + not-allowed 光标；为什么禁用由调用方在上方说明（.queue-hint 之类）。 */
 .chat-input-box textarea:disabled { cursor: not-allowed; color: var(--text-disabled); }
 .chat-input-box:has(textarea:disabled) { opacity: .6; cursor: not-allowed; }
+/* 发送是主操作：走全站统一的 ink 主按钮（P1 定的 primary 语义），琥珀让位给
+   选中/激活/未读/用户气泡/焦点这些「状态」——composer 里同时有琥珀焦点环与琥珀
+   发送键时，两种琥珀说的是两件事。禁用态见 .send-btn:disabled（灰底 + 弱文字）。 */
 .send-btn {
   display: inline-flex; align-items: center; gap: 6px;
-  background: var(--bubble-self); color: var(--amber-on-primary);
+  background: var(--ink-primary-btn); color: var(--on-ink);
   border: none; border-radius: var(--radius-md); height: 40px; padding: 0 var(--space-5);
-  cursor: pointer; font-weight: 700; font-size: var(--fs-base);
-  box-shadow: var(--shadow-1);
-  transition: transform var(--dur-press) var(--ease-spring), box-shadow var(--dur-hover) var(--ease-out),
-    filter var(--dur-hover) var(--ease-out), opacity var(--dur-hover) var(--ease-out);
+  cursor: pointer; font-weight: 600; font-size: var(--fs-base);
+  box-shadow: none;
+  transition: transform var(--dur-press) var(--ease-spring), background var(--dur-hover) var(--ease-out),
+    opacity var(--dur-hover) var(--ease-out);
 }
-.send-btn:hover:not(:disabled) { box-shadow: var(--shadow-2); filter: brightness(1.04); transform: translateY(-1px); }
+.send-btn:hover:not(:disabled) { background: var(--ink-primary-btn-hover); }
 .send-btn:active:not(:disabled) { transform: scale(var(--press-scale)); }
+/* 输入区的模型读数（D11）：12px tertiary 的一行读数，点击去 Me → 模型与供应商。
+   它没有边框、没有底色——它回答「这句话谁来答」，不是一个第二主按钮。 */
+.composer-model {
+  display: inline-flex; align-items: center; gap: 4px;
+  margin: var(--space-1) 0 0 6px; height: var(--row-h-sm); padding: 0 6px;
+  border: none; border-radius: var(--radius-sm); background: none;
+  color: var(--text-tertiary); font: inherit; font-size: var(--fs-xs); cursor: pointer;
+  max-width: 100%; overflow: hidden; white-space: nowrap;
+  transition: color var(--dur-hover) var(--ease-out), background var(--dur-hover) var(--ease-out);
+}
+.composer-model span { overflow: hidden; text-overflow: ellipsis; }
+.composer-model:hover { color: var(--text-secondary); background: var(--hover-bg); }
 .queue-hint { margin: 0 0 6px; font-size: var(--fs-sm); color: var(--amber-text); display: flex; align-items: center; gap: 6px; }
 .queue-pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--amber-primary); animation: pulse 1.6s var(--ease-out) infinite; }
 
@@ -1201,7 +1349,7 @@ button.tool-row:disabled { cursor: default; }
 .approval-stack { display: flex; flex-direction: column; gap: 8px; margin: 0 0 8px; }
 .approval-card {
   padding: 10px 12px; background: var(--bg-elevated); border: 1px solid var(--amber-primary);
-  border-left-width: 3px; border-radius: var(--radius-md); box-shadow: var(--shadow-1);
+  border-left-width: 3px; border-radius: var(--radius-md); box-shadow: none;
 }
 .approval-title {
   margin: 0 0 6px; font-size: var(--fs-sm); color: var(--amber-text);
@@ -1246,7 +1394,7 @@ button.tool-row:disabled { cursor: default; }
 
 /* 右栏信息板：顶部用径向柔光 + 发丝分隔线，取消棕褐色 blob */
 .right-panel {
-  width: 280px; flex-shrink: 0; background: var(--bg-surface);
+  width: var(--panel-w); flex-shrink: 0; background: var(--bg-surface);
   border-left: 1px solid var(--divider); position: relative; overflow: hidden;
   transition: width 220ms var(--ease-out);
 }
@@ -1256,7 +1404,6 @@ button.tool-row:disabled { cursor: default; }
 .right-panel.is-collapsed { width: var(--panel-collapsed-w); border-left: none; }
 .right-panel.is-collapsed .panel-banner,
 .right-panel.is-collapsed .panel-body { visibility: hidden; }
-.right-panel.is-collapsed .panel-expand-btn { left: 10px; right: auto; }
 /* 窄窗下的右栏：覆盖式抽屉。
    此前这里是 display:none——记忆、手册、待办、调度轨迹在这个宽度下**一个入口都没有**，
    内容还在服务端却既看不到也打不开，用户只能把窗口拉宽才找得到。
@@ -1355,11 +1502,13 @@ button.tool-row:disabled { cursor: default; }
 .panel-preview .attach-preview-frame { height: 100%; min-height: 0; }
 .panel-empty { color: var(--text-secondary); font-size: var(--fs-sm); }
 .profile-head { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); text-align: center; }
-.profile-head h3 { margin: 0; font-size: var(--fs-title); }
+.profile-head h3 { margin: 0; font-size: var(--fs-title); line-height: var(--lh-tight); }
 .badge {
   background: var(--amber-primary-soft); color: var(--amber-text);
   font-size: var(--fs-xs); border-radius: var(--radius-pill); padding: 1px 10px; font-weight: 600;
 }
+/* 云成员：中性底色，不与「内置」的琥珀徽标抢注意力；它说的是"在哪儿跑"，不是等级。 */
+.badge-cloud { background: var(--bg-subtle); color: var(--text-secondary); }
 .profile-fields { margin-top: var(--space-3); }
 .profile-fields dt { color: var(--text-secondary); font-size: var(--fs-xs); margin-top: var(--space-3); font-weight: 600; }
 .profile-fields dd { margin: 4px 0 0; font-size: var(--fs-sm); }
@@ -1395,6 +1544,9 @@ button.tool-row:disabled { cursor: default; }
   display: inline-flex; align-items: center; min-height: 24px; border-radius: var(--radius-sm);
 }
 .artifact-list li .icon { color: var(--amber-text); }
+/* 两个文字动作的悬停：浅底 + 下划线。它们没有盒子，只变色不足以说明「这里能点」。 */
+.artifact-list a:hover,
+.artifact-list button:hover { background: var(--hover-bg); text-decoration: underline; text-underline-offset: 3px; }
 /* 主操作（打开）之外的第二动作更安静：两个琥珀按钮并排会把一行读成两个并列的“主要动作” */
 .file-open.is-quiet {
   background: transparent; color: var(--text-secondary);
@@ -1465,37 +1617,42 @@ button.tool-row:disabled { cursor: default; }
   padding: var(--space-4) var(--gutter-x); background: var(--bg-surface);
   border-bottom: 1px solid var(--divider);
 }
-.page-header h2 { margin: 0; font-size: var(--fs-title); letter-spacing: -0.01em; }
+.page-header h2 { margin: 0; font-size: var(--fs-title); line-height: var(--lh-tight); letter-spacing: -0.01em; }
 .page-header .page-actions { margin-left: auto; display: flex; gap: var(--space-2); }
 .page-scroll { flex: 1; overflow-y: auto; padding: var(--space-6) var(--gutter-x); background: var(--chat-bg-tint); }
 .page-scroll-col { max-width: 960px; margin: 0 auto; }
 .section-title { color: var(--text-secondary); font-size: var(--fs-sm); font-weight: 600; margin: var(--space-2) 0 var(--space-3); }
 
-/* 按钮：控件档阴影（--shadow-1），hover 才升到卡片档。
-   边框是白底控件唯一的边缘信号（--bg-elevated 与弹窗底同为纯白，抬升光影看不见），
-   所以这一档是描边 + 阴影叠加，而不是二选一。 */
+/* 按钮：贴面控件，不是浮起来的白盒子。
+   边缘靠一根发丝内描边（--ring-edge）站住——白底控件压在白底上时投影量不出边，
+   而满页投影正是「拼装感」的来源。抬升只留给浮层（菜单 / 弹窗 / 轻提示）。
+   高度取 --ctl-h：padding + 行高推算出来的高度会随字体浮动，同一排按钮就高低不齐。 */
 .btn {
-  border: 1px solid var(--edge); background: var(--bg-elevated);
-  border-radius: var(--radius-md); padding: 8px var(--space-4); cursor: pointer;
-  font-size: var(--fs-base); font-weight: 600; color: var(--text-primary);
-  box-shadow: var(--shadow-1);
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: var(--ctl-h); padding: 0 var(--space-4);
+  border: 1px solid var(--edge); background: var(--bg-surface);
+  border-radius: var(--radius-md); cursor: pointer;
+  font-size: var(--fs-base); font-weight: 500; color: var(--text-primary);
+  box-shadow: none;
   transition: background var(--dur-hover) var(--ease-out), transform var(--dur-press) var(--ease-out),
-    box-shadow var(--dur-hover) var(--ease-out), border-color var(--dur-hover) var(--ease-out);
+    border-color var(--dur-hover) var(--ease-out), color var(--dur-hover) var(--ease-out);
 }
-.btn:hover { background: var(--hover-bg); border-color: var(--edge-strong); box-shadow: var(--shadow-2); }
+.btn:hover:not(:disabled) { background: var(--hover-bg); border-color: var(--edge-strong); }
+.btn:active:not(:disabled) { background: var(--active-bg); }
+/* 主按钮 = ink 实心（D1/dsh 纪律）：主动作近黑/近白，无描边无投影。琥珀不再是主动作
+   填色，退居选中/active/unread/用户气泡/focus/品牌。hover 走 --ink-primary-btn-hover
+   （ink 往 canvas 混一档），不用 filter: brightness——后者把字和底一起提亮，对比度反掉。 */
 .btn-primary {
-  background: var(--bubble-self); color: var(--amber-on-primary);
-  box-shadow: var(--shadow-1);
+  background: var(--ink-primary-btn); color: var(--on-ink);
+  border-color: transparent; box-shadow: none; font-weight: 600;
 }
-/* 主按钮 hover 时不能掉回普通按钮的灰底。
-   `.btn:hover` 的特异性（0,2,0）高过 `.btn-primary`（0,1,0），于是指针一移上去，
-   琥珀底就被换成 `--hover-bg`——主按钮最该给的那点颜色反馈，恰恰是它先丢。
-   这里的 `background` 把主色按回来（`filter: brightness` 再叠一层更亮）。 */
-.btn-primary:hover:not(:disabled) {
-  background: var(--bubble-self);
-  box-shadow: var(--shadow-2);
-  filter: brightness(1.04);
-}
+.btn-primary:hover:not(:disabled) { background: var(--ink-primary-btn-hover); border-color: transparent; }
+.btn-primary:active:not(:disabled) { background: var(--ink-primary-btn-hover); }
+/* 幽灵按钮：连描边都不要，用在工具条与行内次要动作上。 */
+.btn-ghost { background: transparent; border-color: transparent; }
+.btn-ghost:hover:not(:disabled) { background: var(--hover-bg); border-color: transparent; }
+/* 密集区（行内、卡片脚）用矮一档，字号同步降档，不然字撑破 28px 盒子。 */
+.btn-sm { height: var(--ctl-h-sm); padding: 0 var(--space-3); font-size: var(--fs-sm); border-radius: var(--radius-sm); }
 /* 禁用态不能只是降透明度：暗色主题下亮琥珀降一半就沉进背景里，看着像"这里本来
    就没有按钮"（发送键在空输入时、已保存的保存键都会这样）。改成灰底 + 弱化文字：
    禁用与可用一眼分得开，而不是变成一团说不清的暗色。 */
@@ -1504,11 +1661,14 @@ button.tool-row:disabled { cursor: default; }
 .send-btn:disabled {
   background: var(--bg-subtle);
   color: var(--text-disabled);
-  border-color: var(--edge);
   opacity: 1;
   cursor: default;
   box-shadow: none;
 }
+/* 空输入时的禁用发送再收一档：透明底 + 发丝边。灰底 pill 在 composer 的留白里像
+   一块「占位实体」，而发送键此刻要表达的是「暂时按不动」，不是「这里有个灰按钮」。
+   写在上面那组之后，同特异性才能赢。 */
+.send-btn:disabled { background: transparent; border: 1px solid var(--edge); }
 
 /* 通讯录 */
 .contact-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: var(--space-5); }
@@ -1516,16 +1676,19 @@ button.tool-row:disabled { cursor: default; }
   background: var(--bg-surface);
   border-radius: var(--radius-lg); padding: var(--space-5) var(--space-4);
   display: flex; flex-direction: column; align-items: center; gap: var(--space-2);
-  text-align: center; box-shadow: var(--shadow-1);
-  transition: transform var(--dur-hover) var(--ease-out), box-shadow var(--dur-hover) var(--ease-out);
+  text-align: center; box-shadow: none;
+  transition: box-shadow var(--dur-hover) var(--ease-out);
   animation: item-in var(--dur-in) var(--ease-out) backwards;
   animation-delay: calc(min(var(--i, 0), 8) * 30ms);
 }
-.contact-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-2); }
-/* 指针停在某位助理的卡片上，他抬头应一声。
-   静态立绘只有一张图、换不了表情，就用一次轻轻的"点头"代替——指针压上去毫无反应
-   的话，这张卡看着就只是一张图。幅度走性格变量（见 lib/avatar-motion.ts）。 */
+/* 卡片贴面：白面压在米底上靠明度差分层，hover 才浮出一根发丝边。
+   整页卡片都自带投影时，页面看着像一堆浮起来的盒子——抬升只留给浮层。 */
+.contact-card:hover { box-shadow: var(--ring-edge); }
+/* 指针停在某位助理上，他抬头应一声——卡片视图与默认列表视图都给这一下（此前品牌
+   问候只藏在卡片视图里，默认列表视图的头像悬停毫无反应）。静态立绘只有一张图、换不了
+   表情，就用一次轻轻的"点头"代替。幅度走性格变量（见 lib/avatar-motion.ts）。 */
 .contact-card:hover .avatar { animation: avatar-greet 720ms var(--ease-out) 1; }
+.contact-row:hover .avatar { animation: avatar-greet 720ms var(--ease-out) 1; }
 .contact-card h3 { margin: 0; font-size: var(--fs-md); }
 .contact-model { color: var(--text-secondary); font-size: var(--fs-xs); margin: 0; }
 .contact-prompt { color: var(--text-secondary); font-size: var(--fs-xs); margin: 0; min-height: 34px; line-height: 1.5; }
@@ -1550,19 +1713,18 @@ button.tool-row:disabled { cursor: default; }
 }
 .contact-card .btn { margin-top: var(--space-2); }
 /* 空位卡：常态不抬升（--bg-subtle 上那层发丝环只是把这一格标成「还没建」），
-   hover 才真的升到卡片档。虚线已经退场——虚线与实线描边在这套语言里表达的是同一件事，
-   两个都留着只会让人以为虚线还承担什么额外语义。 */
+   hover 把环换成琥珀并染一层主色薄雾。虚线已经退场——虚线与实线描边在这套语言里
+   表达的是同一件事，两个都留着只会让人以为虚线还承担什么额外语义。 */
 .contact-create {
   border: none; background: var(--bg-subtle); cursor: pointer;
   box-shadow: var(--ring-edge); align-items: center; justify-content: center; min-height: 208px;
-  transition: background var(--dur-hover) var(--ease-out),
-    transform var(--dur-hover) var(--ease-out), box-shadow var(--dur-hover) var(--ease-out);
+  transition: background var(--dur-hover) var(--ease-out), box-shadow var(--dur-hover) var(--ease-out);
 }
 .contact-create:hover {
   background: var(--amber-primary-soft);
-  transform: translateY(-2px); box-shadow: inset 0 0 0 1px var(--amber-text), var(--shadow-2);
+  box-shadow: inset 0 0 0 1px var(--amber-text);
 }
-.contact-create:active { transform: translateY(-2px) scale(.98); }
+.contact-create:active { transform: scale(.98); }
 .contact-create-icon {
   width: 44px; height: 44px; border-radius: var(--radius-lg);
   background: var(--amber-primary-soft); color: var(--amber-text);
@@ -1570,76 +1732,6 @@ button.tool-row:disabled { cursor: default; }
   display: flex; align-items: center; justify-content: center;
 }
 
-/* 头像选择器：现役实现是 .face-grid / .face-cell（ContactsPage 的 radiogroup），
-   下面这套 .avatar-picker-* 是早期那版网格的残留，全仓零引用——留着只会让人
-   以为"改这里能改头像选择器"。 */
-
-/* 我的页 */
-.me-page { display: flex; flex-direction: column; align-items: center; padding-top: var(--space-8); }
-.me-usercard {
-  display: flex; flex-direction: column; align-items: center; gap: var(--space-2);
-  background: var(--bg-surface);
-  border-radius: var(--radius-xl); padding: var(--space-6) var(--space-8);
-  box-shadow: var(--shadow-1);
-  width: 100%; max-width: 520px;
-}
-/* 头像是圆（AVATAR_SPEC 只有圆形一种）；原来给这块留的是 28% 的圆角方，
-   里面套一只圆头像 → 圆里套方。现在用户自己的形象是立体动物（本身就是球），
-   外面再套一个方框就更不像话了：改成圆形，与全应用一致。 */
-.me-avatar { border-radius: 50%; overflow: hidden; width: 96px; height: 96px; box-shadow: var(--shadow-2); }
-
-/* ---- 我的形象（可定制的立体动物） ---- */
-.animal-studio {
-  display: flex; flex-direction: column; gap: var(--space-4);
-  background: var(--bg-surface); border-radius: var(--radius-xl);
-  padding: var(--space-5) var(--space-6); box-shadow: var(--shadow-1);
-  width: 100%; max-width: 520px;
-}
-.animal-studio-preview { display: flex; align-items: flex-start; gap: var(--space-5); }
-.animal-studio-preview-face { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); }
-.animal-studio-current {
-  font-size: var(--fs-xs); color: var(--text-secondary);
-  background: var(--bg-subtle); border-radius: 999px; padding: 2px 10px;
-}
-.animal-studio-preview-side { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
-.animal-studio-title { font-size: var(--fs-title); font-weight: 700; margin: 0; }
-.animal-studio-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
-.animal-studio-group { border: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: var(--space-2); }
-.animal-studio-group legend { font-size: var(--fs-sm); color: var(--text-secondary); padding: 0 0 var(--space-1); }
-.animal-studio-row { display: flex; gap: var(--space-2); flex-wrap: wrap; }
-.animal-studio-pick {
-  display: flex; flex-direction: column; align-items: center; gap: 4px;
-  border: 1px solid var(--edge); border-radius: var(--radius-md);
-  background: var(--bg-elevated); padding: 6px 8px; cursor: pointer; min-width: 60px;
-  transition: border-color var(--dur-hover) var(--ease-out), background var(--dur-hover) var(--ease-out);
-}
-.animal-studio-pick:hover { border-color: var(--edge-strong); }
-.animal-studio-pick.is-selected { border-color: var(--amber-primary); background: var(--amber-primary-soft); }
-.animal-studio-pick small { font-size: var(--fs-xs); color: var(--text-secondary); }
-/* 选择器里的缩略图：尺寸由 img 自身的 width/height 属性给（动物组 44、毛色组 36）。
-   object-fit 用 contain 而不是 cover——图是正方形时两者等价，但 contain 在图
-   不是正方形时不会把主体切掉。
-   底色跟大预览的圆形头像盘（.avatar-3d）用同一个 token：缩略图要跟预览看起來
-   是同一种东西，缺了这层底盘，动物就像浮在卡片上。 */
-.animal-studio-art {
-  display: block;
-  border-radius: 50%;
-  object-fit: contain;
-  background: var(--bg-subtle);
-}
-/* 毛色选择器：也用缩略图，不用色块——色块看不出毛发染成那个颜色是什么样。
-   8 个要排得下一行（面板内容宽 472px），所以这一组比动物组紧一档。 */
-.animal-studio-hue {
-  display: flex; flex-direction: column; align-items: center; gap: 3px;
-  border: 1px solid var(--edge); border-radius: var(--radius-md);
-  background: var(--bg-elevated); padding: 4px 5px; cursor: pointer; min-width: 50px;
-  transition: border-color var(--dur-hover) var(--ease-out), background var(--dur-hover) var(--ease-out);
-}
-.animal-studio-hue:hover { border-color: var(--edge-strong); }
-.animal-studio-hue.is-selected { border-color: var(--amber-primary); background: var(--amber-primary-soft); }
-.animal-studio-hue small { font-size: var(--fs-xs); color: var(--text-secondary); }
-.animal-studio-hint { display: flex; align-items: center; gap: 6px; font-size: var(--fs-xs); color: var(--text-tertiary); margin: 0; }
-.animal-studio-hint-line { color: var(--text-tertiary); font-size: var(--fs-xs); margin: 0; }
 .me-name {
   border: none; background: none; cursor: pointer;
   font-size: var(--fs-display); font-weight: 700; letter-spacing: -0.01em;
@@ -1648,23 +1740,20 @@ button.tool-row:disabled { cursor: default; }
   transition: background var(--dur-hover) var(--ease-out);
 }
 .me-name:hover { background: var(--hover-bg); }
-.me-pencil { color: var(--text-disabled); margin-left: 4px; transition: color var(--dur-hover) var(--ease-out); }
 .me-name:hover .me-pencil { color: var(--amber-text); }
-.me-sub { color: var(--text-secondary); font-size: var(--fs-sm); margin: 0; }
 /* 完整口径的三句话：比副标题弱一档，但不给它缩到 12px 以下——那是 CJK 的可读下限。 */
 .me-note {
   color: var(--text-tertiary); font-size: var(--fs-xs); line-height: 1.6;
   margin: var(--space-2) 0 0; max-width: 46ch;
 }
-.me-section { width: 100%; max-width: 520px; margin-top: var(--space-6); }
 .me-row {
   display: flex; align-items: center; gap: var(--space-3);
   background: var(--bg-surface);
-  /* 与 .btn 同理：白卡压在 --bg-app 上，阴影只给抬升，边缘归 --edge */
+  /* 与 .btn 同理：白卡压在 --bg-app 上，边缘归 --edge，抬升只留给浮层 */
   border: 1px solid var(--edge);
   border-radius: var(--radius-lg); padding: var(--space-3) var(--space-4);
   margin-bottom: var(--space-2);
-  box-shadow: var(--shadow-1);
+  box-shadow: none;
   transition: background var(--dur-hover) var(--ease-out), border-color var(--dur-hover) var(--ease-out);
 }
 .me-row-btn { width: 100%; text-align: left; font: inherit; color: inherit; cursor: pointer; }
@@ -1672,7 +1761,6 @@ button.tool-row:disabled { cursor: default; }
 .me-row .me-row-body { flex: 1; min-width: 0; }
 .me-row .me-row-title { font-size: var(--fs-base); font-weight: 600; }
 .me-row .me-row-sub { font-size: var(--fs-xs); color: var(--text-secondary); }
-.me-chevron { color: var(--text-disabled); font-size: var(--fs-title); flex-shrink: 0; }
 .status-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
 .status-dot.ok { background: var(--success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 18%, transparent); }
 .status-dot.warn { background: var(--amber-primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--amber-primary) 18%, transparent); }
@@ -1682,17 +1770,6 @@ button.tool-row:disabled { cursor: default; }
 .about-list { margin: var(--space-2) 0; padding-left: var(--space-5); }
 .about-list li { margin: var(--space-1) 0; }
 .about-note { color: var(--text-secondary); }
-.theme-toggle {
-  display: inline-flex; border: none; border-radius: var(--radius-pill);
-  overflow: hidden; background: var(--bg-subtle); box-shadow: var(--ring-edge);
-}
-.theme-toggle button {
-  border: none; background: transparent; padding: 6px 14px; cursor: pointer;
-  font-size: var(--fs-sm); color: var(--text-secondary); font-weight: 600;
-  display: inline-flex; align-items: center; gap: 5px;
-  transition: background var(--dur-hover) var(--ease-out), color var(--dur-hover) var(--ease-out);
-}
-.theme-toggle button.is-active { background: var(--amber-primary-soft); color: var(--amber-text); }
 
 /* 欢迎主页：聊天软件的空状态，不是落地页。
    一屏只有一句话的重量，其余都安静下去；区块排布交给 styles-product.css 的
@@ -1715,8 +1792,17 @@ button.tool-row:disabled { cursor: default; }
    这条分工对它是缺席的——全屏最饱和的物体此前一点抬升都没有，于是读作一张渲染图。
    补一档卡片级的 --shadow-2：暗色档自带的内描边正是暗色下的边缘语言，与别处卡片同源。 */
 .welcome-cat .cat { border-radius: var(--cat-plate-radius); box-shadow: var(--shadow-2); }
-/* 全页唯一的主标题：它只负责提出「今天做什么」，问候已经降级到上方的上下文行。 */
-.welcome-greeting { margin: 0; font-size: clamp(24px, 2.4vw, 30px); line-height: 1.22; letter-spacing: -0.022em; }
+/* 全页唯一的主标题：它只负责提出「今天做什么」，问候已经降级到上方的上下文行。
+   与品牌猫同一拍进场（猫 welcome-rise、标题/供应商列表 welcome-content-in），
+   首跑不再是「猫在动、其余瞬现」的半截动效。 */
+.welcome-greeting {
+  margin: 0; font-size: clamp(24px, 2.4vw, 30px); line-height: 1.22; letter-spacing: -0.022em;
+  animation: welcome-content-in var(--dur-macro) var(--ease-out) backwards;
+}
+@keyframes welcome-content-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
 /* 起步建议：一排安静的胶囊。
    底色透明 —— 它压在页面底色上，画一层白面等于多一个盒子，而这一屏已经有一个盒子
    （composer）。剩下的可见性全交给那 1px --edge：胶囊本身是平的，只有悬停时才浮出
@@ -1825,7 +1911,7 @@ button.tool-row:disabled { cursor: default; }
   animation: modal-in var(--dur-in) var(--ease-out);
 }
 .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--space-2); }
-.modal-header h3 { margin: 0; font-size: var(--fs-md); }
+.modal-header h3 { margin: 0; font-size: var(--fs-md); line-height: var(--lh-tight); }
 .modal-header button {
   border: none; background: none; cursor: pointer; font-size: var(--fs-md);
   color: var(--text-secondary); width: 28px; height: 28px; border-radius: var(--radius-sm);
@@ -1969,12 +2055,12 @@ button.tool-row:disabled { cursor: default; }
   background: var(--bg-surface); border: none;
   border-radius: var(--radius-lg); padding: var(--space-3) var(--space-4);
   display: flex; flex-direction: column; gap: 4px; color: var(--text-primary);
-  box-shadow: var(--shadow-1);
-  transition: transform var(--dur-hover) var(--ease-out), box-shadow var(--dur-hover) var(--ease-out);
+  box-shadow: none;
+  transition: box-shadow var(--dur-hover) var(--ease-out);
   animation: item-in var(--dur-in) var(--ease-out) backwards;
   animation-delay: calc(min(var(--i, 0), 8) * 30ms);
 }
-.template-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-2); }
+.template-card:hover { box-shadow: var(--ring-edge); }
 .template-card strong { font-size: var(--fs-base); }
 .template-card span { color: var(--text-secondary); font-size: var(--fs-xs); line-height: 1.5; }
 
@@ -2282,4 +2368,180 @@ button.tool-row:disabled { cursor: default; }
 .search-title-mark {
   background: var(--search-hit-bg); color: var(--search-hit-fg);
   border-radius: var(--radius-xs); padding: 0 2px;
+}
+
+/* ---- 聊天头部会话菜单（置顶/静音/群设置/归到项目） ----
+   与左栏行菜单同一组动作、同一套视觉：用户不必退回列表才能操作当前会话。 */
+.chat-header-menu-wrap {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.chat-header-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: var(--z-popover);
+  width: 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-1);
+  background: var(--bg-elevated);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-3);
+  animation: menu-in var(--dur-in) var(--ease-spring);
+}
+
+.chat-header-menu .menu-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 32px;
+  padding: 0 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.chat-header-menu .menu-item:hover {
+  background: var(--hover-bg);
+}
+
+/* ---- 输入区附件按钮 ----
+   附件之前只能拖/贴，桌面用户第一反应是找回形针。按钮与发送键同高，
+   放在输入框左侧；没有上传通道时调用方不渲染它。 */
+.attach-btn {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background var(--dur-hover) var(--ease-out), color var(--dur-hover) var(--ease-out),
+    border-color var(--dur-hover) var(--ease-out);
+}
+
+.attach-btn:hover:not(:disabled) {
+  background: var(--hover-bg);
+  color: var(--amber-text);
+  border-color: var(--edge-strong);
+}
+
+.attach-btn:disabled {
+  cursor: default;
+  color: var(--text-disabled);
+}
+
+/* 窄窗聊天头部：亲密度徽标让位给标题与会话菜单，分数在右栏资料卡里仍然看得到。 */
+@media (max-width: 1180px) {
+  .chat-header .chip {
+    display: none;
+  }
+}
+
+/* ---- 全局命令面板（Cmd/Ctrl+K） ----
+   一张贴着视口上方的搜索卡：输入框 + 过滤后的命令列。焦点全程留在输入框，
+   ↑↓ 移高亮、Enter 执行、Esc 关闭。遮罩与弹窗同层（--z-modal），但不做 blur——
+   面板要能一边输入一边看清下面的页面。 */
+.command-palette-mask {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: min(14vh, 160px) var(--space-4) var(--space-4);
+  background: color-mix(in srgb, var(--bg-app) 55%, rgba(20, 12, 4, .42));
+  animation: fade-in 140ms var(--ease-out);
+}
+.command-palette {
+  width: 560px;
+  max-width: 92vw;
+  max-height: min(60vh, 460px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-3);
+  animation: modal-in var(--dur-in) var(--ease-out);
+}
+.command-palette-search {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--divider);
+  color: var(--text-tertiary);
+}
+.command-palette-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--fs-base);
+  line-height: 1.5;
+  outline: none;
+}
+.command-palette-input::placeholder { color: var(--text-tertiary); }
+.command-palette-kbd {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+.command-palette-list {
+  list-style: none;
+  margin: 0;
+  padding: var(--space-2);
+  overflow-y: auto;
+}
+.command-palette-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: var(--fs-base);
+  line-height: 1.5;
+  cursor: pointer;
+}
+.command-palette-item.is-active { background: var(--amber-primary-soft); color: var(--amber-text); }
+.command-palette-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.command-palette-hint {
+  flex: none;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+.command-palette-item.is-active .command-palette-hint { color: var(--amber-text); }
+.command-palette-empty {
+  margin: 0;
+  padding: var(--space-4);
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+  text-align: center;
 }

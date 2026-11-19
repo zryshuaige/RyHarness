@@ -283,4 +283,47 @@ describe('SessionStore', () => {
     rmSync(`${path}-wal`, { force: true })
     rmSync(`${path}-shm`, { force: true })
   })
+
+  it('云成员与工位：runtime 列、雇佣契约、游标都能落盘读回，删成员级联清干净', () => {
+    const store = new SessionStore(':memory:')
+    const agent = store.upsertAgent({ ...sampleAgent('cloud'), runtime: 'hosted' })
+    expect(agent.runtime).toBe('hosted')
+    // 普通 PATCH 不带 runtime 时不该把云成员改回本机。
+    expect(store.upsertAgent({ ...sampleAgent('cloud'), name: '改名' }).runtime).toBe('hosted')
+
+    store.upsertHostedMember({
+      agentId: 'cloud',
+      remoteAgentId: 'agent_remote',
+      environmentId: 'env_remote',
+      scope: 'official',
+    })
+    expect(store.getHostedMember('cloud')?.remoteAgentId).toBe('agent_remote')
+    expect(store.listHostedMembers()).toHaveLength(1)
+
+    const conversation = store.createConversation({ kind: 'direct', memberAgentIds: ['cloud'] })
+    const session = store.upsertHostedSession({
+      conversationId: conversation.id,
+      agentId: 'cloud',
+      sessionId: 'sesn_remote',
+    })
+    expect(session.status).toBe('idle')
+    const advanced = store.updateHostedSession({
+      conversationId: conversation.id,
+      agentId: 'cloud',
+      cursor: '42',
+      lastEventId: 'sevt_1',
+      lastEventAt: '2026-01-01T00:00:00Z',
+      status: 'running',
+    })
+    expect(advanced?.cursor).toBe('42')
+    expect(advanced?.lastEventId).toBe('sevt_1')
+    expect(advanced?.lastEventAt).toBe('2026-01-01T00:00:00Z')
+    expect(advanced?.status).toBe('running')
+    expect(store.listHostedSessions(conversation.id)).toHaveLength(1)
+
+    store.deleteAgent('cloud')
+    expect(store.getHostedMember('cloud')).toBeUndefined()
+    expect(store.listHostedSessions(conversation.id)).toHaveLength(0)
+    store.close()
+  })
 })

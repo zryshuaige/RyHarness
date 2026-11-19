@@ -41,6 +41,16 @@
   color: var(--text-secondary);
 }
 
+/* 搜索框：预设网格与已装列表共用一个过滤口（补评审清单「供应商无搜索」缺口）。
+   宽度收一档不铺满整行，与插件页搜索同一口径。 */
+.provider-search {
+  width: min(440px, 100%);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
 /* 这一页唯一的主操作：琥珀实心。 */
 .provider-add-btn {
   display: inline-flex;
@@ -80,10 +90,10 @@
 /* ---- 供应商行：图标 + 名称 + 副行 + 状态 › ---- */
 .provider-item {
   background: var(--bg-surface);
-  /* 白卡压在暖奶油底上，阴影只表达「抬起来一点」，边缘归 --edge 描边。 */
+  /* 白卡压在暖奶油底上，边缘归 --edge 描边；抬升只留给浮层。 */
   border: 1px solid var(--edge);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-1);
+  box-shadow: none;
   /* 行头 hover 的底色要跟着卡片的圆角走，否则底角会漏出一块方角。 */
   overflow: hidden;
 }
@@ -117,9 +127,8 @@
   border-radius: var(--radius-sm);
   overflow: hidden;
   /* 品牌方块与页面底色同深度时（暗色下 moonshot 的 #26292E、ollama 的 #1F2328 几乎
-     就是 --bg-surface），那圈发丝描边是它唯一的轮廓。抬升仍只走阴影档，描边补的是
-     「边」而不是第几层。 */
-  box-shadow: var(--shadow-1), 0 0 0 1px var(--edge-strong);
+     就是 --bg-surface），那圈发丝描边是它唯一的轮廓。 */
+  box-shadow: 0 0 0 1px var(--edge-strong);
   /* 字母标是装饰：拖选整行时不能把 "D" 一起复制走。 */
   user-select: none;
 }
@@ -483,7 +492,6 @@
 .provider-preset-tile:hover {
   background: var(--hover-bg);
   border-color: var(--edge-strong);
-  box-shadow: var(--shadow-1);
 }
 
 .provider-preset-tile:focus-visible {
@@ -545,29 +553,44 @@
   font-weight: 600;
 }
 
+/* 竖列表行，不是九宫格（D10）：格子按 auto-fill 排，厂商数是奇数时最后一行只剩
+   一个孤儿；而且 logo 铺成一片彩虹，压过琥珀品牌。一行一家时名字与副标题形成可扫读
+   的一列，chevron 负责「点进去」。 */
 .provider-picker-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(136px, 1fr));
-  gap: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
   margin-top: var(--space-2);
 }
 
 .provider-pick-tile {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-2);
+  gap: var(--space-3);
+  min-height: 48px;
+  padding: var(--space-2) var(--space-3);
   border: 1px solid var(--edge);
   border-radius: var(--radius-md);
   background: var(--bg-surface);
   cursor: pointer;
+  text-align: left;
   transition: border-color var(--dur-hover) var(--ease-out), box-shadow var(--dur-hover) var(--ease-out);
 }
 
+/* 名字是决策依据（14/500），副标题只是让人少点一次（12 tertiary），chevron 贴右缘。 */
+.provider-pick-tile .provider-preset-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--fs-base);
+  font-weight: 500;
+}
+.provider-pick-tile .provider-preset-sub { flex: 0 1 auto; min-width: 0; }
+.provider-pick-chevron { flex-shrink: 0; color: var(--text-tertiary); }
+
 .provider-pick-tile:hover {
   border-color: var(--edge-strong);
-  box-shadow: var(--shadow-1);
+  background: var(--hover-bg);
 }
 
 .provider-pick-tile:focus-visible {
@@ -602,6 +625,63 @@
 /* 表单分组：一张表单塞着基本信息、模型、凭据三件事，不分组就只是一屏字段。 */
 .provider-form-group {
   margin-top: var(--space-4);
+}
+
+/* 预设厂商的「高级设置」折叠区：名称/协议/地址/模型列表预设已填好，
+   默认收起，要改的人点开才看见——首屏只剩填 Key 这一件正事。 */
+.provider-advanced {
+  margin-top: var(--space-4);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-lg);
+  background: var(--bg-subtle);
+}
+
+.provider-advanced > summary {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-lg);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+  transition: color var(--dur-hover) var(--ease-out);
+}
+
+.provider-advanced > summary:hover {
+  color: var(--text-primary);
+}
+
+.provider-advanced > summary:focus-visible {
+  outline: 2px solid var(--focus-outline);
+  outline-offset: -2px;
+}
+
+.provider-advanced > summary::-webkit-details-marker {
+  display: none;
+}
+
+.provider-advanced > summary::before {
+  content: '›';
+  display: inline-block;
+  transition: transform var(--dur-hover) var(--ease-out);
+}
+
+.provider-advanced[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.provider-advanced > summary small {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-weight: 400;
+}
+
+.provider-advanced > .provider-form-group {
+  margin: 0;
+  padding: 0 var(--space-3) var(--space-3);
 }
 
 .provider-form-group-title {

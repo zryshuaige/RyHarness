@@ -26,10 +26,17 @@
 .me-page {
   /* 顶部留白收一档：这一页区块多，省下的 8px 够多放一行。 */
   padding-top: var(--space-5);
+
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
 .me-section {
   margin-top: var(--space-5);
+
+  width: 100%;
+  max-width: 520px;
 }
 
 /* 分组标题（「助理」「这台电脑」…）：比行标题大一档，比页面标题低一档。
@@ -58,7 +65,9 @@
   /* 白卡压在暖奶油底上只有 1.09:1，阴影量不出边，这 1px --edge 才是它的轮廓。 */
   border: 1px solid var(--edge);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-1);
+  box-shadow: none;
+
+  align-items: center;
 }
 
 .me-usercard-main {
@@ -82,7 +91,9 @@
   flex-shrink: 0;
   /* 圆盘自己会裁（.avatar-3d 内部就是圆的），这里放开是为了让角标能探出圆外。 */
   overflow: visible;
-  box-shadow: var(--shadow-1);
+  box-shadow: var(--ring-edge);
+
+  border-radius: 50%;
 }
 
 /* 头像上的「改头像」角标常驻：旧写法是 opacity:0，只在鼠标悬停时才冒出来——
@@ -97,15 +108,22 @@
   background: var(--bg-surface);
   color: var(--text-secondary);
   border: 1px solid var(--edge-strong);
-  box-shadow: var(--shadow-1);
+  box-shadow: none;
   transition:
     opacity var(--dur-hover) var(--ease-out),
     background var(--dur-hover) var(--ease-out),
     color var(--dur-hover) var(--ease-out);
+
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
 }
 
 .me-avatar-btn:hover .me-avatar-edit,
 .me-avatar-btn:focus-visible .me-avatar-edit {
+  opacity: 1;
   background: var(--amber-primary);
   color: var(--amber-on-primary);
   border-color: transparent;
@@ -133,6 +151,9 @@
    鼠标压上去变琥珀。 */
 .me-pencil {
   color: var(--text-tertiary);
+
+  margin-left: 4px;
+  transition: color var(--dur-hover) var(--ease-out);
 }
 
 /* 行内编辑的输入框：跟着名字一起变大，边框贴着名字的左边缘，
@@ -177,6 +198,19 @@
 /* 行内编辑的触发点：按钮本体太小（不到 24px），按 WCAG 2.5.8 的下限垫高。 */
 .me-inline-edit {
   min-height: 24px;
+
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: none;
+  padding: 2px 6px;
+  margin: -2px -6px;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background var(--dur-hover) var(--ease-out);
 }
 
 /* =====================================================================
@@ -187,7 +221,7 @@
   background: var(--bg-surface);
   border: 1px solid var(--edge);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-1);
+  box-shadow: none;
   /* 行各自的首尾圆角要由这张卡裁掉，否则悬停底色会戳出卡片外面。 */
   overflow: hidden;
 }
@@ -241,6 +275,81 @@
   user-select: text;
 }
 
+/* ---- 备份清单：把「最近 10 份」真的列出来（此前文案承诺了清单却从不渲染） ---- */
+.backup-history {
+  margin-top: var(--space-3);
+}
+
+.backup-history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.backup-history-title {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+
+.backup-history-empty {
+  margin: var(--space-2) 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+.backup-list {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 密集档行（24px）：时间 + 大小 + 文件名 + 复制，一行扫完一份备份。 */
+.backup-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--row-h-sm);
+  padding: var(--space-1) 0;
+  border-top: 1px solid var(--divider);
+}
+
+.backup-item:first-child {
+  border-top: none;
+}
+
+.backup-item-time {
+  flex: none;
+  color: var(--text-primary);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.backup-item-size {
+  flex: none;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.backup-item-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+.backup-item-copy {
+  flex: none;
+}
+
 /* 加载中的骨架条：跟卡片同一套底色，跟着主题翻面。 */
 .me-skeleton {
   display: flex;
@@ -257,6 +366,9 @@
 /* 箭头：旧写法是 --text-disabled（灰到看不见）。抬到第三级文字色。 */
 .me-chevron {
   color: var(--text-tertiary);
+
+  font-size: var(--fs-title);
+  flex-shrink: 0;
 }
 
 /* 中性小标签：「内置」这类信息不该挂琥珀（琥珀留给该动手的地方）。 */
@@ -351,6 +463,12 @@
   gap: 2px;
   padding: 3px;
   overflow: visible;
+
+  display: inline-flex;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: var(--bg-subtle);
+  box-shadow: var(--ring-edge);
 }
 
 .theme-toggle button {
@@ -359,12 +477,22 @@
   border-radius: var(--radius-pill);
   color: var(--text-secondary);
   font-weight: 600;
+
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: background var(--dur-hover) var(--ease-out), color var(--dur-hover) var(--ease-out);
 }
 
 .theme-toggle button.is-active {
   background: var(--bg-elevated);
   color: var(--amber-text);
-  font-weight: 700;
+  /* 选中态已有底色 + 琥珀 + 阴影三重信号，字重不必再跳到 700（既过重，又随状态改字宽）。 */
+  font-weight: 600;
   box-shadow: var(--shadow-1);
 }
 
@@ -380,7 +508,10 @@
   background: var(--bg-surface);
   border: 1px solid var(--edge);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-1);
+  box-shadow: none;
+
+  display: flex;
+  flex-direction: column;
 }
 
 /* 预览：这一页的主角，抬到最上面。头像外圈那圈琥珀光环用的是既有的
@@ -417,11 +548,14 @@
   gap: var(--space-2);
 }
 
-/* 卡标题比页面标题低一档：旧写法跟页面标题一样大，两层的层级就平了。 */
+/* 卡标题比页面标题低一档：旧写法跟页面标题一样大，两层的层级就平了。
+   字重 600 而非 700——标题层级靠字号差表达，700 留给 display 名字那一处。 */
 .animal-studio-title {
   margin: 0;
   font-size: var(--fs-md);
-  font-weight: 700;
+  font-weight: 600;
+
+  line-height: var(--lh-tight);
 }
 
 .animal-studio-desc {
@@ -446,7 +580,33 @@
   margin-top: var(--space-1);
 }
 
-/* 两组挑选器：legend 是分组标题，比卡标题低一档。 */
+/* D8：没改动时的「已保存」是一枚状态徽标（role=status），不是点不动的按钮——状态不伪装
+   控件。高度取 --ctl-h 与保存键同槽同高，dirty↔saved 切换不跳布局；语义色走 --success，
+   软底由它推导（color-mix），不另立裸色。 */
+.animal-studio-saved {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--ctl-h);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+  color: var(--success);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* 两组挑选器：fieldset 去掉默认边框与内边距，legend 是分组标题，比卡标题低一档。 */
+.animal-studio-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border: none;
+  padding: 0;
+  margin: 0;
+}
+
 .animal-studio-group legend {
   padding: 0 0 var(--space-2);
   color: var(--text-primary);
@@ -477,6 +637,14 @@
     background var(--dur-hover) var(--ease-out);
 }
 
+.animal-studio-hue {
+  min-width: 50px;
+}
+
+.animal-studio-pick {
+  min-width: 60px;
+}
+
 .animal-studio-pick {
   min-width: 60px;
 }
@@ -501,8 +669,9 @@
 
 .animal-studio-pick.is-selected small,
 .animal-studio-hue.is-selected small {
+  /* 选中只换颜色，不动字重：琥珀边 + 软底 + 勾选角标已经把「选的是它」说清楚，
+     再跳 700 既过重，又让标签随选中态变宽（状态不改几何）。 */
   color: var(--amber-text);
-  font-weight: 700;
 }
 
 .animal-studio-pick small,
@@ -556,4 +725,225 @@
   color: var(--text-tertiary);
   font-size: var(--fs-xs);
   line-height: 1.6;
+}
+
+/* =====================================================================
+   设置 Hub：左二级导航 + 右单页内容（2026-11 IA 整改）
+   ===================================================================== */
+
+.me-hub-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.me-nav {
+  width: 196px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-4) var(--space-2) var(--space-6);
+  border-right: 1px solid var(--divider);
+  background: var(--bg-surface);
+  overflow-y: auto;
+}
+
+.me-nav-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: 40px;
+  padding: 6px var(--space-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-hover) var(--ease-out), color var(--dur-hover) var(--ease-out);
+}
+
+.me-nav-item:hover {
+  background: var(--hover-bg);
+}
+
+.me-nav-item.is-active {
+  background: var(--amber-primary-soft);
+  color: var(--amber-text);
+}
+
+/* 激活指示条：与 rail-tab / conversation-item 同一套 spring 语言（此前唯独 Me 子导航
+   的激活态是静态软底瞬切，没有指示条）。九段常驻不窗口化，故走 conversation-item 的
+   transition 手法而非 animation——点哪段，哪段的指示条 scaleY .2→1 弹入、旧段淡出，
+   与 me-section-in 内容补间同一拍，导航本身也成了编排的一部分。左缘内侧 1px 同约定。 */
+.me-nav-item::before {
+  content: '';
+  position: absolute;
+  left: 1px;
+  top: 50%;
+  margin-top: -11px;
+  width: 3px;
+  height: 22px;
+  border-radius: var(--radius-pill);
+  background: var(--amber-text);
+  opacity: 0;
+  transform: scaleY(0.2);
+  transition: opacity var(--dur-hover) var(--ease-out), transform 280ms var(--ease-spring);
+}
+
+.me-nav-item.is-active::before {
+  opacity: 1;
+  transform: scaleY(1);
+}
+
+.me-nav-icon {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-xs);
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+}
+
+.me-nav-item.is-active .me-nav-icon {
+  background: color-mix(in srgb, var(--amber-primary) 18%, transparent);
+  color: var(--amber-text);
+}
+
+.me-nav-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.me-nav-text strong {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.me-nav-text small {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 内容列：880px 上限，表单类子页自己的卡片继续用 720px 居中。 */
+.me-hub .me-page {
+  width: 100%;
+  max-width: 880px;
+  margin: 0 auto;
+  padding-top: var(--space-5);
+  align-items: stretch;
+}
+
+.me-hub .me-section {
+  width: 100%;
+  max-width: none;
+  margin-top: var(--space-5);
+}
+
+.me-hub .me-usercard,
+.me-hub .animal-studio {
+  width: 100%;
+  max-width: 720px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* 单页模式：只显示当前 data-section 的一段（同一段落可有多块，例如个人卡 + 形象）。 */
+.me-hub .me-page:not(.is-legacy) > [data-section] {
+  display: none;
+}
+
+.me-hub .me-page:not(.is-legacy)[data-active-section='profile'] > [data-section='profile'],
+.me-hub .me-page:not(.is-legacy)[data-active-section='assistant'] > [data-section='assistant'],
+.me-hub .me-page:not(.is-legacy)[data-active-section='models'] > [data-section='models'],
+.me-hub .me-page:not(.is-legacy)[data-active-section='cloud'] > [data-section='cloud'],
+.me-hub .me-page:not(.is-legacy)[data-active-section='data'] > [data-section='data'],
+.me-hub .me-page:not(.is-legacy)[data-active-section='usage'] > [data-section='usage'],
+.me-hub .me-page:not(.is-legacy)[data-active-section='preferences'] > [data-section='preferences'],
+.me-hub .me-page:not(.is-legacy)[data-active-section='about'] > [data-section='about'] {
+  display: block;
+  /* 子页切换补间：被点亮的那一段从 display:none→block 时播一次进场（与 RyVibe 主列
+     vibe-swap 同一手法）。段落始终挂载、表单状态不丢，动效只负责「换了一段」的告知；
+     reduced-motion 由全局 1ms 接管。 */
+  animation: me-section-in var(--dur-macro) var(--ease-out);
+}
+
+@keyframes me-section-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* 内嵌插件页：去掉它自己的一层 page 骨架，只借设置 Hub 的滚动。 */
+.plugins-page.is-embedded {
+  display: block;
+  flex: none;
+  overflow: visible;
+}
+
+.plugins-page.is-embedded .page-header {
+  padding: 0 0 var(--space-4);
+  border-bottom: none;
+  background: transparent;
+}
+
+.plugins-page.is-embedded .plugins-body {
+  padding: 0;
+}
+
+.plugins-page.is-embedded .plugins-col {
+  max-width: none;
+}
+
+@media (max-width: 1100px) {
+  .me-hub-body {
+    flex-direction: column;
+  }
+
+  .me-nav {
+    width: 100%;
+    flex-direction: row;
+    gap: var(--space-1);
+    padding: var(--space-2) var(--space-3);
+    border-right: none;
+    border-bottom: 1px solid var(--divider);
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .me-nav-item {
+    width: auto;
+    flex-shrink: 0;
+    min-height: 34px;
+    padding: 4px var(--space-2);
+  }
+
+  .me-nav-icon {
+    display: none;
+  }
+
+  .me-nav-text small {
+    display: none;
+  }
+
+  .me-hub .me-page {
+    padding-top: var(--space-2);
+  }
+}
+
+/* 云成员区块自己带一层 .me-section；外层再包一层只为挂 data-section。
+   两层 margin-top 会叠成 48px，把首行推下去。 */
+.me-hub [data-section='cloud'] > .me-section {
+  margin-top: 0;
 }

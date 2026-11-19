@@ -609,6 +609,9 @@ describe('保存中：按钮自报忙碌，不让人以为没点上', () => {
       )
       await Promise.resolve()
     })
+    // 新建走分步向导（P3）：保存键只在末步「模型与权限」出现，先连点两次「下一步」走到那步。
+    click(buttonByText('下一步'))
+    click(buttonByText('下一步'))
     click(buttonByText('保存'))
     await act(async () => {
       await Promise.resolve()

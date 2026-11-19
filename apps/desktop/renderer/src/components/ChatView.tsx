@@ -1,12 +1,12 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { AgentDef, ApiClient, Conversation, MessageRow, WsEvent } from '../api.ts'
+import type { AgentDef, ApiClient, Conversation, ConversationContextView, MessageRow, WsEvent } from '../api.ts'
 import { ApiRequestError, messageText } from '../api.ts'
 import { builtinBadge } from '../lib/agents.ts'
 import { rowArtifacts } from '../lib/artifacts.ts'
 import { authedFetch } from '../lib/authed-fetch.ts'
 import type { Command } from '../lib/commands.ts'
 import { errorDetail, humanError } from '../lib/error-text.ts'
-import { formatTime } from '../lib/format.ts'
+import { formatTime, formatTokens } from '../lib/format.ts'
 import { modelPair } from '../lib/humanize.ts'
 import {
   chatWindowOf,
@@ -504,11 +504,16 @@ export function ChatView({
   onAffinityChange,
   onPreview,
   onOpenVibe,
+  onOpenProviders,
   onSwitchConversation,
   commands,
   voice,
   onTogglePanel,
   panelOpen,
+  onPinToggle,
+  onMuteToggle,
+  onEditGroup,
+  onPickWorkspace,
 }: {
   api: ApiClient
   conversation: Conversation
@@ -560,6 +565,8 @@ export function ChatView({
   onPreview?: (file: { name: string; mime: string; size: number }) => void
   /** 这条会话关联的 RyVibe 工作台；不存在任务时按钮不会出现。 */
   onOpenVibe?: (conversationId: string) => void
+  /** 输入区的模型读数被点击：壳把用户送到 Me → 模型与供应商。 */
+  onOpenProviders?: () => void
   /**
    * 待发送的首条消息（欢迎页：先把会话切过来、WS 订阅建好，再发出去）。
    * 见挂载 effect 里的发送时机——顺序反了这条消息就落在订阅之前。
@@ -584,6 +591,11 @@ export function ChatView({
   onTogglePanel?: () => void
   /** 抽屉此刻是开着的吗（按钮图标跟着翻转）。 */
   panelOpen?: boolean
+  /** 头部会话菜单：置顶/静音/群设置/归到项目（与左栏行菜单同一组动作）。 */
+  onPinToggle?: () => void
+  onMuteToggle?: () => void
+  onEditGroup?: () => void
+  onPickWorkspace?: () => void
 }) {
   // 会话相关的一切都从这个桶里读：切会话时组件不卸载，换个数据源就是全部。
   const view = useConversationView(bucket)
@@ -591,6 +603,24 @@ export function ChatView({
   const store = bucket.store
   const snapshot = useChat(store)
   const [hasVibeTask, setHasVibeTask] = useState(false)
+  const [headerMenuOpen, setHeaderMenuOpen] = useState(false)
+  const headerMenuRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!headerMenuOpen) return
+    const onPointerDown = (event: MouseEvent): void => {
+      if (headerMenuRef.current?.contains(event.target as Node) === true) return
+      setHeaderMenuOpen(false)
+    }
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setHeaderMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [headerMenuOpen])
   useEffect(() => {
     let cancelled = false
     setHasVibeTask(false)
@@ -743,6 +773,11 @@ export function ChatView({
    * 两个 ref 互相推断（那正是把用户拽回原处的那次误判）。
    */
   const syncedPadTop = useRef(0)
+  /**
+   * 上一次 scroll 事件时的 scrollTop：裁决「用户在往上滚」的方向基准（见 handleScroll）。
+   * 程序化位移也会更新它——方向要比的是「这次事件相对上一次」，与谁驱动无关。
+   */
+  const lastScrollTop = useRef<number | undefined>(undefined)
   /** 待写的「跟随底部」帧：见 {@link scheduleFollow}。 */
   const followFrame = useRef(0)
   /**
@@ -1693,6 +1728,8 @@ export function ChatView({
     // 上一段会话欠下的两件事作废：翻页的视口还原、以及还没落地的那一帧滚动采样——
     // 拿来对新的会话用，等于把上一个会话的位置按到这一个上面。
     restoreScroll.current = null
+    // 方向基准也作废：拿上一个会话的 scrollTop 比方向，第一次滚动会被误判。
+    lastScrollTop.current = undefined
     if (pendingFrame.current !== 0) {
       cancelAnimationFrame(pendingFrame.current)
       pendingFrame.current = 0
@@ -1748,6 +1785,9 @@ export function ChatView({
   const handleScroll = (): void => {
     const node = scrollRef.current
     if (node === null) return
+    // 方向基准每次都记（含程序化位移）：下一次事件拿它比「往上还是往下」。
+    const prevTop = lastScrollTop.current
+    lastScrollTop.current = node.scrollTop
     // 视口位置按帧合并：连续滚动下每帧最多重算一次窗口，而不是每个 scroll 事件
     // 都让整条消息流重渲染（与 lib/windowed.ts 里 useVisibleWindow 的取舍一致）。
     if (pendingFrame.current === 0) {
@@ -1758,9 +1798,17 @@ export function ChatView({
     }
     if (!userDriven()) return
     const distance = node.scrollHeight - node.scrollTop - node.clientHeight
-    pinBottom(distance < FOLLOW_THRESHOLD)
+    /**
+     * 向上滚一律解除贴底，阈值只管「向下滚回底部附近时恢复跟随」。
+     *
+     * 此前只按 distance < 100 裁决：Windows 一格滚轮常不足 100px，滚上去仍被判
+     * 「贴着底」，跟随帧下一帧就把视口拽回底部——用户看到的就是「滚轮滚不动、
+     * 看不了历史」（真机 CDP 量到：上滚 120px 后 scrollTop 被写回 max）。
+     */
+    const movedUp = prevTop !== undefined && node.scrollTop < prevTop - 1
+    pinBottom(movedUp ? false : distance < FOLLOW_THRESHOLD)
     // 「跳至最新」跟着贴底状态一起走：用户上滚的那一刻就该出现，而不是等下一轮对齐。
-    setShowJump(distance >= FOLLOW_THRESHOLD)
+    setShowJump(!stickToBottom.current)
     // 触顶自动翻页：向上回看历史时不该反复点按钮，也让"窗口"随浏览自然长大。
     if (node.scrollTop < 160 && hasMore && !loadingEarlier) {
       void loadEarlier()
@@ -1797,6 +1845,18 @@ export function ChatView({
         return a !== undefined
       })
   }, [conversation.memberAgentIds, agents])
+  /** 这个会话里有没有跑在云端的成员：标题下那行要说清楚，别让人以为它在这台机器上。 */
+  const hasCloudMember = useMemo(() => {
+    return members.some((member) => {
+      return member.runtime === 'hosted'
+    })
+  }, [members])
+  /** 输入区的模型读数（D11）：单聊取对方配置的 provider·model；群聊各说各的，不指名单一模型。 */
+  const composerModel = useMemo(() => {
+    if (conversation.kind === 'group') return undefined
+    const agent = members[0]
+    return agent === undefined ? undefined : modelPair(agent.provider, agent.model)
+  }, [conversation.kind, members])
 
   // 读 ref 而不是闭包里的 allMessages：allMessages 每来一个 token 就换一次身份，
   // 挂进 useCallback 会让 onSend 每帧换新——memo 的输入框于是每帧重渲染，等于没 memo。
@@ -1846,6 +1906,39 @@ export function ChatView({
     streamingRef.current = streamingActive
     if (wasStreaming && !streamingActive) onTurnEnd?.()
   }, [streamingActive, onTurnEnd])
+
+  /**
+   * composer 的上下文读数（D11）：切会话 + 每轮收工各取一次轻量 GET。
+   *
+   * 不订阅 store、也不在渲染层 join 成员/agent/供应商三份清单——流式期聊天区每
+   * 40ms 重渲染一次，一行 12px 读数不该跟着每帧重算；端点已经按派工口径解析好了。
+   */
+  const [contextReadout, setContextReadout] = useState<ConversationContextView | undefined>(undefined)
+  useEffect(() => {
+    // 流式期不取：这一轮的用量还在每帧增长，读数跟着跳没有意义。切会话时取一次、
+    // 每轮收工（streamingActive 由真→假）再取一次，就够用。
+    if (streamingActive) return
+    let cancelled = false
+    // 可选调用：只关心消息流的测试替身没有这条读数，chip 退化成只有模型名即可。
+    api
+      .conversationContext?.(conversation.id)
+      ?.then((readout) => {
+        if (!cancelled) setContextReadout(readout)
+      })
+      .catch(() => {
+        // 读数失败不打扰：chip 退化成只有模型名，聊天本身不受影响。
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [api, conversation.id, streamingActive])
+  /** 「128k 上下文」/「上下文未知」：窗口只认供应商声明的值，不猜。 */
+  const contextLabel =
+    contextReadout === undefined
+      ? undefined
+      : contextReadout.contextWindow === null
+        ? '上下文未知'
+        : `${formatTokens(contextReadout.contextWindow)} 上下文`
 
   // 稳定引用：MessageBubble 的 memo 依赖这两个 prop 的身份不变。
   const fileUrl = useCallback(
@@ -1984,39 +2077,125 @@ export function ChatView({
         <Cat size={34} />
         <div className="chat-header-info">
           <strong>{conversation.title || nameOf(conversation.memberAgentIds[0] ?? '')}</strong>
-          <small>{conversation.kind === 'group' ? `群聊 · ${members.length} 位成员` : '单聊'}</small>
+          <small>
+            {conversation.kind === 'group' ? `群聊 · ${members.length} 位成员` : '单聊'}
+            {hasCloudMember ? ' · 含云成员' : ''}
+          </small>
         </div>
-        {bond !== undefined && (
-          <span className="chip" title={bond.title} style={{ marginLeft: 'auto' }}>
-            {bond.label}
-          </span>
-        )}
-        {hasVibeTask && onOpenVibe !== undefined && (
-          <button
-            type="button"
-            className="panel-drawer-btn chat-task-btn"
-            title="打开任务与产物"
-            aria-label="打开任务与产物"
-            onClick={() => {
-              onOpenVibe(conversation.id)
-            }}
-          >
-            <Icon name="sparkles" size={16} />
-          </button>
-        )}
-        {/* 窄窗抽屉的入口：宽窗时右栏就在旁边，不需要这枚按钮（那时壳不传这个回调）。 */}
-        {onTogglePanel !== undefined && (
-          <button
-            type="button"
-            className="panel-drawer-btn"
-            title={panelOpen === true ? '收起信息板' : '打开信息板'}
-            aria-label={panelOpen === true ? '收起信息板' : '打开信息板'}
-            aria-expanded={panelOpen === true}
-            onClick={onTogglePanel}
-          >
-            <Icon name="panel-right" size={16} />
-          </button>
-        )}
+        {/* 右侧动作收成一簇：徽标/任务/会话菜单/信息板同属「关于这个会话的次级动作」，
+            整组推到行尾。此前每枚按钮各自 margin-left:auto，空白被摊到按钮之间，
+            三枚图标散在整行（截图里 sparkles、…、面板键彼此隔了半个屏幕）。 */}
+        <div className="chat-header-actions">
+          {bond !== undefined && (
+            <span className="chip" title={bond.title}>
+              {bond.label}
+            </span>
+          )}
+          {hasVibeTask && onOpenVibe !== undefined && (
+            <button
+              type="button"
+              className="panel-drawer-btn chat-task-btn"
+              title="打开任务与产物"
+              aria-label="打开任务与产物"
+              onClick={() => {
+                onOpenVibe(conversation.id)
+              }}
+            >
+              <Icon name="sparkles" size={16} />
+            </button>
+          )}
+          {(onPinToggle !== undefined ||
+            onMuteToggle !== undefined ||
+            onEditGroup !== undefined ||
+            onPickWorkspace !== undefined) && (
+            <div className="chat-header-menu-wrap" ref={headerMenuRef}>
+              <button
+                type="button"
+                className="panel-drawer-btn"
+                title="会话操作"
+                aria-label="会话操作"
+                aria-expanded={headerMenuOpen}
+                aria-haspopup="menu"
+                onClick={() => {
+                  setHeaderMenuOpen((open) => {
+                    return !open
+                  })
+                }}
+              >
+                <Icon name="ellipsis" size={16} />
+              </button>
+              {headerMenuOpen && (
+                <div className="chat-header-menu" role="menu">
+                  {conversation.kind === 'group' && onEditGroup !== undefined && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="menu-item"
+                      onClick={() => {
+                        setHeaderMenuOpen(false)
+                        onEditGroup()
+                      }}
+                    >
+                      群设置
+                    </button>
+                  )}
+                  {onPinToggle !== undefined && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="menu-item"
+                      onClick={() => {
+                        setHeaderMenuOpen(false)
+                        onPinToggle()
+                      }}
+                    >
+                      {conversation.pinned === true ? '取消置顶' : '置顶'}
+                    </button>
+                  )}
+                  {onMuteToggle !== undefined && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="menu-item"
+                      onClick={() => {
+                        setHeaderMenuOpen(false)
+                        onMuteToggle()
+                      }}
+                    >
+                      {conversation.muted === true ? '取消静音' : '静音'}
+                    </button>
+                  )}
+                  {onPickWorkspace !== undefined && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="menu-item"
+                      onClick={() => {
+                        setHeaderMenuOpen(false)
+                        onPickWorkspace()
+                      }}
+                    >
+                      归到项目
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+          {/* 窄窗抽屉的入口：宽窗时右栏就在旁边，不需要这枚按钮（那时壳不传这个回调）。 */}
+          {onTogglePanel !== undefined && (
+            <button
+              type="button"
+              className="panel-drawer-btn"
+              title={panelOpen === true ? '收起信息板' : '打开信息板'}
+              aria-label={panelOpen === true ? '收起信息板' : '打开信息板'}
+              aria-expanded={panelOpen === true}
+              onClick={onTogglePanel}
+            >
+              <Icon name="panel-right" size={16} />
+            </button>
+          )}
+        </div>
       </header>
 
       {connBanner.shown !== undefined && (
@@ -2288,6 +2467,9 @@ export function ChatView({
               onDraftChange={onDraftChange}
               focusToken={focusToken}
               onStop={stopTurn}
+              model={composerModel}
+              modelContext={contextLabel}
+              onModelClick={onOpenProviders}
             />
           </div>
         </div>

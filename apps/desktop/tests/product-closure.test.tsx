@@ -187,7 +187,7 @@ describe('群聊右栏：看得见的进化', () => {
     const html = renderToStaticMarkup(
       <GroupEvolution members={[agent, coder]} onShowMemories={onShowMemories} onShowPlaybook={onShowPlaybook} />,
     )
-    expect(html).toContain('谁在进化')
+    expect(html).toContain('成员（2）')
     expect(html).toContain('CodeBot')
     // 每个成员两个入口（title 里也带名字，所以按按钮数断言而不是按出现次数）。
     expect(html.match(/class="btn btn-mini"/g)).toHaveLength(4)
@@ -294,7 +294,7 @@ describe('群聊右栏：看得见的进化', () => {
       await Promise.resolve()
     })
     const panel = container.textContent ?? ''
-    expect(panel).toContain('谁在进化')
+    expect(panel).toContain('成员（2）')
     // 默认折叠：右栏只给一行摘要，轨迹细节要用户点开才有
     expect(panel).toContain('1 次派工 · 最后由 CodeBot 交付')
     expect(container.querySelector('.relay-list')).toBeNull()
@@ -612,6 +612,16 @@ describe('弹窗提交失败不再静默', () => {
       )
       await Promise.resolve()
     })
+    // 新建走分步向导（P3）：保存键只在末步「模型与权限」出现，先连点两次「下一步」走到那步。
+    for (let round = 0; round < 2; round += 1) {
+      const next = [...container.querySelectorAll('.modal-actions button')].find((node) => {
+        return node.textContent === '下一步'
+      }) as HTMLButtonElement
+      await act(async () => {
+        next.click()
+        await Promise.resolve()
+      })
+    }
     const save = [...container.querySelectorAll('.modal-actions button')].find((node) => {
       return node.textContent === '保存'
     }) as HTMLButtonElement

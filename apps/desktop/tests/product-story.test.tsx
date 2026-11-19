@@ -178,15 +178,18 @@ describe('P0-1 真正选模型的地方接的是目录真源', () => {
       )
       await Promise.resolve()
     })
-    // 模型下拉收在「高级设置」里（那一格是实现层选择，不是「她是谁」），
-    // 所以断言下拉内容之前先把入口展开。
-    const advanced = container.querySelector<HTMLButtonElement>('button.advanced-toggle')
-    if (advanced === null) throw new Error('找不到「高级设置」入口')
-    expect(advanced.getAttribute('aria-expanded'), '高级设置默认应折叠').toBe('false')
-    await act(async () => {
-      advanced.click()
-      await Promise.resolve()
-    })
+    // 模型下拉在向导第三步「模型与权限」（那一格是实现层选择，不是「她是谁」）。
+    // 新建走分步向导（P3）：连点两次「下一步」走到末步，下拉才在那一步可见。
+    for (let round = 0; round < 2; round += 1) {
+      const next = [...container.querySelectorAll<HTMLButtonElement>('.modal-actions button')].find((node) => {
+        return node.textContent === '下一步'
+      })
+      if (next === undefined) throw new Error('找不到「下一步」走到模型与权限步')
+      await act(async () => {
+        next.click()
+        await Promise.resolve()
+      })
+    }
   }
 
   it('下拉里每条都带着上下文读数：有的给长度，没报的明说未知', async () => {

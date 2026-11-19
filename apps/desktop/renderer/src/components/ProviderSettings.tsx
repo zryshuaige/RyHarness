@@ -585,7 +585,7 @@ function ProviderItem({
                   <Icon name="chevron-left" size={16} /> 取消更换
                 </button>
               )}
-              <p className="provider-note">Key 只写在本机配置文件（api-keys.json，权限 0600）。</p>
+              <p className="provider-note">Key 只存在这台机器上。</p>
             </div>
           )}
           {/*
@@ -640,7 +640,7 @@ function ProviderItem({
       {removing && (
         <ConfirmDialog
           title={`移除「${provider.displayName}」的凭据？`}
-          body={`本机 api-keys.json 里存的那份 key 会被删掉，用它的 agent 立刻回复不了，直到重新填一个。随时可以再填回来。`}
+          body={`存在这台机器上的那份 key 会被删掉，用它的 agent 立刻回复不了，直到重新填一个。随时可以再填回来。`}
           confirmLabel="确认移除"
           onCancel={() => {
             setRemoving(false)
@@ -1190,6 +1190,134 @@ function ProviderForm({
     )
   }
 
+  /**
+   * 预设厂商 / 内置供应商走「简形」：用户要做的只有填 Key，名称、协议、地址、
+   * 模型列表都是预设填好的实现层细节，收进「高级设置」折叠区。自定义供应商
+   * 没有预设可填，整张表单照常展开。
+   */
+  const simple = preset !== undefined || (provider !== undefined && provider.custom !== true)
+
+  const identityGroup = (
+    <div className="provider-form-group">
+      <p className="provider-form-group-title">这家是谁</p>
+      <label className="field">
+        <span>名称</span>
+        <input
+          value={displayName}
+          onChange={(event) => {
+            setDisplayName(event.target.value)
+          }}
+        />
+      </label>
+      <div className="field-row">
+        <div className="field">
+          <span>协议</span>
+          {/* 下拉而不是文本框：协议是有限集合（服务端 ProviderProtocol 只有两个值），
+              让用户手敲 `openai` 拼错成 `Openai` 时，错误要到保存之后、
+              真正发请求失败时才暴露出来。展示名走 protocolLabel，不给用户看标识。 */}
+          <Select
+            value={protocol}
+            options={PROTOCOL_OPTIONS}
+            ariaLabel="协议"
+            onChange={(next) => {
+              setProtocol(next)
+            }}
+          />
+        </div>
+        <label className="field">
+          <span>Base URL</span>
+          <input
+            value={baseUrl}
+            placeholder="https://api.example.com/v1"
+            onChange={(event) => {
+              setBaseUrl(event.target.value)
+            }}
+          />
+        </label>
+      </div>
+    </div>
+  )
+
+  const modelsGroup = (
+    <div className="provider-form-group">
+      <p className="provider-form-group-title">模型</p>
+      <label className="field">
+        <span>模型列表</span>
+        <textarea
+          rows={5}
+          value={modelsText}
+          placeholder="deepseek-ai/DeepSeek-V4-Flash&#10;gpt-oss-120b"
+          // 失焦时整理成一行一个：用户写的时候可以用空格、逗号、换行，也可以整段粘贴，
+          // 不必先去挑分隔符；整理只发生在他离开这个框之后，不打断正在输入的人。
+          onBlur={() => {
+            setModelsText(formatModels(parseModels(modelsText)))
+          }}
+          onChange={(event) => {
+            setModelsText(event.target.value)
+          }}
+        />
+      </label>
+      <ContextWindowEditor
+        models={parseModels(modelsText)}
+        windows={windows}
+        onChange={(modelId, raw) => {
+          setWindows((prev) => {
+            return { ...prev, [modelId]: raw }
+          })
+        }}
+      />
+      <ModelDiscoveryPanel
+        state={discovery}
+        picked={picked}
+        supported={canDiscover}
+        onReload={() => {
+          runDiscovery()
+        }}
+        onToggle={(modelId, checked) => {
+          setPicked((prev) => {
+            const next = new Set(prev)
+            if (checked) next.add(modelId)
+            else next.delete(modelId)
+            return next
+          })
+        }}
+        onToggleAll={(checked) => {
+          setPicked(
+            checked && discovery.kind === 'loaded'
+              ? new Set(
+                  discovery.models.map((model) => {
+                    return model.id
+                  }),
+                )
+              : new Set<string>(),
+          )
+        }}
+        onInsert={insertPicked}
+      />
+      <p className="provider-note">
+        空格、逗号或换行都行，离开这一栏会自动排成一行一个；不知道 id 就点「从供应商拉取模型」。
+      </p>
+    </div>
+  )
+
+  const credentialGroup =
+    !keyless && !editing ? (
+      <div className="provider-form-group">
+        <p className="provider-form-group-title">凭据</p>
+        <label className="field">
+          <span>API Key（可稍后再填）</span>
+          <input
+            type="password"
+            value={apiKey}
+            autoComplete="off"
+            onChange={(event) => {
+              setApiKey(event.target.value)
+            }}
+          />
+        </label>
+      </div>
+    ) : null
+
   return (
     // 表单而非 div：任意字段里按回车都能保存，键盘用户不用一路 Tab 到按钮。
     <form
@@ -1214,116 +1342,25 @@ function ProviderForm({
       {/* 这一步走到哪儿了，写在表单最上面：弹窗顶上只有一句「添加 DeepSeek」，
           下面却是一屏字段，用户容易不知道自己是在挑厂商还是在填资料。 */}
       <p className="provider-step">{editing ? '改这一条路由' : '第 2 步 · 填资料'}</p>
-      <div className="provider-form-group">
-        <p className="provider-form-group-title">这家是谁</p>
-        <label className="field">
-          <span>名称</span>
-          <input
-            value={displayName}
-            onChange={(event) => {
-              setDisplayName(event.target.value)
-            }}
-          />
-        </label>
-        <div className="field-row">
-          <div className="field">
-            <span>协议</span>
-            {/* 下拉而不是文本框：协议是有限集合（服务端 ProviderProtocol 只有两个值），
-                让用户手敲 `openai` 拼错成 `Openai` 时，错误要到保存之后、
-                真正发请求失败时才暴露出来。展示名走 protocolLabel，不给用户看标识。 */}
-            <Select
-              value={protocol}
-              options={PROTOCOL_OPTIONS}
-              ariaLabel="协议"
-              onChange={(next) => {
-                setProtocol(next)
-              }}
-            />
-          </div>
-          <label className="field">
-            <span>Base URL</span>
-            <input
-              value={baseUrl}
-              placeholder="https://api.example.com/v1"
-              onChange={(event) => {
-                setBaseUrl(event.target.value)
-              }}
-            />
-          </label>
-        </div>
-      </div>
-      <div className="provider-form-group">
-        <p className="provider-form-group-title">模型</p>
-        <label className="field">
-          <span>模型列表</span>
-          <textarea
-            rows={5}
-            value={modelsText}
-            placeholder="deepseek-ai/DeepSeek-V4-Flash&#10;gpt-oss-120b"
-            // 失焦时整理成一行一个：用户写的时候可以用空格、逗号、换行，也可以整段粘贴，
-            // 不必先去挑分隔符；整理只发生在他离开这个框之后，不打断正在输入的人。
-            onBlur={() => {
-              setModelsText(formatModels(parseModels(modelsText)))
-            }}
-            onChange={(event) => {
-              setModelsText(event.target.value)
-            }}
-          />
-        </label>
-        <ContextWindowEditor
-          models={parseModels(modelsText)}
-          windows={windows}
-          onChange={(modelId, raw) => {
-            setWindows((prev) => {
-              return { ...prev, [modelId]: raw }
-            })
-          }}
-        />
-        <ModelDiscoveryPanel
-          state={discovery}
-          picked={picked}
-          supported={canDiscover}
-          onReload={() => {
-            runDiscovery()
-          }}
-          onToggle={(modelId, checked) => {
-            setPicked((prev) => {
-              const next = new Set(prev)
-              if (checked) next.add(modelId)
-              else next.delete(modelId)
-              return next
-            })
-          }}
-          onToggleAll={(checked) => {
-            setPicked(
-              checked && discovery.kind === 'loaded'
-                ? new Set(
-                    discovery.models.map((model) => {
-                      return model.id
-                    }),
-                  )
-                : new Set<string>(),
-            )
-          }}
-          onInsert={insertPicked}
-        />
-      </div>
-      {!keyless && !editing && (
-        <div className="provider-form-group">
-          <p className="provider-form-group-title">凭据</p>
-          <label className="field">
-            <span>API Key（可稍后再填）</span>
-            <input
-              type="password"
-              value={apiKey}
-              autoComplete="off"
-              onChange={(event) => {
-                setApiKey(event.target.value)
-              }}
-            />
-          </label>
-        </div>
+      {/* 简形把 Key 摆在最前：预设厂商的其余字段都已填好，填 Key 就是全部正事。 */}
+      {simple && credentialGroup}
+      {simple && keyless && !editing && <p className="provider-note">本地服务无需 API Key，保存后会自动探活。</p>}
+      {simple ? (
+        <details className="provider-advanced">
+          <summary>
+            高级设置
+            <small>名称、协议、地址、模型列表（预设已填好，一般不用动）</small>
+          </summary>
+          {identityGroup}
+          {modelsGroup}
+        </details>
+      ) : (
+        <>
+          {identityGroup}
+          {modelsGroup}
+        </>
       )}
+      {!simple && credentialGroup}
       {preset?.docsUrl !== undefined && (
         <p className="provider-note">
           <a href={preset.docsUrl} target="_blank" rel="noreferrer">
@@ -1332,11 +1369,7 @@ function ProviderForm({
         </p>
       )}
       {removalHint !== undefined && <p className="provider-note provider-warn">{removalHint}</p>}
-      <p className="provider-note">
-        {editing
-          ? '空格、逗号或换行都行，离开这一栏会自动排成一行一个；要换 Key 请回到这一行用「更换 Key」。'
-          : '空格、逗号或换行都行，离开这一栏会自动排成一行一个；不知道 id 就点上面的「从供应商拉取模型」，保存后还能逐个补 key。'}
-      </p>
+      {editing && <p className="provider-note">要换 Key 请回到这一行用「更换 Key」。</p>}
       {unsupported && (
         <p className="apikey-error" role="alert">
           {editing
@@ -1518,6 +1551,8 @@ export function ProviderSettings({
   const [pickedPreset, setPickedPreset] = useState<ProviderPreset | undefined>(undefined)
   /** 需要初始展开的条目（用户刚点过的那家）。 */
   const [openIds, setOpenIds] = useState<ReadonlySet<string>>(new Set())
+  /** 搜索词：预设网格与已装列表共用一个过滤口径（名字或 id），补评审清单里「供应商无搜索」的缺口。 */
+  const [query, setQuery] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -1541,17 +1576,26 @@ export function ProviderSettings({
     }
   }, [api])
 
+  const q = query.trim().toLowerCase()
+  const matches = (name: string, id: string): boolean => {
+    return q.length === 0 || name.toLowerCase().includes(q) || id.toLowerCase().includes(q)
+  }
   const builtin = providers.filter((provider) => {
-    return provider.custom !== true
+    return provider.custom !== true && matches(provider.displayName, provider.id)
   })
   const custom = providers.filter((provider) => {
-    return provider.custom === true
+    return provider.custom === true && matches(provider.displayName, provider.id)
+  })
+  const visiblePresets = presets.filter((preset) => {
+    return matches(preset.displayName, preset.id)
   })
   /** 一家能用的都没有：先把「挑一家」摆在最前面，别让他面对一个默认选项。 */
   const configured = providers.filter((provider) => {
     return provider.apiKeyConfigured || isLocalService(provider)
   })
   const needPick = configured.length === 0 && presets.length > 0
+  /** 搜索无命中：预设模式看可见预设，已装模式看两组之和（分组空了会自动隐藏）。 */
+  const noMatch = q.length > 0 && (needPick ? visiblePresets.length === 0 : builtin.length + custom.length === 0)
   return (
     <>
       <div className="provider-section-head">
@@ -1571,12 +1615,33 @@ export function ProviderSettings({
           <Icon name="plus" size={16} /> 添加供应商
         </button>
       </div>
-      {needPick && (
+      <label className="search-box-wrap provider-search">
+        <span className="search-box-icon">
+          <Icon name="search" size={16} />
+        </span>
+        <input
+          className="search-box has-icon"
+          type="search"
+          value={query}
+          placeholder="搜索供应商"
+          aria-label="搜索供应商"
+          onChange={(event) => {
+            setQuery(event.target.value)
+          }}
+        />
+      </label>
+      {noMatch && (
+        <div className="provider-empty provider-no-match">
+          <p className="provider-empty-title">没有匹配的供应商</p>
+          <p className="provider-empty-hint">搜的是名字或 id；换个关键词，或者点右上角「添加供应商」。</p>
+        </div>
+      )}
+      {needPick && !noMatch && (
         <section className="provider-picker">
           <p className="provider-picker-title">先挑一家</p>
           <p className="provider-note">哪家都行，之后在下面随时能换。key 只存在这台机器上。</p>
           <div className="provider-picker-grid">
-            {presets.map((preset) => {
+            {visiblePresets.map((preset) => {
               // 已经建过路由的那家（内置的 SiliconFlow）直接展开它填 key，
               // 不要再走一遍添加向导——那会多出一条同地址的重复路由。
               const installed = providers.find((provider) => {
@@ -1598,18 +1663,19 @@ export function ProviderSettings({
                     })
                   }}
                 >
-                  <ProviderIcon id={preset.id} name={preset.displayName} size={36} />
+                  <ProviderIcon id={preset.id} name={preset.displayName} size={24} />
                   <span className="provider-preset-name">{preset.displayName}</span>
                   <span className="provider-preset-sub">
                     {installed === undefined ? presetSummary(preset) : '已添加 · 点这里填 key'}
                   </span>
+                  <Icon name="chevron-right" size={16} className="provider-pick-chevron" />
                 </button>
               )
             })}
           </div>
         </section>
       )}
-      {providers.length === 0 ? (
+      {noMatch ? null : providers.length === 0 ? (
         // 三种空态分开说：还在加载 / 预设读到了但一家都没加 / 连预设都读不到。
         // 混成一句「还没读到供应商」，用户在「刚加完还没刷新」时会被吓一跳。
         <div className="provider-empty">

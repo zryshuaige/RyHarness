@@ -401,6 +401,42 @@ describe('滚动仲裁', () => {
     expect(scroller.top).toBe(up)
   })
 
+  it('贴底时小幅上滚（不足 100px）也立即脱离贴底：跟随帧不得把视口拽回底部', async () => {
+    await render()
+    expect(scroller.top).toBe(scroller.max())
+
+    // Windows 一格滚轮常不足 100px：旧实现按 distance < 100 仍判「贴着底」，
+    // 跟随帧下一帧就把 scrollTop 写回 max——真机 CDP 量到的「滚轮滚不动」。
+    const up = scroller.max() - 60
+    await userScrollTo(up)
+    expect(scroller.top).toBe(up)
+    expect(bucket.getView().scroll.atBottom).toBe(false)
+
+    // 内容继续变高（流式写出一行字）也不拽回。
+    await grow(300)
+    await settle()
+    expect(scroller.top).toBe(up)
+  })
+
+  it('流式输出期间小幅上滚同样停得住：token 续写不把视口拽回底部', async () => {
+    await render()
+    const up = scroller.max() - 60
+    await userScrollTo(up)
+    expect(bucket.getView().scroll.atBottom).toBe(false)
+
+    for (let i = 0; i < 6; i++) {
+      await act(async () => {
+        push({ type: 'message-start', conversationId: 'c1', senderId: 'ryen', senderName: 'Ryen', turnIndex: 50 })
+        push({ type: 'text-delta', conversationId: 'c1', senderId: 'ryen', text: `第 ${i} 个 token` })
+        vi.advanceTimersByTime(20)
+        await Promise.resolve()
+      })
+      await settle(20)
+      await grow(30)
+      expect(scroller.top).toBe(up)
+    }
+  })
+
   it('真实高度远超估算：窗口不会塌到最后一条（塌了内容骤缩，视口就被夹回底部）', async () => {
     await render()
     const up = Math.round(scroller.max() / 2)
@@ -479,7 +515,9 @@ describe('滚动仲裁', () => {
 
   it('流式的一帧里连来多个 token：跟随只写一次 scrollTop（合帧，不是逐 token 同步写）', async () => {
     await render()
-    await userScrollTo(scroller.max() - 50)
+    // 停在底部测合帧。注意不能写成 max-50：那是从底部**上滚** 50px，新语义下
+    // 任何上滚都立即解除贴底（正是「滚轮滚不动」的修复），跟随就不该再写。
+    await userScrollTo(scroller.max())
     await settle()
     scrollWrites = 0
 

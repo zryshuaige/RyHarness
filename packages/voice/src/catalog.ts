@@ -177,9 +177,38 @@ export function declareVoiceId(id: string): void {
   declaredVoiceIds.add(id)
 }
 
+/**
+ * 本机系统音色的 id 前缀。
+ *
+ * 静态四条预设（慧慧/瑶瑶/康康/云希）在没装对应语音包的机器上全都回退到同一条
+ * 默认音色——用户听着就是「换哪个都一样」。真正的解法是渲染层按
+ * `speechSynthesis.getVoices()` 列出**本机真实有的**音色，每条给一个
+ * `system-local:<encodeURIComponent(音色名)>` 形式的 id。名字编在 id 里，服务端
+ * 不需要注册就能解码回音色（系统音色本来就不经服务端合成），人格保存也不会被
+ * normalizeVoiceId 洗成「不朗读」。
+ */
+export const SYSTEM_LOCAL_ID_PREFIX = 'system-local:'
+
+/** 给一条本机系统音色名生成目录 id。 */
+export function systemLocalVoiceId(voiceName: string): string {
+  return `${SYSTEM_LOCAL_ID_PREFIX}${encodeURIComponent(voiceName)}`
+}
+
+/** 这个 id 是不是本机系统音色；是则解码出音色名，不是则 undefined。 */
+export function systemLocalVoiceName(id: string): string | undefined {
+  if (!id.startsWith(SYSTEM_LOCAL_ID_PREFIX)) return undefined
+  try {
+    const name = decodeURIComponent(id.slice(SYSTEM_LOCAL_ID_PREFIX.length))
+    return name.length > 0 ? name : undefined
+  } catch {
+    return undefined
+  }
+}
+
 /** 这个 id 是不是一条合法的音色 id（不管它此刻能不能合成）。 */
 export function isKnownVoiceId(id: string): boolean {
   if (declaredVoiceIds.has(id)) return true
+  if (systemLocalVoiceName(id) !== undefined) return true
   return VOICE_PROFILES.some((profile) => {
     return profile.id === id
   })
@@ -211,6 +240,17 @@ export function allVoiceProfiles(): VoiceProfile[] {
 
 /** 按 id 取音色；未知 id 返回 undefined（调用方据此回 VOICE_PROFILE_NOT_FOUND）。 */
 export function voiceProfile(id: string): VoiceProfile | undefined {
+  const localName = systemLocalVoiceName(id)
+  if (localName !== undefined) {
+    return {
+      id,
+      name: localName,
+      engine: 'system',
+      voice: localName,
+      sampleText: SAMPLE_TEXT,
+      description: '本机安装的系统音色',
+    }
+  }
   const builtin = VOICE_PROFILES.find((profile) => {
     return profile.id === id
   })

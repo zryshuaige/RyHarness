@@ -36,26 +36,67 @@
 
 /* 卡片网格：窄了自动少一列（auto-fill 自己算），卡片之间留一档呼吸。 */
 .contacts-page .contact-grid {
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: var(--space-4);
+  /* 列表↔卡片切换补间：容器挂载时整幅淡入上浮，行/卡各自的 item-in 错峰随后，
+     视图切换不再是硬切（与 RyVibe vibe-swap、Me me-section-in 同一套宏动效）。 */
+  animation: contacts-view-in var(--dur-macro) var(--ease-out);
 }
 
-/* 卡片本体：白面 + 1px 发丝描边 + 极轻阴影 + 12px 圆角。
-   描边是白卡压在暖奶油底上唯一的边缘信号（阴影量不出边）。 */
+/* 卡片本体：白面 + 1px 发丝描边 + 12px 圆角，贴面不抬升。
+   描边是白卡压在暖奶油底上唯一的边缘信号（阴影量不出边）。
+   这一版改左对齐：此前头像/标题/性格/按钮全部居中，扫读时每行都要重新找起点；
+   名字、模型、性格尺落在同一条竖线上，眼睛才有一条基线可跟。 */
 .contacts-page .contact-card {
   border: 1px solid var(--edge);
   border-radius: var(--radius-card);
-  box-shadow: var(--shadow-1);
-  padding: var(--space-5) var(--space-4);
+  box-shadow: none;
+  padding: var(--space-4);
   gap: var(--space-2);
+  align-items: flex-start;
+  text-align: left;
+  min-height: 220px;
 }
 
-/* 悬停：抬起来 + 描边加深。
-   卡片本身不是可点的（可点的是名字与里面的按钮），所以抬的是这一格的分量，
-   不是在暗示「整张卡能按」。 */
+/* 身份环：色相只喂头像外圈（与聊天页同一口径），名字与正文保持中性。 */
+.contacts-page .contact-avatar {
+  display: inline-flex;
+  flex-shrink: 0;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--agent-hue);
+}
+
+/* 拉平链接（stretched link）：一枚透明的真按钮铺满整卡/整行，「点卡面 = 开聊」
+   不再是 article 上的 onClick（那既过不了键盘可达性，也把行内按钮变成嵌套交互）。
+   行内真实按钮用 z-index 1 浮在它上面，各自收各自的点击。 */
+.contacts-page .contact-card,
+.contacts-page .contact-row {
+  position: relative;
+}
+
+.contacts-page .contact-hit {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  padding: 0;
+  border: none;
+  border-radius: inherit;
+  background: none;
+  cursor: pointer;
+}
+
+.contacts-page .contact-card .contact-open,
+.contacts-page .contact-card .contact-more-wrap,
+.contacts-page .contact-card .contact-actions,
+.contacts-page .contact-row .contact-open,
+.contacts-page .contact-row .contact-row-actions {
+  position: relative;
+  z-index: 1;
+}
+
+/* 悬停只加深描边：整页卡片都浮起来时，页面就是一堆盒子。
+   卡片本身不是可点的（可点的是名字与里面的按钮），位移更不该暗示「整张卡能按」。 */
 .contacts-page .contact-card:hover {
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-2);
   border-color: var(--edge-strong);
 }
 
@@ -63,7 +104,7 @@
    Tab 走到哪一位助理身上，一眼看得出来。 */
 .contacts-page .contact-card:focus-within {
   border-color: var(--amber-text);
-  box-shadow: var(--shadow-1), var(--focus-ring);
+  box-shadow: var(--focus-ring);
 }
 
 /* 名字那一行：名字可点（开聊），内置标记跟在旁边。 */
@@ -71,11 +112,12 @@
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 2px var(--space-2);
   width: 100%;
   margin: 0;
   font-size: var(--fs-md);
+  text-align: left;
 }
 
 /* 名字按钮：长得像标题，按下去能开聊。
@@ -97,7 +139,7 @@
   font-weight: 600;
   line-height: 1.35;
   color: var(--text-primary);
-  text-align: center;
+  text-align: left;
   overflow-wrap: anywhere;
   cursor: pointer;
   transition: color var(--dur-hover) var(--ease-out);
@@ -209,18 +251,92 @@
   font-size: var(--fs-xs);
 }
 
-/* 四个动作排成 2×2：此前四个按钮挤在一行，放不下就换行，换出来的行参差不齐。 */
+/* 一个主按钮 + 一个「…」菜单：4 个同权重按钮挤在 208px 卡里像工具栏，
+   而且「删除」与「发消息」并排时误点的代价不对等。 */
 .contacts-page .contact-actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+  display: flex;
+  align-items: center;
   gap: var(--space-2);
   width: 100%;
   margin-top: auto;
 }
 
-/* 卡片里的按钮不再各自带一段上边距（grid 自己管间距）。 */
 .contacts-page .contact-actions .btn {
   margin-top: 0;
+}
+
+/* 「发消息」占满行内剩余宽度；菜单键保持方形。 */
+.contacts-page .contact-actions > .btn {
+  flex: 1;
+}
+
+.contacts-page .contact-more-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.contacts-page .contact-more-btn {
+  width: var(--ctl-h-sm);
+  min-width: var(--ctl-h-sm);
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.contacts-page .contact-more-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: var(--z-popover);
+  width: 148px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-1);
+  background: var(--bg-elevated);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-3);
+  animation: menu-in var(--dur-in) var(--ease-spring);
+}
+
+.contacts-page .contact-more-menu[hidden] {
+  display: none;
+}
+
+.contacts-page .contact-more-menu .menu-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 32px;
+  padding: 0 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.contacts-page .contact-more-menu .menu-item:hover {
+  background: var(--hover-bg);
+}
+
+.contacts-page .contact-more-menu .menu-item.is-danger {
+  color: var(--danger);
+}
+
+.contacts-page .contact-more-menu .menu-item:disabled {
+  color: var(--text-disabled);
+  cursor: default;
+}
+
+/* 卡面可点：hover 抬升与点击开聊必须是同一件事。 */
+.contacts-page .contact-card[data-clickable='true'] {
+  cursor: pointer;
 }
 
 /* 「听听」：图标与文字之间留一格——JSX 里的换行不会变成空格。 */
@@ -235,61 +351,168 @@
   flex-shrink: 0;
 }
 
-/* ---- 「新建 Agent」那一格：它是一个动作，不是一张人卡 ----
-   此前它是一张空卡：同样的白底、同样的圆角、同样的悬停抬升，
-   用户会以为点它能选一位已有的人。现在给它琥珀底 + 实心加号 +
-   动作文案，一眼就知道是「加一个」。 */
-.contacts-page .contact-create {
-  border: 1px solid var(--edge);
-  /* 琥珀只做淡底：color-mix 的是已有的两个 token，深浅两套主题各自成立。 */
-  background: color-mix(in srgb, var(--amber-primary) 10%, var(--bg-surface));
-  box-shadow: var(--shadow-1);
-  color: var(--amber-text);
-  cursor: pointer;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-2);
-  min-height: 208px;
-  transition: background var(--dur-hover) var(--ease-out), transform var(--dur-hover) var(--ease-out),
-    box-shadow var(--dur-hover) var(--ease-out), border-color var(--dur-hover) var(--ease-out);
+/* ---- 列表视图（默认）：一行 64px，密度优先 ----
+   一屏能扫完更多人。动作默认只占位不上屏，hover 或键盘焦点进入时才显现——
+   三十行每行常显两枚按钮，就是一排工具栏。
+   隐藏只用 opacity（几何常在、Tab 仍可达，focus-within 会把它显出来），
+   与聊天操作条同一条纪律。 */
+.contacts-page .contact-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  animation: contacts-view-in var(--dur-macro) var(--ease-out);
 }
 
-.contacts-page .contact-create:hover {
-  background: color-mix(in srgb, var(--amber-primary) 18%, var(--bg-surface));
-  border-color: var(--amber-text);
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-2);
+@keyframes contacts-view-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
 }
 
-.contacts-page .contact-create:active {
-  transform: translateY(-2px) scale(0.98);
-}
-
-/* 加号：实心琥珀圆牌，和「选中 / 主按钮」同一套「该注意的地方」的琥珀。 */
-.contacts-page .contact-create-icon {
-  width: 44px;
-  height: 44px;
-  border-radius: var(--radius-pill);
-  background: var(--amber-primary);
-  color: var(--amber-on-primary);
+.contacts-page .contact-row {
   display: flex;
   align-items: center;
-  justify-content: center;
+  gap: var(--space-3);
+  min-height: 64px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  animation: item-in var(--dur-in) var(--ease-out) backwards;
+  animation-delay: calc(min(var(--i, 0), 8) * 30ms);
+  transition: background var(--dur-hover) var(--ease-out);
 }
 
-.contacts-page .contact-create h3 {
-  color: var(--amber-text);
-  font-size: var(--fs-md);
-  font-weight: 600;
+.contacts-page .contact-row:hover {
+  background: var(--hover-bg);
 }
 
-.contacts-page .contact-prompt {
-  max-width: 18em;
+.contacts-page .contact-row:focus-within {
+  background: var(--hover-bg);
+  box-shadow: var(--focus-ring);
+}
+
+/* 名字 + 模型两行：名字 14/600，模型 12 mono 单行省略（完整值在 title 上）。 */
+.contacts-page .contact-row-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.contacts-page .contact-row .contact-title {
+  width: auto;
   margin: 0;
+  flex-wrap: nowrap;
+}
+
+.contacts-page .contact-row .contact-open {
+  max-height: none;
   min-height: 0;
+  font-size: var(--fs-base);
+  line-height: 1.35;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.contacts-page .contact-row .contact-model {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 性格 chip：只给档位名，最多两条。 */
+.contacts-page .contact-row-traits {
+  flex: none;
+  display: flex;
+  gap: var(--space-1);
+  margin: 0;
+  width: auto;
+}
+
+.contacts-page .contact-trait-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-subtle);
   color: var(--text-secondary);
   font-size: var(--fs-xs);
-  line-height: 1.6;
+  white-space: nowrap;
+}
+
+/* 亲密度：行尾一个弱读数，数字用等宽数字，不随位数跳。 */
+.contacts-page .contact-row-bond {
+  flex: none;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.contacts-page .contact-row-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-hover) var(--ease-out);
+}
+
+.contacts-page .contact-row:hover .contact-row-actions,
+.contacts-page .contact-row:focus-within .contact-row-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* 窄窗：性格 chip 与亲密度先让位（名字与动作不能挤没）。 */
+@media (max-width: 1100px) {
+  .contacts-page .contact-row-traits,
+  .contacts-page .contact-row-bond {
+    display: none;
+  }
+}
+
+/* ---- 视图切换：胶囊分段，选中用琥珀文字 + 白面 ----
+   与聊天列表的选中同一套「琥珀只标选中」的口径；两枚按钮各自 aria-pressed。 */
+.contacts-page .view-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+}
+
+.contacts-page .view-toggle button {
+  height: calc(var(--row-h) - 6px);
+  min-width: 44px;
+  padding: 0 var(--space-2);
+  border: none;
+  border-radius: var(--radius-xs);
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  /* 分段控件的标签是常读 chrome，13 比 12 更稳（与导航/行名同一档），不靠缩小省地方。 */
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  transition: background var(--dur-hover) var(--ease-out), color var(--dur-hover) var(--ease-out);
+}
+
+.contacts-page .view-toggle button:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+
+.contacts-page .view-toggle button.is-active {
+  background: var(--bg-surface);
+  color: var(--amber-text);
+  box-shadow: var(--ring-edge);
 }
 
 /* ---- 空态：给一个能点的按钮 ---- */
@@ -317,7 +540,7 @@
   flex: 0 0 240px;
   border: 1px solid var(--edge);
   border-radius: var(--radius-card);
-  box-shadow: var(--shadow-1);
+  box-shadow: none;
 }
 
 .contacts-page .template-card strong {
@@ -461,4 +684,49 @@
   flex-shrink: 0;
   color: var(--text-tertiary);
   font-size: var(--fs-xs);
+}
+
+/* ---- 页头：计数 + 搜索 + 三个动作 ----
+   此前通讯录页头只有「通讯录」和两枚按钮，内容区又写一遍「我的 Agent（N）」——
+   同一页两个标题。计数并入标题，搜索与动作排在右侧。 */
+.contacts-header .page-count {
+  margin-left: var(--space-2);
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+  font-weight: 400;
+  vertical-align: 2px;
+}
+
+/* 搜索占页头剩余宽度（上限 320）：拥挤时它先收（可缩到 140），把宽度让给动作按钮。 */
+.contacts-search {
+  flex: 1 1 180px;
+  width: auto;
+  min-width: 140px;
+  max-width: 320px;
+}
+
+/* 页头动作按钮永不折行、不被挤瘦：此前 .btn 没有 nowrap，窄窗下「建群 / 从模板 /
+   新建 Agent」被 flex 压到内容宽以下，中文标签竖排成两行（建/群、从模/板）。
+   按钮保住自然宽，搜索框负责伸缩。视图切换同理不缩。 */
+.contacts-header .page-actions .btn,
+.contacts-header .view-toggle {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* 模板弹层：横向轨在弹层里改成两列网格，不再横向滚动。 */
+.template-rail-dialog {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+  overflow: visible;
+  padding-bottom: 0;
+}
+
+.template-rail-dialog .template-card {
+  flex: none;
+}
+
+.contacts-no-match {
+  min-height: 280px;
 }

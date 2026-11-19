@@ -21,6 +21,7 @@ import { rowTransitionName, withViewTransition } from '../lib/view-transition.ts
 import { useVisibleWindow, windowSlice } from '../lib/windowed.ts'
 import { Avatar } from './avatars/Avatar.tsx'
 import { GroupAvatar } from './avatars/GroupAvatar.tsx'
+import { Cat } from './Cat.tsx'
 import { ConfirmDialog } from './ConfirmDialog.tsx'
 import { Icon } from './Icon.tsx'
 import { ConversationSkeleton } from './Skeleton.tsx'
@@ -547,15 +548,15 @@ export function ConversationList({
         .filter((a): a is AgentDef => {
           return a !== undefined
         })
-      return <GroupAvatar members={members} size={48} />
+      return <GroupAvatar members={members} size={40} />
     }
     const other = agents.find((a) => {
       return a.id === conversation.memberAgentIds[0]
     })
     if (other === undefined) {
-      return <Avatar name={conversation.title || '?'} seed={conversation.id} size={48} />
+      return <Avatar name={conversation.title || '?'} seed={conversation.id} size={40} />
     }
-    return <Avatar avatarKey={other.avatar} name={other.name} seed={other.id} size={48} />
+    return <Avatar avatarKey={other.avatar} name={other.name} seed={other.id} size={40} />
   }
 
   /**
@@ -861,6 +862,14 @@ export function ConversationList({
               <p className="search-section-empty">没有叫「{trimmed}」的会话</p>
             ) : (
               <div className="empty-state empty-state-inline">
+                {/* 品牌空态猫：与 ChatView/通讯录/右栏产物同一套 empty-cat 语言（此前唯独
+                    会话列表空态漏了它）。窄列用 56 档（主列 88），琥珀光晕由 .empty-cat 提供；
+                    只在「真没有会话」时出现，搜索无匹配不摆猫。 */}
+                {conversations.length === 0 && (
+                  <span className="empty-cat">
+                    <Cat size={56} />
+                  </span>
+                )}
                 <h3>{conversations.length === 0 ? '还没有会话' : '没有匹配的会话'}</h3>
                 <p>{conversations.length === 0 ? '先去通讯录看看有什么助理。' : '换个关键词试试。'}</p>
                 {conversations.length === 0 && onGoContacts !== undefined && (
@@ -987,7 +996,7 @@ export function ConversationList({
                         {conversation.kind === 'group' && onEditGroup !== undefined && (
                           <button
                             type="button"
-                            className="btn btn-mini"
+                            className="menu-item"
                             onClick={() => {
                               closeMenu(false)
                               onEditGroup(conversation)
@@ -998,7 +1007,7 @@ export function ConversationList({
                         )}
                         <button
                           type="button"
-                          className="btn btn-mini"
+                          className="menu-item"
                           onClick={() => {
                             void patchConversation(conversation, { pinned: !(conversation.pinned ?? false) })
                           }}
@@ -1007,7 +1016,7 @@ export function ConversationList({
                         </button>
                         <button
                           type="button"
-                          className="btn btn-mini"
+                          className="menu-item"
                           onClick={() => {
                             void patchConversation(conversation, { muted: !(conversation.muted ?? false) })
                           }}
@@ -1017,7 +1026,7 @@ export function ConversationList({
                         {onPickWorkspace !== undefined && (
                           <button
                             type="button"
-                            className="btn btn-mini"
+                            className="menu-item"
                             onClick={() => {
                               closeMenu(false)
                               onPickWorkspace(conversation)
@@ -1028,7 +1037,7 @@ export function ConversationList({
                         )}
                         <button
                           type="button"
-                          className="btn btn-mini btn-danger"
+                          className="menu-item is-danger"
                           onClick={() => {
                             closeMenu(false)
                             setDeleting(conversation)

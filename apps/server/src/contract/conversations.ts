@@ -96,6 +96,26 @@ export const UploadArtifactBody: z<UploadArtifactInput> = z.object({
   mime: z.string(),
 })
 
+/**
+ * GET /api/conversations/:id/context 的只读响应：composer 的模型读数。
+ *
+ * 解析在服务端完成（direct → 唯一成员，group → 调度员），与 loop 实际派工同一口径；
+ * 渲染层自己 join 会话成员 + agent 清单 + 供应商清单的话，composer 就得为一行读数
+ * 订阅两份 store，40ms 流式窗口下每帧重算。
+ *
+ * `contextWindow` 只取供应商里**声明**的值：适配器没报、用户没补录时是 null，
+ * 界面显示「上下文未知」——绝不猜一个数字（见 routes/providers.ts 的注释）。
+ */
+export interface ConversationContextView {
+  providerId: string
+  modelId: string
+  /** 「模型叶名 · 供应商名」的读数（服务端口径，渲染层沿用 modelPair 的同一套写法）。 */
+  modelLabel: string
+  contextWindow: number | null
+  /** 本会话累计 token（与 GET /api/conversations/:id 的 usage 同一聚合）。 */
+  usedTokens: number | null
+}
+
 /** POST /api/attachments/lookup 的查重体。 */
 export interface AttachmentLookupInput {
   data?: string

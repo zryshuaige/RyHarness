@@ -321,6 +321,73 @@ export function localSystemVoiceNames(): string[] {
   })
 }
 
+/**
+ * 本机系统音色的 id 约定，与内核 `@ryharness/voice/catalog` 的
+ * `SYSTEM_LOCAL_ID_PREFIX` 同一份字面量（渲染层不 import 内核包，两侧靠测试钉住）。
+ *
+ * 为什么系统音色要按本机实际安装动态列：静态预设（慧慧/瑶瑶/康康/云希）在只装了
+ * 一条中文语音包的机器上全都回退到同一条默认音色——「换哪个听起来都一样」。
+ * 名字编在 id 里，播放器不查目录也能解码回音色，人格保存时内核也认得它。
+ */
+const SYSTEM_LOCAL_ID_PREFIX = 'system-local:'
+
+/** 给一条本机系统音色名生成目录 id（与内核 systemLocalVoiceId 同算法）。 */
+export function systemLocalVoiceId(voiceName: string): string {
+  return `${SYSTEM_LOCAL_ID_PREFIX}${encodeURIComponent(voiceName)}`
+}
+
+/** 本机音色的试听句（与内核目录的 SAMPLE_TEXT 同一句）。 */
+const LOCAL_SAMPLE_TEXT = '你好，我是 Ryen，今天也一起把事情做完吧。'
+
+/** 本机系统音色 id → 音色条目；不是这种 id 时返回 undefined。 */
+export function systemLocalVoiceProfile(id: string): VoiceProfile | undefined {
+  if (!id.startsWith(SYSTEM_LOCAL_ID_PREFIX)) return undefined
+  let name: string
+  try {
+    name = decodeURIComponent(id.slice(SYSTEM_LOCAL_ID_PREFIX.length))
+  } catch {
+    return undefined
+  }
+  if (name.length === 0) return undefined
+  return {
+    id,
+    name,
+    engine: 'system',
+    voice: name,
+    sampleText: LOCAL_SAMPLE_TEXT,
+    description: '本机安装的系统音色',
+  }
+}
+
+/**
+ * 本机真实有的系统音色目录（下拉选项用）。
+ *
+ * 还没加载完 / 没有 Web Speech 时返回空数组，调用方按「读到了没有」区分。
+ * 中文音色排前面、离线（localService）音色排前面：在线 Natural 音色要连微软
+ * 服务器取声，断网时会静默失败——能用，但不该是默认推荐。
+ */
+export function localSystemVoiceProfiles(): VoiceProfile[] {
+  if (typeof window === 'undefined') return []
+  const synth = window.speechSynthesis
+  if (synth === undefined) return []
+  const rank = (voice: SpeechSynthesisVoice): number => {
+    return (/^zh/i.test(voice.lang) ? 0 : 2) + (voice.localService ? 0 : 1)
+  }
+  const voices = [...synth.getVoices()].sort((a, b) => {
+    return rank(a) - rank(b)
+  })
+  return voices.map((voice) => {
+    return {
+      id: systemLocalVoiceId(voice.name),
+      name: voice.name,
+      engine: 'system',
+      voice: voice.name,
+      sampleText: LOCAL_SAMPLE_TEXT,
+      description: '本机安装的系统音色',
+    }
+  })
+}
+
 /** 系统朗读的最小接口：取消由播放器统一管。 */
 export interface SystemVoice {
   speak(input: { text: string; voiceName?: string; lang: string; rate: number }): Promise<void>
@@ -588,6 +655,9 @@ export class VoicePlayer {
 
   /** 解析音色；目录里没有时回落到第一条系统音色，并告诉调用方它是不是云端 id。 */
   private async resolveProfile(profileId: string): Promise<{ profile?: VoiceProfile; wantsCloud: boolean }> {
+    // 本机系统音色不查目录：名字就编在 id 里，目录请求失败也不该影响本机朗读。
+    const local = systemLocalVoiceProfile(profileId)
+    if (local !== undefined) return { profile: local, wantsCloud: false }
     const wantsCloud = profileId !== 'none' && !profileId.startsWith('system-')
     try {
       const catalog = await this.deps.catalog()

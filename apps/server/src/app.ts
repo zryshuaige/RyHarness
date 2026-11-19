@@ -65,6 +65,9 @@ import {
 } from './config.ts'
 import { envValue } from './env.ts'
 import type { WsEvent } from './events.ts'
+import { HostedClient } from './hosted/client.ts'
+import { HOSTED_DEFAULT_BASE_URL, readHostedApiKey, readHostedConfig } from './hosted/config.ts'
+import { HostedRuntime } from './hosted/service.ts'
 import { readServerVersion, readTelemetryConfig } from './otel-config.ts'
 import { ASK_USER_PLUGIN_ID, askUserPlugin } from './plugins/ask-user.ts'
 import { QuestionStore, renderQuestionContext } from './plugins/ask-user-store.ts'
@@ -79,6 +82,7 @@ import { goalPlugin } from './plugins/goal.ts'
 import { grillMePlugin } from './plugins/grill-me.ts'
 import type { PluginEntry } from './plugins/host.ts'
 import { PluginHost } from './plugins/host.ts'
+import { hostedPlugin } from './plugins/hosted.ts'
 import { jobsPlugin } from './plugins/jobs.ts'
 import { llmOpenAiPlugin } from './plugins/llm-openai.ts'
 import { lspPlugin } from './plugins/lsp.ts'
@@ -257,8 +261,14 @@ export interface ServerOptions {
   port?: number
   /** 监听地址，默认 127.0.0.1。 */
   host?: string
-  /** 数据目录（SQLite、config、workspace），默认 <cwd>/data。 */
+  /** 数据目录（SQLite、config），默认 <cwd>/data。 */
   dataDir?: string
+  /**
+   * 工作区根目录（agent 文件工具的读写边界、产物落盘处），默认 <dataDir>/workspace。
+   * 桌面端会显式传一个用户找得到的地方（见 electron/workspace-dir）；独立服务与
+   * 测试不传则沿用旧默认，不会写到别处。
+   */
+  workspaceRoot?: string
   /** 覆盖 providers.json（测试注入 mock 时用）。 */
   providersConfig?: ProvidersConfigFile
   /**
@@ -519,6 +529,8 @@ export interface RyHarnessServerOptions {
   readonly presetRegistry: PresetRegistry
   /** 插件配置服务（设置路由与进程外自检都要用它）。 */
   readonly settingsService: SettingsService
+  /** 云成员人设同步：改完本地 agent 后把 system 推到远端（可选）。 */
+  readonly hostedSync?: (agentId: string) => Promise<void>
 }
 
 /**
@@ -600,6 +612,8 @@ export class RyHarnessServer {
   readonly presetRegistry: PresetRegistry
   /** 插件配置服务（设置路由与进程外自检都要用它）。 */
   readonly settingsService: SettingsService
+  /** 云成员人设同步：改完本地 agent 后把 system 推到远端（可选）。 */
+  readonly hostedSync?: (agentId: string) => Promise<void>
 
   private readonly memoryService: MemoryService | undefined
   private readonly evolutionService: EvolveService | undefined
@@ -650,6 +664,7 @@ export class RyHarnessServer {
     this.sandboxPolicy = options.sandboxPolicy
     this.presetRegistry = options.presetRegistry
     this.settingsService = options.settingsService
+    this.hostedSync = options.hostedSync
   }
 
   /** 第二次及以后的 close() 直接复用首次的停机 Promise（幂等）。 */
@@ -794,7 +809,7 @@ export class RyHarnessServer {
   /** 组装并启动服务。 */
   static async create(options: ServerOptions = {}): Promise<RyHarnessServer> {
     const dataDir = options.dataDir ?? join(process.cwd(), 'data')
-    const workspaceRoot = join(dataDir, 'workspace')
+    const workspaceRoot = options.workspaceRoot ?? join(dataDir, 'workspace')
     mkdirSync(join(dataDir, 'config'), { recursive: true })
     mkdirSync(workspaceRoot, { recursive: true })
 
@@ -950,6 +965,27 @@ export class RyHarnessServer {
     // 「还没建好」。
     const hub = new EventHub()
     const approvals = new ApprovalBroker(hub)
+    /**
+     * 云成员运行时：客户端按需创建（设置页改完 Key 之后，下一次调用就该用新的）。
+     * 没配 Key 时把"缺凭据"留在真正发请求的那一刻再抛——启动时抛会让整个服务
+     * 因为一个可选功能起不来。
+     */
+    const hostedClient = (): HostedClient => {
+      const apiKey = readHostedApiKey(dataDir)
+      if (apiKey === undefined) {
+        throw new Error('还没有配置 Kimi Open Platform 的 API Key（设置 → 云成员）')
+      }
+      return new HostedClient({
+        baseUrl: readHostedConfig(dataDir).baseUrl ?? HOSTED_DEFAULT_BASE_URL,
+        apiKey,
+      })
+    }
+    const hostedRuntime = new HostedRuntime({
+      store,
+      approvals,
+      workspaceRoot,
+      clientProvider: hostedClient,
+    })
     let noticeHub: EventHub | undefined = hub
     /**
      * 工具审批的唯一闸：单聊、群聊成员、子代理的内层 loop 全走这一条闭包。
@@ -1076,6 +1112,8 @@ export class RyHarnessServer {
       documentPlugin({ dataDir, workspaceRoot }),
       // 远程机器：本机的 ssh 客户端；密码与私钥走凭据注册表。
       sshPlugin({ dataDir, credentials: credentialRegistry }),
+      // 云成员：雇佣/解雇与设置面；真正的对话由协调器经 hostedRuntime 走远端。
+      hostedPlugin({ dataDir, store, runtime: hostedRuntime, client: hostedClient }),
       // 代码导航：语言服务器要用户自己装并配（config/lsp.json），没配时工具直说。
       lspPlugin({ dataDir, workspaceRoot }),
       spillPlugin({
@@ -1366,6 +1404,8 @@ export class RyHarnessServer {
       },
       // shell_exec 这类工具的逐条审批：单聊与群聊成员走同一条闸（见 approveToolCall）。
       approver: approveToolCall,
+      // 云成员：单聊与群聊都由协调器把这一位交给远端运行时。
+      hostedRunner: hostedRuntime.asTurnRunner(),
     })
     // 巩固记账与主动消息调度器由组合根共享：回顾里报的合并条数必须来自真跑出来的那
     // 一轮，而不是另记一份会漂移的账。
@@ -1424,6 +1464,7 @@ export class RyHarnessServer {
     const server = new RyHarnessServer({
       store,
       presetRegistry,
+      hostedSync: (agentId: string) => hostedRuntime.syncAgent(agentId),
       settingsService,
       coordinator,
       memory: memoryOption,
@@ -1501,6 +1542,9 @@ export class RyHarnessServer {
     server.router()
     // 插件按清单顺序挂载；core 失败会在这里抛出去，非 core 失败只记录状态。
     await pluginHost.start()
+    // 冷启动对账：离线期间云端可能已经跑完（或还在跑），把消息补进本地镜像。
+    // 不等它：对账是后台活，首个 HTTP 请求不该被它拖住。
+    if (store.listHostedSessions().length > 0) void hostedRuntime.reconcileAll()
     if (evolutionService !== undefined && options.consolidationIntervalMs !== 0) {
       server.startConsolidation(options.consolidationIntervalMs ?? DEFAULT_CONSOLIDATION_INTERVAL_MS)
     }
@@ -1838,6 +1882,7 @@ export class RyHarnessServer {
       providers: this.providers,
       tools: this.tools,
       presets: this.presetRegistry,
+      ...(this.hostedSync === undefined ? {} : { hostedSync: this.hostedSync }),
     })
     registerProfileRoutes(router, { store })
 
@@ -1891,6 +1936,18 @@ export class RyHarnessServer {
         return this.turnEngine.cancelTurn(conversationId)
       },
       approvals: this.approvals,
+      // composer 的上下文读数：只认供应商里声明的 contextWindow，缺省 null 由界面
+      // 显示「上下文未知」（与 routes/providers.ts 的口径同一份，绝不猜一个数字）。
+      describeModel: (providerId, modelId) => {
+        const provider = this.providers.providers[providerId]
+        const declared = provider?.models.find((model) => {
+          return model.id === modelId
+        })?.contextWindow
+        return {
+          providerName: provider?.displayName ?? providerId,
+          contextWindow: declared ?? null,
+        }
+      },
     })
 
     registerProviderRoutes(router, {

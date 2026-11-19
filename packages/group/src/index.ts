@@ -9,7 +9,7 @@
  * @module @ryharness/group
  */
 
-export type { GroupDispatcherOptions, GroupEvent, GroupHistoryEntry } from './dispatcher.ts'
+export type { GroupDispatcherOptions, GroupEvent, GroupHistoryEntry, MemberRunner } from './dispatcher.ts'
 export {
   buildGroupContext,
   DEFAULT_FANOUT_CONCURRENCY,

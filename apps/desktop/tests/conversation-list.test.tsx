@@ -296,6 +296,26 @@ describe('全文搜索', () => {
     await settleSearch()
     expect(container.textContent).toContain('全文搜索暂不可用')
   })
+
+  it('真没有会话时摆品牌空态猫（与主列/通讯录同一套 empty-cat）+ 去通讯录入口', async () => {
+    await renderList(undefined, { conversations: [], onGoContacts: () => {} })
+    const empty = container.querySelector('.empty-state')
+    // 品牌猫是装饰 img.cat，挂在 .empty-cat 光晕壳里（与 ChatView/ContactsPage 同构）。
+    expect(empty?.querySelector('.empty-cat img.cat')).not.toBeNull()
+    expect(empty?.textContent).toContain('还没有会话')
+    expect(buttonByText('去通讯录')).toBeTruthy()
+  })
+
+  it('搜索无匹配是另一种空态：不摆品牌猫（猫只属于「还没有会话」的上手时刻）', async () => {
+    const { api } = fakeApi(() => {
+      return Promise.resolve({ results: [] })
+    })
+    await renderList(api)
+    typeQuery('不存在的东西')
+    await settleSearch()
+    expect(container.querySelector('.empty-state')?.textContent).toContain('没有命中的消息')
+    expect(container.querySelector('.empty-cat')).toBeNull()
+  })
 })
 
 describe('会话行尾操作', () => {

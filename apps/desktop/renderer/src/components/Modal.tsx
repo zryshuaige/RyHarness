@@ -57,7 +57,10 @@ export function Modal({
     const restoreTo = document.activeElement instanceof HTMLElement ? document.activeElement : null
     const focusables = (): HTMLElement[] => {
       return Array.from(modal.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((el) => {
-        return !el.hasAttribute('disabled')
+        // 隐藏面板里的控件不算可聚焦：向导要把未到的那几步留在 DOM 里（表单状态不丢），
+        // 但 focus()/Tab 圈禁不能落进去——焦点停在一个 display:none 的输入框上，
+        // 用户看不见光标，Tab 也会跳过它，像是弹窗失焦了。
+        return !el.hasAttribute('disabled') && el.closest('[hidden]') === null
       })
     }
     ;(focusables()[0] ?? modal).focus()

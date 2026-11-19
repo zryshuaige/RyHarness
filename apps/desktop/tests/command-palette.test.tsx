@@ -1,138 +1,147 @@
 // @vitest-environment jsdom
 /**
- * `/` 命令面板。
+ * 全局命令面板：Cmd+K 打开、输入过滤、↑↓ 走位、Enter 执行、Esc 关闭。
  *
- * 两条口径要钉住：**触发**（只有行首的斜杠算命令，中间的斜杠是正文）与
- * **执行**（选中一条命令就清空输入框并跑它；没选中时 `/` 留在输入框里不被吞掉）。
- *
- * @module @ryharness/desktop/tests/command-palette
+ * 命令表复用 `/` 面板那份（由 App 构建），这里只验面板本身的过滤与键盘走位——
+ * 「任何页面按一下就能找到并触发本机动作」是这个面板存在的全部理由。
  */
-
 import { act } from 'react'
-import { createRoot } from 'react-dom/client'
+import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChatInput } from '../renderer/src/components/ChatInput.tsx'
-import { type Command, commandQueryAt, filterCommands } from '../renderer/src/lib/commands.ts'
+import { CommandPalette } from '../renderer/src/components/CommandPalette.tsx'
+import type { Command } from '../renderer/src/lib/commands.ts'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-const commands: Command[] = [
-  { id: 'new-chat', label: '新对话', hint: 'Ctrl+N', run: vi.fn() },
-  { id: 'theme-dark', label: '切到深色主题', run: vi.fn() },
-  { id: 'open-workspace', label: '打开工作区目录', run: vi.fn() },
-]
+let container: HTMLDivElement
+let root: Root | undefined
 
-describe('命令触发口径', () => {
-  it('行首的斜杠算命令', () => {
-    expect(commandQueryAt('/', 1)).toEqual({ start: 0, query: '' })
-    expect(commandQueryAt('/新', 2)).toEqual({ start: 0, query: '新' })
-  })
-
-  it('中间的斜杠是正文（路径、日期那些）', () => {
-    expect(commandQueryAt('路径是 C:/Users', 13)).toBeNull()
-    expect(commandQueryAt('看这个 /文档', 6)).toBeNull()
-  })
-
-  it('片段里有空白就不是命令了', () => {
-    expect(commandQueryAt('/新 对话', 5)).toBeNull()
-  })
-
-  it('按关键字过滤候选（大小写不敏感）', () => {
-    expect(
-      filterCommands(commands, '新').map((each) => {
-        return each.id
-      }),
-    ).toEqual(['new-chat'])
-    expect(filterCommands(commands, '')).toHaveLength(3)
-    expect(
-      filterCommands(commands, '目录').map((each) => {
-        return each.id
-      }),
-    ).toEqual(['open-workspace'])
-  })
+beforeEach(() => {
+  container = document.createElement('div')
+  document.body.appendChild(container)
 })
 
-describe('命令面板', () => {
-  let container: HTMLDivElement
-  let root: ReturnType<typeof createRoot> | undefined
-
-  beforeEach(() => {
-    // 命令表是模块级的常量：每次用例前把它的 mock 清空，否则上一条用例执行过
-    // 的命令会被算到这一条头上。
-    vi.clearAllMocks()
-    container = document.createElement('div')
-    document.body.appendChild(container)
-    root = createRoot(container)
-  })
-
-  afterEach(() => {
+afterEach(() => {
+  if (root !== undefined) {
     act(() => {
       root?.unmount()
     })
     root = undefined
-    container.remove()
-    vi.unstubAllGlobals()
-  })
-
-  function mountInput(): HTMLTextAreaElement {
-    act(() => {
-      root?.render(<ChatInput members={[]} commands={commands} onSend={vi.fn()} />)
-    })
-    return container.querySelector('textarea') as HTMLTextAreaElement
   }
+  container.remove()
+  document.body.innerHTML = ''
+})
 
-  it('输入 "/" 出现候选列表', () => {
-    const input = mountInput()
-    act(() => {
-      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
-      setter?.call(input, '/')
-      input.dispatchEvent(new Event('input', { bubbles: true }))
-    })
-    const options = container.querySelectorAll('[role="option"]')
-    expect(options.length).toBe(3)
+/** 造一小组命令 + 记录各条被跑过几次。 */
+function scaffold(open = true) {
+  const runs = { newChat: 0, theme: 0, vibe: 0 }
+  const commands: Command[] = [
+    {
+      id: 'new-chat',
+      label: '新对话',
+      hint: 'Ctrl+N',
+      run: () => {
+        runs.newChat += 1
+      },
+    },
+    {
+      id: 'theme-dark',
+      label: '切到深色主题',
+      run: () => {
+        runs.theme += 1
+      },
+    },
+    {
+      id: 'tab-vibe',
+      label: '切到 RyVibe',
+      hint: 'Ctrl+2',
+      run: () => {
+        runs.vibe += 1
+      },
+    },
+  ]
+  const onClose = vi.fn()
+  root = createRoot(container)
+  act(() => {
+    root?.render(<CommandPalette open={open} commands={commands} onClose={onClose} />)
+  })
+  return { runs, onClose }
+}
+
+function input(): HTMLInputElement {
+  const node = container.querySelector<HTMLInputElement>('.command-palette-input')
+  if (node === null) throw new Error('找不到 .command-palette-input')
+  return node
+}
+
+function items(): HTMLLIElement[] {
+  return [...container.querySelectorAll<HTMLLIElement>('.command-palette-item')]
+}
+
+function type(value: string): void {
+  const node = input()
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+  act(() => {
+    setter?.call(node, value)
+    node.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+}
+
+function key(name: string): void {
+  act(() => {
+    input().dispatchEvent(new KeyboardEvent('keydown', { key: name, bubbles: true }))
+  })
+}
+
+describe('CommandPalette', () => {
+  it('关闭时不渲染任何东西', () => {
+    scaffold(false)
+    expect(container.querySelector('.command-palette')).toBeNull()
   })
 
-  it('按回车执行选中的那条命令，并清空输入框', () => {
-    const input = mountInput()
-    act(() => {
-      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
-      setter?.call(input, '/')
-      input.dispatchEvent(new Event('input', { bubbles: true }))
-    })
-    act(() => {
-      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-    })
-    expect(commands[0]?.run).toHaveBeenCalledTimes(1)
-    expect(input.value).toBe('')
+  it('打开：渲染对话框与全部命令，第一项默认高亮', () => {
+    scaffold()
+    expect(container.querySelector('.command-palette')?.getAttribute('role')).toBe('dialog')
+    expect(items()).toHaveLength(3)
+    expect(items()[0]?.classList.contains('is-active')).toBe(true)
+    expect(items()[0]?.textContent).toContain('新对话')
   })
 
-  it('没选中命令时，"/" 留在输入框里不被吞掉（也能正常当正文发出去）', () => {
-    const onSend = vi.fn()
-    act(() => {
-      root?.render(<ChatInput members={[]} commands={[]} onSend={onSend} />)
-    })
-    const input = container.querySelector('textarea') as HTMLTextAreaElement
-    act(() => {
-      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
-      setter?.call(input, '/1')
-      input.dispatchEvent(new Event('input', { bubbles: true }))
-    })
-    act(() => {
-      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-    })
-    expect(onSend).toHaveBeenCalledWith('/1', undefined)
+  it('输入过滤命令（大小写不敏感包含匹配）', () => {
+    scaffold()
+    type('主题')
+    expect(items()).toHaveLength(1)
+    expect(items()[0]?.textContent).toContain('切到深色主题')
   })
 
-  it('Esc 关掉命令菜单，不执行任何命令', () => {
-    const input = mountInput()
+  it('没有匹配时显示空态', () => {
+    scaffold()
+    type('不存在的命令')
+    expect(items()).toHaveLength(0)
+    expect(container.querySelector('.command-palette-empty')?.textContent).toContain('没有匹配')
+  })
+
+  it('↓ 移高亮、Enter 执行并关闭', () => {
+    const { runs, onClose } = scaffold()
+    key('ArrowDown')
+    expect(items()[1]?.classList.contains('is-active')).toBe(true)
+    key('Enter')
+    expect(runs.theme).toBe(1)
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  it('Esc 关闭', () => {
+    const { onClose } = scaffold()
+    key('Escape')
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  it('点命令项执行并关闭', () => {
+    const { runs, onClose } = scaffold()
     act(() => {
-      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
-      setter?.call(input, '/')
-      input.dispatchEvent(new Event('input', { bubbles: true }))
+      items()[2]?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
     })
-    act(() => {
-      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
-    })
-    expect(commands[0]?.run).not.toHaveBeenCalled()
+    expect(runs.vibe).toBe(1)
+    expect(onClose).toHaveBeenCalled()
   })
 })

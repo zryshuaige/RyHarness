@@ -5,6 +5,7 @@ import { ApiClient } from './api.ts'
 import type { ArtifactTarget } from './components/ArtifactPreview.tsx'
 import { Cat } from './components/Cat.tsx'
 import { ChatView } from './components/ChatView.tsx'
+import { CommandPalette } from './components/CommandPalette.tsx'
 import { ConfirmDialog } from './components/ConfirmDialog.tsx'
 import { ContactsPage, CreateAgentModal } from './components/ContactsPage.tsx'
 import { ConversationList } from './components/ConversationList.tsx'
@@ -12,7 +13,7 @@ import { ErrorBoundary, reportRenderCrash } from './components/ErrorBoundary.tsx
 import { GroupSettingsModal } from './components/GroupSettingsModal.tsx'
 import type { IconName } from './components/Icon.tsx'
 import { Icon } from './components/Icon.tsx'
-import { MePage } from './components/MePage.tsx'
+import { MePage, type MeSection, SettingsShell } from './components/MePage.tsx'
 import { PluginsPage } from './components/PluginsPage.tsx'
 import { RightPanel } from './components/RightPanel.tsx'
 import { RyVibePage } from './components/RyVibePage.tsx'
@@ -32,7 +33,7 @@ import type { TurnErrorTarget } from './lib/turn-errors.ts'
 import { withViewTransition } from './lib/view-transition.ts'
 import { ConversationCache } from './store.ts'
 
-type Tab = 'chats' | 'vibe' | 'contacts' | 'plugins' | 'me'
+type Tab = 'chats' | 'vibe' | 'contacts' | 'me'
 
 type Theme = 'light' | 'dark'
 
@@ -177,9 +178,6 @@ const RAIL_TABS: { key: Tab; icon: IconName; label: string; beta?: boolean }[] =
   // 聊天（那也是你和小队说话的地方），但它是一个独立页面，不是一条会话。
   { key: 'vibe', icon: 'sparkles', label: 'RyVibe', beta: true },
   { key: 'contacts', icon: 'users', label: '通讯录' },
-  // 插件是「能力」而不是「设置」：它决定助理能做什么、哪些界面会出现在应用里，
-  // 与供应商/主题这类偏好不是同一层。独立页签让开关不必藏在「我的」页深处。
-  { key: 'plugins', icon: 'blocks', label: '插件' },
   // 「我的」是用户自己的页面，不是 Ryen。品牌猫只出现在两处：栏顶 logo 与 Ryen 的
   // 头像位——它是产品标识，不是导航图标；挂在导航里既和旁边 20px 的线性图标不是一个
   // 重量，16px 下也糊成一小团。
@@ -264,6 +262,14 @@ export function App() {
   const apiBase = useApiBase()
   const [api, setApi] = useState<ApiClient | undefined>(undefined)
   const [tab, setTab] = useState<Tab>('chats')
+  /**
+   * 「我的」页内部的二级路由。
+   *
+   * 这一页此前是一条 2,700px 的长滚动：个人资料、供应商、云成员、用量挤在同一列。
+   * 拆成设置 Hub 之后，进入「我的」=/me/profile，各子页各自滚动；插件也从一级页签
+   * 收进来，和它「能力开关」的身份对上。
+   */
+  const [settingsSection, setSettingsSection] = useState<MeSection>('profile')
   const [vibeSessionId, setVibeSessionId] = useState<string | undefined>(undefined)
   const [theme, setTheme] = useState<Theme>(loadTheme)
   const [agents, setAgents] = useState<AgentDef[]>([])
@@ -315,6 +321,8 @@ export function App() {
   const [editingAgent, setEditingAgent] = useState<AgentDef | undefined>(undefined)
   const [panelCollapsed, setPanelCollapsed] = useState(loadPanelCollapsed)
   const [listCollapsed, setListCollapsed] = useState(loadListCollapsed)
+  /** 全局命令面板（Cmd/Ctrl+K）开关。 */
+  const [paletteOpen, setPaletteOpen] = useState(false)
   /**
    * 窄窗判定：视口宽度不够时右栏改走**覆盖式抽屉**。
    *
@@ -415,22 +423,27 @@ export function App() {
     })
   }, [])
 
+  /** 打开「我的」的某个设置子页；全应用只保留这一个入口口径。 */
+  const openSettings = useCallback((section: MeSection): void => {
+    setSettingsSection(section)
+    setTab('me')
+  }, [])
+
   /**
    * 错误条/失败横幅上「去配 Key、去改 agent」的跳转：聊天页与 RyVibe 共用同一份
    * 接线，两个页面给的下一步才是同一条路。重试类动作不经过这里（各页就地做）。
    */
-  const navigateFromError = useCallback((target: TurnErrorTarget): void => {
-    if (target === 'retry') return
-    if (target === 'contacts') {
-      setTab('contacts')
-      return
-    }
-    setTab('me')
-    // 供应商区块在「我的」页中段：直接跳过去，省得用户再滚一遍。
-    requestAnimationFrame(() => {
-      document.getElementById('provider-settings')?.scrollIntoView({ block: 'center' })
-    })
-  }, [])
+  const navigateFromError = useCallback(
+    (target: TurnErrorTarget): void => {
+      if (target === 'retry') return
+      if (target === 'contacts') {
+        setTab('contacts')
+        return
+      }
+      openSettings('models')
+    },
+    [openSettings],
+  )
 
   /** Esc 关掉抽屉：抽屉盖着聊天区，不给一个键盘出口就等于把它锁住。 */
   useEffect(() => {
@@ -503,6 +516,19 @@ export function App() {
         hint: 'Ctrl+N',
         run: () => {
           window.dispatchEvent(new CustomEvent(NEW_CHAT_EVENT))
+        },
+      },
+      {
+        id: 'search-sessions',
+        label: '搜索会话与消息',
+        hint: 'Ctrl+K',
+        run: () => {
+          // 会话列表只在聊天页挂载并注册焦点事件监听：先切页，等一帧让监听就位再派发，
+          // 否则事件落在空处（用户在命令面板里点「搜索会话」却没反应）。
+          setTab('chats')
+          window.setTimeout(() => {
+            window.dispatchEvent(new CustomEvent(SEARCH_FOCUS_EVENT))
+          }, 0)
         },
       },
       {
@@ -909,7 +935,9 @@ export function App() {
       if (matched === undefined) return
       if (matched.id === 'focus-search') {
         event.preventDefault()
-        window.dispatchEvent(new CustomEvent(SEARCH_FOCUS_EVENT))
+        // Cmd+K 打开全局命令面板（不再是「只聚焦左栏搜索框」）：面板里含「搜索会话与消息」
+        // 这条命令把原能力保留下来，同时把切页签/切主题/新对话带到任何页面。
+        setPaletteOpen(true)
         return
       }
       if (matched.id === 'new-chat') {
@@ -969,6 +997,24 @@ export function App() {
 
   return (
     <div className="app-shell">
+      {/* 顶条：原本是一条 40px 的死拖拽带。给它一枚全局搜索触发——Cmd+K 不再只是
+          藏在键盘里的快捷键，鼠标用户也看得见、点得到（打开同一个命令面板）。
+          原生窗口按钮在右上角（titleBarOverlay），搜索丸居中并让出右侧那一段。 */}
+      <div className="titlebar">
+        <button
+          type="button"
+          className="titlebar-search"
+          aria-label="搜索会话与消息（Ctrl+K）"
+          title="搜索会话与消息（Ctrl+K）"
+          onClick={() => {
+            setPaletteOpen(true)
+          }}
+        >
+          <Icon name="search" size={16} />
+          <span className="titlebar-search-label">搜索会话与消息</span>
+          <kbd className="titlebar-search-kbd">Ctrl+K</kbd>
+        </button>
+      </div>
       {/* 栏 1：72px icon rail */}
       <nav className="rail" aria-label="主导航">
         <span className="rail-logo" aria-hidden="true">
@@ -1014,17 +1060,6 @@ export function App() {
           }}
         >
           <Icon name={theme === 'light' ? 'moon' : 'sun'} size={20} />
-        </button>
-        <button
-          type="button"
-          className="rail-icon-btn"
-          title="我的 / 设置"
-          aria-label="我的 / 设置"
-          onClick={() => {
-            setTab('me')
-          }}
-        >
-          <Icon name="gear" size={20} />
         </button>
       </nav>
 
@@ -1128,6 +1163,9 @@ export function App() {
                 })()
               }}
               commands={commands}
+              onOpenProviders={() => {
+                openSettings('models')
+              }}
               {...(narrow
                 ? {
                     onTogglePanel: toggleDrawer,
@@ -1147,6 +1185,34 @@ export function App() {
                 // 跨档提示照样可以报。
                 turnEnded.current = true
                 scheduleRefresh()
+              }}
+              onPinToggle={() => {
+                const next = !(active.conversation.pinned ?? false)
+                void api
+                  .patchConversation(active.conversation.id, { pinned: next })
+                  .then(() => {
+                    scheduleRefresh()
+                  })
+                  .catch((error: unknown) => {
+                    toast.error(`没能${next ? '置顶' : '取消置顶'}：${humanError(error, '再试一次')}`)
+                  })
+              }}
+              onMuteToggle={() => {
+                const next = !(active.conversation.muted ?? false)
+                void api
+                  .patchConversation(active.conversation.id, { muted: next })
+                  .then(() => {
+                    scheduleRefresh()
+                  })
+                  .catch((error: unknown) => {
+                    toast.error(`没能${next ? '静音' : '取消静音'}：${humanError(error, '再试一次')}`)
+                  })
+              }}
+              onEditGroup={() => {
+                setEditingGroup(active.conversation)
+              }}
+              onPickWorkspace={() => {
+                setPickingWorkspace(active.conversation)
               }}
             />
           ) : (
@@ -1246,20 +1312,28 @@ export function App() {
               void openDirectChat(agentId)
             }}
           />
-        ) : tab === 'plugins' ? (
-          <PluginsPage api={api} />
+        ) : settingsSection === 'plugins' ? (
+          <SettingsShell active="plugins" onSelect={setSettingsSection}>
+            <PluginsPage api={api} embedded />
+          </SettingsShell>
         ) : (
           <MePage
             api={api}
             ryen={ryen}
             providers={providers}
+            agents={agents}
             theme={theme}
             onThemeChange={changeTheme}
+            section={settingsSection}
+            onSectionChange={setSettingsSection}
             onRyenPatched={() => {
               void refresh()
             }}
+            onAgentsChanged={() => {
+              void refresh()
+            }}
             onOpenPlugins={() => {
-              setTab('plugins')
+              openSettings('plugins')
             }}
           />
         )}
@@ -1285,7 +1359,7 @@ export function App() {
           }}
           onToggle={narrow ? toggleDrawer : togglePanel}
           onOpenPlugins={() => {
-            setTab('plugins')
+            openSettings('plugins')
           }}
         />
       )}
@@ -1317,14 +1391,11 @@ export function App() {
             setAgentTemplateKey(undefined)
           }}
           onOpenProviderSettings={() => {
-            // 音色行里的「配置云端音色」：关掉编辑器、切到「我的」并滚到供应商区块。
+            // 音色行里的「配置云端音色」：关掉编辑器，落到「我的 → 模型与供应商」。
             setModal(undefined)
             setEditingAgent(undefined)
             setAgentTemplateKey(undefined)
-            setTab('me')
-            setTimeout(() => {
-              document.getElementById('provider-settings')?.scrollIntoView({ block: 'start' })
-            }, 0)
+            openSettings('models')
           }}
           onSubmit={async (input) => {
             if (editingAgent === undefined) await api.createAgent(input)
@@ -1407,6 +1478,13 @@ export function App() {
           其余页面（欢迎页 / 通讯录 / 插件 / 我的）由这里兜底——保存、删除的反馈不能只有
           聊天页看得见。任何时刻只有一个宿主在屏上。 */}
       {!(tab === 'chats' && active !== undefined) && <ToastHost />}
+      <CommandPalette
+        open={paletteOpen}
+        commands={commands}
+        onClose={() => {
+          setPaletteOpen(false)
+        }}
+      />
     </div>
   )
 }

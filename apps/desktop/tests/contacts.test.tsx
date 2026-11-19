@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import type { AgentDef, AgentTemplate, ProviderInfo } from '../renderer/src/api.ts'
 import { BRAND_AVATAR } from '../renderer/src/components/avatars/avatars.tsx'
 import { ContactCard } from '../renderer/src/components/ContactCard.tsx'
@@ -130,7 +130,7 @@ describe('通讯录', () => {
     expect(source).toContain('handlers.current = { onChat, onEditAgent, onDeleteAgent }')
   })
 
-  it('卡片上看得见这位的脾气与声音：四条性格、口头禅、试听键', () => {
+  it('卡片上看得见这位的脾气与声音：两条性格、口头禅、试听键', () => {
     const vivid: AgentDef = {
       id: 'mine',
       name: '小译',
@@ -151,24 +151,24 @@ describe('通讯录', () => {
         appearance: '',
       },
     }
+    // 卡片视图由 ContactCard 直接渲染：页面默认是列表（同一份数据的另一密度），
+    // 卡片形态的性格尺/口头禅/试听菜单在这一层断言，才不会被默认视图挡住。
     const html = renderToStaticMarkup(
-      <ContactsPage
-        agents={[vivid]}
-        templates={templates}
-        onChat={() => {}}
-        onCreateAgent={() => {}}
-        onEditAgent={() => {}}
-        onDeleteAgent={() => {}}
-        onCreateGroup={() => {}}
+      <ContactCard
+        agent={vivid}
+        index={0}
+        speaking={false}
+        voicePlayer={undefined}
+        handlers={{ current: { onChat: () => {}, onEditAgent: () => {}, onDeleteAgent: () => {} } }}
       />,
     )
-    // 性格四条都在，档位名比数字好懂
+    // 两条性格都在，档位名比数字好懂
     expect(html).toContain('contact-traits')
     expect(html).toContain('自来熟')
     // 口头禅：他常挂在嘴边的那句话
     expect(html).toContain('这事我来安排。')
     // 声音：卡片上就能试听，不用先去编辑弹窗
-    expect(html).toContain('contact-voice')
+    expect(html).toContain('contact-more-btn')
     expect(html).toContain('听听')
   })
 
@@ -187,22 +187,21 @@ describe('通讯录', () => {
     expect(html).toContain('这位还没选音色')
   })
 
-  it('模板轨把 templateKey 传给新建回调（此前点"翻译"也开通用助理表单）', () => {
-    const onCreateAgent = vi.fn()
+  it('模板入口在页头：点「从模板」再挑，不再把模板轨压在页尾', () => {
     const html = renderToStaticMarkup(
       <ContactsPage
         agents={agents}
         templates={templates}
         onChat={() => {}}
-        onCreateAgent={onCreateAgent}
+        onCreateAgent={() => {}}
         onEditAgent={() => {}}
         onDeleteAgent={() => {}}
         onCreateGroup={() => {}}
       />,
     )
-    expect(html).toContain('翻译官')
-    // 模板卡存在且可点（onClick 在渲染期不可断言，这里只保证模板都渲染出来了）。
-    expect(html).toContain('可用模板（2）')
+    expect(html).toContain('从模板')
+    // 模板卡只在弹层打开时渲染；页尾那条横轨已撤走。
+    expect(html).not.toContain('可用模板（2）')
   })
 
   it('内置 agent 可以编辑但不能删除；用户自建的编辑与删除都有', () => {
@@ -374,16 +373,18 @@ describe('Agent 表单弹窗', () => {
   })
 
   /**
-   * 折叠态的结构不变量：供应商 / 模型 / 工具白名单不进首屏，但当前值摘要必须在上。
+   * 折叠态的结构不变量（编辑模式）：供应商 / 模型 / 工具白名单不进首屏，但当前值摘要必须在上。
    *
    * 折叠的意义是「别一上来就是一排原生控件」，不是「把选择藏起来」——藏起来的代价是
-   * 用户不知道自己建出来的助理归谁跑、能碰到什么。
+   * 用户不知道自己建出来的助理归谁跑、能碰到什么。新建走三步向导（模型与权限整步可见），
+   * 折叠只留编辑态：改一位已有助理时，用户是来改某一项的。
    */
-  it('高级设置默认折叠，但折叠态能看到当前值摘要', () => {
+  it('编辑模式：高级设置默认折叠，但折叠态能看到当前值摘要', () => {
     const html = renderToStaticMarkup(
       <CreateAgentModal
         templates={templates}
         providers={providers}
+        editing={agents[1] as AgentDef}
         onSubmit={() => Promise.resolve()}
         onClose={() => {}}
       />,
@@ -393,9 +394,31 @@ describe('Agent 表单弹窗', () => {
     expect(html).toContain('aria-expanded="false"')
     expect(html).not.toContain('工具白名单')
     expect(html).not.toContain('>供应商<')
+    // 编辑不走向导：没有步骤条.
+    expect(html).not.toContain('wizard-steps')
     // 身份卡常驻：它是这个流程的结果预览，不随任何折叠区进出。
     expect(html).toContain('agent-card')
     expect(html).toContain('助理卡')
+  })
+
+  it('新建走三步向导：第一屏只露起点，模型与权限留到第三步保存', () => {
+    const html = renderToStaticMarkup(
+      <CreateAgentModal
+        templates={templates}
+        providers={providers}
+        onSubmit={() => Promise.resolve()}
+        onClose={() => {}}
+      />,
+    )
+    expect(html).toContain('wizard-steps')
+    for (const label of ['起点', '人设', '模型与权限']) expect(html).toContain(`>${label}<`)
+    // 第一步的模板选择可见；后两步的面板带 hidden（留在 DOM 里，表单状态不丢）。
+    expect(html).toContain('data-step="0"')
+    expect(html).toMatch(/data-step="1"[^>]*hidden/)
+    expect(html).toMatch(/data-step="2"[^>]*hidden/)
+    // 页脚是「下一步」而不是「保存」：没到第三步不给提交键。
+    expect(html).toContain('下一步')
+    expect(html).not.toContain('保存修改')
   })
 
   /**

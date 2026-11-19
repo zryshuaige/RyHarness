@@ -1,4 +1,3 @@
-import type { CSSProperties } from 'react'
 import { memo, useEffect, useMemo, useState } from 'react'
 import type { AgentDef, ApiClient, Conversation, TodoGroup, TodoItem, UsageTotals } from '../api.ts'
 import { ApiRequestError } from '../api.ts'
@@ -356,6 +355,9 @@ const TodoSection = memo(function TodoSection({
   }, [client, conversationId, updatedAt])
 
   if (client === undefined) return null
+  // 空待办不占右栏第一屏：用户点开右栏是为了看「这个人/这个群」，
+  // 先读到一句「还没有待办」只是噪音。
+  if (state.status === 'ready' && state.items.length === 0) return null
 
   const applyResult = (group: TodoGroup): void => {
     setState({ status: 'ready', items: itemsOf(group) })
@@ -772,12 +774,6 @@ const DirectProfile = memo(function DirectProfile({
   )
 })
 
-/**
- * 调度者皇冠与名字之间留 3px：名字是 nowrap + ellipsis，图标紧贴文字会读成一个词。
- * 皇冠放在名字前面而不是后面——名字过长时省略号吃的是名字，标记始终可见。
- */
-const DISPATCH_MARK_STYLE: CSSProperties = { display: 'inline-flex', verticalAlign: '-3px', marginRight: 3 }
-
 const GroupInfo = memo(function GroupInfo({
   conversation,
   agents,
@@ -815,30 +811,14 @@ const GroupInfo = memo(function GroupInfo({
   }
   return (
     <>
-      <h4>成员（{members.length}）</h4>
-      <div className="member-grid">
-        {members.map((member) => (
-          <div key={member.id} className="member-cell">
-            <Avatar avatarKey={member.avatar} name={member.name} seed={member.id} size={44} />
-            <span
-              className="member-name"
-              // 名字在三列网格里会被截断（六七个汉字），所以**全名必须能拿回来**：
-              // 调度者另给一句说明，普通成员给全名——原来只有调度者有 title，
-              // 于是普通成员截断后 hover 也看不到自己是谁。
-              title={conversation.dispatcherAgentId === member.id ? `${member.name} · 本会话的调度者` : member.name}
-            >
-              {conversation.dispatcherAgentId === member.id ? (
-                <span style={DISPATCH_MARK_STYLE}>
-                  <Icon name="crown" size={16} />
-                </span>
-              ) : null}
-              {member.name}
-            </span>
-          </div>
-        ))}
-      </div>
-      {/* 群聊此前完全没有记忆/经验手册入口，"群里的人也在进化"这件事看不见。 */}
-      <GroupEvolution members={members} onShowMemories={onShowMemories} onShowPlaybook={onShowPlaybook} />
+      {/* 成员与「谁在进化」合并成一张表：此前成员网格列一遍、进化列表又列一遍，
+          5 人群的右栏首屏被同一批人占了两次。记忆/手册入口挂在每个人行尾。 */}
+      <GroupEvolution
+        members={members}
+        dispatcherAgentId={conversation.dispatcherAgentId}
+        onShowMemories={onShowMemories}
+        onShowPlaybook={onShowPlaybook}
+      />
       {/* 标题归 RelayTimeline 自己：折叠行要整行可点，标题留在外面就没法一起点 */}
       <RelayTimeline relays={relays} nameOf={nameOf} />
       <h4>本会话产物</h4>

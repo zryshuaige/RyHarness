@@ -161,12 +161,9 @@ describe('右栏待办区', () => {
     })
     await flush()
     expect(api.clearTodos).toHaveBeenCalledWith('c1')
-    expect(container.textContent).toContain('还没有待办')
-    expect(
-      [...container.querySelectorAll('button')].some((button) => {
-        return button.textContent === '清空'
-      }),
-    ).toBe(false)
+    // 清空之后整块待办收起：右栏第一屏不该再读一句「还没有待办」。
+    expect(container.textContent).not.toContain('还没有待办')
+    expect(container.querySelector('.todo-head')).toBeNull()
   })
 
   it('插件关闭（路由 404）显示「待办插件已关闭」，不弹错误', async () => {

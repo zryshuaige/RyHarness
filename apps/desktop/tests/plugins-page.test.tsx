@@ -557,7 +557,7 @@ describe('「我的」页只留入口', () => {
     expect(container.textContent).toContain('开关与说明')
     // 内嵌区块已撤走：服务端插件清单不会出现在「我的」页。
     expect(container.textContent).not.toContain('内置工具')
-    await click(buttonContaining('.me-row-btn', '开关与说明'))
+    await click(buttonContaining('.me-nav-item', '插件与能力'))
     expect(onOpenPlugins).toHaveBeenCalledTimes(1)
   })
 })
@@ -605,18 +605,7 @@ describe('App 导航', () => {
       tabs.map((tab) => {
         return tab.textContent?.trim()
       }),
-    ).toEqual(['聊天', 'RyVibe', '通讯录', '插件', '我的'])
-
-    await click(
-      tabs.find((tab) => {
-        return tab.textContent?.trim() === '插件'
-      }) ?? null,
-    )
-    await flush()
-    expect(container.querySelector('.page-header h2')?.textContent).toBe('插件')
-    expect(container.textContent).toContain('关掉后，对应的工具与界面会一起消失')
-    expect(cardFor('todo')).not.toBeNull()
-    expect(nav?.querySelector('[aria-current="page"]')?.textContent).toContain('插件')
+    ).toEqual(['聊天', 'RyVibe', '通讯录', '我的'])
 
     await click(
       tabs.find((tab) => {
@@ -624,9 +613,11 @@ describe('App 导航', () => {
       }) ?? null,
     )
     await flush()
-    expect(container.textContent).toContain('开关与说明')
-    await click(buttonContaining('.me-row-btn', '开关与说明'))
+    expect(container.textContent).toContain('插件与能力')
+    await click(buttonContaining('.me-nav-item', '插件与能力'))
     await flush()
-    expect(container.querySelector('.page-header h2')?.textContent).toBe('插件')
+    expect(container.querySelector('.plugins-page .page-header h2')?.textContent).toBe('插件与能力')
+    expect(container.textContent).toContain('关掉后，对应的工具与界面会一起消失')
+    expect(cardFor('todo')).not.toBeNull()
   })
 })

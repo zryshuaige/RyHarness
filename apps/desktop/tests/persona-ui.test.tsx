@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentDef, AgentPersona, AgentTemplate, Conversation, ProviderInfo } from '../renderer/src/api.ts'
 import { ApiClient } from '../renderer/src/api.ts'
 import { ChatView } from '../renderer/src/components/ChatView.tsx'
+import { ContactCard } from '../renderer/src/components/ContactCard.tsx'
 import { ContactsPage, CreateAgentModal } from '../renderer/src/components/ContactsPage.tsx'
 import { RightPanel } from '../renderer/src/components/RightPanel.tsx'
 import { composePersonaPrompt, normalizePersona } from '../renderer/src/lib/persona.ts'
@@ -174,11 +175,24 @@ function saveButton(): HTMLButtonElement {
   }) as HTMLButtonElement
 }
 
-/** 高级设置的折叠入口（供应商/模型/工具白名单都收在里面）。 */
-function advancedToggle(): HTMLButtonElement {
-  const toggle = container.querySelector<HTMLButtonElement>('button.advanced-toggle')
-  if (toggle === null) throw new Error('找不到「高级设置」入口')
-  return toggle
+/**
+ * 新建向导走到最后一步（模型与权限）。
+ *
+ * P3 起新建是三步向导：起点→人设→模型与权限，保存键只在最后一步出现，供应商/模型
+ * 也不再是折叠区而是整整一步。人格字段虽在第二步，但 hidden 面板仍留在 DOM 里——
+ * 第一步就能设值（状态不丢），走到末步再保存。编辑模式没有「下一步」，原样返回。
+ */
+async function wizardToLast(): Promise<void> {
+  for (let round = 0; round < 2; round += 1) {
+    const next = [...container.querySelectorAll<HTMLButtonElement>('.modal-actions button')].find((node) => {
+      return node.textContent === '下一步'
+    })
+    if (next === undefined) return
+    await act(async () => {
+      next.click()
+      await Promise.resolve()
+    })
+  }
 }
 
 describe('建 agent 表单的人格编辑区', () => {
@@ -534,6 +548,7 @@ describe('建 agent 表单的人格编辑区', () => {
     })
     await renderModal({ onSubmit })
     dragTrait('严谨', 10)
+    await wizardToLast()
     await act(async () => {
       saveButton().click()
       await Promise.resolve()
@@ -556,6 +571,7 @@ describe('建 agent 表单的人格编辑区', () => {
       await Promise.resolve()
     })
     expect(preview()).not.toContain('生日：')
+    await wizardToLast()
     await act(async () => {
       saveButton().click()
       await Promise.resolve()
@@ -579,6 +595,7 @@ describe('建 agent 表单的人格编辑区', () => {
       birthday.dispatchEvent(new Event('input', { bubbles: true }))
       await Promise.resolve()
     })
+    await wizardToLast()
     await act(async () => {
       saveButton().click()
       await Promise.resolve()
@@ -590,21 +607,34 @@ describe('建 agent 表单的人格编辑区', () => {
     expect(input.persona.birthday).toBe('07-04')
   })
 
-  it('性格区常驻展开，折叠的是高级设置（第一卖点不能藏进折叠区）', async () => {
+  it('性格是人设步的主角（常驻展开），供应商/模型单独一步（第一卖点不藏进折叠区）', async () => {
     await renderModal()
-    // 性格是这个产品的第一卖点：四维滑杆必须一进来就在，不需要点任何按钮。
-    expect(container.querySelector('input[aria-label="外向"]')).not.toBeNull()
-    expect(container.querySelector('.persona-card')).not.toBeNull()
-    // 进而在折叠的是实现层选择（供应商/模型/工具），且折叠态仍给一行当前值摘要。
-    const advanced = advancedToggle()
-    expect(advanced.getAttribute('aria-expanded')).toBe('false')
-    expect(container.querySelector('#advanced-settings')).toBeNull()
-    expect(container.querySelector('.advanced-text small')?.textContent).toBe('SiliconFlow · DeepSeek-V3 · 1 个工具')
+    // P3 起新建是三步向导：起点（模板）→人设→模型与权限。性格在第一卖点的位置——
+    // 专属的「人设」步，走到那一步，四维滑杆常驻展开，不藏进任何折叠区。
     await act(async () => {
-      advanced.click()
+      const next = [...container.querySelectorAll<HTMLButtonElement>('.modal-actions button')].find((node) => {
+        return node.textContent === '下一步'
+      })
+      if (next === undefined) throw new Error('找不到「下一步」走到人设步')
+      next.click()
       await Promise.resolve()
     })
-    expect(advanced.getAttribute('aria-expanded')).toBe('true')
+    expect(container.querySelector('input[aria-label="外向"]')).not.toBeNull()
+    expect(container.querySelector('.persona-card')).not.toBeNull()
+    const slider = container.querySelector('input[aria-label="外向"]')
+    expect(slider?.closest('details')).toBeNull()
+    const voiceTrigger = container.querySelector('[aria-label="音色"]')
+    expect(voiceTrigger?.closest('details')).toBeNull()
+    // 生日/口头禅/形象/提示预览是二级细节：收进 persona-more 折叠，默认收起但仍在 DOM。
+    const more = container.querySelector('details.persona-more')
+    expect(more).not.toBeNull()
+    expect(more?.hasAttribute('open')).toBe(false)
+    expect(more?.querySelector('.profile-prompt')).not.toBeNull()
+    // 供应商/模型/权限是实现层选择：单独一步，不混进人设步——人设步里那一块藏着。
+    expect(container.querySelector('[data-step="2"]')?.hasAttribute('hidden')).toBe(true)
+    // 走到「模型与权限」步，实现层面板才露出来（新建模式它是整步，不再是折叠开关）。
+    await wizardToLast()
+    expect(container.querySelector('[data-step="2"]')?.hasAttribute('hidden')).toBe(false)
     expect(container.querySelector('#advanced-settings')).not.toBeNull()
   })
 
@@ -643,6 +673,7 @@ describe('建 agent 表单的人格编辑区', () => {
     expect(preview()).toBe(composePersonaPrompt('你是阿码。', coding.persona as AgentPersona))
     expect(container.querySelector('.agent-card-catch')?.textContent).toBe('「改完了，跑一遍。」')
     expect(container.querySelector('.agent-card-traits')?.textContent).not.toBe(before)
+    await wizardToLast()
     await act(async () => {
       saveButton().click()
       await Promise.resolve()
@@ -701,6 +732,8 @@ describe('建 agent 表单的人格编辑区', () => {
       await Promise.resolve()
     })
     expect(appearance.value).toBe('橘色围巾 狸花猫 ')
+    // 保存键在向导末步：人格字段已在 DOM 里设好值，走到最后一步再提交。
+    await wizardToLast()
     await act(async () => {
       saveButton().click()
       await Promise.resolve()
@@ -726,6 +759,7 @@ describe('建 agent 表单的人格编辑区', () => {
       catchphrase.dispatchEvent(new Event('input', { bubbles: true }))
       await Promise.resolve()
     })
+    await wizardToLast()
     await act(async () => {
       saveButton().click()
       await Promise.resolve()
@@ -760,14 +794,31 @@ describe('通讯录卡片', () => {
   )
 
   it('卡片上给性格档位 + 亲密度档位，而不是原始 system prompt 的前 48 字', () => {
-    // 性格做成四条小条：每条带自己的档位名——「自来熟」比「外向 92」好懂。
-    expect(html).toContain('contact-traits')
-    for (const label of ['自来熟', '一丝不苟', '贫嘴', '很主动']) {
-      expect(html).toContain(label)
+    // 卡片视图（variant=card）才摊开性格尺与「亲密度 N/100 · 档位」；列表行只给精简
+    // 亲密度。通讯录默认列表（P3），所以这里直接渲染卡片形态，钉的是卡片本身。
+    const card = renderToStaticMarkup(
+      <ContactCard
+        agent={vividAgent}
+        index={0}
+        speaking={false}
+        voicePlayer={undefined}
+        handlers={{
+          current: {
+            onChat: () => {},
+            onEditAgent: () => {},
+            onDeleteAgent: () => {},
+          },
+        }}
+      />,
+    )
+    // 卡片只留两条最常用的性格：每条带档位名——「自来熟」比「外向 92」好懂。
+    expect(card).toContain('contact-traits')
+    for (const label of ['自来熟', '一丝不苟']) {
+      expect(card).toContain(label)
     }
-    expect(html).toContain('亲密度 92/100 · 挚友')
+    expect(card).toContain('亲密度 92/100 · 挚友')
     // 旧写法把 systemPrompt.slice(0, 48) 直接摆上卡片。
-    expect(html).not.toContain('你是住在通讯录里的助理。')
+    expect(card).not.toContain('你是住在通讯录里的助理。')
   })
 
   it('模型走人话层，不显示开发者字符串', () => {

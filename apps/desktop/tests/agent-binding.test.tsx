@@ -6,7 +6,9 @@
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { PERMISSION_PRESETS } from '../../../packages/agent/src/permission.ts'
 import type { AgentDef, AgentTemplate, ProviderInfo } from '../renderer/src/api.ts'
+import { ApiClient } from '../renderer/src/api.ts'
 import { CreateAgentModal } from '../renderer/src/components/ContactsPage.tsx'
 import { TEST_PERSONA } from './fixtures.ts'
 import { currentValue, listedValues, openSelect, optionRows, pickOption, triggerLabel } from './select-dom.tsx'
@@ -102,18 +104,31 @@ async function renderModal(
 }
 
 /**
- * 展开「高级设置」。
+ * 露出「供应商 / 模型 / 权限」那一块。
  *
- * 供应商 / 模型 / 工具白名单默认折叠成一入口行（它们是实现层选择，不是「她是谁」），
- * 所以要看它们的内容必须先展开——这是弹窗结构的一部分，不是测试的绕路。
+ * 它们是实现层选择（不是「她是谁」），默认不摆在第一屏：
+ * - 编辑模式：折叠成一入口行（advanced-toggle），点开即展开。
+ * - 新建向导（P3）：整整第三步「模型与权限」，没有折叠开关——点两次「下一步」走到那步。
+ * 两种形态走完后 #advanced-settings 都在 DOM 里可见，保存键也出现（向导末步才有保存）。
  */
 function openAdvanced(): void {
   const toggle = container.querySelector<HTMLButtonElement>('button.advanced-toggle')
-  if (toggle === null) throw new Error('找不到「高级设置」入口')
-  if (toggle.getAttribute('aria-expanded') === 'true') return
-  act(() => {
-    toggle.click()
-  })
+  if (toggle !== null) {
+    if (toggle.getAttribute('aria-expanded') === 'true') return
+    act(() => {
+      toggle.click()
+    })
+    return
+  }
+  for (let round = 0; round < 2; round += 1) {
+    const next = [...container.querySelectorAll<HTMLButtonElement>('.modal-actions button')].find((node) => {
+      return node.textContent === '下一步'
+    })
+    if (next === undefined) return
+    act(() => {
+      next.click()
+    })
+  }
 }
 
 /**
@@ -135,15 +150,6 @@ function providerOptions(): { value: string; text: string }[] {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
   })
   return rows
-}
-
-function clickCheckbox(toolLabel: string): void {
-  const label = [...container.querySelectorAll('.tool-checks label')].find((node) => {
-    return node.textContent?.includes(toolLabel)
-  })!
-  act(() => {
-    label.querySelector<HTMLInputElement>('input')!.click()
-  })
 }
 
 function saveButton(): HTMLButtonElement {
@@ -315,38 +321,77 @@ describe('供应商与模型的绑定', () => {
 
   it('供应商一个模型都没有时也禁用保存，并指向补模型的地方', async () => {
     await renderModal({ templates: [], providers: [{ ...ready, models: [] }] })
+    // 模型校验与保存键都在向导末步（模型与权限），走到那一步再看。
+    openAdvanced()
     expect(container.querySelector('.apikey-error')?.textContent).toContain('模型供应商')
     expect(saveButton().disabled).toBe(true)
   })
 })
 
-describe('执行命令默认不勾选', () => {
-  it('模板默认带的 shell_exec 在新建时是未勾选', async () => {
-    await renderModal()
+describe('执行命令默认不给', () => {
+  /** 档位清单走服务端接口：stub fetch 只答这一条，其余请求一律算测试写错了。 */
+  function stubPresets(): void {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        expect(String(input)).toContain('/api/permission-presets')
+        return new Response(JSON.stringify({ presets: PERMISSION_PRESETS }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }),
+    )
+  }
+
+  function presetRadio(name: string): HTMLInputElement {
+    const label = [...container.querySelectorAll('input[name="permission-preset"]')]
+      .map((input) => {
+        return input.closest('label')
+      })
+      .find((node) => {
+        return node?.textContent?.includes(name)
+      })
+    if (label === null || label === undefined) throw new Error(`找不到档位「${name}」`)
+    return label.querySelector<HTMLInputElement>('input')!
+  }
+
+  function pickPreset(name: string): void {
+    act(() => {
+      presetRadio(name).click()
+    })
+  }
+
+  it('权限只有几档分类，不再摆工具复选框；模板带的 shell_exec 新建时不给', async () => {
+    stubPresets()
+    await renderModal({ api: new ApiClient('http://binding.test') })
     openAdvanced()
-    const label = [...container.querySelectorAll('.tool-checks label')].find((node) => {
-      return node.textContent?.includes('执行命令')
-    })!
-    expect(label.querySelector<HTMLInputElement>('input')!.checked).toBe(false)
-    // 其余工具照旧默认勾上。
-    const readLabel = [...container.querySelectorAll('.tool-checks label')].find((node) => {
-      return node.textContent?.includes('读文件')
-    })!
-    expect(readLabel.querySelector<HTMLInputElement>('input')!.checked).toBe(true)
+    await act(async () => {
+      await Promise.resolve()
+    })
+    // 模板默认 [fs_read, fs_write, shell_exec]，新建滤掉 shell_exec 后不属于任何
+    // 一档：如实显示「自定义」，而不是硬报成某一档骗用户。
+    expect(container.querySelectorAll('.tool-checks input[type="checkbox"]').length).toBe(0)
+    expect(presetRadio('自定义').checked).toBe(true)
+    expect(container.textContent).not.toContain('直接跑 shell')
   })
 
-  it('勾上后给一次风险说明（告知，不做审批流）', async () => {
-    await renderModal()
+  it('选「全权」给一次风险说明，换回「工作区可写」就收回（告知，不做审批流）', async () => {
+    stubPresets()
+    await renderModal({ api: new ApiClient('http://binding.test') })
     openAdvanced()
+    await act(async () => {
+      await Promise.resolve()
+    })
     expect(container.textContent).not.toContain('直接跑 shell')
-    clickCheckbox('执行命令')
+    pickPreset('全权')
     expect(container.textContent).toContain('直接跑 shell')
-    expect(container.textContent).toContain('只在任务来源可信时勾选')
-    clickCheckbox('执行命令')
+    expect(container.textContent).toContain('只在任务来源可信时给这一档')
+    pickPreset('工作区可写')
     expect(container.textContent).not.toContain('直接跑 shell')
   })
 
-  it('编辑既有 agent 时保留它原本勾着的工具（不替用户偷偷取消）', async () => {
+  it('编辑既有 agent 时保留它原本的工具（不替用户偷偷取消），提交原样带回', async () => {
+    stubPresets()
     const withShell: AgentDef = {
       id: 'coder',
       name: '小码',
@@ -356,13 +401,27 @@ describe('执行命令默认不勾选', () => {
       tools: ['fs_read', 'shell_exec'],
       isBuiltin: false,
     }
-    await renderModal({ editing: withShell, templates: [] })
+    const submitted: Record<string, unknown>[] = []
+    await renderModal({
+      editing: withShell,
+      templates: [],
+      api: new ApiClient('http://binding.test'),
+      onSubmit: (input) => {
+        submitted.push(input)
+        return Promise.resolve()
+      },
+    })
     openAdvanced()
-    const label = [...container.querySelectorAll('.tool-checks label')].find((node) => {
-      return node.textContent?.includes('执行命令')
-    })!
-    expect(label.querySelector<HTMLInputElement>('input')!.checked).toBe(true)
-    // 仍然要给正在勾着的人看风险说明。
+    await act(async () => {
+      await Promise.resolve()
+    })
+    // [fs_read, shell_exec] 不属于任何一档：显示「自定义」，风险说明照常给。
+    expect(presetRadio('自定义').checked).toBe(true)
     expect(container.textContent).toContain('直接跑 shell')
+    await act(async () => {
+      saveButton().click()
+      await Promise.resolve()
+    })
+    expect(submitted[0]?.tools).toEqual(['fs_read', 'shell_exec'])
   })
 })

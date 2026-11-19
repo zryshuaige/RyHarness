@@ -13,6 +13,9 @@ export type {
   ChatTurnOptions,
   ContextInjection,
   CoordinatorOptions,
+  HostedDirectInput,
+  HostedGroupStream,
+  HostedTurnRunner,
   RunContext,
   UsageReport,
 } from './coordinator.ts'
@@ -69,6 +72,8 @@ export type {
   ConversationInput,
   DeleteAgentResult,
   HistoryReadOptions,
+  HostedMemberInput,
+  HostedSessionInput,
   MessageInput,
   MessagePage,
   MessageSearchHit,
@@ -76,9 +81,15 @@ export type {
 } from './store.ts'
 export { MESSAGE_SEARCH_WINDOW, SessionStore } from './store.ts'
 export type {
+  AgentRuntime,
   Conversation,
   ConversationKind,
   DispatchEvent,
+  HostedMember,
+  HostedMemberScope,
+  HostedMemberStatus,
+  HostedSession,
+  HostedSessionStatus,
   MessageArtifact,
   SenderType,
   StoredAgent,

@@ -113,37 +113,33 @@
   background: var(--bg-surface);
   border: 1px solid var(--edge);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-1);
+  box-shadow: none;
   overflow: hidden;
-  transition:
-    border-color var(--dur-hover) var(--ease-out),
-    box-shadow var(--dur-hover) var(--ease-out);
+  transition: border-color var(--dur-hover) var(--ease-out);
 }
 
 .plugin-card:hover {
   border-color: var(--edge-strong);
-  box-shadow: var(--shadow-2);
 }
 
 /* 展开中的卡片不再加琥珀边：琥珀留给开关和出错的提醒。一张卡片同时亮三种颜色，
-   就没有哪一种是「出事了」的意思了。 */
+   就没有哪一种是「出事了」的意思了。展开本身（多出来的正文）就是它的状态信号。 */
 .plugin-card.is-open {
   border-color: var(--edge-strong);
-  box-shadow: var(--shadow-2);
 }
 
 .plugin-card-head {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-4);
 }
 
 .plugin-card-main {
   flex: 1;
   min-width: 0;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: var(--space-3);
   border: none;
   background: none;
@@ -153,6 +149,13 @@
   color: inherit;
   cursor: pointer;
   border-radius: var(--radius-sm);
+}
+
+/* 键盘走到卡头/箭头时，环画在控件内侧：卡片自己已经有描边，再叠外环就是两根线。 */
+.plugin-card-main:focus-visible,
+.plugin-chevron:focus-visible {
+  outline: 2px solid var(--focus-outline);
+  outline-offset: -2px;
 }
 
 /* 图标位：内置插件是实心琥珀（它是底座，跟别的不一样），其余一律中性底。
@@ -194,9 +197,18 @@
 }
 
 .plugin-desc {
+  overflow: hidden;
   color: var(--text-secondary);
   font-size: var(--fs-sm);
   line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 展开后卡头描述让位给展开区里的全文（同一屏不出现两遍）：与 .plugin-core-note 同口径。
+   文本仍在 DOM 里（截断只是视觉），读屏与搜索照常拿得到整句。 */
+.plugin-card.is-open .plugin-desc {
+  display: none;
 }
 
 /* 内置插件的「为什么关不掉」：左边一道琥珀竖线标出「这条要看」，正文保持安静。
@@ -540,4 +552,58 @@
     justify-content: flex-end;
     padding-top: var(--space-1);
   }
+}
+
+/* ---- 筛选 + 两列 ----
+   插件清单在 1024 窗口下曾有 2,927px 高（4 屏），分组与卡片都没有收口。
+   880px 上限 + 宽屏两列 + 三个筛选，先把“找得到”解决。 */
+.plugins-page .plugins-col {
+  max-width: 880px;
+}
+
+.plugins-filter {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+}
+
+.plugins-filter-btn {
+  min-height: 26px;
+  padding: 0 9px;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
+.plugins-filter-btn:hover {
+  color: var(--text-primary);
+}
+
+.plugins-filter-btn.is-active {
+  background: var(--bg-surface);
+  color: var(--amber-text);
+  font-weight: 600;
+  box-shadow: var(--shadow-1);
+}
+
+/* D2：宽屏不再排两列。两列把每张卡挤到 ~430px，描述折成六八行、一屏只装得下四张卡；
+   单列满宽行让描述一行就够（与会话列表同一套「名字 + 单行预览」行语言），密度回到正常档。
+   .plugin-list 本体就是 flex-column，这里不再覆写成 grid。 */
+
+.plugins-page .plugins-search {
+  width: min(440px, 48vw);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.plugins-page .plugins-search .search-box-wrap {
+  flex: 1;
+  min-width: 0;
 }

@@ -170,6 +170,19 @@ export type GroupEvent =
   | { type: 'error'; message: string; code: string }
 
 /** 调度器构造参数。 */
+/**
+ * 一位成员的事件流。
+ *
+ * 本地成员由 `AgentLoop` 产出；云成员由宿主注入的 runner 产出（把群历史作为
+ * `promptText` 发到远端，再把远端事件翻成同一套 `AgentLoopEvent`）。两者对
+ * 调度器完全同形，所以 dispatch、护栏、落库都不用知道成员的运行位置。
+ */
+export type MemberRunner = (
+  promptText: string,
+  context: ToolContext,
+  options: { signal?: AbortSignal; onAssistantMessage?: (message: AssistantMessage) => void },
+) => AsyncGenerator<AgentLoopEvent>
+
 export interface GroupDispatcherOptions {
   llm: LlmRuntime
   /** 全部群成员。 */
@@ -208,6 +221,13 @@ export interface GroupDispatcherOptions {
    * 群里每一位成员的 loop 都挂同一条钩子。
    */
   transformToolResult?: AgentLoopOptions['transformToolResult']
+  /**
+   * 成员运行器（可选）：返回非 undefined 时，这一位成员不再走本地 AgentLoop。
+   *
+   * 云成员（Kimi Hosted Agents）由它把调度器拼好的 promptText 发到远端，再把
+   * 远端事件流翻成同一套 `AgentLoopEvent`。返回 undefined 的成员照旧走本地。
+   */
+  runnerFor?: (member: AgentDefinition) => MemberRunner | undefined
 }
 
 /**
@@ -767,21 +787,34 @@ export class GroupDispatcher {
       // 交接工具先把请求攒在这轮里，等这一位说完再统一转成 dispatch 事件
       // （工具执行发生在 AgentLoop 内部，事件流由外层按顺序 yield）。
       const handoffs: HandoffRequest[] = []
-      const loop = this.createLoop(
-        this.definitionOf(member),
-        (message) => {
-          assistant = message
-        },
-        undefined,
-        [this.handoffTool(member, handoffs)],
-      )
+      /**
+       * 云成员不走本地循环：runner 拿到的是调度器已经拼好的 promptText（含群历史
+       * 与"谁交给你的任务"），把远端事件流原样翻回来。返回 undefined 的成员照旧
+       * 建 AgentLoop——两条路对调度器同形，下面的 memberEvents / 护栏 / 落库不变。
+       */
+      const runner = this.options.runnerFor?.(member)
+      const run =
+        runner === undefined
+          ? (() => {
+              const loop = this.createLoop(
+                this.definitionOf(member),
+                (message) => {
+                  assistant = message
+                },
+                undefined,
+                [this.handoffTool(member, handoffs)],
+              )
+              return loop.run({ text: promptText }, toolContext, { signal })
+            })()
+          : runner(promptText, toolContext, {
+              ...(signal === undefined ? {} : { signal }),
+              onAssistantMessage: (message) => {
+                assistant = message
+              },
+            })
       let failed = false
       try {
-        for await (const event of memberEvents(
-          member.id,
-          member.name,
-          loop.run({ text: promptText }, toolContext, { signal }),
-        )) {
+        for await (const event of memberEvents(member.id, member.name, run)) {
           if (event.type === 'error') failed = true
           yield event
         }
@@ -1108,21 +1141,29 @@ export class GroupDispatcher {
   ): Promise<MemberTurnOutcome> {
     let assistant: AssistantMessage | undefined
     const handoffs: HandoffRequest[] = []
-    const loop = this.createLoop(
-      this.definitionOf(member),
-      (message) => {
-        assistant = message
-      },
-      memory,
-      [this.handoffTool(member, handoffs)],
-    )
+    const runner = this.options.runnerFor?.(member)
+    const run =
+      runner === undefined
+        ? (() => {
+            const loop = this.createLoop(
+              this.definitionOf(member),
+              (message) => {
+                assistant = message
+              },
+              memory,
+              [this.handoffTool(member, handoffs)],
+            )
+            return loop.run({ text: promptText }, toolContext, { signal })
+          })()
+        : runner(promptText, toolContext, {
+            ...(signal === undefined ? {} : { signal }),
+            onAssistantMessage: (message) => {
+              assistant = message
+            },
+          })
     let failed = false
     try {
-      for await (const event of memberEvents(
-        member.id,
-        member.name,
-        loop.run({ text: promptText }, toolContext, { signal }),
-      )) {
+      for await (const event of memberEvents(member.id, member.name, run)) {
         if (event.type === 'error') failed = true
         queue.push(event)
       }

@@ -6,6 +6,14 @@
 import type { PermissionPreset } from '@ryharness/agent'
 import type { AgentPersona } from './persona.ts'
 
+/**
+ * Agent 跑在哪儿：本机（默认）还是 Kimi Hosted Agents 的云沙箱。
+ *
+ * 存成一列而不是另开一张表：通讯录、建群、@提及、调度器选人都按 `agents` 行认人，
+ * 云成员只要还是这一行，那些流程一行都不用改。
+ */
+export type AgentRuntime = 'local' | 'hosted'
+
 /** 持久化的 Agent 定义（与 @ryharness/agent 的 AgentDefinition 同构，常用字段展开便于 SQL 查询）。 */
 export interface StoredAgent {
   id: string
@@ -31,6 +39,8 @@ export interface StoredAgent {
    * 读出来一定是完整的一份：存量 agent 的 persona 列是 NULL，存储层按默认值补齐。
    */
   persona: AgentPersona
+  /** 这个成员跑在本机还是云端。缺省（旧行/旧调用方）按本机算。 */
+  runtime?: AgentRuntime
   isBuiltin: boolean
   /**
    * 路由是否被用户手动锁住：true = 用户自己挑的这条 provider/model，服务器
@@ -139,4 +149,52 @@ export interface DispatchEvent {
   reason: string
   turnIndex: number
   createdAt: number
+}
+
+/** 云成员的来源：官方只读 agent，还是我们自己创建的可改 agent。 */
+export type HostedMemberScope = 'official' | 'custom'
+
+/** 雇佣状态：active 在用；archived 已解雇（远端已归档）；error 远端对不上。 */
+export type HostedMemberStatus = 'active' | 'archived' | 'error'
+
+/**
+ * 一条雇佣契约：本地 agent ↔ 远端 agent。
+ *
+ * 远端 `agent_` 是"这个人"，`environment_id` 是它上班的环境。两者在雇佣时确定，
+ * 之后只有"重新雇佣"才会换。会话（`hosted_sessions`）才是它每次上班的工位。
+ */
+export interface HostedMember {
+  agentId: string
+  remoteAgentId: string
+  environmentId: string
+  /** 钉住的远端版本；缺省 = 每次新建会话取最新版本。 */
+  agentVersion?: string
+  scope: HostedMemberScope
+  status: HostedMemberStatus
+  createdAt: number
+  updatedAt: number
+}
+
+/** 云会话（工位）的生命周期；`lost` 表示远端查不到这个会话了。 */
+export type HostedSessionStatus = 'idle' | 'running' | 'terminated' | 'lost'
+
+/**
+ * 一个成员在一个会话里的工位。
+ *
+ * 主键是 (conversationId, agentId)：群聊里可以同时有多位云成员，同一位成员也可以
+ * 同时在多个会话里上班，各自是独立的远端会话（彼此不共享上下文）。
+ */
+export interface HostedSession {
+  conversationId: string
+  agentId: string
+  sessionId: string
+  /** SSE 恢复游标（不透明字符串，原样回传）。 */
+  cursor?: string
+  /** 最后处理过的 KHA 事件 id：重连会重投最后一帧，靠它去重。 */
+  lastEventId?: string
+  /** 最后处理过的事件的服务端时间（ISO）：事件 id 对不上时用它兜底对账。 */
+  lastEventAt?: string
+  status: HostedSessionStatus
+  createdAt: number
+  updatedAt: number
 }

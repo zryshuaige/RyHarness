@@ -328,6 +328,13 @@ export class TurnEngine {
     conversation: TurnConversation,
     plan: { truncateFrom: number; editText?: { seq: number; text: string }; replayText: string },
   ): Promise<{ applied: boolean; error?: string }> {
+    /**
+     * 云会话的历史在远端，本地截断没有意义：下一次发言时远端仍按它自己的历史
+     * 继续，本地只是少了一段镜像。宁可明确拒绝，也不要假装改成功。
+     */
+    if (this.options.store.listHostedSessions(conversation.id).length > 0) {
+      return { applied: false, error: '云端会话的历史保存在服务器上，本地不支持编辑或重新生成。' }
+    }
     // 1、2 立刻做：别等在途那一轮跑完才停，那段时间烧的 token 全是白烧。
     this.supersedeTurn(conversation.id)
     this.discardQueuedTurns(conversation.id)

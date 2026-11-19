@@ -82,3 +82,19 @@ export function formatSize(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
+
+/**
+ * token 数的人话写法（12px 读数用）：128000 → 「128k」、1048576 → 「1M」。
+ *
+ * 上下文窗口是四位以上的整数，原样写「131072」在 composer 那一行里读不出量级；
+ * 千位以下仍原样（8192 会写成 8.2k，但读数场景全是窗口/累计量，量级比精度重要）。
+ */
+export function formatTokens(tokens: number): string {
+  if (tokens < 1000) return String(tokens)
+  if (tokens < 1_000_000) {
+    const k = tokens / 1000
+    return `${Number.isInteger(k) ? k : k.toFixed(1)}k`
+  }
+  const m = tokens / 1_000_000
+  return `${Number.isInteger(m) ? m : m.toFixed(1)}M`
+}

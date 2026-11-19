@@ -111,3 +111,6 @@ vendor/*/*/lib/
 /.tmp-*/
 /.zwork/
 .zcode/
+
+# Cygwin/MSYS 崩溃转储（bash.exe.stackdump 之类）：本机排障产物，不入库。
+*.stackdump

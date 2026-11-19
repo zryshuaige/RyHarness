@@ -12,6 +12,7 @@ import {
   fetchPiperInstallStatus,
   loadAutoSpeak,
   localSystemVoiceNames,
+  localSystemVoiceProfiles,
   pickSystemVoice,
   refreshVoiceCatalog,
   resetVoiceCatalogCache,
@@ -20,6 +21,8 @@ import {
   splitSentenceStream,
   splitSentences,
   startPiperInstall,
+  systemLocalVoiceId,
+  systemLocalVoiceProfile,
   type VoiceCatalog,
   VoicePlayer,
   type VoiceProfile,
@@ -200,6 +203,36 @@ describe('localSystemVoiceNames', () => {
   })
 })
 
+describe('localSystemVoiceProfiles', () => {
+  it('按本机实际安装列音色：中文排前，每条 id 都能解码回同一个名字', () => {
+    vi.stubGlobal('speechSynthesis', {
+      getVoices: () => [
+        { name: 'Microsoft Zira Desktop - English (United States)', lang: 'en-US' },
+        { name: 'Microsoft Huihui Desktop - Chinese (Simplified)', lang: 'zh-CN' },
+      ],
+    })
+    const profiles = localSystemVoiceProfiles()
+    expect(profiles.map((p) => p.voice)).toEqual([
+      'Microsoft Huihui Desktop - Chinese (Simplified)',
+      'Microsoft Zira Desktop - English (United States)',
+    ])
+    for (const profile of profiles) {
+      expect(profile.engine).toBe('system')
+      expect(systemLocalVoiceProfile(profile.id)?.voice).toBe(profile.voice)
+    }
+    // 两条不同的本机音色必须是两个不同的 id——「换哪个都一样」的判据
+    expect(new Set(profiles.map((p) => p.id)).size).toBe(2)
+  })
+
+  it('没有 Web Speech 时返回空数组；坏 id 解码给 undefined 而不是抛错', () => {
+    vi.stubGlobal('speechSynthesis', undefined)
+    expect(localSystemVoiceProfiles()).toEqual([])
+    expect(systemLocalVoiceProfile('system-huihui')).toBeUndefined()
+    expect(systemLocalVoiceProfile('system-local:%E0%A4%A')).toBeUndefined()
+    expect(systemLocalVoiceProfile('system-local:')).toBeUndefined()
+  })
+})
+
 describe('pickSystemVoice', () => {
   const voices = [
     { name: 'Microsoft David Desktop', lang: 'en-US' },
@@ -334,6 +367,29 @@ describe('VoicePlayer', () => {
     await player.speak({ text: '系统念。', profileId: systemProfile.id })
     expect(synthesizes).toEqual([])
     expect(spoken).toEqual(['系统念。'])
+  })
+
+  /**
+   * 本机音色（system-local:）的名字编在 id 里：目录读不到也要按**选的那条**念，
+   * 而不是回退到默认音色——回退正是「换哪个听起来都一样」的根因。
+   */
+  it('本机音色 id 不查目录：目录失败也按 id 里的名字念，两条 id 念出两条音色', async () => {
+    const voiceNames: (string | undefined)[] = []
+    const { player, synthesizes, notifyCatalogFallback } = playerFixture({
+      catalog: () => Promise.reject(new Error('插件关了')),
+      system: {
+        speak: (input) => {
+          voiceNames.push(input.voiceName)
+          return Promise.resolve()
+        },
+        cancel: () => {},
+      },
+    })
+    await player.speak({ text: '第一句。', profileId: systemLocalVoiceId('Microsoft Huihui Desktop') })
+    await player.speak({ text: '第二句。', profileId: systemLocalVoiceId('Microsoft Zira Desktop') })
+    expect(voiceNames).toEqual(['Microsoft Huihui Desktop', 'Microsoft Zira Desktop'])
+    expect(synthesizes).toEqual([])
+    expect(notifyCatalogFallback).not.toHaveBeenCalled()
   })
 
   it('离线音色与云端走同一条服务端合成路径（不是系统语音）', async () => {

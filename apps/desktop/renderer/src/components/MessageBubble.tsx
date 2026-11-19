@@ -1,4 +1,4 @@
-import { type CSSProperties, memo, type ReactNode, useRef, useState } from 'react'
+import { type CSSProperties, memo, type ReactNode, useEffect, useRef, useState } from 'react'
 import type { AgentDef } from '../api.ts'
 import type { AvatarTemperament } from '../lib/avatar-motion.ts'
 import { humanError } from '../lib/error-text.ts'
@@ -349,6 +349,14 @@ export interface MessageViewer {
  * 用户侧的 seed 固定成 'you'：兜底色板按 seed 哈希，改昵称不该把「我」的那张脸换成
  * 另一种颜色——同一个人的头像在资料页与气泡里必须是同一枚。
  */
+/**
+ * 一条消息上最多同时挂几枚**内联**操作按钮（D5）：停止朗读（仅播放时）+ 复制 + 溢出触发。
+ * 低频动作（朗读/赞/踩/编辑重发/重新生成/分支）进 `.bubble-menu` 溢出菜单，不计入内联。
+ * 导出给 design-system.test 当操作条通道宽度与窄列断点的几何输入——按钮数变了却不同步改
+ * 它，通道就短一截、按钮重新压回正文（975px 那条旧断点正是六枚内联按钮算出来的）。
+ */
+export const BUBBLE_INLINE_ACTIONS = 3
+
 function userAvatar(viewer: MessageViewer | undefined): ReactNode {
   if (viewer === undefined) return null
   return <Avatar avatarKey={viewer.avatarKey} name={viewer.name} seed="you" size={40} />
@@ -453,6 +461,38 @@ function MessageBubbleInner({
   })
   /** 请求在途：期间两个按钮都锁住，连点/换信号不会发出并发请求。 */
   const [pending, setPending] = useState(false)
+  /** 溢出菜单（D5）：低频动作收进这里，气泡上只留「停止朗读/复制/更多」三枚。 */
+  const [menuOpen, setMenuOpen] = useState(false)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  /** 菜单里可点的项（跳过禁用项）：方向键走位与 Home/End 共用一份查询。 */
+  const focusableMenuItems = (): HTMLButtonElement[] => {
+    return [...(menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? [])]
+  }
+  /**
+   * 关菜单并（按需）把焦点还给触发键。
+   *
+   * 键盘用户把菜单关掉之后焦点必须落在「哪里」，否则会掉回 body——下一次 Tab 从
+   * 文档开头重新数起，等于丢了这个会话的位置。鼠标移出操作区那条路径不还焦。
+   */
+  const closeMenu = (refocusTrigger: boolean): void => {
+    setMenuOpen(false)
+    if (refocusTrigger) triggerRef.current?.focus()
+  }
+  // 指针移出操作区已能关菜单；键盘与触屏没有 mouseleave，补一条「外部按下即关闭」。
+  useEffect(() => {
+    if (!menuOpen) return
+    const onPointerDown = (event: PointerEvent): void => {
+      const target = event.target as Node | null
+      if (target === null) return
+      if (menuRef.current?.contains(target) === true || triggerRef.current?.contains(target) === true) return
+      setMenuOpen(false)
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown)
+    }
+  }, [menuOpen])
   const isUser = message.senderType === 'user'
   const hue = agentHue(message.senderId)
   /**
@@ -533,6 +573,17 @@ function MessageBubbleInner({
     onEdit?.(message, next)
   }
 
+  /**
+   * 溢出菜单里到底有几项（决定是否挂「更多」触发键）。朗读在播放中已经以内联停止键
+   * 出现，所以此时不再重复进菜单；其余低频动作按各自的可见条件算。
+   */
+  const hasMenuItems =
+    (canRead && !voiceSpeaking) ||
+    (!isUser && onFeedback !== undefined && message.done === true) ||
+    (isUser && onEdit !== undefined && !editing && message.seq !== undefined) ||
+    (!isUser && onRegenerate !== undefined && message.done === true && message.seq !== undefined) ||
+    onBranch !== undefined
+
   const rowClass = [
     'bubble-row',
     isUser ? 'from-user' : 'from-agent',
@@ -544,13 +595,14 @@ function MessageBubbleInner({
     .join(' ')
 
   return (
-    // 暗色主题的正文色相挂在行上：自定义属性会继承，.bubble-name 因此读得到，
-    // 而它自己的 style 里只剩浅色那一套的 color，主题层才能干净地接管。
+    // 身份色相只挂在行上，由样式表喂给头像环（.from-agent .bubble-avatar-gutter）：
+    // 以前是名字文字色 + 气泡左 3px 条，蓝名字看着像超链接、左条和琥珀品牌色抢注意力，
+    // 一个 agent 在整页里就出现了三次身份色。现在色相只做「是谁」的环，正文/名字全回中性。
     <div
       className={rowClass}
       data-sender={message.senderId}
       data-message-id={serverMessageId(message.key)}
-      style={isUser ? undefined : ({ '--agent-hue-text-dark': hue.text.dark } as StyleVars)}
+      style={isUser ? undefined : ({ '--agent-hue': hue.graphic } as StyleVars)}
     >
       {/* 头像列：两侧共用同一个 DOM 位置——.bubble-row 在用户行是 row-reverse，所以
           同一处代码落在 agent 行是左侧、落在用户行是右侧，镜像不必另写一套。
@@ -563,17 +615,11 @@ function MessageBubbleInner({
       )}
       <div className="bubble">
         {!isUser && firstOfGroup && (
-          // 浅色主题的正文色相直接内联成 color；暗色那套由行上的 --agent-hue-text-dark
-          // 继承下来、由主题层接管（见 styles.css 里 .bubble-name 的注释）。
-          <div className="bubble-name" style={{ color: hue.text.light }}>
-            {message.senderName}
-          </div>
+          // 名字回中性正文色（styles.css 的 .bubble-name 给 --text-secondary），
+          // 身份交给上面头像环的 --agent-hue，不再把色相写进文字。
+          <div className="bubble-name">{message.senderName}</div>
         )}
-        <div
-          className="bubble-bubble"
-          // agent 气泡左边框吃自己的色相；左内边距补回边框的 3px，正文不发生位移。
-          style={isUser ? undefined : { borderLeft: `3px solid ${hue.graphic}`, paddingLeft: '11px' }}
-        >
+        <div className="bubble-bubble">
           {editing ? (
             <div className="bubble-edit">
               <textarea
@@ -642,31 +688,38 @@ function MessageBubbleInner({
         </div>
         <span
           className="bubble-actions"
+          role="toolbar"
+          aria-label="消息操作"
           // 播放中必须常显：操作条默认靠 hover 浮现，朗读时用户找不到停止键就只能
           // 等它念完。其余状态仍交给样式表的 hover 规则。
           style={
             voiceSpeaking ? { opacity: 1, pointerEvents: 'auto', transform: 'translateY(-50%) scale(1)' } : undefined
           }
+          // 指针离开整条操作区（含已展开的菜单）就收起菜单：菜单是绝对定位的子节点，
+          // 指针移进菜单不算离开；移出去再 hover 回来不该还留着一个上次没关的菜单。
+          onMouseLeave={() => {
+            setMenuOpen(false)
+          }}
         >
-          {canRead && (
+          {/* 内联只剩三枚（BUBBLE_INLINE_ACTIONS）：停止朗读（仅播放中）+ 复制 + 更多。
+              播放中不出现「朗读」——那会与停止键同形同事，反而让用户犹豫点哪个。 */}
+          {canRead && voiceSpeaking && (
             <>
-              {voiceSpeaking && (
-                <span className="typing-dots voice-wave" aria-hidden="true" style={{ alignSelf: 'center' }}>
-                  <i />
-                  <i />
-                  <i />
-                </span>
-              )}
+              <span className="typing-dots voice-wave" aria-hidden="true" style={{ alignSelf: 'center' }}>
+                <i />
+                <i />
+                <i />
+              </span>
               <button
                 type="button"
-                className={`bubble-action${voiceSpeaking ? ' is-active' : ''}`}
-                title={voiceSpeaking ? '停止朗读' : '朗读这条消息'}
-                aria-label={voiceSpeaking ? '停止朗读' : '朗读这条消息'}
+                className="bubble-action is-active"
+                title="停止朗读"
+                aria-label="停止朗读"
                 onClick={() => {
                   onVoiceToggle?.(message)
                 }}
               >
-                <Icon name={voiceSpeaking ? 'square' : 'volume-2'} size={16} />
+                <Icon name="square" size={16} />
               </button>
             </>
           )}
@@ -681,75 +734,175 @@ function MessageBubbleInner({
           >
             <Icon name={copied ? 'check' : 'copy'} size={16} />
           </button>
-          {!isUser && onFeedback !== undefined && message.done && (
-            <>
-              <button
-                type="button"
-                className={`bubble-action ${feedback === 'thumb_up' ? 'is-active' : ''}`}
-                title="有帮助"
-                aria-label="有帮助"
-                disabled={pending}
-                onClick={() => {
-                  giveFeedback('thumb_up')
-                }}
-              >
-                <Icon name="thumbs-up" size={16} />
-              </button>
-              <button
-                type="button"
-                className={`bubble-action ${feedback === 'thumb_down' ? 'is-active-neg' : ''}`}
-                title="有问题（触发反思）"
-                aria-label="哪里不对"
-                disabled={pending}
-                onClick={() => {
-                  giveFeedback('thumb_down')
-                }}
-              >
-                <Icon name="thumbs-down" size={16} />
-              </button>
-            </>
-          )}
-          {/* 编辑并重发：只给用户自己的话（改 agent 的发言等于让用户替它说话），
-              也只给已经落库的消息（还没送达的那条没有服务端 seq，改不了）。 */}
-          {isUser && onEdit !== undefined && !editing && message.seq !== undefined && (
+          {hasMenuItems && (
             <button
+              ref={triggerRef}
               type="button"
-              className="bubble-action"
-              title="编辑并重发"
-              aria-label="编辑并重发"
-              onClick={startEdit}
-            >
-              <Icon name="pencil" size={16} />
-            </button>
-          )}
-          {/* 重新生成：只给已经说完的 agent 消息（还在生成时没有"重来"可言）。 */}
-          {!isUser && onRegenerate !== undefined && message.done && message.seq !== undefined && (
-            <button
-              type="button"
-              className="bubble-action"
-              title="重新生成"
-              aria-label="重新生成这条回复"
+              className={`bubble-action${menuOpen ? ' is-active' : ''}`}
+              title="更多操作"
+              aria-label="更多操作"
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
               onClick={() => {
-                onRegenerate(message)
+                setMenuOpen((open) => !open)
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  closeMenu(false)
+                  return
+                }
+                // ↓ 从触发键直接进菜单第一项：键盘用户不必再 Tab 一次。
+                if (event.key === 'ArrowDown') {
+                  event.preventDefault()
+                  setMenuOpen(true)
+                  requestAnimationFrame(() => {
+                    focusableMenuItems()[0]?.focus()
+                  })
+                }
               }}
             >
-              <Icon name="arrow-up" size={16} />
+              <Icon name="ellipsis" size={16} />
             </button>
           )}
-          {/* 从此处分支：把会话在这里的状态复制成一个新会话，之后各走各的。 */}
-          {onBranch !== undefined && (
-            <button
-              type="button"
-              className="bubble-action"
-              title="从这里分支"
-              aria-label="从这里分支出新会话"
-              onClick={() => {
-                onBranch(message)
-              }}
-            >
-              <Icon name="arrow-up-right" size={16} />
-            </button>
-          )}
+          {/* 低频动作收在溢出菜单里：朗读（非播放时）/ 赞 / 踩 / 编辑重发 / 重新生成 / 分支。
+              关闭时用 hidden 属性移出可达树，但仍留在 DOM——测试与读屏按 aria-label 找得到。 */}
+          <div
+            ref={menuRef}
+            className="bubble-menu"
+            role="menu"
+            hidden={!menuOpen}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                event.stopPropagation()
+                closeMenu(true)
+                return
+              }
+              // 菜单内全键盘走位（WAI-ARIA menu 约定）：↑↓ 循环、Home/End 到两端。
+              const items = focusableMenuItems()
+              if (items.length === 0) return
+              const current = items.indexOf(document.activeElement as HTMLButtonElement)
+              const focusAt = (index: number): void => {
+                items[(index + items.length) % items.length]?.focus()
+              }
+              if (event.key === 'ArrowDown') {
+                event.preventDefault()
+                focusAt(current + 1)
+              } else if (event.key === 'ArrowUp') {
+                event.preventDefault()
+                focusAt(current - 1)
+              } else if (event.key === 'Home') {
+                event.preventDefault()
+                focusAt(0)
+              } else if (event.key === 'End') {
+                event.preventDefault()
+                focusAt(items.length - 1)
+              }
+            }}
+          >
+            {canRead && !voiceSpeaking && (
+              <button
+                type="button"
+                role="menuitem"
+                className="menu-item"
+                title="朗读这条消息"
+                aria-label="朗读这条消息"
+                onClick={() => {
+                  closeMenu(true)
+                  onVoiceToggle?.(message)
+                }}
+              >
+                <Icon name="volume-2" size={16} />
+                <span>朗读</span>
+              </button>
+            )}
+            {!isUser && onFeedback !== undefined && message.done && (
+              <>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={`menu-item${feedback === 'thumb_up' ? ' is-active' : ''}`}
+                  title="有帮助"
+                  aria-label="有帮助"
+                  disabled={pending}
+                  onClick={() => {
+                    closeMenu(true)
+                    giveFeedback('thumb_up')
+                  }}
+                >
+                  <Icon name="thumbs-up" size={16} />
+                  <span>有帮助</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={`menu-item${feedback === 'thumb_down' ? ' is-active-neg' : ''}`}
+                  title="有问题（触发反思）"
+                  aria-label="哪里不对"
+                  disabled={pending}
+                  onClick={() => {
+                    closeMenu(true)
+                    giveFeedback('thumb_down')
+                  }}
+                >
+                  <Icon name="thumbs-down" size={16} />
+                  <span>哪里不对</span>
+                </button>
+              </>
+            )}
+            {/* 编辑并重发：只给用户自己的话（改 agent 的发言等于让用户替它说话），
+                也只给已经落库的消息（还没送达的那条没有服务端 seq，改不了）。 */}
+            {isUser && onEdit !== undefined && !editing && message.seq !== undefined && (
+              <button
+                type="button"
+                role="menuitem"
+                className="menu-item"
+                title="编辑并重发"
+                aria-label="编辑并重发"
+                onClick={() => {
+                  // 编辑会原地摊开输入框：焦点交给编辑器，不还给触发键。
+                  closeMenu(false)
+                  startEdit()
+                }}
+              >
+                <Icon name="pencil" size={16} />
+                <span>编辑并重发</span>
+              </button>
+            )}
+            {/* 重新生成：只给已经说完的 agent 消息（还在生成时没有"重来"可言）。 */}
+            {!isUser && onRegenerate !== undefined && message.done && message.seq !== undefined && (
+              <button
+                type="button"
+                role="menuitem"
+                className="menu-item"
+                title="重新生成"
+                aria-label="重新生成这条回复"
+                onClick={() => {
+                  closeMenu(true)
+                  onRegenerate(message)
+                }}
+              >
+                <Icon name="arrow-up" size={16} />
+                <span>重新生成</span>
+              </button>
+            )}
+            {/* 从此处分支：把会话在这里的状态复制成一个新会话，之后各走各的。 */}
+            {onBranch !== undefined && (
+              <button
+                type="button"
+                role="menuitem"
+                className="menu-item"
+                title="从这里分支"
+                aria-label="从这里分支出新会话"
+                onClick={() => {
+                  closeMenu(true)
+                  onBranch(message)
+                }}
+              >
+                <Icon name="arrow-up-right" size={16} />
+                <span>分支新会话</span>
+              </button>
+            )}
+          </div>
         </span>
       </div>
       {/* 送达角标挂在行尾（row-reverse 下落在用户气泡左侧），不进 .bubble：

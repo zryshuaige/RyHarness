@@ -15,9 +15,15 @@ import type { AffinityEvent, AgentPersona } from './persona.ts'
 import { nextAffinity, normalizePersona, serializePersona } from './persona.ts'
 import { migrate, SCHEMA_VERSION } from './schema.ts'
 import type {
+  AgentRuntime,
   Conversation,
   ConversationKind,
   DispatchEvent,
+  HostedMember,
+  HostedMemberScope,
+  HostedMemberStatus,
+  HostedSession,
+  HostedSessionStatus,
   MessageArtifact,
   SenderType,
   StoredAgent,
@@ -32,9 +38,11 @@ import type {
  * persona 可选且可只给部分字段：调用方（种子、模板实例化、旧测试）不必为了
  * 存一个 agent 先拼一整个人格，缺的部分由 {@link normalizePersona} 补默认值。
  */
-export type AgentInput = Omit<StoredAgent, 'isBuiltin' | 'createdAt' | 'updatedAt' | 'persona'> & {
+export type AgentInput = Omit<StoredAgent, 'isBuiltin' | 'createdAt' | 'updatedAt' | 'persona' | 'runtime'> & {
   isBuiltin?: boolean
   persona?: Partial<AgentPersona>
+  /** 缺省 = 'local'；云成员由雇佣流程显式传 'hosted'。 */
+  runtime?: AgentRuntime
 }
 
 /** 创建会话的输入。 */
@@ -45,6 +53,25 @@ export interface ConversationInput {
   dispatcherAgentId?: string
   /** 归到哪个工作区（`@ryharness/workspace` 的工作区 id）；不给就是未归属。 */
   workspaceId?: string
+}
+
+/** 雇佣一个云成员的输入。 */
+export interface HostedMemberInput {
+  agentId: string
+  remoteAgentId: string
+  environmentId: string
+  /** 钉住的远端版本；缺省 = 每次新建会话取最新。 */
+  agentVersion?: string
+  scope: HostedMemberScope
+  status?: HostedMemberStatus
+}
+
+/** 登记一个云会话（工位）的输入。 */
+export interface HostedSessionInput {
+  conversationId: string
+  agentId: string
+  sessionId: string
+  status?: HostedSessionStatus
 }
 
 /** 追加消息的输入。 */
@@ -362,13 +389,13 @@ export class SessionStore {
     const now = Date.now()
     const existing = this.getAgent(input.id)
     this.stmt(`
-      INSERT INTO agents (id, name, avatar, system_prompt, provider, model, temperature, reasoning_effort, tools, persona, is_builtin, route_locked, permission_preset, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO agents (id, name, avatar, system_prompt, provider, model, temperature, reasoning_effort, tools, persona, runtime, is_builtin, route_locked, permission_preset, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (id) DO UPDATE SET
         name = excluded.name, avatar = excluded.avatar, system_prompt = excluded.system_prompt,
         provider = excluded.provider, model = excluded.model, temperature = excluded.temperature,
         reasoning_effort = excluded.reasoning_effort,
-        tools = excluded.tools, persona = excluded.persona,
+        tools = excluded.tools, persona = excluded.persona, runtime = excluded.runtime,
         route_locked = excluded.route_locked, permission_preset = excluded.permission_preset,
         updated_at = excluded.updated_at
     `).run(
@@ -386,6 +413,8 @@ export class SessionStore {
       serializePersona(
         normalizePersona(input.persona === undefined ? existing?.persona : { ...existing?.persona, ...input.persona }),
       ),
+      // 没给 runtime 时沿用库里的那份：雇佣流程显式给 'hosted'，普通 PATCH 不该把它改回本机。
+      input.runtime ?? existing?.runtime ?? 'local',
       input.isBuiltin === true ? 1 : 0,
       // 没给 routeLocked 时沿用库里的那份：服务器自动改绑不该顺手把「用户手动挑过
       // 路由」这个标记抹掉，抹掉等于把用户的选择重新交回默认值。
@@ -478,11 +507,207 @@ export class SessionStore {
       tools: parseJsonArray(String(row.tools)) as string[],
       // persona 列可能是 NULL（v6 之前的行）或脏 JSON：一律走归一，读出来必是完整一份。
       persona: normalizePersona(parseJsonValue(row.persona)),
+      runtime: row.runtime === 'hosted' ? 'hosted' : 'local',
       isBuiltin: Number(row.is_builtin) === 1,
       ...(Number(row.route_locked) === 1 ? { routeLocked: true } : {}),
       ...(row.permission_preset === null || row.permission_preset === undefined
         ? {}
         : { permissionPreset: String(row.permission_preset) as StoredAgent['permissionPreset'] }),
+      createdAt: Number(row.created_at),
+      updatedAt: Number(row.updated_at),
+    }
+  }
+
+  // ---- hosted members / sessions ----
+
+  /**
+   * 写一条雇佣契约（同 agentId 覆盖）。
+   *
+   * 没给 agentVersion 时沿用库里那份：一次只改状态的调用（解雇）不该把它抹掉。
+   */
+  upsertHostedMember(input: HostedMemberInput): HostedMember {
+    const now = Date.now()
+    const existing = this.getHostedMember(input.agentId)
+    this.stmt(`
+      INSERT INTO hosted_members (agent_id, remote_agent_id, environment_id, agent_version, scope, status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (agent_id) DO UPDATE SET
+        remote_agent_id = excluded.remote_agent_id,
+        environment_id = excluded.environment_id,
+        agent_version = excluded.agent_version,
+        scope = excluded.scope,
+        status = excluded.status,
+        updated_at = excluded.updated_at
+    `).run(
+      input.agentId,
+      input.remoteAgentId,
+      input.environmentId,
+      input.agentVersion ?? existing?.agentVersion ?? null,
+      input.scope,
+      input.status ?? existing?.status ?? 'active',
+      existing?.createdAt ?? now,
+      now,
+    )
+    const stored = this.getHostedMember(input.agentId)
+    if (stored === undefined)
+      throw new Error(`@ryharness/session: upsert of hosted member "${input.agentId}" did not persist`)
+    return stored
+  }
+
+  /** 读一条雇佣契约；不是云成员返回 undefined。 */
+  getHostedMember(agentId: string): HostedMember | undefined {
+    const row = this.stmt('SELECT * FROM hosted_members WHERE agent_id = ?').get(agentId) as
+      | Record<string, unknown>
+      | undefined
+    return row === undefined ? undefined : this.rowToHostedMember(row)
+  }
+
+  /** 全部雇佣契约。 */
+  listHostedMembers(): HostedMember[] {
+    const rows = this.stmt('SELECT * FROM hosted_members ORDER BY created_at, agent_id').all() as Record<
+      string,
+      unknown
+    >[]
+    return rows.map((row) => {
+      return this.rowToHostedMember(row)
+    })
+  }
+
+  /** 改雇佣状态（解雇 / 远端对不上）。返回改完的那条。 */
+  setHostedMemberStatus(agentId: string, status: HostedMemberStatus): HostedMember | undefined {
+    this.stmt('UPDATE hosted_members SET status = ?, updated_at = ? WHERE agent_id = ?').run(
+      status,
+      Date.now(),
+      agentId,
+    )
+    return this.getHostedMember(agentId)
+  }
+
+  /** 删一条雇佣契约（不碰远端——远端归档是调用方的事）。 */
+  deleteHostedMember(agentId: string): void {
+    this.stmt('DELETE FROM hosted_members WHERE agent_id = ?').run(agentId)
+  }
+
+  private rowToHostedMember(row: Record<string, unknown>): HostedMember {
+    return {
+      agentId: String(row.agent_id),
+      remoteAgentId: String(row.remote_agent_id),
+      environmentId: String(row.environment_id),
+      ...(row.agent_version === null || row.agent_version === undefined
+        ? {}
+        : { agentVersion: String(row.agent_version) }),
+      scope: String(row.scope) as HostedMemberScope,
+      status: String(row.status) as HostedMemberStatus,
+      createdAt: Number(row.created_at),
+      updatedAt: Number(row.updated_at),
+    }
+  }
+
+  /** 登记一个工位（同 conversationId + agentId 覆盖 sessionId）。 */
+  upsertHostedSession(input: HostedSessionInput): HostedSession {
+    const now = Date.now()
+    const existing = this.getHostedSession(input.conversationId, input.agentId)
+    this.stmt(`
+      INSERT INTO hosted_sessions (conversation_id, agent_id, session_id, cursor, last_event_id, last_event_at, status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (conversation_id, agent_id) DO UPDATE SET
+        session_id = excluded.session_id,
+        status = excluded.status,
+        updated_at = excluded.updated_at
+    `).run(
+      input.conversationId,
+      input.agentId,
+      input.sessionId,
+      existing?.cursor ?? null,
+      existing?.lastEventId ?? null,
+      existing?.lastEventAt ?? null,
+      input.status ?? existing?.status ?? 'idle',
+      existing?.createdAt ?? now,
+      now,
+    )
+    const stored = this.getHostedSession(input.conversationId, input.agentId)
+    if (stored === undefined) {
+      throw new Error(
+        `@ryharness/session: upsert of hosted session "${input.conversationId}/${input.agentId}" did not persist`,
+      )
+    }
+    return stored
+  }
+
+  /** 读一个工位；没有返回 undefined。 */
+  getHostedSession(conversationId: string, agentId: string): HostedSession | undefined {
+    const row = this.stmt('SELECT * FROM hosted_sessions WHERE conversation_id = ? AND agent_id = ?').get(
+      conversationId,
+      agentId,
+    ) as Record<string, unknown> | undefined
+    return row === undefined ? undefined : this.rowToHostedSession(row)
+  }
+
+  /** 列工位：给了 conversationId 就只列该会话的。 */
+  listHostedSessions(conversationId?: string): HostedSession[] {
+    const rows =
+      conversationId === undefined
+        ? (this.stmt('SELECT * FROM hosted_sessions ORDER BY created_at, conversation_id, agent_id').all() as Record<
+            string,
+            unknown
+          >[])
+        : (this.stmt('SELECT * FROM hosted_sessions WHERE conversation_id = ? ORDER BY created_at, agent_id').all(
+            conversationId,
+          ) as Record<string, unknown>[])
+    return rows.map((row) => {
+      return this.rowToHostedSession(row)
+    })
+  }
+
+  /**
+   * 推进游标 / 状态。
+   *
+   * 只写给出的字段：每收到一帧就写一次游标，不该顺手把状态改成别的。
+   */
+  updateHostedSession(input: {
+    conversationId: string
+    agentId: string
+    cursor?: string
+    lastEventId?: string
+    lastEventAt?: string
+    status?: HostedSessionStatus
+  }): HostedSession | undefined {
+    const existing = this.getHostedSession(input.conversationId, input.agentId)
+    if (existing === undefined) return undefined
+    this.stmt(`
+      UPDATE hosted_sessions
+      SET cursor = ?, last_event_id = ?, last_event_at = ?, status = ?, updated_at = ?
+      WHERE conversation_id = ? AND agent_id = ?
+    `).run(
+      input.cursor ?? existing.cursor ?? null,
+      input.lastEventId ?? existing.lastEventId ?? null,
+      input.lastEventAt ?? existing.lastEventAt ?? null,
+      input.status ?? existing.status,
+      Date.now(),
+      input.conversationId,
+      input.agentId,
+    )
+    return this.getHostedSession(input.conversationId, input.agentId)
+  }
+
+  /** 删一个工位（会话/成员删除时级联也会清，这里给显式路径）。 */
+  deleteHostedSession(conversationId: string, agentId: string): void {
+    this.stmt('DELETE FROM hosted_sessions WHERE conversation_id = ? AND agent_id = ?').run(conversationId, agentId)
+  }
+
+  private rowToHostedSession(row: Record<string, unknown>): HostedSession {
+    return {
+      conversationId: String(row.conversation_id),
+      agentId: String(row.agent_id),
+      sessionId: String(row.session_id),
+      ...(row.cursor === null || row.cursor === undefined ? {} : { cursor: String(row.cursor) }),
+      ...(row.last_event_id === null || row.last_event_id === undefined
+        ? {}
+        : { lastEventId: String(row.last_event_id) }),
+      ...(row.last_event_at === null || row.last_event_at === undefined
+        ? {}
+        : { lastEventAt: String(row.last_event_at) }),
+      status: String(row.status) as HostedSessionStatus,
       createdAt: Number(row.created_at),
       updatedAt: Number(row.updated_at),
     }

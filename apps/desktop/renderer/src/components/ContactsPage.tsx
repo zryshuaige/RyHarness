@@ -33,14 +33,15 @@ import {
   providersByReadiness,
 } from '../lib/provider-health.ts'
 import { type StyleVars, stagger } from '../lib/stagger.ts'
+import { readSetting, writeSetting } from '../lib/storage.ts'
 import { toast } from '../lib/toast.ts'
-import { ALL_TOOLS, toolLabel } from '../lib/tool-labels.ts'
 import {
   fetchPiperInstallStatus,
   fetchVoiceCatalog,
-  localSystemVoiceNames,
+  localSystemVoiceProfiles,
   refreshVoiceCatalog,
   startPiperInstall,
+  systemLocalVoiceProfile,
   useVoicePlayback,
   type VoiceCatalog,
   type VoiceEngineInfo,
@@ -554,6 +555,29 @@ export function ContactsPage({
     if (b.id === 'ryen') return 1
     return a.name.localeCompare(b.name)
   })
+  const [query, setQuery] = useState('')
+  const [templateOpen, setTemplateOpen] = useState(false)
+  /**
+   * 视图形态：列表（默认）与卡片。列表一屏能扫完更多人；卡片把性格与口头禅摊开。
+   * 选择是本机使用偏好，与主题同一套存法（localStorage；隐私模式静默降级为内存态）。
+   */
+  const [view, setView] = useState<'list' | 'card'>(() => {
+    return readSetting('ryharness-contacts-view') === 'card' ? 'card' : 'list'
+  })
+  const chooseView = (next: 'list' | 'card'): void => {
+    setView(next)
+    writeSetting('ryharness-contacts-view', next)
+  }
+  const needle = query.trim().toLowerCase()
+  const filtered =
+    needle === ''
+      ? sorted
+      : sorted.filter((agent) => {
+          return (
+            agent.name.toLowerCase().includes(needle) ||
+            `${agent.provider} ${agent.model}`.toLowerCase().includes(needle)
+          )
+        })
   /**
    * 试听用的播放器：按 API 地址共享的单例（队列与「正在播哪一个」必须是全局状态，
    * 卡片各自 new 一个会同时开口）。
@@ -585,11 +609,57 @@ export function ContactsPage({
       : undefined
   return (
     <section className="page contacts-page">
-      <header className="page-header">
-        <h2>通讯录</h2>
+      <header className="page-header contacts-header">
+        <h2>
+          通讯录
+          <span className="page-count">{agents.length}</span>
+        </h2>
         <div className="page-actions">
+          {/* 视图切换：默认列表；卡片视图把性格与口头禅摊开。两态都只是同一份数据的
+              不同密度，不改变排序与搜索。 */}
+          {/* biome-ignore lint/a11y/useSemanticElements: 胶囊分段按钮组，fieldset 的默认边框与内边距套不上 .view-toggle 的样式 */}
+          <div className="view-toggle" role="group" aria-label="通讯录视图">
+            <button
+              type="button"
+              className={view === 'list' ? 'is-active' : undefined}
+              aria-pressed={view === 'list'}
+              onClick={() => {
+                chooseView('list')
+              }}
+            >
+              列表
+            </button>
+            <button
+              type="button"
+              className={view === 'card' ? 'is-active' : undefined}
+              aria-pressed={view === 'card'}
+              onClick={() => {
+                chooseView('card')
+              }}
+            >
+              卡片
+            </button>
+          </div>
+          <label className="search-box-wrap contacts-search">
+            <span className="search-box-icon">
+              <Icon name="search" size={16} />
+            </span>
+            <input
+              className="search-box has-icon"
+              type="search"
+              value={query}
+              placeholder="搜名字或模型"
+              aria-label="搜索助理"
+              onChange={(event) => {
+                setQuery(event.target.value)
+              }}
+            />
+          </label>
           <button type="button" className="btn" onClick={onCreateGroup}>
             <Icon name="group" size={16} /> 建群
+          </button>
+          <button type="button" className="btn" onClick={() => setTemplateOpen(true)}>
+            <Icon name="dices" size={16} /> 从模板
           </button>
           <button
             type="button"
@@ -635,27 +705,21 @@ export function ContactsPage({
               </div>
             }
           >
-            <>
-              <p className="section-title">我的 Agent（{sorted.length}）</p>
-              <div className="contact-grid">
-                <button
-                  type="button"
-                  className="contact-card contact-create"
-                  style={stagger(0)}
-                  onClick={() => {
-                    onCreateAgent()
-                  }}
-                >
-                  <span className="contact-create-icon">
-                    <Icon name="plus" size={24} />
-                  </span>
-                  <h3>新建 Agent</h3>
-                  <p className="contact-prompt">从模板开始，挑头像、定脾气</p>
+            {filtered.length === 0 ? (
+              <div className="empty-state empty-state-inline contacts-no-match">
+                <h3>没有匹配的助理</h3>
+                <p>搜的是名字或模型名；换个关键词，或者直接新建一位。</p>
+                <button type="button" className="btn" onClick={() => setQuery('')}>
+                  清空搜索
                 </button>
-                {sorted.map((agent, index) => {
+              </div>
+            ) : view === 'list' ? (
+              <div className="contact-list">
+                {filtered.map((agent, index) => {
                   return (
                     <ContactCard
                       key={agent.id}
+                      variant="row"
                       agent={agent}
                       index={index}
                       speaking={speakingAgentId === agent.id}
@@ -665,39 +729,71 @@ export function ContactsPage({
                   )
                 })}
               </div>
-              <p className="section-title" style={{ marginTop: 24 }}>
-                可用模板（{templates.length}）
-              </p>
-              <p className="contacts-hint">点一个模板，就按它的样子建一位：名字、头像、性格都会一起带过来。</p>
-              <div className="template-rail">
-                {templates.map((template, index) => (
-                  <button
-                    type="button"
-                    key={template.key}
-                    className="template-card"
-                    style={stagger(index)}
-                    onClick={() => {
-                      onCreateAgent(template.key)
-                    }}
-                  >
-                    <strong>{template.name}</strong>
-                    <span>{template.description}</span>
-                  </button>
-                ))}
+            ) : (
+              <div className="contact-grid">
+                {filtered.map((agent, index) => {
+                  return (
+                    <ContactCard
+                      key={agent.id}
+                      variant="card"
+                      agent={agent}
+                      index={index}
+                      speaking={speakingAgentId === agent.id}
+                      voicePlayer={voicePlayer}
+                      handlers={handlers}
+                    />
+                  )
+                })}
               </div>
-            </>
+            )}
           </AsyncState>
         </div>
       </div>
+      {templateOpen && (
+        <Modal
+          title="从模板新建"
+          onClose={() => {
+            setTemplateOpen(false)
+          }}
+        >
+          <p className="me-row-sub">点一个模板，就按它的样子建一位：名字、头像、性格都会一起带过来。</p>
+          <div className="template-rail template-rail-dialog">
+            {templates.map((template, index) => (
+              <button
+                type="button"
+                key={template.key}
+                className="template-card"
+                style={stagger(index)}
+                onClick={() => {
+                  setTemplateOpen(false)
+                  onCreateAgent(template.key)
+                }}
+              >
+                <strong>{template.name}</strong>
+                <span>{template.description}</span>
+              </button>
+            ))}
+          </div>
+        </Modal>
+      )}
     </section>
   )
 }
 
-/** 需要单独告知的工具：勾上它等于把这台机器的一部分交给 agent。 */
+/** 需要单独告知的工具：给了它等于把这台机器的一部分交给 agent。 */
 const RISKY_TOOL = 'shell_exec'
 
-/** 勾上执行命令时的一次性风险说明（只告知，不做审批流）。 */
-const RISKY_TOOL_HINT = '执行命令能在你这台电脑上直接跑 shell：改文件、装东西、删东西都做得到。只在任务来源可信时勾选。'
+/** 选了带执行命令的那一档时的一次性风险说明（只告知，不做审批流）。 */
+const RISKY_TOOL_HINT =
+  '执行命令能在你这台电脑上直接跑 shell：改文件、装东西、删东西都做得到。只在任务来源可信时给这一档。'
+
+/**
+ * 新建向导的三步。
+ *
+ * 一步只回答一个问题：它是谁（起点/人设）、它归谁跑（模型）、能碰到什么（权限）。
+ * 此前五块内容一屏滚到底，用户在第一屏既看不到权限也看不到保存键。
+ */
+const WIZARD_STEPS = ['起点', '人设', '模型与权限'] as const
 
 /**
  * 模型下拉下方那句话：解释「上下文未知」是什么，以及能去哪里补。
@@ -897,9 +993,10 @@ function PersonaEditor({
   onCatalogChange?: (catalog: VoiceCatalog) => void
   onChange: (next: AgentPersona) => void
 }) {
-  const selectedVoice = voiceProfiles.find((profile) => {
-    return profile.id === persona.voiceId
-  })
+  const selectedVoice =
+    voiceProfiles.find((profile) => {
+      return profile.id === persona.voiceId
+    }) ?? systemLocalVoiceProfile(persona.voiceId)
   const selectedEngine = voiceEngines.find((engine) => {
     return engine.id === selectedVoice?.engine
   })
@@ -909,16 +1006,16 @@ function PersonaEditor({
   const knownVoice = persona.voiceId === NO_VOICE_ID || selectedVoice !== undefined
 
   /**
-   * 本机真实有的系统音色名（`undefined` = 还没读到；`[]` = 读到了，本机一条都没有）。
+   * 本机真实有的系统音色（`undefined` = 还没读到；`[]` = 读到了，本机一条都没有）。
    *
-   * 系统音色能不能用，取决于这台机器装了哪些 Windows 语音包——目录里列的四条
-   * 在没装对应语言包的机器上**全都念不出来**（四条一起回退到同一条，用户听着
-   * 就是"一种声音"）。所以下拉里要把"本机没装"标出来，而不是让人白选一次。
+   * 系统音色按本机实际安装动态列，而不是目录里那四条静态预设：没装对应语音包的
+   * 预设会全部回退到同一条默认音色，用户听着就是「换哪个都一样」。动态清单里
+   * 每一条都是真实存在、彼此不同的声音。
    */
-  const [localVoices, setLocalVoices] = useState<string[] | undefined>(undefined)
+  const [localVoices, setLocalVoices] = useState<VoiceProfile[] | undefined>(undefined)
   useEffect(() => {
     const read = (): void => {
-      setLocalVoices(localSystemVoiceNames())
+      setLocalVoices(localSystemVoiceProfiles())
     }
     read()
     if (typeof window === 'undefined' || window.speechSynthesis === undefined) return
@@ -927,14 +1024,6 @@ function PersonaEditor({
       window.speechSynthesis.removeEventListener('voiceschanged', read)
     }
   }, [])
-  /** 这条系统音色在本机有没有。读到列表之前一律当有（别先标错再改）。 */
-  const localVoiceAvailable = (profile: VoiceProfile): boolean => {
-    if (profile.engine !== 'system') return true
-    if (localVoices === undefined) return true
-    return localVoices.some((name) => {
-      return name === profile.voice || name.startsWith(profile.voice)
-    })
-  }
   /**
    * 音色下拉的选项（原生 `<optgroup>` 的等价物：按引擎分组的小标题）。
    * 不可用的引擎不隐藏：用户要看得见「有这一条」，还要知道差哪一步。
@@ -945,21 +1034,28 @@ function PersonaEditor({
     // 原始 id 收进 title——它是排障线索，不是用户要读的音色名。
     ...(knownVoice ? [] : [{ value: persona.voiceId, label: '已下架的旧音色', title: persona.voiceId }]),
     ...voiceEngines.flatMap((engine) => {
-      const profiles = voiceProfiles.filter((profile) => {
-        return profile.engine === engine.id
-      })
-      if (profiles.length === 0) return []
-      return profiles.map((profile) => {
-        // 三种"不可用"要分开说：引擎没就绪（差一步就能用）、本机没装这条系统音色
-        // （装了才有）、引擎可用。
+      // 系统引擎用本机动态清单；没有 Web Speech 的环境（精简运行时/测试）退回
+      // 目录里的静态预设。旧人格里存的静态预设 id（system-huihui 等）不在动态
+      // 清单里，补一条进去，否则下拉的值对不上任何选项，看起来像没选。
+      const hasSpeech = typeof window !== 'undefined' && window.speechSynthesis !== undefined
+      const useLocal = engine.id === 'system' && localVoices !== undefined && (localVoices.length > 0 || hasSpeech)
+      const profiles = useLocal
+        ? localVoices
+        : voiceProfiles.filter((profile) => {
+            return profile.engine === engine.id
+          })
+      const extras =
+        engine.id === 'system' && selectedVoice?.engine === 'system' && !profiles.some((p) => p.id === selectedVoice.id)
+          ? [selectedVoice]
+          : []
+      const all = [...profiles, ...extras]
+      if (all.length === 0) return []
+      return all.map((profile) => {
         const engineLabel = engine.available ? undefined : engineAvailabilityLabel(engine)
-        const missingHere = localVoiceAvailable(profile) ? undefined : '本机没装'
-        const suffix = engineLabel ?? missingHere
         return {
           value: profile.id,
           group: engine.available ? engine.name : `${engine.name}（${engineAvailabilityLabel(engine)}）`,
-          label: suffix === undefined ? profile.name : `${profile.name}（${suffix}）`,
-          ...(missingHere === undefined ? {} : { title: '这台机器没装对应的 Windows 语音包，点了会用系统默认音色' }),
+          label: engineLabel === undefined ? profile.name : `${profile.name}（${engineLabel}）`,
         }
       })
     }),
@@ -1019,42 +1115,6 @@ function PersonaEditor({
         })}
       </div>
       <div className="persona-fields">
-        <label className="field">
-          <span>生日</span>
-          {/* 原生日期选择器：点开就是日历，不用手敲"03-14"这种没人记得住的格式。
-              存的是 MM-DD（生日不需要年份），控件要用完整日期，所以中间过一道
-              2000-01-01 的占位年。 */}
-          <input
-            type="date"
-            value={birthdayInputValue(persona.birthday)}
-            onChange={(e) => {
-              const birthday = birthdayFromInput(e.target.value)
-              onChange({ ...persona, birthday })
-            }}
-          />
-        </label>
-        {/* 口头禅/形象输入期不 trim：当场裁会把英文短语中间的空格吞掉（"Trust me"
-            敲到空格就成了 "Trustme"）；空白的收口放到保存时做，名字字段同此口径。 */}
-        <label className="field">
-          <span>口头禅</span>
-          <input
-            value={persona.catchphrase}
-            placeholder="例如：交给我吧"
-            onChange={(e) => {
-              onChange({ ...persona, catchphrase: e.target.value })
-            }}
-          />
-        </label>
-        <label className="field">
-          <span>形象</span>
-          <input
-            value={persona.appearance}
-            placeholder="一句话描述：长什么样、什么动物"
-            onChange={(e) => {
-              onChange({ ...persona, appearance: e.target.value })
-            }}
-          />
-        </label>
         <div className="field">
           <span>音色</span>
           <span style={{ display: 'flex', gap: 8, alignItems: 'center', minWidth: 0 }}>
@@ -1105,14 +1165,63 @@ function PersonaEditor({
           {needsPiperInstall && apiBase !== undefined && onCatalogChange !== undefined && (
             <PiperInstallCard base={apiBase} onInstalled={onCatalogChange} />
           )}
+          {localVoices !== undefined && localVoices.length === 0 && (
+            <small className="provider-note">
+              本机没有可用的系统音色：到 Windows 设置 → 时间和语言 → 语音 里添加语音包后就能选。
+            </small>
+          )}
           {voiceCatalogError !== undefined && <small className="provider-note">{voiceCatalogError}</small>}
         </div>
+        {/* 生日/口头禅/形象与提示预览是「想细调再展开」的二级细节：首屏只留
+            四维性格与音色这两件最常改的事，其余收进折叠区（仍在 DOM，点开即改）。 */}
+        <details className="persona-more">
+          <summary>
+            更多个性化
+            <small>生日、口头禅、形象、系统提示预览</small>
+          </summary>
+          <label className="field">
+            <span>生日</span>
+            {/* 原生日期选择器：点开就是日历，不用手敲"03-14"这种没人记得住的格式。
+                存的是 MM-DD（生日不需要年份），控件要用完整日期，所以中间过一道
+                2000-01-01 的占位年。 */}
+            <input
+              type="date"
+              value={birthdayInputValue(persona.birthday)}
+              onChange={(e) => {
+                const birthday = birthdayFromInput(e.target.value)
+                onChange({ ...persona, birthday })
+              }}
+            />
+          </label>
+          {/* 口头禅/形象输入期不 trim：当场裁会把英文短语中间的空格吞掉（"Trust me"
+              敲到空格就成了 "Trustme"）；空白的收口放到保存时做，名字字段同此口径。 */}
+          <label className="field">
+            <span>口头禅</span>
+            <input
+              value={persona.catchphrase}
+              placeholder="例如：交给我吧"
+              onChange={(e) => {
+                onChange({ ...persona, catchphrase: e.target.value })
+              }}
+            />
+          </label>
+          <label className="field">
+            <span>形象</span>
+            <input
+              value={persona.appearance}
+              placeholder="一句话描述：长什么样、什么动物"
+              onChange={(e) => {
+                onChange({ ...persona, appearance: e.target.value })
+              }}
+            />
+          </label>
+          <div className="field">
+            <span>最终系统提示（只读预览）</span>
+            <pre className="profile-prompt">{composePersonaPrompt(basePrompt, persona)}</pre>
+          </div>
+          <p className="provider-note">按当前性格建议的回复温度：{suggestTemperature(persona)}</p>
+        </details>
       </div>
-      <div className="field">
-        <span>最终系统提示（只读预览）</span>
-        <pre className="profile-prompt">{composePersonaPrompt(basePrompt, persona)}</pre>
-      </div>
-      <p className="provider-note">按当前性格建议的回复温度：{suggestTemperature(persona)}</p>
     </div>
   )
 }
@@ -1181,10 +1290,6 @@ export function CreateAgentModal({
       return tool !== RISKY_TOOL
     })
   })
-  /** 可勾的工具名：服务端给的清单（取不到时用本地那份）。 */
-  const [toolNames, setToolNames] = useState<string[]>(() => {
-    return [...ALL_TOOLS]
-  })
   /**
    * 权限档位：助理「能碰到什么」的那一档。
    *
@@ -1207,6 +1312,14 @@ export function CreateAgentModal({
   // 供应商 / 模型 / 工具默认折叠：它们是「这位助理归谁跑、能碰到什么」的实现层选择，
   // 不是「她是谁」。折叠态仍给一行当前值摘要，不是把选择藏起来。
   const [advancedOpen, setAdvancedOpen] = useState(false)
+  /**
+   * 新建向导的当前步（0 起点 / 1 人设 / 2 模型与权限）。
+   *
+   * 编辑模式不走向导：改一位已有助理时，用户是来改某一项的，分步只会多两次点击，
+   * 还会把「当前值在哪一格」藏起来。向导只服务「从零建一位」。
+   */
+  const wizard = editing === undefined
+  const [step, setStep] = useState(0)
   const [busy, setBusy] = useState(false)
   /** 脏表单关闭前的二次确认。 */
   const [confirmDiscard, setConfirmDiscard] = useState(false)
@@ -1290,46 +1403,12 @@ export function CreateAgentModal({
     }
     // 清单只取一次：deps 里带上 presets.length 是为了「取到就别再取」。
   }, [api, presets.length])
-  /**
-   * 工具清单：服务端出，界面不抄一份。
-   *
-   * 抄的那份会与实际注册的工具漂——插件装上装下、或某个能力还没接进服务端时，
-   * 界面照样让人勾一个调不通的工具。取不到就退回本地那份（宁可少几个可选的，
-   * 也不让整个白名单空掉）。
-   */
-  useEffect(() => {
-    if (api === undefined) return
-    if (toolNames.length > ALL_TOOLS.length) return
-    const load = api.tools
-    if (typeof load !== 'function') return
-    let alive = true
-    load
-      .call(api)
-      .then((body) => {
-        if (!alive) return
-        const list = Array.isArray(body?.tools) ? body.tools : []
-        const names = list
-          .map((tool) => {
-            return tool?.name
-          })
-          .filter((name): name is string => {
-            return typeof name === 'string' && name.length > 0
-          })
-        if (names.length === 0) return
-        setToolNames(names)
-      })
-      .catch(() => {
-        // 读不到就还用本地那份。
-      })
-    return () => {
-      alive = false
-    }
-  }, [api, toolNames.length])
   const voiceProfiles = voiceCatalog?.profiles ?? []
   const voiceEngines = voiceCatalog?.engines ?? []
-  const selectedVoice = voiceProfiles.find((profile) => {
-    return profile.id === persona.voiceId
-  })
+  const selectedVoice =
+    voiceProfiles.find((profile) => {
+      return profile.id === persona.voiceId
+    }) ?? systemLocalVoiceProfile(persona.voiceId)
   const voicePreviewSpeaking = voicePlayback.status === 'speaking' && voicePlayback.key === 'voice-preview'
 
   /** 试听一句：正在念就停，否则用当前音色的固定试听句入队。 */
@@ -1502,16 +1581,41 @@ export function CreateAgentModal({
         return false
       }}
     >
+      {wizard && (
+        <ol className="wizard-steps" aria-label="新建助理步骤">
+          {WIZARD_STEPS.map((label, index) => {
+            const state = index === step ? 'is-current' : index < step ? 'is-done' : 'is-todo'
+            return (
+              <li key={label} className={state}>
+                <button
+                  type="button"
+                  className="wizard-step"
+                  aria-current={index === step ? 'step' : undefined}
+                  disabled={index > step}
+                  onClick={() => {
+                    if (index <= step) setStep(index)
+                  }}
+                >
+                  <span className="wizard-step-dot" aria-hidden="true">
+                    {index < step ? <Icon name="check" size={12} /> : index + 1}
+                  </span>
+                  <span className="wizard-step-label">{label}</span>
+                </button>
+              </li>
+            )
+          })}
+        </ol>
+      )}
       <div className="modal-scroll">
         <div className="studio">
           <div className="studio-main">
             {editing === undefined && templates.length > 0 && (
-              <section className="studio-section">
+              <section className="studio-section" data-step="0" hidden={step !== 0}>
                 <SectionTitle icon="users" title="挑一个起点" hint="名字、性格和工具都会一起换。" />
                 <TemplatePicker templates={templates} value={templateKey} onPick={pickTemplate} />
               </section>
             )}
-            <section className="studio-section">
+            <section className="studio-section" data-step="1" hidden={wizard && step !== 1}>
               <SectionTitle
                 icon="user"
                 title="它是谁"
@@ -1547,7 +1651,7 @@ export function CreateAgentModal({
               </label>
               <AvatarPicker value={avatarKey} onChange={setAvatarKey} />
             </section>
-            <section className="studio-section">
+            <section className="studio-section" data-step="1" hidden={wizard && step !== 1}>
               <SectionTitle icon="brain" title="它什么脾气" hint="这四维连同生日与口头禅会直接写进系统提示。" />
               <PersonaEditor
                 persona={persona}
@@ -1566,7 +1670,7 @@ export function CreateAgentModal({
                 onChange={setPersona}
               />
             </section>
-            <section className="studio-section">
+            <section className="studio-section" data-step="1" hidden={wizard && step !== 1}>
               <SectionTitle icon="clipboard-list" title="它会做什么" hint="性格之外还想交代的：职责、称呼、忌讳。" />
               <label className="field">
                 <span>补充说明（人格之外的交代）</span>
@@ -1580,31 +1684,47 @@ export function CreateAgentModal({
                 <small className="provider-note">这段排在性格前面。下面是它最终收到的样子。</small>
               </label>
             </section>
-            <div className="advanced">
-              <button
-                type="button"
-                className="advanced-toggle"
-                aria-expanded={advancedOpen}
-                aria-controls="advanced-settings"
-                onClick={() => {
-                  setAdvancedOpen(!advancedOpen)
-                }}
-              >
-                <span className="studio-section-icon">
-                  <Icon name="gear" size={16} />
-                </span>
-                <span className="advanced-text">
-                  <strong>高级设置</strong>
-                  <small>{advancedSummary}</small>
-                </span>
-                {/* 组合存不下来时先说清要改，而不是让人自己发现保存键点不动。 */}
-                {modelHint !== undefined && <span className="advanced-flag">需修改</span>}
-                {/* 这块能折起来：光靠一个转圈的箭头说不清眼下是折着还是开着，
+            <div className="advanced" data-step="2" hidden={wizard && step !== 2}>
+              {wizard ? (
+                /* 向导第三步：模型与权限就是这一屏的主题，不再折进「高级设置」。
+                   折叠是编辑态的默认（改一项不用先看一屏实现层选择），不是建人时的默认。 */
+                <div className="wizard-model-head">
+                  <SectionTitle
+                    icon="gear"
+                    title="它归谁跑、能碰到什么"
+                    hint="供应商、模型与权限档位；保存后随时还能改。"
+                  />
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="advanced-toggle"
+                  aria-expanded={advancedOpen}
+                  aria-controls="advanced-settings"
+                  onClick={() => {
+                    setAdvancedOpen(!advancedOpen)
+                  }}
+                >
+                  <span className="studio-section-icon">
+                    <Icon name="gear" size={16} />
+                  </span>
+                  <span className="advanced-text">
+                    <strong>高级设置</strong>
+                    <small>{advancedSummary}</small>
+                  </span>
+                  {/* 组合存不下来时先说清要改，而不是让人自己发现保存键点不动。 */}
+                  {modelHint !== undefined && <span className="advanced-flag">需修改</span>}
+                  {/* 这块能折起来：光靠一个转圈的箭头说不清眼下是折着还是开着，
                     直接写「展开 / 收起」。 */}
-                <span className="advanced-state">{advancedOpen ? '收起' : '展开'}</span>
-                <Icon name="chevron-right" size={16} className={`advanced-chevron${advancedOpen ? ' is-open' : ''}`} />
-              </button>
-              {advancedOpen && (
+                  <span className="advanced-state">{advancedOpen ? '收起' : '展开'}</span>
+                  <Icon
+                    name="chevron-right"
+                    size={16}
+                    className={`advanced-chevron${advancedOpen ? ' is-open' : ''}`}
+                  />
+                </button>
+              )}
+              {(wizard || advancedOpen) && (
                 <div id="advanced-settings" className="advanced-panel">
                   <div className="field-row">
                     {/* 这三格是 button/div 而不是 label：可访问名由 Select 自己的 aria-label
@@ -1651,73 +1771,51 @@ export function CreateAgentModal({
                       </div>
                     )}
                   </div>
-                  {/* 权限档位：先说清「能碰到什么」，再让用户逐个微调。
+                  {/* 权限只给几档分类：先说清「能碰到什么」，选档即定工具。
                       档位清单由服务端给（渲染层不抄一份）——抄了就会与实际放行的
-                      工具漂，漂了之后界面上写着「只读」、实际还挂着执行命令。 */}
-                  <fieldset className="field" aria-label="权限档位">
-                    <span>权限档位</span>
-                    <div className="tool-checks tool-picker">
-                      {presets.map((preset) => (
-                        <label key={preset.id}>
-                          <input
-                            type="radio"
-                            name="permission-preset"
-                            checked={permissionPreset === preset.id}
-                            onChange={() => {
-                              setPermissionPreset(preset.id)
-                              setTools(applyPreset(presets, preset.id, tools))
-                            }}
-                          />
-                          {preset.name}
-                        </label>
-                      ))}
-                      {permissionPreset === '' && (
-                        <label>
-                          <input type="radio" name="permission-preset" checked readOnly />
-                          自定义
-                        </label>
-                      )}
-                    </div>
-                    <p className="provider-note">
-                      {presets.find((preset) => {
-                        return preset.id === permissionPreset
-                      })?.summary ?? '这一档只管内置工具；插件给的工具（待办、提问、网页、MCP…）不受影响。'}
-                    </p>
-                  </fieldset>
-                  {/* .tool-checks 负责排布（styles.css），.tool-picker 把每一格改成可点的胶囊。 */}
-                  <fieldset className="field" aria-label="工具白名单">
-                    <span>工具白名单</span>
-                    <div className="tool-checks tool-picker">
-                      {toolNames.map((tool) => (
-                        <label key={tool}>
-                          <input
-                            type="checkbox"
-                            checked={tools.includes(tool)}
-                            onChange={(e) => {
-                              const next = e.target.checked
-                                ? [...tools, tool]
-                                : tools.filter((t) => {
-                                    return t !== tool
-                                  })
-                              setTools(next)
-                              // 手动改过工具之后，这一档就不再是任何一档了：显示「自定义」，
-                              // 别硬报成某一档——那会让用户以为权限还是那一档。
-                              setPermissionPreset(detectPreset(presets, next) ?? '')
-                            }}
-                          />
-                          {toolLabel(tool)}
-                        </label>
-                      ))}
-                    </div>
-                    {tools.includes(RISKY_TOOL) && <p className="provider-note">{RISKY_TOOL_HINT}</p>}
-                  </fieldset>
+                      工具漂，漂了之后界面上写着「只读」、实际还挂着执行命令。
+                      不再摆一排工具复选框：逐个勾工具等于让用户自己拼权限，
+                      勾错一个 shell_exec 就是把整台电脑交出去。 */}
+                  {presets.length > 0 && (
+                    <fieldset className="field" aria-label="权限档位">
+                      <span>权限档位</span>
+                      <div className="tool-checks tool-picker">
+                        {presets.map((preset) => (
+                          <label key={preset.id}>
+                            <input
+                              type="radio"
+                              name="permission-preset"
+                              checked={permissionPreset === preset.id}
+                              onChange={() => {
+                                setPermissionPreset(preset.id)
+                                setTools(applyPreset(presets, preset.id, tools))
+                              }}
+                            />
+                            {preset.name}
+                          </label>
+                        ))}
+                        {permissionPreset === '' && (
+                          <label>
+                            <input type="radio" name="permission-preset" checked readOnly />
+                            自定义
+                          </label>
+                        )}
+                      </div>
+                      <p className="provider-note">
+                        {presets.find((preset) => {
+                          return preset.id === permissionPreset
+                        })?.summary ?? '这一档只管内置工具；插件给的工具（待办、提问、网页、MCP…）不受影响。'}
+                      </p>
+                      {tools.includes(RISKY_TOOL) && <p className="provider-note">{RISKY_TOOL_HINT}</p>}
+                    </fieldset>
+                  )}
                 </div>
               )}
             </div>
             {/* 报错留在折叠区外面：模型组合存不下来是「这个助理建不出来」，不能让它
                 跟着修法一起缩进去——否则用户只看到一行摘要和一个灰掉的保存键。 */}
             {modelHint !== undefined && (
-              <p className="apikey-error" role="alert">
+              <p className="apikey-error" role="alert" hidden={wizard && step !== 2}>
                 {modelHint}
               </p>
             )}
@@ -1747,18 +1845,41 @@ export function CreateAgentModal({
         >
           取消
         </button>
-        <button
-          type="button"
-          className="btn btn-primary"
-          disabled={busy || !modelValid || nameHint !== undefined}
-          aria-busy={busy}
-          title={nameHint ?? (modelValid ? undefined : modelHint)}
-          onClick={() => {
-            void submit()
-          }}
-        >
-          {busy ? '保存中…' : editing === undefined ? '保存' : '保存修改'}
-        </button>
+        {wizard && step > 0 && (
+          <button
+            type="button"
+            className="btn"
+            onClick={() => {
+              setStep(step - 1)
+            }}
+          >
+            上一步
+          </button>
+        )}
+        {wizard && step < 2 ? (
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => {
+              setStep(step + 1)
+            }}
+          >
+            下一步
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={busy || !modelValid || nameHint !== undefined}
+            aria-busy={busy}
+            title={nameHint ?? (modelValid ? undefined : modelHint)}
+            onClick={() => {
+              void submit()
+            }}
+          >
+            {busy ? '保存中…' : editing === undefined ? '保存' : '保存修改'}
+          </button>
+        )}
       </div>
       {confirmDiscard && (
         <ConfirmDialog

@@ -48,11 +48,11 @@ const agent: AgentDef = {
   isBuiltin: true,
 }
 
-function conversationOf(id: string): Conversation {
+function conversationOf(id: string, kind: 'group' | 'direct' = 'group'): Conversation {
   return {
     id,
-    kind: 'group',
-    title: `小队 ${id}`,
+    kind,
+    title: kind === 'group' ? `小队 ${id}` : 'Ryen',
     memberAgentIds: ['ryen'],
     lastReadSeq: 0,
     createdAt: 1,
@@ -73,10 +73,23 @@ interface Harness {
 }
 
 /** ChatView 用到的 api 替身：未读相关的行为全部由测试驱动，调用次数本身就是断言。 */
-function makeApi(options: { readFails?: boolean } = {}): Harness {
+function makeApi(
+  options: {
+    readFails?: boolean
+    /** composer 模型读数的回包：给了才挂上这条端点（只关心未读的用例不必造它）。 */
+    context?: {
+      providerId: string
+      modelId: string
+      modelLabel: string
+      contextWindow: number | null
+      usedTokens: number | null
+    }
+  } = {},
+): Harness {
   const reads: string[] = []
   let seq = 0
   let onEvent: (event: StampedWsEvent) => void = () => {}
+  const context = options.context
   const api = {
     base: 'http://127.0.0.1:1',
     fileUrl: (name: string) => {
@@ -100,6 +113,13 @@ function makeApi(options: { readFails?: boolean } = {}): Harness {
     cancelTurn: () => {
       return Promise.resolve({ cancelled: true })
     },
+    ...(context === undefined
+      ? {}
+      : {
+          conversationContext: () => {
+            return Promise.resolve(context)
+          },
+        }),
     subscribe: (
       _conversationId: string,
       handler: (event: StampedWsEvent) => void,
@@ -164,21 +184,43 @@ async function settle(ms = 0): Promise<void> {
 }
 
 /** 宿主：像 App 那样按 conversationId 换桶，但不给 ChatView 加 key。 */
-function Host(props: { cache: ConversationCache; id: string; api: ApiClient; onSeen?: () => void }): React.JSX.Element {
+function Host(props: {
+  cache: ConversationCache
+  id: string
+  api: ApiClient
+  onSeen?: () => void
+  onOpenProviders?: () => void
+  kind?: 'group' | 'direct'
+}): React.JSX.Element {
   return (
     <ChatView
       api={props.api}
-      conversation={conversationOf(props.id)}
+      conversation={conversationOf(props.id, props.kind)}
       agents={[agent]}
       bucket={props.cache.bucket(props.id)}
       {...(props.onSeen === undefined ? {} : { onSeen: props.onSeen })}
+      {...(props.onOpenProviders === undefined ? {} : { onOpenProviders: props.onOpenProviders })}
     />
   )
 }
 
-async function mountChat(props: { cache: ConversationCache; id: string; harness: Harness }): Promise<void> {
+async function mountChat(props: {
+  cache: ConversationCache
+  id: string
+  harness: Harness
+  onOpenProviders?: () => void
+  kind?: 'group' | 'direct'
+}): Promise<void> {
   await act(async () => {
-    root.render(<Host cache={props.cache} id={props.id} api={props.harness.api} />)
+    root.render(
+      <Host
+        cache={props.cache}
+        id={props.id}
+        api={props.harness.api}
+        {...(props.onOpenProviders === undefined ? {} : { onOpenProviders: props.onOpenProviders })}
+        {...(props.kind === undefined ? {} : { kind: props.kind })}
+      />,
+    )
   })
   await settle(0)
 }
@@ -575,5 +617,36 @@ describe('左栏角标：正在说话的这一轮不会把角标顶上来', () =
       expect(container.querySelector('.unread-badge')).toBeNull()
     }
     expect(pending).toBe(3)
+  })
+})
+
+describe('composer 的上下文读数（D11）', () => {
+  const readout = {
+    providerId: 'siliconflow',
+    modelId: 'deepseek-ai/DeepSeek-V3',
+    modelLabel: 'DeepSeek-V3 · SiliconFlow',
+    contextWindow: 128000,
+    usedTokens: null,
+  }
+
+  it('供应商声明了窗口：composer 显示「128k 上下文」，点击去模型与供应商', async () => {
+    const opened: number[] = []
+    const harness = makeApi({ context: readout })
+    const cache = new ConversationCache()
+    await mountChat({ cache, id: 'c1', harness, kind: 'direct', onOpenProviders: () => opened.push(1) })
+    const chip = container.querySelector<HTMLButtonElement>('.composer-model')
+    expect(chip?.textContent).toContain('128k 上下文')
+    expect(chip?.getAttribute('aria-label')).toContain('当前模型')
+    act(() => {
+      chip?.click()
+    })
+    expect(opened).toHaveLength(1)
+  })
+
+  it('没声明窗口：明说「上下文未知」，不猜一个数字', async () => {
+    const harness = makeApi({ context: { ...readout, contextWindow: null } })
+    const cache = new ConversationCache()
+    await mountChat({ cache, id: 'c1', harness, kind: 'direct' })
+    expect(container.querySelector('.composer-model')?.textContent).toContain('上下文未知')
   })
 })

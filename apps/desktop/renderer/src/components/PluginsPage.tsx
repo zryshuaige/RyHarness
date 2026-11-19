@@ -210,6 +210,11 @@ function PluginCard({
       </div>
       {open && (
         <div className="plugin-detail" id={panelId}>
+          {/* 卡头描述截断成单行（D2 密度），全文收进展开区第一行：扫读看一行，要细读再展开。 */}
+          <div className="plugin-detail-row">
+            <span className="plugin-detail-label">说明</span>
+            <p className="plugin-detail-text">{plugin.description}</p>
+          </div>
           {tools.length > 0 && (
             <div className="plugin-detail-row">
               <span className="plugin-detail-label">工具</span>
@@ -303,10 +308,11 @@ function EmptyPlugins({ hasPlugins, query, onClear }: { hasPlugins: boolean; que
   )
 }
 
-export function PluginsPage({ api }: { api: PluginsApi }) {
+export function PluginsPage({ api, embedded }: { api: PluginsApi; embedded?: boolean }) {
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
   const [reloadKey, setReloadKey] = useState(0)
   const [query, setQuery] = useState('')
+  const [filter, setFilter] = useState<'all' | 'enabled' | 'off'>('all')
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => {
     return new Set()
   })
@@ -425,6 +431,8 @@ export function PluginsPage({ api }: { api: PluginsApi }) {
   const visible =
     state.kind === 'ready'
       ? state.plugins.filter((plugin) => {
+          if (filter === 'enabled' && plugin.enabled !== true) return false
+          if (filter === 'off' && plugin.enabled === true) return false
           if (needle === '') return true
           return plugin.name.toLowerCase().includes(needle) || plugin.description.toLowerCase().includes(needle)
         })
@@ -442,10 +450,10 @@ export function PluginsPage({ api }: { api: PluginsApi }) {
   const hasPlugins = state.kind === 'ready' && state.plugins.length > 0
 
   return (
-    <section className="page plugins-page">
+    <section className={embedded === true ? 'plugins-page is-embedded' : 'page plugins-page'}>
       <header className="page-header plugins-header">
         <div className="plugins-head-text">
-          <h2>插件</h2>
+          <h2>{embedded === true ? '插件与能力' : '插件'}</h2>
           <p className="plugins-lede">关掉后，对应的工具与界面会一起消失。「内置」那组是助理的地盘，不能关。</p>
           {state.kind === 'ready' && needle !== '' && visible.length > 0 && (
             <p className="plugins-result" aria-live="polite">
@@ -454,6 +462,30 @@ export function PluginsPage({ api }: { api: PluginsApi }) {
           )}
         </div>
         <div className="page-actions plugins-search">
+          {/* biome-ignore lint/a11y/useSemanticElements: 胶囊分段筛选按钮组（aria-pressed），fieldset 的表单语义与默认边框套不上 .plugins-filter */}
+          <div className="plugins-filter" role="group" aria-label="筛选插件">
+            {(
+              [
+                ['all', '全部'],
+                ['enabled', '已启用'],
+                ['off', '已关闭'],
+              ] as const
+            ).map(([key, label]) => {
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  className={filter === key ? 'plugins-filter-btn is-active' : 'plugins-filter-btn'}
+                  aria-pressed={filter === key}
+                  onClick={() => {
+                    setFilter(key)
+                  }}
+                >
+                  {label}
+                </button>
+              )
+            })}
+          </div>
           <label className="search-box-wrap">
             <span className="search-box-icon">
               <Icon name="search" size={16} />
@@ -471,7 +503,7 @@ export function PluginsPage({ api }: { api: PluginsApi }) {
           </label>
         </div>
       </header>
-      <div className="page-scroll">
+      <div className={embedded === true ? 'plugins-body' : 'page-scroll'}>
         <div className="page-scroll-col plugins-col">
           {state.kind === 'unsupported' ? (
             <div className="plugins-empty plugins-unsupported">

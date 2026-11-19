@@ -14,6 +14,12 @@ describe('音色 id 归一', () => {
     }
   })
 
+  it('本机系统音色 id 原样保留：渲染层按本机实际安装列的音色，存盘不能丢', () => {
+    const id = 'system-local:Microsoft%20Zira%20Desktop'
+    expect(normalizeVoiceId(id)).toBe(id)
+    expect(normalizePersona({ voiceId: id }).voiceId).toBe(id)
+  })
+
   it('旧 id 平滑迁移：SiliconFlow 两种气质落到 CosyVoice2，本地 Qwen3 落到系统语音', () => {
     expect(normalizeVoiceId('siliconflow:warm-female')).toBe('sf-cosyvoice2-claire')
     expect(normalizeVoiceId('siliconflow:steady-male')).toBe('sf-cosyvoice2-alex')

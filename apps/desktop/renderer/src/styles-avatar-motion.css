@@ -127,7 +127,8 @@
     animation: none !important;
     transform: none !important;
   }
-  .contact-card:hover .avatar {
+  .contact-card:hover .avatar,
+  .contact-row:hover .avatar {
     animation: none !important;
     transform: none !important;
   }

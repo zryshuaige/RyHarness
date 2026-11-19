@@ -11,7 +11,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import { bigrams, messageSearchText } from './fts.ts'
 
 /** 当前 schema 版本；每次变更表结构时 +1 并追加迁移函数。 */
-export const SCHEMA_VERSION = 13
+export const SCHEMA_VERSION = 14
 
 /** 版本 1：初始表结构。 */
 function migrateV1(db: DatabaseSync): void {
@@ -274,6 +274,54 @@ function migrateV13(db: DatabaseSync): void {
   db.exec('ALTER TABLE conversations ADD COLUMN workspace_id TEXT')
 }
 
+/**
+ * 版本 14：云成员与云会话（Kimi Hosted Agents）。
+ *
+ * - `agents.runtime`：这个成员跑在本机还是云端。存一列而不是另一张表，通讯录/
+ *   建群/调度器选人就能原样把云成员当普通成员用；存量行一律 'local'。
+ * - `hosted_members`：雇佣契约（远端 agent、环境、钉住的版本、状态）。
+ * - `hosted_sessions`：工位（一个成员在一个会话里的远端会话、SSE 游标、状态）。
+ *   主键是 (conversation_id, agent_id)：群聊里可以有多位云成员，同一位成员也可以
+ *   同时在多个会话里上班。
+ *
+ * 远端是事实源，本地这两张表是索引与游标；删会话/删成员时跟着级联清掉。
+ */
+function migrateV14(db: DatabaseSync): void {
+  const columns = db.prepare('PRAGMA table_info(agents)').all() as { name: string }[]
+  if (
+    !columns.some((column) => {
+      return column.name === 'runtime'
+    })
+  ) {
+    db.exec("ALTER TABLE agents ADD COLUMN runtime TEXT NOT NULL DEFAULT 'local'")
+  }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS hosted_members (
+      agent_id        TEXT PRIMARY KEY REFERENCES agents (id) ON DELETE CASCADE,
+      remote_agent_id TEXT NOT NULL,
+      environment_id  TEXT NOT NULL,
+      agent_version   TEXT,
+      scope           TEXT NOT NULL CHECK (scope IN ('official', 'custom')),
+      status          TEXT NOT NULL CHECK (status IN ('active', 'archived', 'error')),
+      created_at      INTEGER NOT NULL,
+      updated_at      INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS hosted_sessions (
+      conversation_id TEXT NOT NULL REFERENCES conversations (id) ON DELETE CASCADE,
+      agent_id        TEXT NOT NULL REFERENCES agents (id) ON DELETE CASCADE,
+      session_id      TEXT NOT NULL,
+      cursor          TEXT,
+      last_event_id   TEXT,
+      last_event_at   TEXT,
+      status          TEXT NOT NULL CHECK (status IN ('idle', 'running', 'terminated', 'lost')),
+      created_at      INTEGER NOT NULL,
+      updated_at      INTEGER NOT NULL,
+      PRIMARY KEY (conversation_id, agent_id)
+    );
+  `)
+}
+
 /** 全部迁移：索引即目标版本。新增迁移只追加，不改动既有条目。 */
 export const MIGRATIONS: Readonly<Record<number, (db: DatabaseSync) => void>> = {
   1: migrateV1,
@@ -289,6 +337,7 @@ export const MIGRATIONS: Readonly<Record<number, (db: DatabaseSync) => void>> = 
   11: migrateV11,
   12: migrateV12,
   13: migrateV13,
+  14: migrateV14,
 }
 
 function userVersion(db: DatabaseSync): number {

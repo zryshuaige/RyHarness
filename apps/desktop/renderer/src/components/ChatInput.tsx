@@ -25,6 +25,11 @@ export interface ChatInputProps {
   onUpload?: (file: File) => Promise<MessageAttachment>
   /** `/` 命令面板的候选（壳构建：每条命令要拿到应用级动作）。 */
   commands?: readonly Command[]
+  /** 当前模型读数（如「deepseek-v3 · SiliconFlow」）；点击去模型与供应商。没配模型时不画。 */
+  model?: string
+  /** 上下文读数（「128k 上下文」/「上下文未知」），由服务端声明值算；缺席时只显示模型名。 */
+  modelContext?: string
+  onModelClick?: () => void
 }
 
 interface MentionMember {
@@ -79,6 +84,9 @@ function ChatInputView({
   focusToken,
   onUpload,
   commands = [],
+  model,
+  modelContext,
+  onModelClick,
 }: ChatInputProps) {
   const [ownText, setOwnText] = useState('')
   const text = draft ?? ownText
@@ -91,6 +99,7 @@ function ChatInputView({
   /** Esc 显式关闭补全菜单；文本变动时复位（不往文本里塞魔法字符）。 */
   const [dismissed, setDismissed] = useState(false)
   const ref = useRef<HTMLTextAreaElement>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
   /** 输入法组合中：部分 Electron 下的 IME 不给 keydown 带 isComposing，
    *  compositionstart/end 是不依赖该标志的兜底信号。 */
   const composingRef = useRef(false)
@@ -358,6 +367,35 @@ function ChatInputView({
 
   return (
     <>
+      {onUpload !== undefined && (
+        <>
+          <button
+            type="button"
+            className="attach-btn"
+            title="添加附件"
+            aria-label="添加附件"
+            disabled={disabled === true}
+            onClick={() => {
+              fileRef.current?.click()
+            }}
+          >
+            <Icon name="paperclip" size={18} />
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            multiple
+            hidden
+            aria-hidden="true"
+            tabIndex={-1}
+            onChange={(event) => {
+              attachFiles(event.currentTarget.files)
+              // 同一个文件连选两次也要能触发 change。
+              event.currentTarget.value = ''
+            }}
+          />
+        </>
+      )}
       <div className="chat-input-box">
         {menu.shown !== undefined && (
           // biome-ignore lint/a11y/noNoninteractiveElementToInteractiveRole: 提及菜单焦点留在 textarea，aria-selected 表达选中态
@@ -477,6 +515,8 @@ function ChatInputView({
             value={text}
             disabled={disabled}
             placeholder={members.length > 0 ? '输入消息，@ 可提及成员…' : '输入消息…'}
+            // placeholder 不是无障碍名字（输入后即消失、读屏未必播报）：给 textarea 一个恒定的 aria-label。
+            aria-label="输入消息"
             rows={1}
             onChange={(event) => {
               setText(event.target.value)
@@ -498,6 +538,23 @@ function ChatInputView({
             }}
           />
         </div>
+        {/* 模型读数（D11）：输入区此前没有任何「这句话谁来答」的读数，模型配错了要
+            去 Me → 模型与供应商翻。一行 12px 的读数 + 点击直达那一页，成本最低。 */}
+        {model !== undefined && (
+          <button
+            type="button"
+            className="composer-model"
+            title="模型与供应商"
+            aria-label={`当前模型 ${model}${modelContext === undefined ? '' : `，${modelContext}`}，打开模型与供应商`}
+            onClick={onModelClick}
+          >
+            <Icon name="brain" size={12} />
+            <span>
+              {model}
+              {modelContext === undefined ? '' : ` · ${modelContext}`}
+            </span>
+          </button>
+        )}
       </div>
       <button
         type="button"

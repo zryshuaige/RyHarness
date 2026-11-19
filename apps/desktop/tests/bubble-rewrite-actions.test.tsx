@@ -220,3 +220,61 @@ describe('重新生成与从这里分支', () => {
     unmount()
   })
 })
+
+describe('溢出菜单的键盘与关闭路径', () => {
+  it('↓ 从「更多」进菜单第一项；↑/↓ 循环；Esc 关菜单并把焦点还给触发键', () => {
+    const { container, unmount } = mount(
+      <MessageBubble message={agentMessage()} fileUrl={fileUrl} onFeedback={vi.fn()} />,
+    )
+    const trigger = button(container, '更多操作')
+    const menu = container.querySelector<HTMLElement>('.bubble-menu')
+    expect(trigger).toBeDefined()
+    expect(menu).not.toBeNull()
+
+    act(() => {
+      trigger?.click()
+    })
+    expect(menu?.hasAttribute('hidden')).toBe(false)
+
+    const items = [...(menu?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? [])]
+    expect(items.length).toBeGreaterThanOrEqual(2)
+    act(() => {
+      items[0]?.focus()
+    })
+    expect(document.activeElement).toBe(items[0])
+
+    act(() => {
+      menu?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+    })
+    expect(document.activeElement).toBe(items[1])
+
+    act(() => {
+      menu?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }))
+    })
+    expect(document.activeElement).toBe(items[0])
+
+    act(() => {
+      menu?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    })
+    expect(menu?.hasAttribute('hidden')).toBe(true)
+    expect(document.activeElement).toBe(trigger)
+    unmount()
+  })
+
+  it('外部按下即关闭菜单（键盘/触屏没有 mouseleave）', () => {
+    const { container, unmount } = mount(
+      <MessageBubble message={agentMessage()} fileUrl={fileUrl} onFeedback={vi.fn()} />,
+    )
+    act(() => {
+      button(container, '更多操作')?.click()
+    })
+    const menu = container.querySelector<HTMLElement>('.bubble-menu')
+    expect(menu?.hasAttribute('hidden')).toBe(false)
+
+    act(() => {
+      document.body.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }))
+    })
+    expect(menu?.hasAttribute('hidden')).toBe(true)
+    unmount()
+  })
+})

@@ -34,6 +34,7 @@ import { hasUsableProvider, missingProviderHint } from '../lib/provider-health.t
 import { toast } from '../lib/toast.ts'
 import { explainTurnError, type TurnErrorTarget } from '../lib/turn-errors.ts'
 import { Avatar } from './avatars/Avatar.tsx'
+import { ConfirmDialog } from './ConfirmDialog.tsx'
 import { Icon } from './Icon.tsx'
 import { MessageBubble } from './MessageBubble.tsx'
 import { VibeArtifactPreview } from './VibeArtifactPreview.tsx'
@@ -181,7 +182,7 @@ function SquadPanel({
               avatarKey={member.avatar}
               name={member.name}
               seed={member.id}
-              size={40}
+              size={32}
               action={speaking ? 'idle' : pondering ? 'pondering' : live ? 'listening' : 'idle'}
               {...(member.temperament === undefined ? {} : { temperament: member.temperament })}
             />
@@ -231,29 +232,57 @@ function AnswerOptions({
 }) {
   return (
     <>
-      <div className="vibe-options">
+      {/* radiogroup：选项是「单选」不是「一堆按钮」。方向键走位 + radio 圆点把单选
+          语义外显出来（D12）——选中态此前只靠底色深浅，读屏与键盘用户无从判断。
+          选项仍是 button（点击即选），role=radio + aria-checked 补齐语义。 */}
+      <div
+        className="vibe-options"
+        role="radiogroup"
+        aria-label={question.question}
+        onKeyDown={(event) => {
+          const forward = event.key === 'ArrowDown' || event.key === 'ArrowRight'
+          const backward = event.key === 'ArrowUp' || event.key === 'ArrowLeft'
+          if (!forward && !backward) return
+          const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('.vibe-option')]
+          if (buttons.length === 0) return
+          event.preventDefault()
+          const active = document.activeElement
+          const index = active instanceof HTMLButtonElement ? buttons.indexOf(active) : -1
+          const next = index < 0 ? 0 : (index + (forward ? 1 : -1) + buttons.length) % buttons.length
+          const target = buttons[next]
+          const option = question.options[next]
+          if (target === undefined || option === undefined) return
+          target.focus()
+          onPick(option)
+        }}
+      >
         {question.options.map((option) => {
           const chosen = current === option && draft.trim().length === 0
           return (
+            // biome-ignore lint/a11y/useSemanticElements: 选项卡式单选，原生 radio 的样式与布局无法满足设计
             <button
               key={option}
               type="button"
+              role="radio"
+              aria-checked={chosen}
               className={chosen ? 'vibe-option is-chosen' : 'vibe-option'}
               disabled={busy}
               onClick={() => {
                 onPick(option)
               }}
             >
+              <span className="vibe-option-radio" aria-hidden="true" />
               {option}
             </button>
           )
         })}
       </div>
       {/* 自己写一句：没有这一行，选项之外的话就没地方说了——用户只能把
-          「我自己说」这个选项当成答案交上去，等于什么都没说。 */}
-      <input
-        type="text"
+          「我自己说」这个选项当成答案交上去，等于什么都没说。用 textarea：自己说的话
+          常常不止一句；虚线边把它和上面那排实心选项卡明确分成两种东西（D12）。 */}
+      <textarea
         className="vibe-own-answer"
+        rows={2}
         value={draft}
         placeholder="都不对？我自己说"
         aria-label={`${question.question} —— 自己写一句`}
@@ -371,25 +400,30 @@ function QuestionCard({
 }
 
 /**
- * 等待期的进度条。
+ * 等待期的进度 stepper。
  *
  * 小队开工到出方案之间有 30 秒到 2 分钟，这一段屏幕上只有一个转圈是最容易让人
- * 放弃的地方（Linear 的 agent 规范第一条就是「沉默等于不确定」）。三步 + 一条
- * 顶边进度线，让人知道事情在往前走。
+ * 放弃的地方（Linear 的 agent 规范第一条就是「沉默等于不确定」）。
+ *
+ * 此前是「一条顶边进度线 + 一排纯文字标签」——线与标签分离，走到哪一步全靠颜色
+ * 深浅猜（D8）。改成五节点 + 连接线：done=success 勾 / current=琥珀环 / todo=灰点，
+ * 标签落在节点下方，连接线随进度染色。节点是纯状态指示（不做成按钮）——还没有
+ * 「回看某一步」的真实机制，做成可点却是空操作就等于又造一个假控件。
  */
 function Progress({ step, status }: { step: number; status: VibeSessionView['status'] }) {
   return (
     <section className="vibe-progress" aria-label="小队进度">
-      <div className="vibe-progress-bar">
-        <span style={{ width: `${Math.round((step / STEPS.length) * 100)}%` }} />
-      </div>
       <ol className="vibe-steps">
         {STEPS.map((label, index) => {
-          const done = index < step
+          const done = index < step || status === 'done'
           const active = index === step && status !== 'done'
+          const state = done ? 'is-done' : active ? 'is-active' : 'is-todo'
           return (
-            <li key={label} className={done ? 'is-done' : active ? 'is-active' : ''}>
-              {label}
+            <li key={label} className={`vibe-step ${state}`} aria-current={active ? 'step' : undefined}>
+              <span className="vibe-step-node">
+                {done ? <Icon name="check" size={12} /> : <span className="vibe-step-dot" />}
+              </span>
+              <span className="vibe-step-label">{label}</span>
             </li>
           )
         })}
@@ -453,11 +487,15 @@ function ProjectCard({
               <button
                 type="button"
                 className="vibe-file"
+                title={`预览 ${file.name}`}
                 onClick={() => {
                   onOpenFile(file.name)
                 }}
               >
-                {file.name}
+                <Icon name="file" size={16} />
+                <span className="vibe-file-name">{file.name}</span>
+                {/* 打开 affordance 常驻占位、hover 才显形：几何不跳，扫读时也不抢名字。 */}
+                <Icon name="arrow-up-right" size={16} className="vibe-file-open" />
               </button>
             </li>
           )
@@ -559,6 +597,17 @@ function statusLine(session: VibeSessionView): string {
   return '已验收，可以用了'
 }
 
+/**
+ * 历史左列的状态短签：一个词 + 一个语义色，扫一眼就知道这条任务停在哪。
+ * statusLine 那一整句是给人读进展的，塞进 240px 的左栏会折成两三行——这里只要「停在哪」。
+ */
+function statusChip(session: VibeSessionView): { label: string; tone: string } {
+  if (session.status === 'failed') return { label: '未通过', tone: 'is-failed' }
+  if (session.status === 'asking') return { label: '等你选', tone: 'is-asking' }
+  if (session.status === 'done') return { label: '已完成', tone: 'is-done' }
+  return { label: '进行中', tone: 'is-building' }
+}
+
 function stepOf(session: VibeSessionView, _outputCount: number): number {
   if (session.status === 'done') return STEPS.length
   if (session.status === 'failed') return 0
@@ -598,6 +647,10 @@ export function RyVibePage({
   const [starting, setStarting] = useState(false)
   const [answering, setAnswering] = useState(false)
   const [error, setError] = useState<string | undefined>(undefined)
+  /** 最近的任务：常驻左栏；没有它，切走一圈就再也回不到上一轮。 */
+  const [history, setHistory] = useState<VibeSessionView[]>([])
+  /** 正在跑的任务被「新任务」顶掉前先问一句。 */
+  const [confirmNewTask, setConfirmNewTask] = useState(false)
   /** 落盘时写进待办的任务清单。 */
   const [todos, setTodos] = useState<TodoItem[]>([])
   /** 正在提交的那一条待办：勾选期间禁用它，连点会并发提交。 */
@@ -710,6 +763,23 @@ export function RyVibePage({
       cancelled = true
     }
   }, [api])
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: session?.id 只作刷新触发器——开新一轮就重取左栏历史，effect 体内读不到它
+  useEffect(() => {
+    let cancelled = false
+    void api
+      .vibeSessions()
+      .then(({ sessions }) => {
+        if (cancelled) return
+        setHistory(sessions)
+      })
+      .catch(() => {
+        // 历史是增强能力：拉不到不影响当前这一轮。
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [api, session?.id])
 
   /**
    * 轮询：只要这一轮还没结束就定期拉一次。
@@ -890,7 +960,25 @@ export function RyVibePage({
     setRequirement('')
     setTodos([])
     setPreview(undefined)
+    setStopped(false)
     outputCursorRef.current = 0
+  }
+
+  /** 从历史里挑一条：先清当前视图，再把那条的状态拉回来。 */
+  const openHistoryItem = (id: string): void => {
+    if (id === session?.id) return
+    reset()
+    onSessionChange?.(id)
+    void refresh(id)
+  }
+
+  /** 「新任务」：正在跑就先确认；后台继续而不是静默丢掉。 */
+  const requestNewTask = (): void => {
+    if (session !== undefined && (session.status === 'building' || session.status === 'asking')) {
+      setConfirmNewTask(true)
+      return
+    }
+    reset()
   }
 
   /** 勾一条任务：先本地改，再发出去；发失败就把服务端那份拉回来。 */
@@ -953,84 +1041,134 @@ export function RyVibePage({
     })()
   }
 
+  /**
+   * 历史常驻左栏：此前它藏在一枚「历史」按钮后的弹层里——用户切走一圈，根本想不起
+   * 上一轮去哪了。现在只要有过任务（或正开着一轮），左栏就一直在：需求摘要 + 状态短签 +
+   * 日期，点一条就把那一轮原样接回来。首跑且零历史时不画栏，让欢迎屏独占整幅居中。
+   */
+  const historyRail =
+    history.length > 0 || session !== undefined ? (
+      <aside className="vibe-rail" aria-label="任务历史">
+        <div className="vibe-rail-head">
+          <span className="vibe-rail-title">任务历史</span>
+          {session !== undefined && (
+            <button type="button" className="btn btn-mini" onClick={requestNewTask}>
+              新任务
+            </button>
+          )}
+        </div>
+        {history.length === 0 ? (
+          <p className="vibe-rail-empty">还没有任务。说一句话就能开一个。</p>
+        ) : (
+          <ul className="vibe-history-list">
+            {history.map((item) => {
+              const chip = statusChip(item)
+              const active = item.id === session?.id
+              return (
+                <li key={item.id}>
+                  <button
+                    type="button"
+                    className={active ? 'vibe-history-item is-active' : 'vibe-history-item'}
+                    {...(active ? { 'aria-current': 'true' as const } : {})}
+                    onClick={() => {
+                      openHistoryItem(item.id)
+                    }}
+                  >
+                    <span className="vibe-history-req">{item.requirement}</span>
+                    <span className="vibe-history-meta">
+                      <span className={`vibe-status-chip ${chip.tone}`}>{chip.label}</span>
+                      <span className="vibe-history-date">{new Date(item.createdAt).toLocaleDateString('zh-CN')}</span>
+                    </span>
+                  </button>
+                </li>
+              )
+            })}
+          </ul>
+        )}
+      </aside>
+    ) : null
+
   if (session === undefined) {
     return (
       <div className="vibe-page">
-        <div className="vibe-hero">
-          <h1 className="vibe-title">
-            RyVibe
-            <span className="vibe-badge">Beta</span>
-          </h1>
-          <p className="vibe-lede">
-            说一句你想要的东西，小队会先问清楚你到底要个什么。
-            <br />
-            一个能打开的小程序、一份文档、一张表，还是一个以后照着做的流程——小队带着选项来问你，你点一下就行。
-          </p>
-          <textarea
-            className="vibe-input"
-            value={requirement}
-            rows={3}
-            placeholder="例如：给独立开发者做一个记账工具，能分类、能看趋势"
-            onChange={(event) => {
-              setRequirement(event.target.value)
-            }}
-            onKeyDown={(event) => {
-              // 输入法组合中的回车是「选词」，不是「开始」。
-              if (event.nativeEvent.isComposing) return
-              if (event.key !== 'Enter' || event.shiftKey) return
-              event.preventDefault()
-              void start()
-            }}
-          />
-          <div className="vibe-actions">
-            <button
-              type="button"
-              className="btn btn-primary vibe-start"
-              disabled={starting || requirement.trim().length === 0}
-              onClick={() => {
+        {historyRail}
+        <div className="vibe-main">
+          <div className="vibe-hero">
+            <h1 className="vibe-title">
+              RyVibe
+              <span className="vibe-badge">Beta</span>
+            </h1>
+            <p className="vibe-lede">
+              说一句你想要的东西，小队会先问清楚你到底要个什么。
+              <br />
+              一个能打开的小程序、一份文档、一张表，还是一个以后照着做的流程——小队带着选项来问你，你点一下就行。
+            </p>
+            <textarea
+              className="vibe-input"
+              value={requirement}
+              rows={3}
+              placeholder="例如：给独立开发者做一个记账工具，能分类、能看趋势"
+              onChange={(event) => {
+                setRequirement(event.target.value)
+              }}
+              onKeyDown={(event) => {
+                // 输入法组合中的回车是「选词」，不是「开始」。
+                if (event.nativeEvent.isComposing) return
+                if (event.key !== 'Enter' || event.shiftKey) return
+                event.preventDefault()
                 void start()
               }}
-            >
-              {starting ? '小队正在接手…' : '开始'}
-            </button>
-            <span className="vibe-hint">Enter 也可以直接开始</span>
-          </div>
-          {/* 引导前置摆出来：没有可用模型来源时，不必先点一次「开始」才知道路怎么走。 */}
-          {(error ?? noSourceHint) !== undefined && <p className="vibe-error">{error ?? noSourceHint}</p>}
-          <div className="vibe-examples">
-            <span className="vibe-examples-label">或者试试</span>
-            {EXAMPLES.map((example) => {
-              return (
-                <button
-                  key={example}
-                  type="button"
-                  className="vibe-example"
-                  onClick={() => {
-                    setRequirement(example)
-                  }}
-                >
-                  {example}
-                </button>
-              )
-            })}
-          </div>
-          {/* 谁会来帮你：首屏原本只有一个输入框，像一张空表单。把这一轮会参与的人
-              摆出来，用户点下「开始」之前就知道不是一个人在自言自语。 */}
-          {crew.length > 0 && (
-            <div className="vibe-crew">
-              <span className="vibe-crew-label">这一轮谁来做</span>
-              <div className="vibe-crew-row">
-                {crew.map((agent) => {
-                  return (
-                    <span key={agent.id} className="vibe-crew-member" title={`${agent.name} 会参与`}>
-                      <Avatar avatarKey={agent.avatar} name={agent.name} seed={agent.id} size={44} />
-                      <span className="vibe-crew-name">{agent.name}</span>
-                    </span>
-                  )
-                })}
-              </div>
+            />
+            <div className="vibe-actions">
+              <button
+                type="button"
+                className="btn btn-primary vibe-start"
+                disabled={starting || requirement.trim().length === 0}
+                onClick={() => {
+                  void start()
+                }}
+              >
+                {starting ? '小队正在接手…' : '开始'}
+              </button>
+              <span className="vibe-hint">Enter 也可以直接开始</span>
             </div>
-          )}
+            {/* 引导前置摆出来：没有可用模型来源时，不必先点一次「开始」才知道路怎么走。 */}
+            {(error ?? noSourceHint) !== undefined && <p className="vibe-error">{error ?? noSourceHint}</p>}
+            <div className="vibe-examples">
+              <span className="vibe-examples-label">或者试试</span>
+              {EXAMPLES.map((example) => {
+                return (
+                  <button
+                    key={example}
+                    type="button"
+                    className="vibe-example"
+                    onClick={() => {
+                      setRequirement(example)
+                    }}
+                  >
+                    {example}
+                  </button>
+                )
+              })}
+            </div>
+            {/* 谁会来帮你：首屏原本只有一个输入框，像一张空表单。把这一轮会参与的人
+              摆出来，用户点下「开始」之前就知道不是一个人在自言自语。 */}
+            {crew.length > 0 && (
+              <div className="vibe-crew">
+                <span className="vibe-crew-label">这一轮谁来做</span>
+                <div className="vibe-crew-row">
+                  {crew.map((agent) => {
+                    return (
+                      <span key={agent.id} className="vibe-crew-member" title={`${agent.name} 会参与`}>
+                        <Avatar avatarKey={agent.avatar} name={agent.name} seed={agent.id} size={44} />
+                        <span className="vibe-crew-name">{agent.name}</span>
+                      </span>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     )
@@ -1107,280 +1245,284 @@ export function RyVibePage({
 
   return (
     <div className="vibe-page">
-      <header className="vibe-header">
-        <h1 className="vibe-title">
-          RyVibe
-          <span className="vibe-badge">Beta</span>
-        </h1>
-        <span className="vibe-status">
-          {stopped ? '已停下' : statusLine(session)}
-          {!stopped && session.status !== 'done' && session.status !== 'failed' && (
-            <span className="queue-pulse vibe-spinner" aria-hidden="true" />
-          )}
-        </span>
-        <div className="vibe-header-actions">
-          {/* 停一下：这一轮还在跑的时候，用户不该只能干等。 */}
-          {!stopped && session.status === 'building' && api.cancelTurn !== undefined && (
-            <button type="button" className="btn btn-mini vibe-stop" disabled={stopping} onClick={stop}>
-              {stopping ? '停下中…' : '停一下'}
+      {historyRail}
+      {/* key=session.id：切历史条目时重建主列，让进场补间重播（状态都在父组件，重建不丢）；
+          左栏是兄弟节点不重建，常驻不动。与聊天页 .is-switching 同一套「切换要有过渡」口径。 */}
+      <div className="vibe-main" key={session.id}>
+        <header className="vibe-header">
+          <h1 className="vibe-title">
+            RyVibe
+            <span className="vibe-badge">Beta</span>
+          </h1>
+          <span className="vibe-status">
+            {stopped ? '已停下' : statusLine(session)}
+            {!stopped && session.status !== 'done' && session.status !== 'failed' && (
+              <span className="queue-pulse vibe-spinner" aria-hidden="true" />
+            )}
+          </span>
+          <div className="vibe-header-actions">
+            {/* 停一下：这一轮还在跑的时候，用户不该只能干等。 */}
+            {!stopped && session.status === 'building' && api.cancelTurn !== undefined && (
+              <button type="button" className="btn btn-mini vibe-stop" disabled={stopping} onClick={stop}>
+                {stopping ? '停下中…' : '停一下'}
+              </button>
+            )}
+            {stopped && (
+              <button
+                type="button"
+                className="btn btn-mini vibe-retry"
+                onClick={() => {
+                  setStopped(false)
+                  retry()
+                }}
+              >
+                再来一次
+              </button>
+            )}
+            <button type="button" className="btn btn-mini vibe-reset" onClick={requestNewTask}>
+              新任务
             </button>
-          )}
-          {stopped && (
-            <button
-              type="button"
-              className="btn btn-mini vibe-retry"
-              onClick={() => {
-                setStopped(false)
-                retry()
-              }}
-            >
-              再来一次
-            </button>
-          )}
-          <button type="button" className="btn btn-mini vibe-reset" onClick={reset}>
-            换一个
-          </button>
-        </div>
-      </header>
+          </div>
+        </header>
 
-      {session.status !== 'failed' && session.status !== 'done' && (
-        <Progress step={stepOf(session, output.length)} status={session.status} />
-      )}
+        {session.status !== 'failed' && session.status !== 'done' && (
+          <Progress step={stepOf(session, output.length)} status={session.status} />
+        )}
 
-      {/* 小队工作台：这一轮谁在、谁在忙。
+        {/* 小队工作台：这一轮谁在、谁在忙。
           此前这里只有一行「小队：Ryen、CodeBot」的文字链接，等的那一两分钟里屏幕上
           没有任何东西在动——用户不知道是谁在写、写到哪了。现在每人一行：头像 + 名字 +
           此刻在做什么，正在说的那一位头像会动。
           它放在消息流**之上**：夹在对话中间会把一段话切成两半。 */}
-      <SquadPanel
-        squad={session.squad}
-        speakingId={speakingId}
-        ponderingId={ponderingId}
-        {...(onOpenAgent === undefined ? {} : { onOpenAgent })}
-      />
+        <SquadPanel
+          squad={session.squad}
+          speakingId={speakingId}
+          ponderingId={ponderingId}
+          {...(onOpenAgent === undefined ? {} : { onOpenAgent })}
+        />
 
-      {/* 消息流：你那句话在最上面，小队的回话往下接。
+        {/* 消息流：你那句话在最上面，小队的回话往下接。
           此前那句话是一块左边带竖线的引用块——那是一句**引文**，不像一句你说的话。
           放进流里当用户气泡，这一页从头到尾就是一段对话。 */}
-      <div className="vibe-stream">
-        <MessageBubble
-          message={{
-            key: 'vibe-requirement',
-            senderType: 'user',
-            senderId: 'user',
-            senderName: '你',
-            turnIndex: 0,
-            parts: [{ kind: 'text', text: session.requirement }],
-            done: true,
-          }}
-          fileUrl={vibeFileUrl}
-        />
-      </div>
+        <div className="vibe-stream">
+          <MessageBubble
+            message={{
+              key: 'vibe-requirement',
+              senderType: 'user',
+              senderId: 'user',
+              senderName: '你',
+              turnIndex: 0,
+              parts: [{ kind: 'text', text: session.requirement }],
+              done: true,
+            }}
+            fileUrl={vibeFileUrl}
+          />
+        </div>
 
-      {session.status === 'failed' && (
-        <div className="vibe-failed" role="alert">
-          <strong>小队没能给出方案</strong>
-          <span>
-            {failure?.title}。{failure?.hint}
-          </span>
-          {/* 与聊天页红条同一套「下一步」：可点的动作（去配 Key / 改 agent），重试走旁边那枚。 */}
-          {failure?.action !== undefined && (
-            <button
-              type="button"
-              className="btn vibe-failed-action"
-              onClick={() => {
-                runFailureAction(failure?.action?.target ?? 'retry')
-              }}
-            >
-              {failure.action.label}
-            </button>
-          )}
-          {failure?.detail !== undefined && (
-            <details style={{ flexBasis: '100%' }}>
-              <summary style={{ cursor: 'pointer', fontSize: 'var(--fs-xs)' }}>详情</summary>
-              <code
-                style={{
-                  display: 'block',
-                  marginTop: 4,
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: 'var(--fs-xs)',
+        {session.status === 'failed' && (
+          <div className="vibe-failed" role="alert">
+            <strong>小队没能给出方案</strong>
+            <span>
+              {failure?.title}。{failure?.hint}
+            </span>
+            {/* 与聊天页红条同一套「下一步」：可点的动作（去配 Key / 改 agent），重试走旁边那枚。 */}
+            {failure?.action !== undefined && (
+              <button
+                type="button"
+                className="btn vibe-failed-action"
+                onClick={() => {
+                  runFailureAction(failure?.action?.target ?? 'retry')
                 }}
               >
-                {failure.detail}
-              </code>
-            </details>
-          )}
-          <div className="vibe-failed-actions">
-            <button type="button" className="btn vibe-retry" onClick={retry}>
-              再试一次
-            </button>
-            <button type="button" className="btn vibe-continue" onClick={reset}>
-              换句话说
-            </button>
+                {failure.action.label}
+              </button>
+            )}
+            {failure?.detail !== undefined && (
+              <details style={{ flexBasis: '100%' }}>
+                <summary style={{ cursor: 'pointer', fontSize: 'var(--fs-xs)' }}>详情</summary>
+                <code
+                  style={{
+                    display: 'block',
+                    marginTop: 4,
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: 'var(--fs-xs)',
+                  }}
+                >
+                  {failure.detail}
+                </code>
+              </details>
+            )}
+            <div className="vibe-failed-actions">
+              <button type="button" className="btn vibe-retry" onClick={retry}>
+                再试一次
+              </button>
+              <button type="button" className="btn vibe-continue" onClick={reset}>
+                换句话说
+              </button>
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {answered.length > 0 && (
-        <section className="vibe-section vibe-stream-section">
-          {/*
+        {answered.length > 0 && (
+          <section className="vibe-section vibe-stream-section">
+            {/*
             已经答过的题也留在流里：小队问的那句是一条气泡，你的回答是另一条。
             此前它们被折成一张"你们问过这些"的表——那是记录表，不是对话。
           */}
-          <div className="vibe-stream">
-            {answered.map((question) => {
-              const asker = session.squad.find((member) => {
-                return member.id === question.agentId
-              })
-              const answer =
-                question.selected !== undefined && question.selected.length > 0
-                  ? question.selected.join('、')
-                  : (question.answer ?? '')
-              const editing = editingId === question.id
-              return (
-                <div key={question.id} className="vibe-asked-pair">
-                  <MessageBubble
-                    message={{
-                      key: `vibe-q-${question.id}`,
-                      senderType: 'agent',
-                      senderId: question.agentId ?? 'squad',
-                      senderName: asker?.name ?? '小队',
-                      turnIndex: 0,
-                      parts: [{ kind: 'text', text: question.question }],
-                      done: true,
-                    }}
-                    agent={
-                      asker === undefined
-                        ? undefined
-                        : {
-                            id: asker.id,
-                            name: asker.name,
-                            ...(asker.avatar === undefined ? {} : { avatar: asker.avatar }),
-                            ...(asker.temperament === undefined ? {} : { temperament: asker.temperament }),
-                          }
-                    }
-                    fileUrl={vibeFileUrl}
-                  />
-                  {editing ? (
-                    /* 改主意的展开态就长在答案底下：选项还是那几个，填回他上次说的。 */
-                    <div className="vibe-asked-edit">
-                      <AnswerOptions
-                        question={question}
-                        current={picks[question.id] ?? ''}
-                        draft={drafts[question.id] ?? ''}
-                        busy={answering}
-                        onPick={(option) => {
-                          setPicks((prev) => {
-                            return { ...prev, [question.id]: option }
-                          })
-                        }}
-                        onDraft={(text) => {
-                          setDrafts((prev) => {
-                            return { ...prev, [question.id]: text }
-                          })
-                        }}
-                      />
-                      <div className="vibe-card-actions">
-                        <button
-                          type="button"
-                          className="btn btn-primary vibe-card-submit"
-                          disabled={answering}
-                          onClick={() => {
-                            void submit(false, [question.id])
+            <div className="vibe-stream">
+              {answered.map((question) => {
+                const asker = session.squad.find((member) => {
+                  return member.id === question.agentId
+                })
+                const answer =
+                  question.selected !== undefined && question.selected.length > 0
+                    ? question.selected.join('、')
+                    : (question.answer ?? '')
+                const editing = editingId === question.id
+                return (
+                  <div key={question.id} className="vibe-asked-pair">
+                    <MessageBubble
+                      message={{
+                        key: `vibe-q-${question.id}`,
+                        senderType: 'agent',
+                        senderId: question.agentId ?? 'squad',
+                        senderName: asker?.name ?? '小队',
+                        turnIndex: 0,
+                        parts: [{ kind: 'text', text: question.question }],
+                        done: true,
+                      }}
+                      agent={
+                        asker === undefined
+                          ? undefined
+                          : {
+                              id: asker.id,
+                              name: asker.name,
+                              ...(asker.avatar === undefined ? {} : { avatar: asker.avatar }),
+                              ...(asker.temperament === undefined ? {} : { temperament: asker.temperament }),
+                            }
+                      }
+                      fileUrl={vibeFileUrl}
+                    />
+                    {editing ? (
+                      /* 改主意的展开态就长在答案底下：选项还是那几个，填回他上次说的。 */
+                      <div className="vibe-asked-edit">
+                        <AnswerOptions
+                          question={question}
+                          current={picks[question.id] ?? ''}
+                          draft={drafts[question.id] ?? ''}
+                          busy={answering}
+                          onPick={(option) => {
+                            setPicks((prev) => {
+                              return { ...prev, [question.id]: option }
+                            })
                           }}
-                        >
-                          改好了
-                        </button>
-                        <button
-                          type="button"
-                          className="btn vibe-card-skip"
-                          disabled={answering}
-                          onClick={() => {
-                            setEditingId(undefined)
+                          onDraft={(text) => {
+                            setDrafts((prev) => {
+                              return { ...prev, [question.id]: text }
+                            })
                           }}
-                        >
-                          算了
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <>
-                      {answer.length > 0 && (
-                        <MessageBubble
-                          message={{
-                            key: `vibe-a-${question.id}`,
-                            senderType: 'user',
-                            senderId: 'user',
-                            senderName: '你',
-                            turnIndex: 0,
-                            parts: [{ kind: 'text', text: answer }],
-                            done: true,
-                          }}
-                          fileUrl={vibeFileUrl}
                         />
-                      )}
-                      <button
-                        type="button"
-                        className="vibe-asked-edit-link"
-                        disabled={answering}
-                        onClick={() => {
-                          startEdit(question)
-                        }}
-                      >
-                        改一下
-                      </button>
-                    </>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        </section>
-      )}
+                        <div className="vibe-card-actions">
+                          <button
+                            type="button"
+                            className="btn btn-primary vibe-card-submit"
+                            disabled={answering}
+                            onClick={() => {
+                              void submit(false, [question.id])
+                            }}
+                          >
+                            改好了
+                          </button>
+                          <button
+                            type="button"
+                            className="btn vibe-card-skip"
+                            disabled={answering}
+                            onClick={() => {
+                              setEditingId(undefined)
+                            }}
+                          >
+                            算了
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        {answer.length > 0 && (
+                          <MessageBubble
+                            message={{
+                              key: `vibe-a-${question.id}`,
+                              senderType: 'user',
+                              senderId: 'user',
+                              senderName: '你',
+                              turnIndex: 0,
+                              parts: [{ kind: 'text', text: answer }],
+                              done: true,
+                            }}
+                            fileUrl={vibeFileUrl}
+                          />
+                        )}
+                        <button
+                          type="button"
+                          className="vibe-asked-edit-link"
+                          disabled={answering}
+                          onClick={() => {
+                            startEdit(question)
+                          }}
+                        >
+                          改一下
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </section>
+        )}
 
-      {showCard && (
-        <section className="vibe-section">
-          <QuestionCard
-            questions={pending}
-            picks={picks}
-            drafts={drafts}
-            busy={answering}
-            squad={session.squad}
-            onPick={(questionId, option) => {
-              setPicks((prev) => {
-                return { ...prev, [questionId]: option }
-              })
-            }}
-            onDraft={(questionId, text) => {
-              setDrafts((prev) => {
-                return { ...prev, [questionId]: text }
-              })
-            }}
-            onSubmit={() => {
-              void submit(
-                false,
-                pending.map((question) => {
-                  return question.id
-                }),
-              )
-            }}
-            onSkip={() => {
-              void submit(
-                true,
-                pending.map((question) => {
-                  return question.id
-                }),
-              )
-            }}
-          />
-        </section>
-      )}
+        {showCard && (
+          <section className="vibe-section">
+            <QuestionCard
+              questions={pending}
+              picks={picks}
+              drafts={drafts}
+              busy={answering}
+              squad={session.squad}
+              onPick={(questionId, option) => {
+                setPicks((prev) => {
+                  return { ...prev, [questionId]: option }
+                })
+              }}
+              onDraft={(questionId, text) => {
+                setDrafts((prev) => {
+                  return { ...prev, [questionId]: text }
+                })
+              }}
+              onSubmit={() => {
+                void submit(
+                  false,
+                  pending.map((question) => {
+                    return question.id
+                  }),
+                )
+              }}
+              onSkip={() => {
+                void submit(
+                  true,
+                  pending.map((question) => {
+                    return question.id
+                  }),
+                )
+              }}
+            />
+          </section>
+        )}
 
-      {output.length > 0 && (
-        <section className="vibe-section vibe-stream-section">
-          {/*
+        {output.length > 0 && (
+          <section className="vibe-section vibe-stream-section">
+            {/*
             这一页就是一条消息流。
             此前每段产出是一个带边框的独立卡片——那是一份**日志**：看得见"有几条记录"，
             看不见"谁在跟谁说话"。RyVibe 讲的就是一支队伍在接力干活，那它就该长得
@@ -1388,84 +1530,99 @@ export function RyVibePage({
             视觉直接复用聊天页那套气泡（同一个组件），于是复制、朗读、流式光标、
             头像列对齐全是白捡的，RyVibe 与聊天页也不会是两副面孔。
           */}
-          <div className="vibe-stream">
-            {output.map((item, index) => {
-              const member = session.squad.find((row) => {
-                return row.id === item.senderId
-              })
-              const previous = output[index - 1]
-              // 同一个人连着说几句：收紧间距，头像只在组首画一次（与聊天页同一套口径）。
-              const tight = previous !== undefined && previous.senderId === item.senderId
-              /**
-               * 正在写的那一条标成"还没写完"：气泡组件靠这一位决定头像要不要动
-               * （未完成的 agent 消息，头像会跟着说话律动）。
-               */
-              const last = index === output.length - 1
-              const writing = last && session.status === 'building'
-              return (
-                <MessageBubble
-                  key={`vibe-${item.seq}`}
-                  message={{
-                    key: `vibe-${item.seq}`,
-                    senderType: 'agent',
-                    senderId: item.senderId,
-                    senderName: nameOf(item.senderId),
-                    turnIndex: 0,
-                    seq: item.seq,
-                    createdAt: item.createdAt,
-                    parts: [{ kind: 'text', text: item.text }],
-                    done: !writing,
-                  }}
-                  agent={
-                    member === undefined
-                      ? undefined
-                      : {
-                          id: member.id,
-                          name: member.name,
-                          ...(member.avatar === undefined ? {} : { avatar: member.avatar }),
-                          ...(member.temperament === undefined ? {} : { temperament: member.temperament }),
-                        }
-                  }
-                  fileUrl={vibeFileUrl}
-                  firstOfGroup={!tight}
-                  tight={tight}
-                />
-              )
-            })}
-          </div>
-        </section>
-      )}
+            <div className="vibe-stream">
+              {output.map((item, index) => {
+                const member = session.squad.find((row) => {
+                  return row.id === item.senderId
+                })
+                const previous = output[index - 1]
+                // 同一个人连着说几句：收紧间距，头像只在组首画一次（与聊天页同一套口径）。
+                const tight = previous !== undefined && previous.senderId === item.senderId
+                /**
+                 * 正在写的那一条标成"还没写完"：气泡组件靠这一位决定头像要不要动
+                 * （未完成的 agent 消息，头像会跟着说话律动）。
+                 */
+                const last = index === output.length - 1
+                const writing = last && session.status === 'building'
+                return (
+                  <MessageBubble
+                    key={`vibe-${item.seq}`}
+                    message={{
+                      key: `vibe-${item.seq}`,
+                      senderType: 'agent',
+                      senderId: item.senderId,
+                      senderName: nameOf(item.senderId),
+                      turnIndex: 0,
+                      seq: item.seq,
+                      createdAt: item.createdAt,
+                      parts: [{ kind: 'text', text: item.text }],
+                      done: !writing,
+                    }}
+                    agent={
+                      member === undefined
+                        ? undefined
+                        : {
+                            id: member.id,
+                            name: member.name,
+                            ...(member.avatar === undefined ? {} : { avatar: member.avatar }),
+                            ...(member.temperament === undefined ? {} : { temperament: member.temperament }),
+                          }
+                    }
+                    fileUrl={vibeFileUrl}
+                    firstOfGroup={!tight}
+                    tight={tight}
+                  />
+                )
+              })}
+            </div>
+          </section>
+        )}
 
-      {session.project !== undefined && (
-        <ProjectCard
-          project={session.project}
-          versions={session.versions}
-          preview={preview}
-          onOpenFile={openFile}
-          onClosePreview={() => {
-            setPreview(undefined)
-          }}
-          onOpenFolder={openFolder}
-          onRestore={api.restoreVibeVersion === undefined ? undefined : restoreVersion}
-        />
-      )}
+        {session.project !== undefined && (
+          <ProjectCard
+            project={session.project}
+            versions={session.versions}
+            preview={preview}
+            onOpenFile={openFile}
+            onClosePreview={() => {
+              setPreview(undefined)
+            }}
+            onOpenFolder={openFolder}
+            onRestore={api.restoreVibeVersion === undefined ? undefined : restoreVersion}
+          />
+        )}
 
-      <TaskList todos={todos} busyId={todoBusy} onToggle={toggleTodo} />
+        <TaskList todos={todos} busyId={todoBusy} onToggle={toggleTodo} />
 
-      {error !== undefined && <p className="vibe-error">{error}</p>}
+        {error !== undefined && <p className="vibe-error">{error}</p>}
 
-      {session.status === 'done' && onOpenConversation !== undefined && (
-        <button
-          type="button"
-          className="btn vibe-continue"
-          onClick={() => {
-            onOpenConversation(session.conversationId)
-          }}
-        >
-          <Icon name="chat-bubble" size={16} />
-          在聊天里继续追问
-        </button>
-      )}
+        {session.status === 'done' && onOpenConversation !== undefined && (
+          <button
+            type="button"
+            className="btn vibe-continue"
+            onClick={() => {
+              onOpenConversation(session.conversationId)
+            }}
+          >
+            <Icon name="chat-bubble" size={16} />
+            在聊天里继续追问
+          </button>
+        )}
+        {confirmNewTask && (
+          <ConfirmDialog
+            title="开始新任务？"
+            body="当前任务会留在历史里继续跑，随时能从左栏回来；新任务会清空这一屏。"
+            confirmLabel="开始新任务"
+            onCancel={() => {
+              setConfirmNewTask(false)
+            }}
+            onConfirm={async () => {
+              setConfirmNewTask(false)
+              reset()
+            }}
+          />
+        )}
+      </div>
     </div>
   )
 }

@@ -53,19 +53,19 @@
          徽标本身是位图，深浅两套底色都不用为它改任何东西：琥珀底板自带一圈实色描边，
          浅色底上是暖色块、暗色底上是发光的琥珀贴纸，两边都立得住。 */
       :root {
-        --splash-bg: #FAF7F2;
+        --splash-bg: #F5F1E8;
         --splash-ink: #B45309;
       }
       /* 紧随其后的引导脚本在 body 之前就定了 data-theme；系统暗色这条媒体查询兜的
          是「脚本还没跑 / 跑失败」的窗口期。 */
       @media (prefers-color-scheme: dark) {
         :root:not([data-theme='light']) {
-          --splash-bg: #14110E;
+          --splash-bg: #101114;
           --splash-ink: #FCD34D;
         }
       }
       :root[data-theme='dark'] {
-        --splash-bg: #14110E;
+        --splash-bg: #101114;
         --splash-ink: #FCD34D;
       }
       #splash {

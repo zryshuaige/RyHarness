@@ -18,9 +18,13 @@ import type { PublicMemoryRow } from '@ryharness/memory'
 import type {
   AgentTemplate,
   PreviewFile as ArtifactInfo,
+  BackupListView,
+  ConversationContextView,
   ConversationState,
   ConversationUsageRow,
   DeletedApiKeyResult,
+  HostedEnvironment,
+  HostedRemoteAgent,
   MemoryRecall,
   PermissionPresetSpec as PermissionPresetView,
   PluginView,
@@ -55,6 +59,8 @@ import type {
 /** 局部别名绑定：MessageUsageRow 要用 TurnUsage 这个名字；纯 re-export 不进局部作用域。 */
 import type {
   AgentPersona,
+  HostedMember,
+  HostedSession,
   Conversation as ServerConversation,
   StoredAgent,
   StoredMessage,
@@ -116,6 +122,9 @@ export type {
 // 在此换名重导出（对外导出名不变）；形状只写在路由处理函数里的（内联返回体 /
 // 模块私有接口），保留手抄并在各类型头上注明出处与原因。
 
+/** 备份清单的回包形状：Me→工作区与数据只拿类型，不重复抄一遍字段。 */
+/** 输入区模型读数的回包形状：ChatView 只拿类型，不重复抄一遍字段。 */
+export type { BackupFileView, BackupListView, ConversationContextView } from '@ryharness/server'
 /** 单轮 token 用量。真源：@ryharness/session 的 StoredUsage（消息行 usage 列的归一形态）。 */
 export type { StoredUsage as TurnUsage } from '@ryharness/session'
 /** 人格四维 + 生日/口头禅/形象/音色/亲密度。真源：@ryharness/session 的 persona.ts。 */
@@ -143,6 +152,39 @@ export type { ReflectionRow }
 export type AgentDef = Omit<StoredAgent, 'persona' | 'createdAt' | 'updatedAt'> & {
   /** 人格；缺省（旧服务端/测试替身）时按默认人格渲染。 */
   persona?: AgentPersona
+}
+
+/** 云成员雇佣契约与工位。真源：@ryharness/session 的 HostedMember / HostedSession。 */
+/** 远端 agent 与环境。真源：@ryharness/server 的 hosted/types。 */
+export type { HostedEnvironment, HostedMember, HostedRemoteAgent, HostedSession }
+
+/** GET /api/hosted/status 的返回。 */
+export interface HostedStatus {
+  configured: boolean
+  baseUrl: string
+  environmentId?: string
+  members: HostedMember[]
+  sessions: HostedSession[]
+}
+
+/** GET /api/hosted/catalog：远端正版清单。没配 Key 时 configured=false，不报错。 */
+export interface HostedCatalog {
+  configured: boolean
+  agents: HostedRemoteAgent[]
+  environments: HostedEnvironment[]
+  error?: string
+}
+
+/** POST /api/hosted/hire 的入参。 */
+export interface HostedHireInput {
+  source: 'official' | 'custom'
+  remoteAgentId?: string
+  environmentId?: string
+  name?: string
+  avatar?: string
+  systemPrompt?: string
+  model?: string
+  persona?: Record<string, unknown>
 }
 
 /**
@@ -470,6 +512,14 @@ export class ApiClient {
     return this.request('/api/profile', { method: 'PATCH', body: JSON.stringify(patch) })
   }
 
+  /**
+   * 输入区的模型读数：这个会话此刻由哪个模型答、声明的上下文窗口多大、累计用量。
+   * 服务端解析派工对象（direct → 成员 / group → 调度员），渲染层不 join 三份清单。
+   */
+  conversationContext(conversationId: string): Promise<ConversationContextView> {
+    return this.request(`/api/conversations/${conversationId}/context`)
+  }
+
   deleteConversation(id: string): Promise<{ deleted: string }> {
     return this.request(`/api/conversations/${id}`, { method: 'DELETE' })
   }
@@ -549,10 +599,8 @@ export class ApiClient {
   }
 
   /**
-   * 当前注册着的工具清单（服务端出）。
-   *
-   * 助理编辑器里勾的工具必须是真能调的那些，所以清单从服务端取；本地那份
-   * ALL_TOOLS 只当兜底（取不到时不让工具白名单整个空掉）。
+   * 当前注册着的工具清单（服务端出，渲染层不抄一份——抄了会与实际注册的工具漂）。
+   * 助理编辑器现在按权限档位整组定工具，不再逐个勾；这份清单供展示工具名用。
    */
   tools(): Promise<{ tools: ToolInfo[] }> {
     return this.request('/api/tools')
@@ -1020,6 +1068,53 @@ export class ApiClient {
    */
   backup(): Promise<{ path: string }> {
     return this.request('/api/backup', { method: 'POST', body: '{}' })
+  }
+
+  /**
+   * 读最近备份清单（只读）。dir 是备份目录，backups 按时间倒序、最多 10 份。
+   * 旧版本服务端没有这条 GET：调用方按可选能力处理，拿不到就不显示清单。
+   */
+  listBackups(): Promise<BackupListView> {
+    return this.request('/api/backups')
+  }
+
+  // ---- 云成员（Kimi Hosted Agents） ----
+
+  /** 云成员总览：配没配 Key、有哪些雇佣契约与工位。 */
+  hostedStatus(): Promise<HostedStatus> {
+    return this.request('/api/hosted/status')
+  }
+
+  /** 远端正版清单（官方 + 自建）与可用环境。 */
+  hostedCatalog(): Promise<HostedCatalog> {
+    return this.request('/api/hosted/catalog')
+  }
+
+  /** 写云成员的设置（Key / baseUrl / 环境 id）。 */
+  hostedSettings(input: { apiKey?: string; baseUrl?: string; environmentId?: string }): Promise<{
+    configured: boolean
+    baseUrl: string
+    environmentId?: string
+  }> {
+    return this.request('/api/hosted/settings', { method: 'PUT', body: JSON.stringify(input) })
+  }
+
+  /** 雇佣一个云成员：官方 agent 直接引用，自建 agent 现场创建。 */
+  hostedHire(input: HostedHireInput): Promise<{ agent: AgentDef; member: HostedMember }> {
+    return this.request('/api/hosted/hire', { method: 'POST', body: JSON.stringify(input) })
+  }
+
+  /** 解雇：远端归档（官方 agent 只解绑），已有会话变只读。 */
+  hostedFire(agentId: string): Promise<{ member: HostedMember }> {
+    return this.request(`/api/hosted/agents/${encodeURIComponent(agentId)}/fire`, {
+      method: 'POST',
+      body: '{}',
+    })
+  }
+
+  /** 手动对账：把离线期间云端发生的事补进本地。 */
+  hostedSync(): Promise<{ ok: boolean; sessions: HostedSession[] }> {
+    return this.request('/api/hosted/sync', { method: 'POST', body: '{}' })
   }
 
   /**

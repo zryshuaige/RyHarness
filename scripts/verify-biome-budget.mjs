@@ -136,7 +136,7 @@ allow('lint/style/noNonNullAssertion', {
   'apps/desktop/tests/persona-ui.test.tsx': 13,
   'packages/session/tests/coordinator.test.ts': 13,
   'apps/desktop/tests/memory-panel.test.tsx': 12,
-  'apps/desktop/tests/agent-binding.test.tsx': 11,
+  'apps/desktop/tests/agent-binding.test.tsx': 4,
   'apps/desktop/tests/api-ws.test.ts': 11,
   'apps/desktop/tests/interaction-p0.test.tsx': 11,
   'apps/desktop/tests/use-leaving.test.tsx': 11,

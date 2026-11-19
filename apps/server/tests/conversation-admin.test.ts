@@ -400,3 +400,47 @@ describe('GET /api/search', () => {
     }
   })
 })
+
+/**
+ * composer 的模型读数：谁在答、声明的上下文窗口多大、累计用量。
+ *
+ * 窗口只认供应商里声明的值（适配器不报就 null，界面显示「上下文未知」）；
+ * 解析口径与派工一致：direct → 唯一成员 / group → 调度员。
+ */
+describe('GET /api/conversations/:id/context', () => {
+  it('单聊按成员 agent 解析模型；窗口取供应商声明值；未知会话 404', async () => {
+    const server = await startServer(tempDataDir('context'))
+    try {
+      const createdProvider = await sendJson(server.url, '/api/providers', 'POST', {
+        displayName: 'Ctx Lab',
+        baseUrl: 'http://127.0.0.1:9/v1',
+        models: [{ id: 'ctx-model', contextWindow: 128000 }],
+      })
+      expect(createdProvider.status).toBe(201)
+      const providerId = (createdProvider.body as { provider: { id: string } }).provider.id
+      const patched = await sendJson(server.url, '/api/agents/ryen', 'PATCH', {
+        provider: providerId,
+        model: 'ctx-model',
+      })
+      expect(patched.status).toBe(200)
+
+      const created = await sendJson(server.url, '/api/conversations', 'POST', { kind: 'direct', agentId: 'ryen' })
+      const conversationId = (created.body as { conversation: { id: string } }).conversation.id
+
+      const res = await getJson(server.url, `/api/conversations/${conversationId}/context`)
+      expect(res.status).toBe(200)
+      expect(res.body).toMatchObject({
+        providerId,
+        modelId: 'ctx-model',
+        contextWindow: 128000,
+        usedTokens: null,
+      })
+      expect(String(res.body.modelLabel)).toContain('ctx-model')
+      expect(String(res.body.modelLabel)).toContain('Ctx Lab')
+
+      expect((await getJson(server.url, '/api/conversations/nope/context')).status).toBe(404)
+    } finally {
+      await server.close()
+    }
+  })
+})

@@ -4,6 +4,7 @@ import { brandString } from '@ryharness/brand'
 import type { GroupEvent, GroupHistoryEntry } from '@ryharness/group'
 import { buildGroupContext, GroupDispatcher, groupTranscriptBlock, parseMentions } from '@ryharness/group'
 import type { GenerateOptions, LlmRuntime, StreamChunk, ToolCallId } from '@ryharness/llm'
+import { createAssistantMessage } from '@ryharness/llm'
 import { describe, expect, it } from 'vitest'
 
 function agent(id: string, name: string, systemPrompt = `你是${name}。`): AgentDefinition {
@@ -774,5 +775,46 @@ describe('接力链收口', () => {
         return event.type === 'agent-message'
       }).length,
     ).toBeLessThanOrEqual(3)
+  })
+
+  it('runnerFor 命中的成员不走本地 LLM：云成员由宿主运行器产出同一套事件', async () => {
+    const cloud = agent('cloud', 'Cloud')
+    const { llm, calls } = mockLlm(['不该被调用'])
+    const prompts: string[] = []
+    const dispatcher = new GroupDispatcher({
+      llm,
+      members: [cloud],
+      dispatcherId: 'cloud',
+      tools: [],
+      runnerFor: (member) => {
+        if (member.id !== 'cloud') return undefined
+        return (promptText, _context, options) => {
+          prompts.push(promptText)
+          return (async function* () {
+            yield { type: 'text-delta', text: '云端收到' }
+            options.onAssistantMessage?.(
+              createAssistantMessage({
+                content: [{ type: 'text', text: '云端收到' }],
+                source: { provider: 'mock', model: 'mock' },
+              }),
+            )
+            yield { type: 'done', finish: { kind: 'stop' }, steps: 1 }
+          })()
+        }
+      },
+    })
+    const events = await collect(
+      dispatcher.runTurn({ text: '帮我查一下', history: [], workspaceRoot: process.cwd(), turnIndex: 0 }),
+    )
+    expect(calls()).toBe(0)
+    expect(prompts[0]).toContain('帮我查一下')
+    const message = events.find((event) => {
+      return event.type === 'agent-message'
+    })
+    expect(message).toBeDefined()
+    if (message?.type === 'agent-message') {
+      expect(message.agentId).toBe('cloud')
+      expect(message.message.content[0]).toMatchObject({ type: 'text', text: '云端收到' })
+    }
   })
 })

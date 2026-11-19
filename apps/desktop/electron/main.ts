@@ -42,6 +42,7 @@ import { runCapture } from './capture.ts'
 import { migrateLegacyDataDir } from './data-dir.ts'
 import { RENDERER_MOUNT, RendererAssets } from './renderer-assets.ts'
 import { allowedPermission, canOpenPath, dotEnvCandidates, envTokenAllowed, envValue } from './security.ts'
+import { migrateDefaultWorkspace, resolveWorkspaceRoot } from './workspace-dir.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -500,8 +501,8 @@ const MIN_HEIGHT = 680
  */
 const TITLEBAR_H = 40
 const TITLEBAR_OVERLAY = {
-  light: { color: '#FAF7F2', symbolColor: '#736B65' },
-  dark: { color: '#14110E', symbolColor: '#EDE8E2' },
+  light: { color: '#F5F1E8', symbolColor: '#6A625B' },
+  dark: { color: '#101114', symbolColor: '#EDE8E2' },
 } as const
 const IS_MAC = process.platform === 'darwin'
 
@@ -748,7 +749,7 @@ function createWindow(pageUrl: string): BrowserWindow {
     height: bounds.height,
     minWidth: MIN_WIDTH,
     minHeight: MIN_HEIGHT,
-    backgroundColor: '#FAF7F2',
+    backgroundColor: '#F5F1E8',
     title: 'RyHarness',
     icon: appIcon('window'),
     // 首帧画完再显示，避免加载期的白/空窗口闪烁（加载期的骨架由渲染层自己画）。
@@ -1967,7 +1968,31 @@ async function main(): Promise<void> {
       console.warn(`[ryharness] 老数据目录迁移失败（${migration.reason}）：${legacyDataDir}`)
     }
   }
-  const workspaceRoot = join(dataDir, 'workspace')
+  /**
+   * 工作区根：默认不再埋在 C 盘 AppData 里——有 F 盘就放 F:\RyHarness\workspace，
+   * 用户找自己生成的文件不用翻半天；RYHARNESS_WORKSPACE_DIR 显式指定时永远优先。
+   * 后端与 IPC 的路径闸用同一个根（见上方注释），所以这里算一次、两处共用。
+   */
+  const workspaceEnv = envValue(process.env, 'WORKSPACE_DIR')
+  const workspaceRoot = resolveWorkspaceRoot({
+    envRoot: workspaceEnv,
+    dataDir,
+    preferredDriveExists: existsSync('F:\\'),
+  })
+  const workspaceMigration = migrateDefaultWorkspace({
+    from: join(dataDir, 'workspace'),
+    to: workspaceRoot,
+    envOverride: workspaceEnv !== undefined && workspaceEnv.length > 0,
+    exists: existsSync,
+    move: (from, to) => {
+      renameSync(from, to)
+    },
+  })
+  if (workspaceMigration.migrated) {
+    console.log(`[ryharness] 已把默认工作区迁到 ${workspaceRoot}`)
+  } else if (workspaceMigration.reason?.startsWith('move failed') === true) {
+    console.warn(`[ryharness] 默认工作区迁移失败（${workspaceMigration.reason}）`)
+  }
   registerIpcHandlers(workspaceRoot)
   registerPermissionPolicy()
   applyAppMenu()
@@ -1995,6 +2020,7 @@ async function main(): Promise<void> {
       port: choice.port,
       host: BACKEND_HOST,
       dataDir,
+      workspaceRoot,
       authToken: apiToken,
     })
   }
